@@ -166,6 +166,30 @@ class TestProjectMultiYearRevenue:
         for pt in curve.points:
             assert pt.fleet_revenue_gbp >= 0.0
 
+    def test_a_negative_simulated_revenue_is_projected_as_a_loss(self) -> None:
+        """A fleet whose simulated revenue is negative is projected at that loss, not at £0.
+
+        A caller's simulate, such as solve_cost_recovery_rate's public simulate
+        parameter, may report negative export revenue, and YearPoint accepts a
+        revenue of any sign.  The projection reports the resulting loss rather
+        than £0, so the cost-recovery solve prices against the revenue the fleet
+        earns.  Each year earns own-use of 15 p × 100 kWh = £15 and the simulated
+        SEG income of −£50.
+        """
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        assert finance.own_use_rate_pence_per_kwh == 15.0, "premise: own-use at 15 p"
+        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services"
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=lambda fc, s, e: make_fleet_results(
+                homes=fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, export_revenue_gbp=-50.0
+            ),
+        )
+
+        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([-35.0] * 5)
+
 
 def _make_grid_charging_sim_results(
     sc_kwh: float = 2000.0,
