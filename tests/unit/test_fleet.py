@@ -487,7 +487,8 @@ class TestSimulateFleetIter:
         assert len(results) == 3
         assert all(isinstance(r, SimulationResults) for r in results)
 
-    def test_parallel_yields_all_results(self, small_fleet_config):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_parallel_yields_all_results(self, small_fleet_config, worker_start_method):
         """Parallel iteration yields all results (order may vary)."""
         start = pd.Timestamp("2024-06-21", tz="Europe/London")
         end = pd.Timestamp("2024-06-21", tz="Europe/London")
@@ -636,7 +637,8 @@ class TestMultiSweepIter:
         # All results should be SimulationResults
         assert all(isinstance(r[2], SimulationResults) for r in results)
 
-    def test_parallel_yields_all_results(self, sweep_configs):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_parallel_yields_all_results(self, sweep_configs, worker_start_method):
         """Parallel iteration yields all results from all sweeps."""
         start = pd.Timestamp("2024-06-21", tz="Europe/London")
         end = pd.Timestamp("2024-06-21", tz="Europe/London")
@@ -763,7 +765,8 @@ class TestCollectMultiSweepResults:
 
         assert values == [1.0, 2.0]
 
-    def test_home_results_in_correct_order(self, sweep_configs):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_home_results_in_correct_order(self, sweep_configs, worker_start_method):
         """Home results within each sweep are in correct order."""
         start = pd.Timestamp("2024-06-21", tz="Europe/London")
         end = pd.Timestamp("2024-06-21", tz="Europe/London")
