@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
-elements with the attributes and ids they carry, the texts it shows, its headings, the
-text of its scripts and the ids its renderChart calls draw into, in document order, the
-figure the call drawing into an id passes, and how many times each of some given texts
-occurs among them.
+elements with the attributes and ids they carry, the texts it shows, its headings and the
+text of its scripts, in document order, the figure each of its chart containers carries,
+and how many times each of some given texts occurs among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -14,8 +13,8 @@ repeats an attribute carries only its first value, as HTML reads it.
 Usage::
 
     from tests._html_page import (
-        counts_of, doctype, element_attributes, element_count, element_ids, headings,
-        render_chart_figure, render_chart_targets, script_texts, texts, texts_after,
+        chart_figures, counts_of, doctype, element_attributes, element_count, element_ids,
+        headings, script_texts, texts, texts_after,
     )
 
     page = response.get_data(as_text=True)
@@ -29,32 +28,15 @@ Usage::
     subjects = ("PV Capacity", "Battery Capacity")
     assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
     inline_scripts = [text for text in script_texts(page) if text]
-    assert "chart-sankey" in render_chart_targets(page)
-    figure = render_chart_figure(page, "chart-battery-soc")
+    figure = chart_figures(page)["chart-battery-soc"]
 """
 
-import json
-import re
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from html.parser import HTMLParser
 
 _RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
 _HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
-
-_JS_COMMENT = r"//[^\n]*|/\*.*?\*/"
-_DOUBLE_QUOTED_STRING = r'"(?:[^"\\\n]|\\.)*"'
-_JS_STRING = rf"""'(?:[^'\\\n]|\\.)*'|{_DOUBLE_QUOTED_STRING}|`(?:[^`\\]|\\.)*`"""
-_RENDER_CHART_CALL = r"""(?<![\w$.])renderChart\s*\(\s*(?:(?:'(?P<single_quoted>[^'\\\n]*)'|"(?P<double_quoted>[^"\\\n]*)")\s*(?=[,)]))?"""
-_RENDER_CHART_DECLARATION = r"\bfunction\s+renderChart\b"
-_RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING = re.compile(
-    rf"(?P<call>{_RENDER_CHART_CALL})|{_RENDER_CHART_DECLARATION}|{_JS_COMMENT}|{_JS_STRING}",
-    re.DOTALL,
-)
-_RENDER_CHART_FIGURE_ARGUMENT = re.compile(
-    rf"\s*,\s*(?P<figure>{_DOUBLE_QUOTED_STRING}|null)\s*\)", re.DOTALL
-)
-_ARGUMENT_SHOWN = 40
 
 
 def doctype(page: str) -> str | None:
@@ -194,78 +176,32 @@ def script_texts(page: str) -> list[str]:
     return _read(page).script_texts
 
 
-def render_chart_targets(page: str) -> list[str]:
-    """The id each renderChart call in a script of *page* draws into, in document order; an id more than one call draws into is listed each time.
+def chart_figures(page: str) -> dict[str, str]:
+    """The figure each chart container of *page* carries, keyed by the container's id.
 
-    A call counts only in script text, outside JavaScript comments and string literals,
-    and only as a call of renderChart itself, not of a longer name or of an object's
-    method; a function renderChart(...) declaration is not a call. Raises ValueError,
-    rather than skip the call, when its first argument is not one quoted string, naming
-    the call.
-
-    A JavaScript regular expression literal is not recognised as one: a quote or
-    comment marker inside it opens a string or a comment, so a call after it can be
-    missed, or a call inside a later string or comment counted.
+    A chart container is an element with a data-chart-figure attribute, which
+    static/js/chart-renderer.js draws; its value, with character references decoded,
+    is the figure's JSON text. An element inside script text does not count. Raises
+    ValueError, rather than drop or overwrite a container, when one carries no id, a
+    valueless data-chart-figure, or an id another container carries.
     """
-    return [
-        _render_chart_target(script, call) for script, call in _render_chart_calls(page)
-    ]
-
-
-def render_chart_figure(page: str, target: str) -> str | None:
-    """The figure JSON text the one renderChart call in a script of *page* drawing into *target* passes, or None when it passes null.
-
-    The figure is the call's second and last argument, read as Jinja's tojson writes
-    one: a double-quoted JSON string, decoded, or null, which tojson writes for None.
-    Calls are found as render_chart_targets finds them.
-
-    Raises ValueError, naming *target* and the count, unless exactly one call draws into
-    it, rather than pick one; and, naming the call, when its second argument is neither a
-    double-quoted string nor null. A double-quoted string that is not JSON raises
-    json.loads' own ValueError.
-    """
-    calls = [
-        (script, call)
-        for script, call in _render_chart_calls(page)
-        if _render_chart_target(script, call) == target
-    ]
-    if len(calls) != 1:
-        raise ValueError(
-            f"Expected exactly one renderChart call drawing into {target!r} on the page; found {len(calls)}"
-        )
-    script, call = calls[0]
-    argument = _RENDER_CHART_FIGURE_ARGUMENT.match(script, call.end())
-    if argument is None:
-        shown = call[0] + script[call.end() : call.end() + _ARGUMENT_SHOWN]
-        raise ValueError(
-            "Expected one JSON string or null as the second and last argument of the"
-            f" renderChart call drawing into {target!r}; got {shown!r}"
-        )
-    figure: str | None = json.loads(argument["figure"])
-    return figure
-
-
-def _render_chart_calls(page: str) -> Iterator[tuple[str, re.Match[str]]]:
-    """Each renderChart call in a script of *page*, in document order, with the text of the script it is in."""
-    for script in script_texts(page):
-        for match in _RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING.finditer(script):
-            if match["call"] is not None:
-                yield script, match
-
-
-def _render_chart_target(script: str, call: re.Match[str]) -> str:
-    """The quoted first argument of *call*, a renderChart call in *script*."""
-    single_quoted, double_quoted = call.group("single_quoted", "double_quoted")
-    if single_quoted is not None:
-        return single_quoted
-    if double_quoted is not None:
-        return double_quoted
-    following = script[call.end() : call.end() + _ARGUMENT_SHOWN]
-    through_first_argument = call[0] + re.split("[,)]", following, maxsplit=1)[0]
-    raise ValueError(
-        "Expected one quoted id as the first argument of each renderChart call;"
-        f" got {through_first_argument!r}"
-    )
+    figures: dict[str, str] = {}
+    for _, carried in _read(page).elements:
+        if "data-chart-figure" not in carried:
+            continue
+        chart_id, figure = carried.get("id"), carried["data-chart-figure"]
+        if chart_id is None:
+            raise ValueError("Expected each chart container to carry an id; one carries no id")
+        if figure is None:
+            raise ValueError(
+                f"Expected chart container {chart_id!r} to carry a figure; its data-chart-figure is valueless"
+            )
+        if chart_id in figures:
+            raise ValueError(
+                f"Expected each chart container's id on only one container; {chart_id!r} is on more than one"
+            )
+        figures[chart_id] = figure
+    return figures
 
 
 def _refuse_names_not_in_lower_case(*names: str) -> None:

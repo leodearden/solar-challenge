@@ -3,8 +3,8 @@
 
 heat_pump_analysis returns each heat-pump figure in a field of a HeatPumpCharts, which
 results/home.html reads by name, and the page gives each figure a container of its own id.
-A name the template reads that HeatPumpCharts has no field for is Undefined, which tojson
-refuses, so the page fails to render.
+A name the template reads that HeatPumpCharts has no field for is Undefined, which
+chart_panel refuses, so the page fails to render, naming that name.
 """
 
 import dataclasses

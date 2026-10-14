@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import stat_card %}
+{% from "components/macros.html" import chart_panel, stat_card %}
 
 {% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
 
@@ -61,68 +61,20 @@
     </div>
 
     {# ===== Tab 1: Aggregate ===== #}
-    <div x-show="activeTab === 'aggregate'" x-cloak>
-        {# Fleet Aggregate Timeline #}
-        {% if charts.aggregate_timeline and charts.aggregate_timeline != '{}' %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
-            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Fleet Aggregate Power Flow</h3>
-            </div>
-            <div id="chart-aggregate-timeline" class="w-full" style="min-height: 500px;"></div>
-        </div>
-        {% endif %}
-
-        {# Grid Impact #}
-        {% if charts.grid_impact and charts.grid_impact != '{}' %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Net Grid Impact</h3>
-            </div>
-            <div id="chart-grid-impact" class="w-full" style="min-height: 450px;"></div>
-        </div>
-        {% endif %}
+    <div x-show="activeTab === 'aggregate'" x-cloak class="space-y-6">
+        {{ chart_panel('chart-aggregate-timeline', 'Fleet Aggregate Power Flow', charts.aggregate_timeline, '500px') }}
+        {{ chart_panel('chart-grid-impact', 'Net Grid Impact', charts.grid_impact, '450px') }}
     </div>
 
     {# ===== Tab 2: Per-Home ===== #}
-    <div x-show="activeTab === 'per_home'" x-cloak>
-        {# Heatmap #}
-        {% if charts.heatmap and charts.heatmap != '{}' %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
-            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Per-Home Energy Metrics</h3>
-            </div>
-            <div id="chart-heatmap" class="w-full" style="min-height: 450px;"></div>
-        </div>
-        {% endif %}
-
-        {# Box Plots #}
-        {% if charts.box_plots and charts.box_plots != '{}' %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Energy Metrics Distribution</h3>
-            </div>
-            <div id="chart-box-plots" class="w-full" style="min-height: 450px;"></div>
-        </div>
-        {% endif %}
+    <div x-show="activeTab === 'per_home'" x-cloak class="space-y-6">
+        {{ chart_panel('chart-heatmap', 'Per-Home Energy Metrics', charts.heatmap, '450px') }}
+        {{ chart_panel('chart-box-plots', 'Energy Metrics Distribution', charts.box_plots, '450px') }}
     </div>
 
     {# ===== Tab 3: Distributions ===== #}
-    <div x-show="activeTab === 'distributions'" x-cloak>
-        {# Distribution Histograms #}
-        {% if charts.distribution_histograms and charts.distribution_histograms != '{}' %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Fleet Distribution Histograms</h3>
-            </div>
-            <div id="chart-distribution-histograms" class="w-full" style="min-height: 400px;"></div>
-        </div>
-        {% else %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">
-            <p class="text-sm text-slate-500 dark:text-slate-400">
-                No distribution data available.
-            </p>
-        </div>
-        {% endif %}
+    <div x-show="activeTab === 'distributions'" x-cloak class="space-y-6">
+        {{ chart_panel('chart-distribution-histograms', 'Fleet Distribution Histograms', charts.distribution_histograms, '400px', empty_message='No distribution data available.') }}
     </div>
 </div>
 
@@ -150,20 +102,4 @@
 {% block scripts %}
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 <script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
-<script>
-(function () {
-    "use strict";
-
-    // Aggregate tab
-    renderChart('chart-aggregate-timeline', {{ charts.aggregate_timeline | tojson }});
-    renderChart('chart-grid-impact', {{ charts.grid_impact | tojson }});
-
-    // Per-Home tab
-    renderChart('chart-heatmap', {{ charts.heatmap | tojson }});
-    renderChart('chart-box-plots', {{ charts.box_plots | tojson }});
-
-    // Distributions tab
-    renderChart('chart-distribution-histograms', {{ charts.distribution_histograms | tojson }});
-}());
-</script>
 {% endblock %}
