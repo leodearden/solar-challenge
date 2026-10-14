@@ -27,7 +27,7 @@ from solar_challenge.optimize import (
     ConfigPoint,
     SensitivityAxis,
     SensitivityPanel,
-    _build_axis_configs,
+    apply_knob,
     enumerate_configs,
     run_sweep,
     sensitivity_panel,
@@ -379,63 +379,48 @@ class TestSensitivityDataclasses:
 
 
 # ---------------------------------------------------------------------------
-# TestBuildAxisConfigs
+# TestApplyKnob
 # ---------------------------------------------------------------------------
 
 
-class TestBuildAxisConfigs:
-    """Unit tests for _build_axis_configs: pure routing, no run_sweep calls."""
+class TestApplyKnob:
+    """apply_knob: one fleet scenario in, a copy with one sensitivity knob set out."""
 
-    def _base_configs(self, finance: Optional[FinanceConfig] = None):  # type: ignore[no-untyped-def]
-        """Return a minimal base_configs list: one (ConfigPoint, ScenarioConfig) pair."""
-        scenario = _make_scenario(n_homes=2, finance=finance or _interior_finance())
-        return enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
+    def _fleet_scenario(self) -> ScenarioConfig:
+        return _make_scenario(n_homes=2, finance=_interior_finance())
 
-    def test_finance_field_battery_cost_replaced(self) -> None:
-        """battery_cost_per_kwh_gbp is replaced on every pair's scenario.finance."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "battery_cost_per_kwh_gbp", 999.0)
+    def test_finance_knob_sets_that_field_on_the_copy_only(self) -> None:
+        """A FinanceConfig field is set on the returned finance; the rest and the input are kept."""
+        scenario = self._fleet_scenario()
+        assert scenario.finance is not None
+        old_battery_cost = scenario.finance.battery_cost_per_kwh_gbp
 
-        assert len(result) == len(base)
-        for (orig_pt, orig_sc), (new_pt, new_sc) in zip(base, result):
-            assert new_pt is orig_pt, "ConfigPoint must be reused unchanged"
-            assert new_sc.finance is not None
-            assert new_sc.finance.battery_cost_per_kwh_gbp == pytest.approx(999.0)
-            # Other finance fields must be preserved
-            assert new_sc.finance.pv_cost_per_kwp_gbp == pytest.approx(
-                orig_sc.finance.pv_cost_per_kwp_gbp  # type: ignore[union-attr]
-            )
+        new = apply_knob(scenario, "battery_cost_per_kwh_gbp", 999.0)
 
-    def test_finance_field_grid_services_replaced(self) -> None:
-        """grid_services_income_per_kw_per_year_gbp is replaced on every pair."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "grid_services_income_per_kw_per_year_gbp", 42.0)
+        assert new.finance is not None
+        assert new.finance.battery_cost_per_kwh_gbp == pytest.approx(999.0)
+        assert new.finance.pv_cost_per_kwp_gbp == pytest.approx(scenario.finance.pv_cost_per_kwp_gbp)
+        assert scenario.finance.battery_cost_per_kwh_gbp == pytest.approx(old_battery_cost)
 
-        for _, new_sc in result:
-            assert new_sc.finance is not None
-            assert new_sc.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
+    def test_grid_services_income_knob_sets_the_finance_field(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp lands on the returned scenario's finance."""
+        new = apply_knob(self._fleet_scenario(), "grid_services_income_per_kw_per_year_gbp", 42.0)
 
-    def test_seg_alias_replaced(self) -> None:
-        """'seg' alias re-prices the scenario's SEG rate and every home's SEG tariff."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "seg", 7.5)
+        assert new.finance is not None
+        assert new.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
 
-        for (_, orig_sc), (_, new_sc) in zip(base, result):
-            assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(7.5)
-            assert _home_seg_rates(new_sc.homes) == [7.5] * len(new_sc.homes)
-            # Finance block is unchanged
-            assert new_sc.finance is orig_sc.finance
+    @pytest.mark.parametrize("name", ["seg", "seg_tariff_pence_per_kwh"])
+    def test_seg_knob_reprices_the_scenario_and_every_home(self, name: str) -> None:
+        """Either SEG name sets the scenario's SEG rate and every home's tariff, leaving finance alone."""
+        scenario = self._fleet_scenario()
 
-    def test_seg_tariff_full_name_replaced(self) -> None:
-        """'seg_tariff_pence_per_kwh' re-prices the scenario's SEG rate and every home's SEG tariff."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "seg_tariff_pence_per_kwh", 9.0)
+        new = apply_knob(scenario, name, 7.5)
 
-        for _, new_sc in result:
-            assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(9.0)
-            assert _home_seg_rates(new_sc.homes) == [9.0] * len(new_sc.homes)
+        assert new.seg_tariff_pence_per_kwh == pytest.approx(7.5)
+        assert _home_seg_rates(new.homes) == [7.5] * len(scenario.homes)
+        assert new.finance is scenario.finance
 
-    def test_seg_replaces_whatever_tariff_each_home_carried(self) -> None:
+    def test_seg_knob_replaces_whatever_tariff_each_home_carried(self) -> None:
         """A preset, no tariff and another rate all end on the swept rate, as an unnamed tariff."""
         carried = [
             resolve_seg_tariff("Octopus"),
@@ -450,52 +435,49 @@ class TestBuildAxisConfigs:
                 for home, tariff in zip(scenario.homes, carried, strict=True)
             ],
         )
-        base = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
-        [(_, orig_sc)] = base
-        assert [home.seg_tariff for home in orig_sc.homes] == carried
 
-        [(_, new_sc)] = _build_axis_configs(base, "seg", 6.0)
+        new = apply_knob(scenario, "seg", 6.0)
 
-        assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(6.0)
-        assert [home.seg_tariff for home in new_sc.homes] == [
+        assert new.seg_tariff_pence_per_kwh == pytest.approx(6.0)
+        assert [home.seg_tariff for home in new.homes] == [
             SEGTariff(name="", rate_pence_per_kwh=6.0)
         ] * len(carried)
 
-    def test_degradation_alias_replaced(self) -> None:
-        """'degradation' alias replaces degradation_rate_per_year on every home."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "degradation", 0.01)
+    @pytest.mark.parametrize("name", ["degradation", "degradation_rate_per_year"])
+    def test_degradation_knob_sets_every_homes_pv_degradation(self, name: str) -> None:
+        """Either degradation name sets degradation_rate_per_year on every home's PV."""
+        scenario = self._fleet_scenario()
 
-        for _, new_sc in result:
-            for home in new_sc.homes:
-                assert home.pv_config.degradation_rate_per_year == pytest.approx(0.01)
+        new = apply_knob(scenario, name, 0.01)
 
-    def test_degradation_full_name_replaced(self) -> None:
-        """'degradation_rate_per_year' replaces degradation on every home."""
-        base = self._base_configs()
-        result = _build_axis_configs(base, "degradation_rate_per_year", 0.02)
-
-        for _, new_sc in result:
-            for home in new_sc.homes:
-                assert home.pv_config.degradation_rate_per_year == pytest.approx(0.02)
+        assert [home.pv_config.degradation_rate_per_year for home in new.homes] == [0.01] * len(
+            scenario.homes
+        )
 
     def test_unknown_knob_raises_value_error(self) -> None:
         """An unrecognised knob name raises ValueError."""
-        base = self._base_configs()
         with pytest.raises(ValueError, match="Unknown sensitivity knob"):
-            _build_axis_configs(base, "nonexistent_knob_xyz", 1.0)
+            apply_knob(self._fleet_scenario(), "nonexistent_knob_xyz", 1.0)
 
-    def test_none_finance_raises_for_finance_knob(self) -> None:
-        """scenario.finance is None raises ValueError for a FinanceConfig knob."""
-        # Build base_configs where the scenario has NO finance block
-        base = self._base_configs(finance=None)
-        # Manually clear finance on the scenarios
-        cleared = [
-            (pt, dataclasses.replace(sc, finance=None))
-            for pt, sc in base
-        ]
+    def test_finance_knob_without_a_finance_block_raises(self) -> None:
+        """A FinanceConfig knob on a scenario whose finance is None raises ValueError."""
+        scenario = dataclasses.replace(self._fleet_scenario(), finance=None)
+
         with pytest.raises(ValueError, match="finance"):
-            _build_axis_configs(cleared, "battery_cost_per_kwh_gbp", 999.0)
+            apply_knob(scenario, "battery_cost_per_kwh_gbp", 999.0)
+
+    @pytest.mark.parametrize("name", ["battery_cost_per_kwh_gbp", "seg", "degradation"])
+    def test_single_home_scenario_is_refused_for_every_knob_family(self, name: str) -> None:
+        """A single-home scenario raises ValueError naming the fleet requirement, whatever the knob."""
+        scenario = ScenarioConfig(
+            name="single-home",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            home=_make_home_config(),
+            finance=_interior_finance(),
+        )
+
+        with pytest.raises(ValueError, match="fleet"):
+            apply_knob(scenario, name, 0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -896,7 +878,7 @@ class TestSensitivityPanelGuards:
             )
 
     def test_unknown_knob_propagates_value_error(self) -> None:
-        """Unknown knob name in axes raises ValueError (propagated from _build_axis_configs)."""
+        """Unknown knob name in axes raises ValueError (propagated from apply_knob)."""
         base_configs = self._base_configs()
         with pytest.raises(ValueError, match="Unknown sensitivity knob"):
             sensitivity_panel(
