@@ -1,5 +1,8 @@
 """Tests for EV charging configuration and profile generation."""
 
+import itertools
+from collections.abc import Iterator
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,6 +12,67 @@ from solar_challenge.ev import (
     SmartChargingMode,
     generate_ev_charging_profile,
 )
+
+# June has no clock change, so a profile's positional minutes are its wall-clock minutes.
+FIRST_DAY = pd.Timestamp("2024-06-21")
+SECOND_DAY = pd.Timestamp("2024-06-22")
+
+
+def _at(text: str) -> pd.Timestamp:
+    """The time *text* in Europe/London, generate_ev_charging_profile's default timezone."""
+    return pd.Timestamp(text, tz="Europe/London")
+
+
+def _sessions(profile: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """The (first minute, minute after the last) of each unbroken run of charging in *profile*.
+
+    The minute after a run is counted from the profile's start, since a run can
+    end with the profile, where the index has no entry.
+    """
+    charging = np.concatenate(([False], profile.to_numpy() > 0, [False]))
+    edges = profile.index[0] + pd.to_timedelta(np.flatnonzero(np.diff(charging)), unit="min")
+    return list(zip(edges[::2], edges[1::2]))
+
+
+def _grid_configs(charger_type: str, mode: str) -> Iterator[EVConfig]:
+    """Every valid EVConfig for *charger_type* and *mode* on a grid of arrival hours, departure hours and charges."""
+    for arrival_hour, departure_hour, required_kwh in itertools.product(
+        (0, 1, 6, 8, 12, 15, 18, 22), (0, 2, 7, 9, 11, 17, 20), (5.0, 20.0, 35.0, 60.0)
+    ):
+        try:
+            config = EVConfig(charger_type, arrival_hour, departure_hour, required_kwh, mode)
+        except ValueError:
+            continue
+        yield config
+
+
+def _contract_breaches(config: EVConfig) -> list[str]:
+    """How *config*'s FIRST_DAY..SECOND_DAY profile breaks the charging contract, each breach with its values."""
+    profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
+    power_kw = profile.to_numpy()
+    rating_kw = config.get_charger_power_kw()
+    arrival = config.arrival_hour * 60
+    stay = round(config.get_available_charging_hours() * 60)
+    breaches = []
+
+    charged = np.flatnonzero(power_kw)
+    away = charged[(charged - arrival) % 1440 >= stay]
+    if away.size:
+        breaches.append(f"charges while away at minute {away[0]}")
+
+    off_rating = np.unique(power_kw[(power_kw != 0.0) & (power_kw != rating_kw)])
+    if off_rating.size:
+        breaches.append(f"draws {off_rating.tolist()} kW, neither 0 nor the {rating_kw} kW rating")
+
+    first_stay = profile.iloc[arrival : arrival + stay]
+    delivered_kwh = first_stay.sum() / 60
+    if not config.required_charge_kwh - 1e-9 <= delivered_kwh <= config.required_charge_kwh + rating_kw / 60 + 1e-9:
+        breaches.append(f"first stay delivers {delivered_kwh:.3f} kWh")
+
+    runs = len(_sessions(first_stay))
+    if runs != 1:
+        breaches.append(f"first stay charges in {runs} runs")
+    return breaches
 
 
 class TestEVConfigBasics:
@@ -343,19 +407,10 @@ class TestOffPeakChargingMode:
 
     def test_prefers_economy_7_hours(self, config):
         """Off-peak mode prefers 00:30-07:30 window."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-        profile = generate_ev_charging_profile(config, start, end)
+        profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
 
-        # Off-peak window next day: 00:30-07:30 (minutes 1440+30 to 1440+450)
-        # But we're in a single day, so look at 00:30-07:30 today (minutes 30-450)
-        off_peak_start = 0 * 60 + 30  # 30 minutes
-        off_peak_end = 7 * 60 + 30  # 450 minutes
-
-        # Should have some charging in off-peak window
-        off_peak_charging = profile.iloc[off_peak_start:off_peak_end].sum()
-        # May be zero if overnight charging uses next day's window
-        assert off_peak_charging >= 0
+        # The second day's session falls on the morning after the period.
+        assert _sessions(profile) == [(_at("2024-06-22 00:30"), _at("2024-06-22 05:30"))]
 
     def test_delivers_required_energy(self, config):
         """Off-peak charging delivers the required energy."""
@@ -404,18 +459,9 @@ class TestOvernightCharging:
             required_charge_kwh=28.0,  # 4 hours charging
         )
 
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")  # Need 2 days
-        profile = generate_ev_charging_profile(config, start, end)
+        profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
 
-        # Should start charging at 22:00 on day 1 (minute 1320)
-        # Should continue into day 2
-        day1_arrival = 22 * 60  # 1320
-        assert profile.iloc[day1_arrival] == 7.0
-
-        # Should have charging in early hours of day 2
-        day2_morning = 1440 + (3 * 60)  # 3am on day 2
-        assert profile.iloc[day2_morning] >= 0  # May still be charging
+        assert _sessions(profile)[0] == (_at("2024-06-21 22:00"), _at("2024-06-22 02:00"))
 
     def test_delivers_energy_across_midnight(self):
         """Overnight charging delivers required energy."""
@@ -436,6 +482,133 @@ class TestOvernightCharging:
         # Total: 14 + 28 = 42 kWh (last evening session included)
         total_energy_kwh = profile.sum() / 60
         assert total_energy_kwh == pytest.approx(42.0, rel=0.01)
+
+
+class TestChargingSessions:
+    """Test where each day's charging session falls in the car's stay."""
+
+    @pytest.mark.parametrize("charger_type", ["3.6kW", "7kW", "22kW"])
+    @pytest.mark.parametrize("mode", ["none", "solar", "off_peak"])
+    def test_every_session_fits_its_stay_and_delivers_the_charge(self, mode, charger_type):
+        """Each session runs unbroken at the charger's rating while the car is home, and delivers the charge."""
+        configs = list(_grid_configs(charger_type, mode))
+        failures = [f"{config}: {'; '.join(breaches)}" for config in configs if (breaches := _contract_breaches(config))]
+
+        assert configs, "no config on the grid is valid, so nothing was checked"
+        assert not failures, (
+            f"{len(failures)} of {len(configs)} configs break the charging contract; the first 10:\n"
+            + "\n".join(failures[:10])
+        )
+
+    @pytest.mark.parametrize(
+        ("config", "first_session"),
+        [
+            pytest.param(
+                EVConfig("7kW", 8, 17, 14.0, "solar"),
+                (_at("2024-06-21 10:00"), _at("2024-06-21 12:00")),
+                id="solar-window-holds-the-charge",
+            ),
+            pytest.param(
+                EVConfig("7kW", 22, 8, 14.0, "off_peak"),
+                (_at("2024-06-22 00:30"), _at("2024-06-22 02:30")),
+                id="off-peak-window-holds-the-charge",
+            ),
+            pytest.param(
+                EVConfig("3.6kW", 18, 7, 35.0, "off_peak"),
+                (_at("2024-06-21 21:16"), _at("2024-06-22 07:00")),
+                id="off-peak-rest-just-before-the-window",
+            ),
+            pytest.param(
+                EVConfig("7kW", 7, 17, 49.0, "solar"),
+                (_at("2024-06-21 09:00"), _at("2024-06-21 16:00")),
+                id="solar-rest-just-before-the-window",
+            ),
+            pytest.param(
+                EVConfig("7kW", 9, 18, 56.0, "solar"),
+                (_at("2024-06-21 09:00"), _at("2024-06-21 17:00")),
+                id="solar-from-arrival-past-the-window",
+            ),
+            pytest.param(
+                EVConfig("7kW", 18, 8, 35.0, "solar"),
+                (_at("2024-06-21 18:00"), _at("2024-06-21 23:00")),
+                id="solar-no-window-in-the-stay",
+            ),
+            pytest.param(
+                EVConfig("7kW", 18, 12, 35.0, "solar"),
+                (_at("2024-06-22 07:00"), _at("2024-06-22 12:00")),
+                id="solar-next-mornings-window",
+            ),
+            pytest.param(
+                EVConfig("7kW", 2, 1, 14.0, "off_peak"),
+                (_at("2024-06-21 02:00"), _at("2024-06-21 04:00")),
+                id="off-peak-window-with-more-room",
+            ),
+            pytest.param(
+                EVConfig("7kW", 6, 5, 7.0, "off_peak"),
+                (_at("2024-06-21 06:00"), _at("2024-06-21 07:00")),
+                id="off-peak-earliest-of-two-windows-that-fit",
+            ),
+            pytest.param(
+                EVConfig("7kW", 0, 0, 5.0, "off_peak"),
+                (_at("2024-06-21 00:30"), _at("2024-06-21 01:13")),
+                id="off-peak-waits-for-the-window-to-open",
+            ),
+            pytest.param(
+                EVConfig("7kW", 18, 7, 35.0, "none"),
+                (_at("2024-06-21 18:00"), _at("2024-06-21 23:00")),
+                id="none-from-arrival",
+            ),
+        ],
+    )
+    def test_session_placement(self, config, first_session):
+        """The session covers as much of the mode's window as it can, as early as it can."""
+        profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
+
+        assert _sessions(profile)[0] == first_session
+
+    @pytest.mark.parametrize(
+        ("config", "window_overlap", "departure"),
+        [
+            pytest.param(
+                EVConfig("3.6kW", 18, 7, 35.0, "off_peak"),
+                (_at("2024-06-22 00:30"), _at("2024-06-22 07:00")),
+                _at("2024-06-22 07:00"),
+                id="off-peak",
+            ),
+            pytest.param(
+                EVConfig("3.6kW", 8, 17, 30.0, "solar"),
+                (_at("2024-06-21 10:00"), _at("2024-06-21 16:00")),
+                _at("2024-06-21 17:00"),
+                id="solar",
+            ),
+        ],
+    )
+    def test_measured_configs_finish_by_departure(self, config, window_overlap, departure):
+        """A window too short for the charge is used whole, and the session still ends by departure."""
+        profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
+        start, end = _sessions(profile)[0]
+        overlap_start, overlap_end = window_overlap
+        minute = pd.Timedelta(minutes=1)
+
+        assert end <= departure
+        assert profile[start : end - minute].sum() / 60 >= config.required_charge_kwh
+        assert (profile[overlap_start : overlap_end - minute] > 0).all()
+
+    def test_a_session_running_when_the_period_ends_is_cut_there(self):
+        """The period's last session stops at the period's end, though the car is still home."""
+        config = EVConfig("7kW", 22, 6, 28.0, "none")
+
+        profile = generate_ev_charging_profile(config, FIRST_DAY, FIRST_DAY)
+
+        assert _sessions(profile) == [(_at("2024-06-21 22:00"), _at("2024-06-22 00:00"))]
+
+    def test_the_first_morning_holds_no_session_from_the_evening_before(self):
+        """A one-day period holds only that day's session, here on the morning after it."""
+        config = EVConfig("7kW", 22, 8, 14.0, "off_peak")
+
+        profile = generate_ev_charging_profile(config, FIRST_DAY, FIRST_DAY)
+
+        assert profile.sum() == 0
 
 
 class TestDifferentChargerTypes:
