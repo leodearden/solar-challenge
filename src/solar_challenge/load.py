@@ -527,22 +527,22 @@ def energy_kwh(profile: pd.Series) -> float:
     return float(profile.sum() * HOURS_PER_MINUTE)
 
 
-def scale_profile_to_annual(
+def scale_profile_to_energy(
     profile: pd.Series,
-    target_annual_kwh: float,
+    target_kwh: float,
 ) -> pd.Series:
-    """Scale a load profile to match a target annual consumption.
+    """Scale a 1-minute power profile so that its total energy is target_kwh.
 
     Args:
-        profile: Power series in kW
-        target_annual_kwh: Target annual consumption in kWh
+        profile: Power series in kW with 1-minute resolution
+        target_kwh: Target total energy in kWh
 
     Returns:
         Scaled power series in kW
     """
-    current_annual = energy_kwh(profile)
-    if current_annual == 0:
+    current_kwh = energy_kwh(profile)
+    if current_kwh == 0:
         raise ValueError("Cannot scale profile with zero consumption")
 
-    scale_factor = target_annual_kwh / current_annual
+    scale_factor = target_kwh / current_kwh
     return profile * scale_factor
