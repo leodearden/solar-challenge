@@ -3,9 +3,10 @@
 """Unit tests for project_multi_year's CBS revenue.
 
 They cover own-use and SEG export income with and without the
-self-consumption override, grid-services income, grid-charge energy paid once
-on householder import, and the SEG income helper _seg_export_income_gbp, all
-on an injected synthetic simulate.
+self-consumption override, grid-services income, a negative simulated revenue,
+which the projection and the cost-recovery solve both carry as a loss,
+grid-charge energy paid once on householder import, and the SEG income helper
+_seg_export_income_gbp, all on an injected synthetic simulate.
 """
 from __future__ import annotations
 
@@ -17,11 +18,13 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import (
+    CostRecoverySolution,
     FinanceConfig,
     _annualise_physics,
     _seg_export_income_gbp,
     householder_bill,
     project_multi_year,
+    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
@@ -189,6 +192,38 @@ class TestProjectMultiYearRevenue:
         )
 
         assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([-35.0] * 5)
+
+    def test_the_cost_recovery_solve_prices_a_negative_simulated_revenue(self) -> None:
+        """A £50 SEG loss raises the solved own-use rate by £50 / 1,000 kWh = 5 p/kWh.
+
+        One home bills 1,000 kWh of own-use a year.  The solve meets the floor where
+        the home's own-use revenue + SEG income covers its costs and the floor, so
+        recovering a £50 loss over that own-use takes 5 p/kWh more than a £0 SEG
+        income does.  At the configured 0 p the projection the solve prices earns
+        the loss itself, −£50 a year.
+        """
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        def solve(seg_income_gbp: float) -> CostRecoverySolution:
+            return solve_cost_recovery_rate(
+                scenario,
+                finance,
+                simulate=lambda fc, s, e: make_fleet_results(
+                    homes=fc.homes,
+                    self_kwh=1000.0,
+                    export_kwh=800.0,
+                    import_kwh=300.0,
+                    export_revenue_gbp=seg_income_gbp,
+                ),
+            )
+
+        losing, breaking_even = solve(-50.0), solve(0.0)
+
+        assert (losing.binding, breaking_even.binding) == ("floor", "floor"), "premise: both rates are interior"
+        assert losing.own_use_rate_pence_per_kwh - breaking_even.own_use_rate_pence_per_kwh == pytest.approx(
+            50.0 * 100.0 / 1000.0
+        )
 
 
 def _make_grid_charging_sim_results(
