@@ -1324,7 +1324,7 @@ class _NodeData:
     age: int
     """System age in calendar years at which the fleet was simulated."""
 
-    fleet_sc: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_billed_own_use: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
 
     fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
@@ -1545,11 +1545,11 @@ def project_multi_year(
         ]
 
         # Each home is annualised once, by its own simulated days, and every figure
-        # below reads that annual record.  fleet_sc is the own-use the CBS bills
-        # (_billed_energy, the switch householder_bill reads); export, import and
-        # discharge stay the simulated flows (docs/cost-recovery-finance-model.md §4).
+        # below reads that annual record.  Own-use is billed through _billed_energy,
+        # the switch householder_bill reads; export, import and discharge stay the
+        # simulated flows (docs/cost-recovery-finance-model.md §4).
         annualised_homes = [(s, _annualise_physics(s, s.simulation_days)) for s in per_home_summaries]
-        fleet_sc = sum(
+        fleet_billed_own_use = sum(
             _billed_energy(
                 phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale
             ).own_use_kwh
@@ -1560,7 +1560,7 @@ def project_multi_year(
         per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
         #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
@@ -1569,7 +1569,7 @@ def project_multi_year(
         # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
         # self_consumption_override and seg scaling automatically); householder_bill
         # is no longer called here since seg_export_income_gbp was removed from it.
-        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
+        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
         if finance.grid_services_model == "capacity_at_events":
             # None is already excluded by the top-of-function guard; this assert
@@ -1602,7 +1602,7 @@ def project_multi_year(
 
         return _NodeData(
             age=age,
-            fleet_sc=fleet_sc,
+            fleet_billed_own_use=fleet_billed_own_use,
             fleet_exp=fleet_exp,
             fleet_imp=fleet_imp,
             per_home_discharge=per_home_discharge,
@@ -1635,9 +1635,9 @@ def project_multi_year(
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
     # to percentages by each metric's age-0 value.  This ensures interp_error_estimate
-    # bounds ALL interpolated curves (self-consumption, export, import, revenue),
-    # not just self-consumption.
-    annual_scale_sc: float = max(sampled_data[0].fleet_sc, 1e-9)
+    # bounds ALL interpolated curves (own-use, export, import, revenue),
+    # not just own-use.
+    annual_scale_own_use: float = max(sampled_data[0].fleet_billed_own_use, 1e-9)
     annual_scale_exp: float = max(sampled_data[0].fleet_exp, 1e-9)
     annual_scale_imp: float = max(sampled_data[0].fleet_imp, 1e-9)
     annual_scale_rev: float = max(sampled_data[0].fleet_revenue, 1e-9)
@@ -1652,12 +1652,12 @@ def project_multi_year(
         current_ages = sorted(sampled_data.keys())
 
         # Build PCHIP over the current node set for all driven metrics
-        sc_vals_now = [sampled_data[a].fleet_sc for a in current_ages]
+        own_use_vals_now = [sampled_data[a].fleet_billed_own_use for a in current_ages]
         exp_vals_now = [sampled_data[a].fleet_exp for a in current_ages]
         imp_vals_now = [sampled_data[a].fleet_imp for a in current_ages]
         rev_vals_now = [sampled_data[a].fleet_revenue for a in current_ages]
 
-        sc_interp_now = _interpolate_per_year(current_ages, sc_vals_now, asset_life)
+        own_use_interp_now = _interpolate_per_year(current_ages, own_use_vals_now, asset_life)
         exp_interp_now = _interpolate_per_year(current_ages, exp_vals_now, asset_life)
         imp_interp_now = _interpolate_per_year(current_ages, imp_vals_now, asset_life)
         rev_interp_now = _interpolate_per_year(current_ages, rev_vals_now, asset_life)
@@ -1683,7 +1683,7 @@ def project_multi_year(
 
             # Max PCHIP deviation across all driven metrics (percentage)
             dev = max(
-                abs(sc_interp_now[mid] - trial_node.fleet_sc) / annual_scale_sc * 100.0,
+                abs(own_use_interp_now[mid] - trial_node.fleet_billed_own_use) / annual_scale_own_use * 100.0,
                 abs(exp_interp_now[mid] - trial_node.fleet_exp) / annual_scale_exp * 100.0,
                 abs(imp_interp_now[mid] - trial_node.fleet_imp) / annual_scale_imp * 100.0,
                 abs(rev_interp_now[mid] - trial_node.fleet_revenue) / annual_scale_rev * 100.0,
@@ -1726,14 +1726,14 @@ def project_multi_year(
 
     # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())
-    sc_vals = [sampled_data[a].fleet_sc for a in ages_sorted]
+    own_use_vals = [sampled_data[a].fleet_billed_own_use for a in ages_sorted]
     exp_vals = [sampled_data[a].fleet_exp for a in ages_sorted]
     imp_vals = [sampled_data[a].fleet_imp for a in ages_sorted]
     pv_soh_vals = [sampled_data[a].mean_pv_soh for a in ages_sorted]
     batt_soh_vals = [sampled_data[a].mean_battery_soh for a in ages_sorted]
     rev_vals = [sampled_data[a].fleet_revenue for a in ages_sorted]
 
-    sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
+    own_use_per_year = _interpolate_per_year(ages_sorted, own_use_vals, asset_life)
     exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
     imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
     pv_soh_per_year = _interpolate_per_year(ages_sorted, pv_soh_vals, asset_life)
@@ -1746,7 +1746,7 @@ def project_multi_year(
             year=y,
             pv_soh=max(0.0, min(1.0, pv_soh_per_year[y])),
             battery_soh=max(0.0, min(1.0, batt_soh_per_year[y])),
-            fleet_billed_own_use_kwh=max(0.0, sc_per_year[y]),
+            fleet_billed_own_use_kwh=max(0.0, own_use_per_year[y]),
             fleet_export_kwh=max(0.0, exp_per_year[y]),
             fleet_import_kwh=max(0.0, imp_per_year[y]),
             fleet_revenue_gbp=max(0.0, rev_per_year[y]),
