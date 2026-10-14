@@ -442,10 +442,17 @@ def _read_battery(battery: Any, path: str) -> _BlockRead:
 
 
 def _null_capacity_as_zero(spec: Any) -> Any:
-    """The battery capacity *spec* with each null value read as 0 kWh: a home with no battery either way."""
+    """The battery capacity *spec* with each null capacity in it read as 0 kWh: the spec itself, a fixed distribution's value, or one of a distribution's values."""
+    if isinstance(spec, Mapping) and spec.get("type") == "fixed":
+        return {**spec, "value": _zero_if_null(spec["value"])}
     if isinstance(spec, Mapping) and isinstance(spec.get("values"), list):
-        return {**spec, "values": [0.0 if value is None else value for value in spec["values"]]}
-    return spec
+        return {**spec, "values": [_zero_if_null(value) for value in spec["values"]]}
+    return _zero_if_null(spec)
+
+
+def _zero_if_null(capacity: Any) -> Any:
+    """The battery *capacity*, 0 kWh when it is null: a home with no battery either way."""
+    return 0.0 if capacity is None else capacity
 
 
 def _required(value: Any, path: str) -> Any:
