@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_container, run_type_badge %}
+{% from "components/macros.html" import chart_panel, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -114,24 +114,12 @@
 
         {# Bar chart #}
         <div x-show="activeTab === 'bar'">
-            {% if charts.get('bar') and charts.bar != '{}' %}
-            {{ chart_container('chart-comparison-bar', 'Energy Totals Comparison', '450px') }}
-            {% else %}
-            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                No chart data available.
-            </div>
-            {% endif %}
+            {{ chart_panel('chart-comparison-bar', 'Energy Totals Comparison', charts.get('bar'), '450px', empty_message='No chart data available.') }}
         </div>
 
         {# Radar chart #}
         <div x-show="activeTab === 'radar'" x-cloak>
-            {% if charts.get('radar') and charts.radar != '{}' %}
-            {{ chart_container('chart-comparison-radar', 'Efficiency Ratios', '450px') }}
-            {% else %}
-            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                No chart data available.
-            </div>
-            {% endif %}
+            {{ chart_panel('chart-comparison-radar', 'Efficiency Ratios', charts.get('radar'), '450px', empty_message='No chart data available.') }}
         </div>
     </div>
 
@@ -169,21 +157,5 @@
 
 {% block scripts %}
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    {% if charts.get('bar') and charts.bar != '{}' %}
-    try {
-        var barData = JSON.parse({{ charts.bar | tojson }});
-        Plotly.newPlot('chart-comparison-bar', barData.data || [], barData.layout || {}, {responsive: true});
-    } catch (e) { console.error('Bar chart error:', e); }
-    {% endif %}
-
-    {% if charts.get('radar') and charts.radar != '{}' %}
-    try {
-        var radarData = JSON.parse({{ charts.radar | tojson }});
-        Plotly.newPlot('chart-comparison-radar', radarData.data || [], radarData.layout || {}, {responsive: true});
-    } catch (e) { console.error('Radar chart error:', e); }
-    {% endif %}
-});
-</script>
+<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
 {% endblock %}

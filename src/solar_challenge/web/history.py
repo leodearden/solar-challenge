@@ -56,11 +56,7 @@ def compare_page() -> str | Response:
     """
     ids_param = request.args.get("ids", "")
     if not ids_param:
-        return str(render_template(
-            "history/compare.html",
-            runs=[],
-            charts={},
-        ))
+        return str(render_template("history/compare.html", runs=[]))
 
     run_ids = [rid.strip() for rid in ids_param.split(",") if rid.strip()]
     if len(run_ids) < 2:

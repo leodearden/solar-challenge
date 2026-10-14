@@ -74,25 +74,17 @@
 {% endmacro %}
 
 
-{# Chart wrapper div for Plotly charts; a given figure, Plotly figure JSON, rides on the container for static/js/chart-renderer.js to draw #}
-{% macro chart_container(id, title='', min_height='400px', figure='') %}
-<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-    {% if title %}
-    <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ title }}</h3>
-    </div>
-    {% endif %}
-    <div id="{{ id }}" class="w-full" style="min-height: {{ min_height }};"{% if figure %} data-chart-figure="{{ figure }}"{% endif %}></div>
-</div>
-{% endmacro %}
-
-
 {# The titled card of the chart static/js/chart-renderer.js draws from figure; a figure with nothing to draw (none or '{}') gets the card of empty_message instead, or no card, and an undefined figure, read under a name the page's route never set, fails the render, naming that name #}
 {% macro chart_panel(id, title, figure, min_height, empty_message='') %}
 {% if figure is undefined %}
 {{ figure() }}{# calling an undefined raises the UndefinedError that names it #}
 {% elif figure and figure != '{}' %}
-{{ chart_container(id, title, min_height, figure) }}
+<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+    <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ title }}</h3>
+    </div>
+    <div id="{{ id }}" class="w-full" style="min-height: {{ min_height }};" data-chart-figure="{{ figure }}"></div>
+</div>
 {% elif empty_message %}
 {% call card() %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>{% endcall %}
 {% endif %}
