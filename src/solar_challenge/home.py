@@ -2,7 +2,7 @@
 """Single home simulation combining PV, battery, and load."""
 
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
@@ -330,6 +330,94 @@ def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
         raise ValueError(f"Unknown strategy type: {strategy_type}")
 
 
+_Timestep = Callable[[pd.Timestamp, float, float], EnergyFlowResult]
+"""One minute of a run's dispatch: that minute's timestamp, generation in kW and demand in kW, to its flows."""
+
+
+@dataclass(frozen=True)
+class _DispatchPath:
+    """How a run dispatches each minute, and the strategy name its results record.
+
+    The timestep charges and discharges the run's own battery.
+    """
+
+    strategy_name: str
+    timestep: _Timestep
+
+
+def _tariff_tou_timestep(battery: Optional[Battery], tariff: TariffConfig) -> _Timestep:
+    """Each minute dispatched at the tariff's rates by simulate_timestep_tou."""
+
+    def timestep(timestamp: pd.Timestamp, generation_kw: float, demand_kw: float) -> EnergyFlowResult:
+        return simulate_timestep_tou(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=battery,
+            timestamp=timestamp,
+            tariff=tariff,
+            timestep_minutes=1.0,
+        )
+
+    return timestep
+
+
+def _strategy_timestep(
+    battery: Optional[Battery],
+    strategy: DispatchStrategy,
+    tariff: Optional[TariffConfig],
+) -> _Timestep:
+    """Each minute dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+
+    def timestep(timestamp: pd.Timestamp, generation_kw: float, demand_kw: float) -> EnergyFlowResult:
+        return simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=battery,
+            timestep_minutes=1.0,
+            timestamp=timestamp.to_pydatetime(),
+            strategy=strategy,
+            tariff=tariff,
+        )
+
+    return timestep
+
+
+def _dispatch_path(config: HomeConfig) -> _DispatchPath:
+    """How the home dispatches each minute.
+
+    It takes the tariff-rate TOU path when it asks for tou_optimized, has a tariff and its
+    battery names no strategy of its own; otherwise its battery's strategy, self-consumption
+    by default.
+    """
+    battery = None if config.battery_config is None else Battery(config.battery_config)
+    tariff = config.tariff_config
+    battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
+    if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
+        return _DispatchPath("tou_optimized", _tariff_tou_timestep(battery, tariff))
+    strategy = _create_dispatch_strategy(config)
+    return _DispatchPath(strategy.name, _strategy_timestep(battery, strategy, tariff))
+
+
+def _minute_flows(
+    timestep: _Timestep,
+    generation_kw: pd.Series,
+    demand_kw: pd.Series,
+    validate_balance: bool,
+) -> list[EnergyFlowResult]:
+    """Each minute's flows, in order, from timestep run on that minute's generation and demand.
+
+    With validate_balance, each minute's flows are checked for energy balance before the next
+    minute runs, so an imbalance stops the run at the minute it occurs.
+    """
+    flows: list[EnergyFlowResult] = []
+    for timestamp, generation, demand in zip(demand_kw.index, generation_kw, demand_kw, strict=True):
+        flow = timestep(timestamp, float(generation), float(demand))
+        if validate_balance:
+            validate_energy_balance(flow)
+        flows.append(flow)
+    return flows
+
+
 @dataclass(frozen=True)
 class _ImportPricing:
     """Each minute's tariff rate in £/kWh, import cost in £ and grid-charging cost in £, None on an untariffed run."""
@@ -436,83 +524,30 @@ def simulate_home(
 
     aligned_generation = align_tmy_to_index(minute_generation, demand.total_kw.index)
 
-    # Create battery if configured
-    battery: Optional[Battery] = None
-    if config.battery_config is not None:
-        battery = Battery(config.battery_config)
+    dispatch = _dispatch_path(config)
+    flows = _minute_flows(dispatch.timestep, aligned_generation, demand.total_kw, validate_balance)
 
-    # Determine dispatch approach:
-    # 1. BatteryConfig.dispatch_strategy (Strategy pattern from dispatch.py)
-    # 2. HomeConfig.dispatch_strategy == "tou_optimized" with tariff (tariff-based TOU)
-    # 3. Default: SelfConsumptionStrategy
-    use_tariff_tou = (
-        config.dispatch_strategy == "tou_optimized"
-        and config.tariff_config is not None
-        and (config.battery_config is None or config.battery_config.dispatch_strategy is None)
-    )
-
-    strategy: Optional[DispatchStrategy] = None
-    strategy_name = "self_consumption"
-    if not use_tariff_tou:
-        strategy = _create_dispatch_strategy(config)
-        strategy_name = strategy.name
-    else:
-        strategy_name = "tou_optimized"
-
-    # Run timestep simulation
-    results_list: list[EnergyFlowResult] = []
-
-    # Get index for timestamp lookup
     index = demand.total_kw.index
-
-    for timestamp, (gen_kw, dem_kw) in zip(
-        index, zip(aligned_generation, demand.total_kw, strict=True), strict=True
-    ):
-        if use_tariff_tou:
-            result = simulate_timestep_tou(
-                generation_kw=float(gen_kw),
-                demand_kw=float(dem_kw),
-                battery=battery,
-                timestamp=timestamp,
-                tariff=config.tariff_config,  # type: ignore[arg-type]
-                timestep_minutes=1.0,
-            )
-        else:
-            result = simulate_timestep(
-                generation_kw=float(gen_kw),
-                demand_kw=float(dem_kw),
-                battery=battery,
-                timestep_minutes=1.0,
-                timestamp=timestamp.to_pydatetime(),
-                strategy=strategy,
-                tariff=config.tariff_config,
-            )
-
-        if validate_balance:
-            validate_energy_balance(result)
-
-        results_list.append(result)
-
     minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
 
-    import_pricing = _price_imports(config.tariff_config, results_list, index)
-    export_revenue = _export_revenue(config, results_list, index)
+    import_pricing = _price_imports(config.tariff_config, flows, index)
+    export_revenue = _export_revenue(config, flows, index)
     grid_charge_series = (
         None
         if import_pricing.grid_charge_cost is None
-        else pd.Series([r.grid_charge * minute_kwh_to_kw for r in results_list], index=index)
+        else pd.Series([r.grid_charge * minute_kwh_to_kw for r in flows], index=index)
     )
 
     return SimulationResults(
-        strategy_name=strategy_name,
-        generation=pd.Series([r.generation * minute_kwh_to_kw for r in results_list], index=index),
-        demand=pd.Series([r.demand * minute_kwh_to_kw for r in results_list], index=index),
-        self_consumption=pd.Series([r.self_consumption * minute_kwh_to_kw for r in results_list], index=index),
-        battery_charge=pd.Series([r.battery_charge * minute_kwh_to_kw for r in results_list], index=index),
-        battery_discharge=pd.Series([r.battery_discharge * minute_kwh_to_kw for r in results_list], index=index),
-        battery_soc=pd.Series([r.battery_soc for r in results_list], index=index),
-        grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in results_list], index=index),
-        grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in results_list], index=index),
+        strategy_name=dispatch.strategy_name,
+        generation=pd.Series([r.generation * minute_kwh_to_kw for r in flows], index=index),
+        demand=pd.Series([r.demand * minute_kwh_to_kw for r in flows], index=index),
+        self_consumption=pd.Series([r.self_consumption * minute_kwh_to_kw for r in flows], index=index),
+        battery_charge=pd.Series([r.battery_charge * minute_kwh_to_kw for r in flows], index=index),
+        battery_discharge=pd.Series([r.battery_discharge * minute_kwh_to_kw for r in flows], index=index),
+        battery_soc=pd.Series([r.battery_soc for r in flows], index=index),
+        grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in flows], index=index),
+        grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in flows], index=index),
         import_cost=import_pricing.import_cost,
         export_revenue=export_revenue,
         tariff_rate=import_pricing.tariff_rate,
