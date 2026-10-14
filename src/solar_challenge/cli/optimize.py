@@ -20,6 +20,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.optimize import (
+    SENSITIVITY_BANDS,
     enumerate_configs,
     run_sweep,
     sensitivity_panel,
@@ -29,30 +30,13 @@ from solar_challenge.seg import SEGTariff
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands (W3)")
 
-# Short-name → FinanceConfig field-name alias map for --sensitivity.
-# Values: (field_name, default_band) where default_band is the swept value sequence
-# used when the axis is in the default-on set.
-_SENSITIVITY_ALIAS_MAP: dict[str, tuple[str, tuple[float, ...]]] = {
-    "grid_services": (
-        "grid_services_income_per_kw_per_year_gbp",
-        (1.5, 12.0, 48.0),
-    ),
-    "retained_floor": (
-        "retained_cash_floor_per_home_per_year_gbp",
-        (15.0, 27.0, 40.0),
-    ),
-    "battery_cost": (
-        "battery_cost_per_kwh_gbp",
-        (200.0, 300.0, 450.0),
-    ),
-    "pv_cost": (
-        "pv_cost_per_kwp_gbp",
-        (800.0, 1200.0, 1800.0),
-    ),
-    "inverter_cost": (
-        "inverter_cost_per_kw_gbp",
-        (100.0, 200.0, 350.0),
-    ),
+# --sensitivity alias → the knob it sweeps, over that knob's optimize.SENSITIVITY_BANDS values.
+_SENSITIVITY_ALIAS_MAP: dict[str, str] = {
+    "grid_services": "grid_services_income_per_kw_per_year_gbp",
+    "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
+    "battery_cost": "battery_cost_per_kwh_gbp",
+    "pv_cost": "pv_cost_per_kwp_gbp",
+    "inverter_cost": "inverter_cost_per_kw_gbp",
 }
 
 
@@ -306,10 +290,8 @@ def configs(
     # ---- Optional sensitivity panel ----------------------------------------
     panel = None
     if sensitivity_axes and ranked.cheapest_feasible is not None:
-        axes_map: dict[str, list[float]] = {}
-        for alias in sensitivity_axes:
-            field_name, default_band = _SENSITIVITY_ALIAS_MAP[alias]
-            axes_map[field_name] = list(default_band)
+        knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
+        axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
         print_info(f"Computing sensitivity panel for axes: {sensitivity_axes}…")
         try:
             panel = sensitivity_panel(
