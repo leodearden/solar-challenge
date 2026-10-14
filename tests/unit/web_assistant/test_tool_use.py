@@ -38,6 +38,7 @@ from tests.unit.web_assistant._fakes import (
     install_fake_anthropic,
     make_end_turn_stream,
     make_fake_stream,
+    make_stopped_stream,
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
@@ -304,6 +305,30 @@ class TestToolUseLoop:
             ("user", "explain forever"),
             ("assistant", TOOL_CALL_LIMIT_NOTICE),
         ]
+
+    @pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens", "stop_sequence", "refusal", None])
+    def test_a_reply_that_stops_for_any_reason_but_tool_use_ends_the_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        stop_reason: str | None,
+    ) -> None:
+        """A reply that stops for any reason but tool_use is the turn's last model call, and
+        the turn ends with done. pause_turn is left out: only server tools, which TOOLS does
+        not offer, pause a turn."""
+        anthropic_api.set_streams([
+            make_stopped_stream(stop_reason, ["Partial", " answer"]),
+            make_end_turn_stream(["A call the turn must not make."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        assert len(anthropic_api.calls) == 1, (
+            f"Expected one model call; got {len(anthropic_api.calls)}"
+        )
+        assert "".join(e.data["text"] for e in events if e.event == "delta") == "Partial answer"
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
 
     def test_final_message_without_stop_reason_streams_reply(
         self,
