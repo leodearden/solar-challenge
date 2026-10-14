@@ -26,4 +26,6 @@ def test_demand_is_the_homes_load_profile_on_its_locations_clock_ev_charging_inc
     results = simulate_home(home, day, day, weather_data=synthetic_june_weather(day))
 
     load_profile = generate_load_profile(home.load_config, day, day, timezone="Europe/Paris", ev_config=home.ev_config)
+    household_load = generate_load_profile(home.load_config, day, day, timezone="Europe/Paris")
+    assert (load_profile > household_load).any()
     pd.testing.assert_series_equal(results.demand, load_profile, check_names=False, rtol=1e-12, atol=0.0)
