@@ -7,9 +7,8 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from solar_challenge.cli import home as home_cli
 from solar_challenge.cli.main import app
-from solar_challenge.load import LoadConfig
+from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
@@ -25,6 +24,18 @@ def _bristol_june_tmy(weather_cache: WeatherCache) -> None:
     weather_cache.put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
 
 
+def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
+    """The minutes `home quick 4 --days 1 *options` saves, read back from a CSV under tmp_path."""
+    csv_path = tmp_path / "quick.csv"
+
+    result = runner.invoke(
+        app, ["home", "quick", "4", "--days", "1", *options, "-o", str(csv_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    return pd.read_csv(csv_path, index_col=0, parse_dates=True)
+
+
 def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
     """`home quick 4 5 --days 1` exits 0 and prints the results table."""
     result = runner.invoke(app, ["home", "quick", "4", "5", "--days", "1"])
@@ -33,38 +44,30 @@ def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
     assert "Quick Simulation Results" in result.stdout
 
 
-def test_home_quick_writes_the_csv_when_asked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_home_quick_saves_the_minutes_from_midnight_on_1_june_2024(tmp_path: Path) -> None:
+    """`--output` saves the simulated minutes, the first at midnight on 1 June 2024."""
+    saved = _saved_minutes(tmp_path)
+
+    assert saved.index[0] == pd.Timestamp(_DAY, tz=Location.bristol().timezone)
+
+
+@pytest.mark.parametrize(
+    ("consumption_options", "expected_load"),
+    [
+        pytest.param([], LoadConfig(), id="default-is-the-ofgem-tdcv"),
+        pytest.param(
+            ["-c", "4200"],
+            LoadConfig(annual_consumption_kwh=4200.0),
+            id="c-sets-the-annual-consumption",
+        ),
+    ],
+)
+def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
+    consumption_options: list[str], expected_load: LoadConfig, tmp_path: Path
 ) -> None:
-    """`--output` saves the simulated minutes."""
-    monkeypatch.chdir(tmp_path)
+    """The saved day's demand sums to the expected load's day, which the annual consumption fixes whatever the random profile."""
+    saved = _saved_minutes(tmp_path, *consumption_options)
 
-    result = runner.invoke(app, ["home", "quick", "4", "--days", "1", "-o", "q.csv"])
-
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / "q.csv").stat().st_size > 0
-
-
-def test_home_quick_simulates_the_default_home_from_1_june_2024(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With no --consumption-kwh the load is LoadConfig()'s default, and the window starts 1 June 2024."""
-    simulated = []
-    real_simulate_home = home_cli.simulate_home
-
-    def spy(home_config, start_date, end_date):  # type: ignore[no-untyped-def]
-        simulated.append((home_config, start_date, end_date))
-        return real_simulate_home(home_config, start_date, end_date)
-
-    monkeypatch.setattr(home_cli, "simulate_home", spy)
-
-    result = runner.invoke(app, ["home", "quick", "4", "--days", "1"])
-
-    assert result.exit_code == 0, result.output
-    [(home_config, start_date, _)] = simulated
-    assert home_config.load_config.annual_consumption_kwh is None
-    assert (
-        home_config.load_config.get_annual_consumption()
-        == LoadConfig().get_annual_consumption()
-    )
-    assert start_date.date() == pd.Timestamp(_DAY).date()
+    day = pd.Timestamp(_DAY)
+    expected_demand = generate_load_profile(expected_load, day, day)
+    assert saved["demand_kw"].sum() == pytest.approx(expected_demand.sum())

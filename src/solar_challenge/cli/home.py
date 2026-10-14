@@ -203,7 +203,10 @@ def quick(
         Optional[float],
         typer.Option(
             "--consumption-kwh", "-c",
-            help="Annual consumption in kWh (default: Ofgem TDCV for the household)",
+            help=(
+                "Annual consumption in kWh (default: Ofgem TDCV for a "
+                f"{LoadConfig().household_occupants}-person household)"
+            ),
         ),
     ] = None,
     output: Annotated[
