@@ -36,24 +36,21 @@ def _type_checking_imports() -> dict[str, tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Step-1 gate: structural __all__ checks (T3 owns no-dups / no-CLI / count)
-# T4 (test_public_api_surface.py) is the authoritative freeze test that pins
-# the exact set of 69 names — avoid maintaining a second EXPECTED_ALL copy here.
+# Step-1 gate: structural __all__ checks (no duplicates, no CLI names).
+# T4 (test_public_api_surface.py) pins the exact names, and so their count.
 # ---------------------------------------------------------------------------
 
 
-def test_all_is_complete_frozen_surface() -> None:
-    """__all__ has no duplicates, excludes CLI names, and has the expected count.
+def test_all_has_no_duplicates_and_no_cli_names() -> None:
+    """__all__ has no duplicates and excludes CLI names.
 
     T4 (test_public_api_surface.py) is the authoritative surface-lock that pins
     the exact set of names. This test checks only structural properties T3 owns.
     """
     assert hasattr(solar_challenge, "__all__"), "__all__ not defined on package"
     as_list = list(solar_challenge.__all__)
-    # No duplicates
-    assert len(as_list) == len(set(as_list)), "Duplicate names in __all__"
-    # Exact count matches PRD §3.1 (69 names, includes bill); T4 pins the actual names
-    assert len(as_list) == 69, f"Expected 69 names in __all__, got {len(as_list)}"
+    duplicates = sorted({n for n in as_list if as_list.count(n) > 1})
+    assert not duplicates, f"Duplicate names in __all__: {duplicates}"
     # CLI stays out of __all__
     actual = set(solar_challenge.__all__)
     assert "get_cli_app" not in actual
