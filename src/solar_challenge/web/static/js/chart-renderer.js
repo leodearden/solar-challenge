@@ -3,11 +3,11 @@
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
  *
- * Charts are drawn in the theme's colours (AC9), and each drawn chart that is
- * shown is recoloured on theme-changed (AC10). A chart that cannot be drawn,
- * whether its drawing fails at once or after Plotly.newPlot returns, logs a
- * console error naming its container's id, and the page's other charts still
- * draw.
+ * Charts are drawn in the theme's colours (AC9), and each drawn chart is
+ * recoloured on theme-changed once it is shown (AC10): at once if it is, else
+ * when its tab is next shown. A chart that cannot be drawn, whether its
+ * drawing fails at once or after Plotly.newPlot returns, logs a console error
+ * naming its container's id, and the page's other charts still draw.
  *
  * Plotly must load first.
  */
@@ -46,6 +46,11 @@
         };
     }
 
+    /** Layout overrides for the active theme. */
+    function _themeOverrides() {
+        return _isDark() ? _darkOverrides() : _lightOverrides();
+    }
+
     /**
      * Deep-merge theme overrides into a layout object (mutates target).
      */
@@ -72,7 +77,7 @@
     function _draw(container) {
         new Promise(function (resolve) {
             var fig = JSON.parse(container.dataset.chartFigure);
-            var overrides = _isDark() ? _darkOverrides() : _lightOverrides();
+            var overrides = _themeOverrides();
             resolve(Plotly.newPlot(container, fig.data, _applyOverrides(fig.layout || {}, overrides), SOLAR_CHART_CONFIG));
         }).then(function () {
             _drawn.push(container);
@@ -81,29 +86,43 @@
         });
     }
 
-    /** Draws each observed container the first time it has a width (AC3). */
-    var _firstShown = new ResizeObserver(function (entries) {
-        entries.forEach(function (entry) {
-            if (entry.contentRect.width > 0) {
-                _firstShown.unobserve(entry.target);
-                _draw(entry.target);
-            }
+    /** Applies the active theme's overrides to the chart of container, which is drawn. */
+    function _recolour(container) {
+        Plotly.relayout(container, _themeOverrides());
+    }
+
+    /**
+     * Returns a ResizeObserver that calls action with each observed container
+     * the first time it has a width, at the next frame if it has one already,
+     * so nothing is laid out in a hidden tab.
+     */
+    function _onceShown(action) {
+        return new ResizeObserver(function (entries, observer) {
+            entries.forEach(function (entry) {
+                if (entry.contentRect.width > 0) {
+                    observer.unobserve(entry.target);
+                    action(entry.target);
+                }
+            });
         });
-    });
+    }
+
+    /** Draws each observed container the first time it is shown (AC3). */
+    var _drawOnceShown = _onceShown(_draw);
+
+    /** Recolours each observed container's chart the first time it is shown (AC10). */
+    var _recolourOnceShown = _onceShown(_recolour);
 
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('[data-chart-figure]').forEach(function (container) {
-            _firstShown.observe(container);
+            _drawOnceShown.observe(container);
         });
     });
 
-    /** Re-apply theme overrides to each drawn chart that is shown when dark mode toggles (AC10). */
+    /** Recolours each drawn chart once it is shown, in the theme that is active then (AC10). */
     document.addEventListener('theme-changed', function () {
-        var overrides = _isDark() ? _darkOverrides() : _lightOverrides();
         _drawn.forEach(function (container) {
-            if (container.offsetParent !== null) {
-                Plotly.relayout(container, overrides);
-            }
+            _recolourOnceShown.observe(container);
         });
     });
 }());
