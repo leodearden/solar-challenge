@@ -852,8 +852,9 @@ _NO_REPLY_TEXT = "[No reply text was received.]"
 class _TurnEnding:
     """How an assistant turn ended.
 
-    *final_frame* tells the client; *stand_in* is stored as the reply when the
-    model sent no text; *metadata* joins the stored reply's metadata.
+    *final_frame* ends the client's stream, and is empty once the client has
+    left; *stand_in* is stored as the reply when no text streamed; *metadata*
+    joins the stored reply's metadata.
     """
 
     final_frame: str
@@ -862,12 +863,14 @@ class _TurnEnding:
 
 
 _FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
-# The client closed the stream, so its frame is never sent.
 _CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
 
 
 def _failed(error: Exception) -> _TurnEnding:
-    """The ending of a turn that *error* stopped: the notice the user is shown is also its stored reply."""
+    """The ending of a turn that *error* stopped.
+
+    The notice it shows the user stands in for the reply when no text streamed.
+    """
     notice = f"Streaming error: {error}"
     return _TurnEnding(
         _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
@@ -965,6 +968,8 @@ def chat() -> Response:
         cache_usage: dict[str, int] = {}
         invoked_tools: list[str] = []
         ending = _CUT_SHORT
+        # Every exit stores one reply with text:
+        # tests/unit/web_assistant/test_chat.py::TestEveryTurnStoresAReplyWithText
         try:
             # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
             # runaway model cannot hang the single Flask worker or the test suite.
@@ -1051,7 +1056,6 @@ def chat() -> Response:
 
         except Exception as exc:
             ending = _failed(exc)
-        # Every exit stores one reply with text: tests/unit/web_assistant/test_chat.py::TestEveryTurnStoresAReplyWithText
         finally:
             metadata: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
             if invoked_tools:
