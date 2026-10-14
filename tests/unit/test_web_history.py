@@ -19,7 +19,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
@@ -36,7 +36,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
-from tests._web_runs import store_fleet_run
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
@@ -845,14 +845,7 @@ def _store_home_run(
     storage: RunStorage, run_id: str, config: HomeConfig, name: str | None = None
 ) -> None:
     """Save a one-day home run of *config* through RunStorage, as a finished job does."""
-    results = make_sinusoidal_sim_results(days=1)
-    storage.save_home_run(
-        run_id=run_id,
-        config=config,
-        results=results,
-        summary=calculate_summary(results),
-        name=name,
-    )
+    store_home_run(storage, run_id, config, make_sinusoidal_sim_results(days=1), name=name)
 
 
 def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:
@@ -951,32 +944,20 @@ class TestContentDispositionHeader:
     """Tests for Content-Disposition header quoting in export endpoints."""
 
     def test_csv_content_disposition_has_quoted_filename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Test CSV export Content-Disposition header has quotes around the filename."""
         run_id = str(uuid.uuid4())
-
-        # Save a simple home run for export
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3500),
+        _store_home_run(
+            storage,
+            run_id,
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3500),
+                name="Quote Test",
+            ),
             name="Quote Test",
         )
-        results = make_sinusoidal_sim_results(days=1)
-        summary = calculate_summary(results)
-
-        with app.app_context():
-            storage = RunStorage(
-                db_path=app.config["DATABASE"],
-                data_dir=app.config["DATA_DIR"],
-            )
-            storage.save_home_run(
-                run_id=run_id,
-                config=config,
-                results=results,
-                summary=summary,
-                name="Quote Test",
-            )
 
         response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200

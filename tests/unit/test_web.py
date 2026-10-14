@@ -14,7 +14,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RunStatus, get_db
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
@@ -30,7 +30,7 @@ from tests._html_page import (
 )
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
-from tests._web_runs import store_fleet_run
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def _save_home_run(
     results: SimulationResults,
     *,
     created_at: str | None = None,
-    status: str = "completed",
+    status: RunStatus = "completed",
     battery_config: BatteryConfig | None = None,
 ) -> str:
     """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
@@ -77,11 +77,11 @@ def _save_home_run(
     *status* is the status the run is recorded with; it defaults to completed.
     """
     run_id = str(uuid.uuid4())
-    _run_storage(app).save_home_run(
-        run_id=run_id,
-        config=_home_config(name, battery_config=battery_config),
-        results=results,
-        summary=calculate_summary(results),
+    store_home_run(
+        _run_storage(app),
+        run_id,
+        _home_config(name, battery_config=battery_config),
+        results,
         name=name,
         status=status,
         created_at=created_at,
