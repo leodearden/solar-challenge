@@ -884,6 +884,13 @@ _SENSITIVITY_ALIAS_KNOBS: dict[str, str] = {
 }
 
 
+def test_the_documented_sensitivity_aliases_cover_exactly_the_library_bands() -> None:
+    """The documented aliases' knobs are exactly the optimize.SENSITIVITY_BANDS knobs, so the end-to-end alias test covers every band."""
+    assert set(_SENSITIVITY_ALIAS_KNOBS.values()) == set(SENSITIVITY_BANDS), (
+        "Every library band must be reachable from a CLI alias."
+    )
+
+
 def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
     """Return, for each '### Axis: <knob>' section of a config-ranking report, the values its table rows sweep."""
     swept: dict[str, list[float]] = {}
@@ -1003,9 +1010,6 @@ class TestOptimizeCLIE2EFast:
         assert result.exit_code == 0, (
             f"Expected exit 0 from 'optimize configs'; got {result.exit_code}.\n"
             f"Output:\n{result.output}"
-        )
-        assert set(_SENSITIVITY_ALIAS_KNOBS.values()) == set(SENSITIVITY_BANDS), (
-            "Every library band must be reachable from a CLI alias."
         )
         swept = _swept_values_by_axis(result.stdout)
         assert set(swept) == set(_SENSITIVITY_ALIAS_KNOBS.values()), (
