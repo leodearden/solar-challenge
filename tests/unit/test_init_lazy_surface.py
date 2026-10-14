@@ -17,6 +17,24 @@ import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 
 
+def _type_checking_imports() -> dict[str, tuple[str, str]]:
+    """Each name the package's top-level `if TYPE_CHECKING:` block binds, mapped to
+    the module it imports from and the name it imports there."""
+    source = pathlib.Path(solar_challenge.__file__).read_text(encoding="utf-8")
+    blocks = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+    ]
+    return {
+        alias.asname or alias.name: (statement.module, alias.name)
+        for block in blocks
+        for statement in block.body
+        if isinstance(statement, ast.ImportFrom) and statement.module is not None
+        for alias in statement.names
+    }
+
+
 # ---------------------------------------------------------------------------
 # Step-1 gate: structural __all__ checks (T3 owns no-dups / no-CLI / count)
 # T4 (test_public_api_surface.py) is the authoritative freeze test that pins
@@ -63,6 +81,30 @@ def test_every_name_resolves_and_caches() -> None:
         # Repeat access returns the identical (cached) object
         obj2 = getattr(solar_challenge, name)
         assert resolved is obj2, f"Cached and fresh {name!r} differ"
+
+
+def test_every_name_resolves_to_its_type_checking_import() -> None:
+    """Each __all__ name, on a first and on a repeat access, is the object the
+    package's `if TYPE_CHECKING:` block imports under that name.
+
+    Type checkers read that block, so the runtime and typed surfaces must agree.
+    A name the block does not import is test_type_checking_block_names_match_all's
+    to report.
+    """
+    imports = _type_checking_imports()
+    misresolved: list[str] = []
+    for name in solar_challenge.__all__:
+        if name not in imports:
+            continue
+        module, source = imports[name]
+        imported = getattr(import_module(module), source)
+        first, repeat = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if first is not imported or repeat is not imported:
+            misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
+    assert not misresolved, (
+        "Names that resolve to an object other than their TYPE_CHECKING import:\n"
+        + "\n".join(misresolved)
+    )
 
 
 def test_unknown_attribute_raises() -> None:
