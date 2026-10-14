@@ -63,8 +63,8 @@ def test_all_has_no_duplicates_and_no_cli_names() -> None:
 
 
 def test_every_name_resolves_to_its_type_checking_import() -> None:
-    """Each __all__ name, on a first and on a repeat access, is the object the
-    package's `if TYPE_CHECKING:` block imports under that name.
+    """Each __all__ name resolves to the object the package's `if TYPE_CHECKING:`
+    block imports under that name, and stays that object across accesses.
 
     Type checkers read that block, so the runtime and typed surfaces must agree.
     A name the block does not import is test_type_checking_block_names_match_all's
@@ -77,8 +77,8 @@ def test_every_name_resolves_to_its_type_checking_import() -> None:
             continue
         module, source = imports[name]
         imported = getattr(import_module(module), source)
-        first, repeat = getattr(solar_challenge, name), getattr(solar_challenge, name)
-        if first is not imported or repeat is not imported:
+        resolved, resolved_again = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if resolved is not imported or resolved_again is not imported:
             misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
     assert not misresolved, (
         "Names that resolve to an object other than their TYPE_CHECKING import:\n"
