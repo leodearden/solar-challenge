@@ -22,7 +22,9 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
+    BillDistribution,
     CostRecoverySolution,
+    FinanceConfig,
     ProjectEconomics,
     bill_distribution,
     project_economics,
@@ -52,6 +54,27 @@ class FlexBand(str, enum.Enum):
     low = "low"
     central = "central"
     high = "high"
+
+
+def _bill_finances(
+    assumptions: AssumptionMode, finance: FinanceConfig
+) -> tuple[FinanceConfig, Optional[FinanceConfig]]:
+    """The FinanceConfig of the report's first bill column, and under --assumptions both of its spreadsheet column, else None."""
+    physics = dataclasses.replace(finance, self_consumption_override=None)
+    spreadsheet = dataclasses.replace(
+        finance,
+        self_consumption_override=(
+            finance.self_consumption_override
+            if finance.self_consumption_override is not None
+            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
+        ),
+    )
+    pairs: dict[AssumptionMode, tuple[FinanceConfig, Optional[FinanceConfig]]] = {
+        AssumptionMode.physics: (physics, None),
+        AssumptionMode.spreadsheet: (spreadsheet, None),
+        AssumptionMode.both: (physics, spreadsheet),
+    }
+    return pairs[assumptions]
 
 
 @app.command()
@@ -200,27 +223,13 @@ def run(
     ]
 
     # ---- Build bill distributions -------------------------------------------
-    # Only compute the distributions that are actually needed for the selected
-    # --assumptions mode.  dist_physics is skipped for spreadsheet-only to
-    # avoid unnecessary arithmetic (cheap but misleading control flow).
-    dist_physics = None
-    if assumptions in (AssumptionMode.physics, AssumptionMode.both):
-        finance_physics = dataclasses.replace(finance, self_consumption_override=None)
-        dist_physics = bill_distribution(summaries, finance_physics, days)
-
-    dist_spreadsheet = None
-    if assumptions in (AssumptionMode.spreadsheet, AssumptionMode.both):
-        # Use the finance.self_consumption_override if set, otherwise use the
-        # module-level default documented alongside the other finance constants.
-        override_val = (
-            finance.self_consumption_override
-            if finance.self_consumption_override is not None
-            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
-        )
-        finance_spreadsheet = dataclasses.replace(
-            finance, self_consumption_override=override_val
-        )
-        dist_spreadsheet = bill_distribution(summaries, finance_spreadsheet, days)
+    primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)
+    primary_bill = bill_distribution(summaries, primary_finance, days)
+    spreadsheet_bill: Optional[BillDistribution] = (
+        bill_distribution(summaries, spreadsheet_finance, days)
+        if spreadsheet_finance is not None
+        else None
+    )
 
     # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
     econ_scenario: Optional[ScenarioConfig] = None
@@ -259,40 +268,15 @@ def run(
         cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance, simulate=simulate)
 
     # ---- Render report ------------------------------------------------------
-    if assumptions == AssumptionMode.physics:
-        assert dist_physics is not None
-        report = generate_finance_report(
-            dist_physics,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
-    elif assumptions == AssumptionMode.spreadsheet:
-        assert dist_spreadsheet is not None
-        report = generate_finance_report(
-            dist_spreadsheet,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
-    else:  # both
-        assert dist_physics is not None
-        assert dist_spreadsheet is not None
-        report = generate_finance_report(
-            dist_physics,
-            bill_spreadsheet=dist_spreadsheet,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
+    report = generate_finance_report(
+        primary_bill,
+        spreadsheet_bill,
+        scenario_name=raw.get("name", str(scenario)),
+        economics=economics_result,
+        cost_recovery=cost_recovery_result,
+        flex_band=resolved_flex_band,
+        flex_band_name=band_name or "",
+        grid_services_at_events=_grid_services_at_events,
+    )
 
     print_report(report)
