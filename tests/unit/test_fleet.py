@@ -523,13 +523,13 @@ class TestSimulateFleetIter:
 
 @pytest.mark.usefixtures("bristol_june_tmy")
 class TestParallelMatchesSequential:
-    """A seeded fleet's parallel run gives each home exactly the results its sequential run gives it, whichever worker draws its stochastic demand."""
+    """A seeded stochastic fleet's parallel run gives each home exactly its sequential run's results, whichever worker draws its demand."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
     def test_seeded_stochastic_homes_get_their_sequential_results_from_parallel_workers(
         self, worker_start_method: str
     ) -> None:
-        """Four homes differing only in their seed, shared by two forkserver or spawn workers so a worker draws one home's demand after another's, each get exactly the results a sequential run gives them."""
+        workers = 2
         fleet = parse_fleet_config(
             {
                 "fleet_distribution": {
@@ -540,6 +540,10 @@ class TestParallelMatchesSequential:
                 }
             }
         )
+        assert len(fleet.homes) > workers, (
+            f"premise: {len(fleet.homes)} homes over {workers} workers, so some worker draws "
+            "one home's demand after another's"
+        )
 
         in_sequence = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=False)
         distinct_demands = {tuple(results.demand) for results in in_sequence.per_home_results}
@@ -549,7 +553,7 @@ class TestParallelMatchesSequential:
             "the deterministic Elexon fallback's do not"
         )
 
-        in_parallel = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=True, max_workers=2)
+        in_parallel = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=True, max_workers=workers)
         for home, from_workers, from_sequence in zip(
             fleet.homes, in_parallel.per_home_results, in_sequence.per_home_results, strict=True
         ):
