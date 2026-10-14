@@ -218,10 +218,10 @@ class TestProjectMultiYearRevenue:
                 ),
             )
 
-        losing, breaking_even = solve(-50.0), solve(0.0)
+        seg_loss, no_seg = solve(-50.0), solve(0.0)
 
-        assert (losing.binding, breaking_even.binding) == ("floor", "floor"), "premise: both rates are interior"
-        assert losing.own_use_rate_pence_per_kwh - breaking_even.own_use_rate_pence_per_kwh == pytest.approx(
+        assert (seg_loss.binding, no_seg.binding) == ("floor", "floor"), "premise: both rates are interior"
+        assert seg_loss.own_use_rate_pence_per_kwh - no_seg.own_use_rate_pence_per_kwh == pytest.approx(
             50.0 * 100.0 / 1000.0
         )
 
