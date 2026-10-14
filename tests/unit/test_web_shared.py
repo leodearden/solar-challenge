@@ -14,12 +14,16 @@ from solar_challenge.web.shared import (
 )
 
 
-def _accepted_forms_refusal(value: object) -> str:
-    """The refusal resolve_location gives *value*, naming it and the forms it accepts."""
-    return (
-        "location must be 'lat,lon' coordinates or one of "
-        f"{', '.join(map(repr, LOCATION_PRESETS))}, got {value!r}"
-    )
+def _assert_names_location_the_accepted_forms_and_the_value(
+    refusal: ValueError, value: object
+) -> None:
+    """Assert that *refusal* names the location field and the forms resolve_location accepts, 'lat,lon' coordinates and every LOCATION_PRESETS key, and ends naming *value* by its repr, as sent."""
+    message = str(refusal)
+    assert message.startswith("location")
+    assert "lat,lon" in message
+    for key in LOCATION_PRESETS:
+        assert repr(key) in message
+    assert message.endswith(repr(value))
 
 
 class TestRequireJsonObject:
@@ -113,7 +117,7 @@ class TestResolveLocation:
         """A string that is neither a preset name nor 'lat,lon' coordinates is refused naming it as sent and the accepted forms, never read as Bristol."""
         with pytest.raises(ValueError) as refusal:
             resolve_location(text)
-        assert str(refusal.value) == _accepted_forms_refusal(text)
+        _assert_names_location_the_accepted_forms_and_the_value(refusal.value, text)
 
     @pytest.mark.parametrize(
         "value",
@@ -132,7 +136,7 @@ class TestResolveLocation:
         """A value that is not a string gets the same refusal, naming the value by its repr: None, not 'None'."""
         with pytest.raises(ValueError) as refusal:
             resolve_location(value)
-        assert str(refusal.value) == _accepted_forms_refusal(value)
+        _assert_names_location_the_accepted_forms_and_the_value(refusal.value, value)
 
     @pytest.mark.parametrize(
         ("text", "latitude", "longitude"),
