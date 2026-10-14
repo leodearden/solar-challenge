@@ -73,6 +73,24 @@ def _paper(page: Page, chart_id: str) -> Locator:
     return page.locator(f"#{chart_id} .main-svg").first
 
 
+def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
+    """What a theme toggle must leave as it was in the chart in the container chart_id.
+
+    These are its axis titles' texts in document order, the font family of its first x tick label
+    and its number of range sliders.
+    """
+    features: dict[str, object] = page.locator(f"#{chart_id}").evaluate("""chart => {
+        const tickLabel = chart.querySelector('.xtick text');
+        if (!tickLabel) throw new Error(`Plotly chart #${chart.id} has no x tick label`);
+        return {
+            axis_titles: [...chart.querySelectorAll('.xtitle, .ytitle')].map(title => title.textContent),
+            tick_label_font: getComputedStyle(tickLabel).fontFamily,
+            range_sliders: chart.querySelectorAll('.rangeslider-container').length,
+        };
+    }""")
+    return features
+
+
 # -- Dark mode on /simulate/home -------------------------------------------
 
 
@@ -169,3 +187,37 @@ def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_i
 
     _show_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
+
+
+def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_was(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A theme toggle changes only a drawn chart's colours, whether the chart is recoloured at the toggle or when its tab is next shown.
+
+    chart-daily-balance is shown at the toggle and chart-power-flow is hidden at it, so both recolours are read.
+    Each chart is compared with itself before the toggle, so the test names no title text of charts.py's.
+    """
+    run_id, _ = seeded_home_run
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
+
+    _show_tab(page, "Power Flow")
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    power_flow_before = _layout_features(page, "chart-power-flow")
+
+    _show_tab(page, "Overview")
+    daily_balance_before = _layout_features(page, "chart-daily-balance")
+    assert daily_balance_before["axis_titles"] and power_flow_before["range_sliders"] == 1, (
+        f"the charts have no titles or range slider to keep: {daily_balance_before}, {power_flow_before}"
+    )
+
+    _toggle_theme(page)
+    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+    daily_balance_after = _layout_features(page, "chart-daily-balance")
+
+    _show_tab(page, "Power Flow")
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+    power_flow_after = _layout_features(page, "chart-power-flow")
+
+    assert (daily_balance_after, power_flow_after) == (daily_balance_before, power_flow_before)
