@@ -416,9 +416,10 @@ def financial_breakdown(results: SimulationResults) -> str:
     which already reflect the tariff and SEG rate set at simulation time.
 
     The line is the running total of each day's import cost less its export
-    revenue: the run's net cost to date, SummaryStatistics.net_cost_gbp's
-    quantity. It is a cost, not the finance layer's saving against a no-solar
-    baseline (finance.BillBreakdown.saving_vs_baseline_gbp).
+    revenue: the run's net cost to date, so it ends at the run's
+    SummaryStatistics.net_cost_gbp, to the penny. It is a cost, not the
+    finance layer's saving against a no-solar baseline
+    (finance.BillBreakdown.saving_vs_baseline_gbp).
 
     The chart carries a note exactly when the run's import is not priced: its
     tariff rate is zero throughout, as for a run simulated without a tariff.
@@ -445,7 +446,7 @@ def financial_breakdown(results: SimulationResults) -> str:
     daily = aggregate_daily(results)
     daily_cost = daily["import_cost_gbp"].round(2)
     daily_revenue = daily["export_revenue_gbp"].round(2)
-    cumulative_net_cost = (daily_cost - daily_revenue).round(2).cumsum().round(2)
+    cumulative_net_cost = (daily["import_cost_gbp"] - daily["export_revenue_gbp"]).cumsum().round(2)
     net_cost_label = "Cumulative Net Cost"
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
