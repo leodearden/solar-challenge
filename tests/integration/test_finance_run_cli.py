@@ -3,14 +3,21 @@
 """Offline tests of how `finance run` composes its one report from --assumptions, --project and --cost-recovery, with the fleet simulator injected through Click's context object."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
-from solar_challenge.fleet import FleetResults
-from tests._cli_fleet_simulator import invoke_finance_run
-from tests._finance_builders import make_fleet_results
+from solar_challenge.fleet import FleetConfig, FleetResults
+from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._finance_builders import make_fleet_results, make_fleet_results_of
+
+_PROJECT_HEADING = "## Project Economics"
+_COST_RECOVERY_HEADING = "## Cost-Recovery Analysis"
+_PROJECT_STATUS = "Computing project-level economics (DSCR/IRR/payback)…"
+_COST_RECOVERY_STATUS = "Solving cost-recovery own-use rate…"
 
 
 @pytest.fixture(scope="module")
@@ -67,6 +74,25 @@ def _bill_cells(scenario: Path, assumptions: str, fleet_results: FleetResults) -
     return _total_outlay_cells(result.stdout)
 
 
+def _in_order_of_appearance(text: str, fragments: Sequence[str]) -> list[str]:
+    """The *fragments* that occur in *text*, in the order of their first occurrence."""
+    return sorted((fragment for fragment in fragments if fragment in text), key=text.index)
+
+
+class _RecordingSimulator:
+    """A fleet simulator that records each simulation it is asked for, and answers with its results for the homes asked about."""
+
+    def __init__(self, results: FleetResults) -> None:
+        self._results = results
+        self.requests: list[tuple[FleetConfig, pd.Timestamp, pd.Timestamp]] = []
+
+    def __call__(
+        self, fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+    ) -> FleetResults:
+        self.requests.append((fleet_config, start, end))
+        return make_fleet_results_of(self._results.per_home_results, homes=fleet_config.homes)
+
+
 def test_each_assumptions_mode_renders_its_own_bill_column(
     tmp_path: Path, fleet_results: FleetResults
 ) -> None:
@@ -93,3 +119,53 @@ def test_the_spreadsheet_column_bills_the_scenarios_override_and_the_physics_col
 
     assert physics_with == physics_without
     assert spreadsheet_with != spreadsheet_without
+
+
+@pytest.mark.parametrize(
+    ("flags", "headings", "status_lines"),
+    [
+        pytest.param((), [], [], id="neither"),
+        pytest.param(("--project",), [_PROJECT_HEADING], [_PROJECT_STATUS], id="project"),
+        pytest.param(
+            ("--cost-recovery",),
+            [_COST_RECOVERY_HEADING],
+            [_COST_RECOVERY_STATUS],
+            id="cost-recovery",
+        ),
+        pytest.param(
+            ("--project", "--cost-recovery"),
+            [_PROJECT_HEADING, _COST_RECOVERY_HEADING],
+            [_PROJECT_STATUS, _COST_RECOVERY_STATUS],
+            id="both",
+        ),
+    ],
+)
+def test_each_economics_flag_adds_its_block_and_status_line(
+    tmp_path: Path,
+    fleet_results: FleetResults,
+    flags: tuple[str, ...],
+    headings: list[str],
+    status_lines: list[str],
+) -> None:
+    """--project and --cost-recovery each announce themselves on stderr and append their own block to the report, the project block first when both are passed."""
+    result = invoke_finance_run([*flags, str(_write_scenario(tmp_path))], fleet_results)
+
+    assert result.exit_code == 0, result.output
+    assert _in_order_of_appearance(
+        result.stdout, [_PROJECT_HEADING, _COST_RECOVERY_HEADING]
+    ) == headings
+    assert _in_order_of_appearance(
+        " ".join(result.stderr.split()), [_PROJECT_STATUS, _COST_RECOVERY_STATUS]
+    ) == status_lines
+
+
+def test_without_economics_flags_the_fleet_is_simulated_once(
+    tmp_path: Path, fleet_results: FleetResults
+) -> None:
+    """finance run simulates its fleet once, for its bill, when neither --project nor --cost-recovery asks for more."""
+    simulator = _RecordingSimulator(fleet_results)
+
+    result = invoke_cli(["finance", "run", str(_write_scenario(tmp_path))], simulator)
+
+    assert result.exit_code == 0, result.output
+    assert len(simulator.requests) == 1
