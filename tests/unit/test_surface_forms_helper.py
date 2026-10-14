@@ -18,7 +18,6 @@ import decimal
 import enum
 import fractions
 import functools
-import importlib.util
 import pathlib
 import sys
 import types
@@ -59,19 +58,10 @@ from tests._surface_forms import (
     undeclared_attributes,
     unset_attributes,
 )
+from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
 
 if TYPE_CHECKING:
     from decimal import Decimal
-
-
-class Outer:
-    class Inner:
-        pass
-
-
-@dataclass(frozen=True)
-class Preset:
-    rate: float
 
 
 class Gauge:
@@ -128,24 +118,6 @@ class Wrapper:
 
     def __repr__(self) -> str:
         return f"Wrapper[{self.inner.__qualname__}]"
-
-
-def _imported(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
-) -> types.ModuleType:
-    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until the test ends.
-
-    Give each test's module a name no other test uses: the helper under test reads a
-    module's `if TYPE_CHECKING:` imports once per name.
-    """
-    path = tmp_path / f"{name}.py"
-    path.write_text(source)
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, name, module)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -949,7 +921,7 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
 def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    metering = _imported(
+    metering = imported_module(
         tmp_path,
         monkeypatch,
         "metering",
@@ -968,7 +940,7 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _imported(
+    imported_module(
         tmp_path,
         monkeypatch,
         "tapping",
@@ -980,7 +952,7 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
         "    tap: 'Tap'\n"
         "    spare: 'Tap'\n",
     )
-    retapping = _imported(
+    retapping = imported_module(
         tmp_path,
         monkeypatch,
         "retapping",
@@ -1000,7 +972,7 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
 def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_of_a_class_the_dataclass_decorator_never_processed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _imported(
+    imported_module(
         tmp_path,
         monkeypatch,
         "gauging",
@@ -1011,7 +983,7 @@ def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_o
         "class Meter:\n"
         "    gauge: 'Gauge'\n",
     )
-    regauging = _imported(
+    regauging = imported_module(
         tmp_path,
         monkeypatch,
         "regauging",
@@ -1040,7 +1012,7 @@ def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_o
 def test_an_inherited_init_only_variable_names_the_classes_the_module_of_the_dataclass_declaring_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _imported(
+    imported_module(
         tmp_path,
         monkeypatch,
         "priming",
@@ -1051,7 +1023,7 @@ def test_an_inherited_init_only_variable_names_the_classes_the_module_of_the_dat
         "class Meter:\n"
         "    prime: InitVar['Prime']\n",
     )
-    repriming = _imported(
+    repriming = imported_module(
         tmp_path,
         monkeypatch,
         "repriming",
@@ -1070,7 +1042,7 @@ def test_an_inherited_init_only_variable_names_the_classes_the_module_of_the_dat
 def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _imported(
+    imported_module(
         tmp_path,
         monkeypatch,
         "valving",
@@ -1081,7 +1053,7 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
         "class Meter:\n"
         "    valve: 'Valve'\n",
     )
-    revalving = _imported(
+    revalving = imported_module(
         tmp_path,
         monkeypatch,
         "revalving",
@@ -1128,7 +1100,7 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rating = _imported(
+    rating = imported_module(
         tmp_path,
         monkeypatch,
         "rating",
@@ -1146,7 +1118,7 @@ def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module
 def test_a_forward_reference_a_new_type_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ratingnewtype = _imported(
+    ratingnewtype = imported_module(
         tmp_path,
         monkeypatch,
         "ratingnewtype",
@@ -1164,7 +1136,7 @@ def test_a_forward_reference_a_new_type_declares_names_the_class_the_module_decl
 def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    linking = _imported(
+    linking = imported_module(
         tmp_path,
         monkeypatch,
         "linking",
@@ -1190,7 +1162,7 @@ def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class
 def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    documents = _imported(
+    documents = imported_module(
         tmp_path,
         monkeypatch,
         "documents",
@@ -1215,7 +1187,7 @@ def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
 def test_a_forward_reference_inside_its_own_evaluation_names_the_class_another_module_evaluating_it_binds_it_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _imported(
+    imported_module(
         tmp_path,
         monkeypatch,
         "sharing",
@@ -1224,7 +1196,7 @@ def test_a_forward_reference_inside_its_own_evaluation_names_the_class_another_m
         "\n"
         "Share = NewType('Share', 'Ratio')\n",
     )
-    pooling = _imported(
+    pooling = imported_module(
         tmp_path,
         monkeypatch,
         "pooling",
@@ -1246,7 +1218,7 @@ def test_a_forward_reference_inside_its_own_evaluation_names_the_class_another_m
 def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alone(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    branching = _imported(
+    branching = imported_module(
         tmp_path,
         monkeypatch,
         "branching",
@@ -1263,7 +1235,7 @@ def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alon
 def test_a_new_type_inside_its_own_declaration_is_spelled_there_by_its_name_alone(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    grafting = _imported(
+    grafting = imported_module(
         tmp_path,
         monkeypatch,
         "grafting",
@@ -1289,7 +1261,7 @@ def test_a_new_type_inside_its_own_declaration_is_spelled_there_by_its_name_alon
 def test_a_forward_reference_a_type_parameter_declares_names_the_class_the_module_of_its_routine_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    scoping = _imported(
+    scoping = imported_module(
         tmp_path,
         monkeypatch,
         "scoping",
@@ -1305,7 +1277,7 @@ def test_a_forward_reference_a_type_parameter_declares_names_the_class_the_modul
 def test_a_forward_reference_to_a_type_parameter_raises_a_name_error_naming_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bounding = _imported(
+    bounding = imported_module(
         tmp_path,
         monkeypatch,
         "bounding",
