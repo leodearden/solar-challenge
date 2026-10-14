@@ -925,6 +925,15 @@ def _failed(error: Exception) -> _TurnEnding:
     )
 
 
+def _refusal(user_message: str) -> str | None:
+    """Return why a turn with *user_message* cannot reach the model, or None when it can."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return "AI assistant is not configured: set ANTHROPIC_API_KEY."
+    if not user_message:
+        return "Message cannot be empty."
+    return None
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
@@ -947,6 +956,13 @@ def chat() -> Response:
     except NotAJsonObject as refusal:
         return _event_stream([_error_frame(str(refusal))])
     user_message: str = str(data.get("message", "")).strip()
+    refusal_reason = _refusal(user_message)
+    if refusal_reason is not None:
+        return _event_stream([_error_frame(refusal_reason)])
+    try:
+        client = _create_client()
+    except Exception as exc:
+        return _event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
     run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
@@ -955,25 +971,6 @@ def chat() -> Response:
     storage = get_storage()
 
     def generate() -> Generator[str, None, None]:
-        # Pre-check: API key must be set
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            yield _error_frame("AI assistant is not configured: set ANTHROPIC_API_KEY.")
-            return
-
-        # Pre-check: reject empty/whitespace messages before hitting the API
-        # or writing a dangling user row (JS guards are insufficient).
-        if not user_message:
-            yield _error_frame("Message cannot be empty.")
-            return
-
-        # Constructing a client fails on a misconfigured environment, such as a
-        # malformed ANTHROPIC_BASE_URL.
-        try:
-            client = _create_client()
-        except Exception as exc:
-            yield _error_frame(f"Could not initialise Anthropic client: {exc}")
-            return
-
         messages = request_messages(
             database.get_chat_history(db_path, sid), user_message, _run_context(run_id, storage)
         )
