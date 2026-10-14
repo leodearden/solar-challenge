@@ -1,14 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, the classes those forms name, directly or through other classes of a package, and the check that a class declares each public attribute it sets on self.
-
-Each test pins one rule, so an edit that lets one minor's own rendering through, drops
-part of a signature, or lets an attribute set on self go undeclared, fails here instead
-of turning the frozen-surface lock red on one interpreter or blind to a real change.
+"""The rules of tests/_surface_forms.py's named_classes, one per test.
 
 The annotations below are evaluated, as in the modules they stand in for, so this module
-does not import annotations from __future__. The classes whose qualified names are
-asserted, or that a forward reference names, are defined at module level, where a
-qualified name carries no '<locals>' and a name resolves in this module's namespace.
+does not import annotations from __future__. Gauge is defined at module level, where its
+forward reference to itself resolves in this module's namespace.
 """
 
 import collections.abc
@@ -41,10 +36,7 @@ from typing import (
 
 import pytest
 
-from tests._surface_forms import (
-    named_classes,
-    surface_form,
-)
+from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
 
 if TYPE_CHECKING:
