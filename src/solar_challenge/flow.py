@@ -163,7 +163,7 @@ def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
     This is the single source of truth for cheap-period classification.  Both
     :func:`simulate_timestep_tou` and :func:`_build_grid_charge_context` call
     this helper so the two dispatch paths always classify cheap vs. expensive
-    periods identically (PRD §4).
+    periods identically (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
     """
     return current_rate < tariff.peak_rate and current_rate <= tariff.mean_period_rate
 
@@ -176,7 +176,7 @@ def _build_grid_charge_context(
     """Build a GridChargeContext from a battery and tariff for the given timestamp.
 
     Uses :func:`_is_cheap_period` for cheap-period classification so both
-    dispatch paths stay in sync (PRD §4).
+    dispatch paths stay in sync.
 
     Requires battery.config.grid_charging is not None.
     """
@@ -242,7 +242,7 @@ def simulate_timestep(
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    # Initialize battery-related values (split-source tracking)
     pv_charge_stored_kwh = 0.0
     grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
@@ -272,7 +272,7 @@ def simulate_timestep(
             grid_charge_ctx=grid_charge_ctx,
         )
 
-        # Split-source charge/discharge execution (PRD §3.1)
+        # Split-source charge/discharge execution
         pv_charge_stored_kwh = (
             battery.charge(decision.charge_kw, timestep_minutes)
             if decision.charge_kw > 0 else 0.0
@@ -293,13 +293,9 @@ def simulate_timestep(
     direct_consumption_kwh = min(generation_kwh, demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
-    # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import.
-    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
-    # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  The grid-charge cost
-    # accounting in home.py prices stored energy directly — the same basis as
-    # grid_import_kwh — so no charge-efficiency divisor is applied.
+    # Split-source grid flows, which keep validate_energy_balance closed
+    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
+    # reduces export, and grid charge adds the energy it stored to import.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
@@ -362,14 +358,14 @@ def simulate_timestep_tou(
     # Get current tariff rate
     current_rate = tariff.get_rate(timestamp)
 
-    # Determine if current period is cheap via the shared single-source heuristic (PRD §4)
+    # Determine if current period is cheap via the shared single-source heuristic
     is_cheap_period = _is_cheap_period(tariff, current_rate)
 
     # Calculate excess and shortfall
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    # Initialize battery-related values (split-source tracking)
     pv_charge_stored_kwh = 0.0
     grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
@@ -415,13 +411,9 @@ def simulate_timestep_tou(
     direct_consumption_kwh = min(generation_kwh, demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
-    # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import.
-    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
-    # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  The grid-charge cost
-    # accounting in home.py prices stored energy directly — the same basis as
-    # grid_import_kwh — so no charge-efficiency divisor is applied.
+    # Split-source grid flows, which keep validate_energy_balance closed
+    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
+    # reduces export, and grid charge adds the energy it stored to import.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
