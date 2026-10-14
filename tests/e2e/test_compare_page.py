@@ -219,6 +219,11 @@ def test_compare_chart_titles_and_legends_are_legible(
     assert {text["chart"] for text in texts} >= {_BAR_CHART, _RADAR_CHART}, (
         f"Expected title or legend texts in both charts; read {texts}"
     )
+    charts_without_a_backdrop = sorted({text["chart"] for text in texts if text["backdrop"] is None})
+    assert charts_without_a_backdrop == [], (
+        f"No opaque background lies behind these charts, so their texts' contrast cannot be measured: "
+        f"{charts_without_a_backdrop}"
+    )
     illegible = [
         (text["chart"], text["text"], text["fill"], text["backdrop"], round(ratio, 2))
         for text in texts
