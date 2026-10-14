@@ -13,7 +13,7 @@ from solar_challenge.load import (
     OFGEM_TDCV_BY_OCCUPANTS,
     energy_kwh,
     generate_load_profile,
-    scale_profile_to_annual,
+    scale_profile_to_energy,
 )
 
 
@@ -268,16 +268,15 @@ class TestEnergyKwh:
         assert energy_kwh(profile) == 0.0
 
 
-class TestScaleProfileToAnnual:
-    """Test LOAD-003: Profile scaling to annual target."""
+class TestScaleProfileToEnergy:
+    """Test LOAD-003: scaling a profile to a target energy."""
 
     def test_scales_to_target(self):
-        """Scales profile to match target annual consumption."""
-        # Create simple 1-year profile (simplified)
+        """Scales a profile so that its energy is the target."""
         index = pd.date_range("2024-01-01", periods=1440, freq="1min")
         profile = pd.Series([1.0] * 1440, index=index)  # 24 kWh
 
-        scaled = scale_profile_to_annual(profile, target_annual_kwh=48.0)
+        scaled = scale_profile_to_energy(profile, target_kwh=48.0)
         total = energy_kwh(scaled)
 
         assert total == pytest.approx(48.0, rel=0.001)
@@ -287,7 +286,7 @@ class TestScaleProfileToAnnual:
         index = pd.date_range("2024-01-01", periods=100, freq="1min")
         profile = pd.Series(np.arange(100, dtype=float), index=index)
 
-        scaled = scale_profile_to_annual(profile, target_annual_kwh=100.0)
+        scaled = scale_profile_to_energy(profile, target_kwh=100.0)
 
         # Relative values should be preserved
         assert (scaled.iloc[50] / scaled.iloc[25]) == pytest.approx(
@@ -298,7 +297,7 @@ class TestScaleProfileToAnnual:
         """Raises error when profile has zero consumption."""
         profile = pd.Series([0.0] * 100)
         with pytest.raises(ValueError, match="zero"):
-            scale_profile_to_annual(profile, target_annual_kwh=100.0)
+            scale_profile_to_energy(profile, target_kwh=100.0)
 
 
 class TestHouseholdSizeParameter:
