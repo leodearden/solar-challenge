@@ -2,7 +2,7 @@
 """Single home simulation combining PV, battery, and load."""
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
@@ -289,6 +289,59 @@ def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
         raise ValueError(f"Unknown strategy type: {strategy_type}")
 
 
+@dataclass(frozen=True)
+class _ImportPricing:
+    """Each minute's tariff rate in £/kWh, import cost in £ and grid-charging cost in £, None on an untariffed run."""
+
+    tariff_rate: pd.Series
+    import_cost: pd.Series
+    grid_charge_cost: Optional[pd.Series]
+
+
+def _price_imports(
+    tariff: Optional[TariffConfig],
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+) -> _ImportPricing:
+    """Each minute's import priced at the tariff's rate for that minute.
+
+    An untariffed run's rates and costs are 0.0, and it prices no grid charging.
+    """
+    if tariff is None:
+        return _ImportPricing(
+            tariff_rate=pd.Series([0.0] * len(flows), index=minutes),
+            import_cost=pd.Series([0.0] * len(flows), index=minutes),
+            grid_charge_cost=None,
+        )
+    rates = [tariff.get_rate(minute) for minute in minutes]
+    return _ImportPricing(
+        tariff_rate=pd.Series(rates, index=minutes),
+        import_cost=pd.Series([flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes),
+        grid_charge_cost=pd.Series(
+            [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+        ),
+    )
+
+
+def _export_revenue(config: HomeConfig, flows: Sequence[EnergyFlowResult], minutes: pd.DatetimeIndex) -> pd.Series:
+    """Each minute's export valued at the home's SEG rate, never its import rate, or at nothing without an SEG.
+
+    A tariffed home without an SEG also gets a UserWarning, attributed to the
+    code that called simulate_home, which holds only while simulate_home calls
+    this directly.
+    """
+    if config.seg_tariff is not None:
+        return pd.Series([calculate_seg_revenue(flow.grid_export, config.seg_tariff) for flow in flows], index=minutes)
+    if config.tariff_config is not None:
+        warnings.warn(
+            "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
+            "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return pd.Series([0.0] * len(flows), index=minutes)
+
+
 def simulate_home(
     config: HomeConfig,
     start_date: pd.Timestamp,
@@ -421,37 +474,13 @@ def simulate_home(
 
     minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
 
-    # Calculate tariff costs if tariff is configured; only a tariffed run has grid-charge series
-    grid_charge_series: Optional[pd.Series] = None
-    grid_charge_cost_series: Optional[pd.Series] = None
-    if config.tariff_config is not None:
-        tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
-        import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
-        grid_charge_series = pd.Series([r.grid_charge * minute_kwh_to_kw for r in results_list], index=index)
-        grid_charge_cost_series = pd.Series(
-            [r.grid_charge * rate for r, rate in zip(results_list, tariff_rates, strict=True)], index=index
-        )
-    else:
-        tariff_rates = [0.0 for _ in results_list]
-        import_costs = [0.0 for _ in results_list]
-
-    # Calculate export revenue.
-    # Grid export is valued at the export/SEG rate, never the import tariff rate.
-    # Without a seg_tariff there is no export revenue (zero is the economically correct value).
-    if config.seg_tariff is not None:
-        export_revenues = [
-            calculate_seg_revenue(r.grid_export, config.seg_tariff)
-            for r in results_list
-        ]
-    else:
-        if config.tariff_config is not None:
-            warnings.warn(
-                "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
-                "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
-                UserWarning,
-                stacklevel=2,
-            )
-        export_revenues = [0.0 for _ in results_list]
+    import_pricing = _price_imports(config.tariff_config, results_list, index)
+    export_revenue = _export_revenue(config, results_list, index)
+    grid_charge_series = (
+        None
+        if import_pricing.grid_charge_cost is None
+        else pd.Series([r.grid_charge * minute_kwh_to_kw for r in results_list], index=index)
+    )
 
     return SimulationResults(
         strategy_name=strategy_name,
@@ -463,11 +492,11 @@ def simulate_home(
         battery_soc=pd.Series([r.battery_soc for r in results_list], index=index),
         grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in results_list], index=index),
         grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in results_list], index=index),
-        import_cost=pd.Series(import_costs, index=index),
-        export_revenue=pd.Series(export_revenues, index=index),
-        tariff_rate=pd.Series(tariff_rates, index=index),
+        import_cost=import_pricing.import_cost,
+        export_revenue=export_revenue,
+        tariff_rate=import_pricing.tariff_rate,
         heat_pump_load=heat_pump_load_series,
-        grid_charge_cost=grid_charge_cost_series,
+        grid_charge_cost=import_pricing.grid_charge_cost,
         grid_charge=grid_charge_series,
     )
 
