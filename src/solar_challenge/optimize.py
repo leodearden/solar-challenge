@@ -41,7 +41,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, simulate_fleet
-from solar_challenge.flex import FLEX_VALUE_BANDS
+from solar_challenge.flex import resolve_grid_services_band
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.seg import SEGTariff
 
@@ -432,7 +432,7 @@ class SensitivityPanel:
 SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
     "retained_cash_floor_per_home_per_year_gbp": (15.0, 27.0, 40.0),
     "grid_services_income_per_kw_per_year_gbp": tuple(
-        band.grid_services_per_kw_gbp for band in FLEX_VALUE_BANDS.values()
+        resolve_grid_services_band(band) for band in ("low", "central", "high")
     ),
     "battery_cost_per_kwh_gbp": (200.0, 300.0, 450.0),
     "pv_cost_per_kwp_gbp": (800.0, 1200.0, 1800.0),
