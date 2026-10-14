@@ -9,7 +9,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.web.charts import (
     fleet_aggregate_timeline,
@@ -26,6 +26,7 @@ from tests._finance_builders import make_fleet_results, make_fleet_results_of, m
 from tests._html_page import headings, texts, texts_after
 from tests._plotly_figure import traces, traces_by_name
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run
 
 
 @pytest.fixture
@@ -43,11 +44,10 @@ def client(app: Flask) -> FlaskClient:
 def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:
     """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
     run_id = str(uuid.uuid4())
-    RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]).save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet,
-        fleet_summary=calculate_fleet_summary(fleet),
-        per_home_summaries=[calculate_summary(results) for results in fleet.per_home_results],
+    store_fleet_run(
+        RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]),
+        run_id,
+        fleet,
         name=name,
     )
     return run_id
