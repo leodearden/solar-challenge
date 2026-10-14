@@ -259,6 +259,47 @@ class SummaryStatistics:
             )
 
 
+@dataclass(frozen=True)
+class _Demand:
+    """A run's demand in kW on its minutes: the household's load, EV charging included, plus any heat pump's load.
+
+    heat_pump_kw is None without a heat pump.
+    """
+
+    total_kw: pd.Series
+    heat_pump_kw: Optional[pd.Series]
+
+
+def _heat_pump_load(
+    heat_pump: HeatPumpConfig,
+    hourly_temperature_c: pd.Series,
+    minutes: pd.DatetimeIndex,
+) -> pd.Series:
+    """The heat pump's electrical load in kW on minutes.
+
+    Its annual heat demand is shared out over the whole TMY year's air temperature.
+    """
+    minute_temperature = interpolate_to_minute_resolution(hourly_temperature_c)
+    return generate_heat_pump_load(
+        heat_pump, align_tmy_to_index(minute_temperature, minutes), annual_temperature_c=minute_temperature
+    )
+
+
+def _demand(config: HomeConfig, weather: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> _Demand:
+    """The home's demand from start_date to end_date, on its location's clock, with any heat pump run on weather."""
+    household_kw = generate_load_profile(
+        config.load_config,
+        start_date,
+        end_date,
+        timezone=config.location.timezone,
+        ev_config=config.ev_config,
+    )
+    if config.heat_pump_config is None:
+        return _Demand(household_kw, None)
+    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)
+    return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
+
+
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
     """Create dispatch strategy from battery config.
 
@@ -391,29 +432,9 @@ def simulate_home(
     # Interpolate to 1-minute resolution
     minute_generation = interpolate_to_minute_resolution(hourly_generation)
 
-    # Generate load profile at 1-minute resolution
-    minute_demand = generate_load_profile(
-        config.load_config,
-        start_date,
-        end_date,
-        timezone=config.location.timezone,
-        ev_config=config.ev_config,
-    )
+    demand = _demand(config, weather_data, start_date, end_date)
 
-    # Generate and add heat pump load if configured
-    heat_pump_load_series: Optional[pd.Series] = None
-    if config.heat_pump_config is not None:
-        hourly_temperature = weather_data["temp_air"]
-        minute_temperature = interpolate_to_minute_resolution(hourly_temperature)
-        aligned_temperature = align_tmy_to_index(minute_temperature, minute_demand.index)
-        heat_pump_load_series = generate_heat_pump_load(
-            config.heat_pump_config,
-            aligned_temperature,
-            annual_temperature_c=minute_temperature,
-        )
-        minute_demand = minute_demand + heat_pump_load_series
-
-    aligned_generation = align_tmy_to_index(minute_generation, minute_demand.index)
+    aligned_generation = align_tmy_to_index(minute_generation, demand.total_kw.index)
 
     # Create battery if configured
     battery: Optional[Battery] = None
@@ -442,10 +463,10 @@ def simulate_home(
     results_list: list[EnergyFlowResult] = []
 
     # Get index for timestamp lookup
-    index = minute_demand.index
+    index = demand.total_kw.index
 
     for timestamp, (gen_kw, dem_kw) in zip(
-        index, zip(aligned_generation, minute_demand, strict=True), strict=True
+        index, zip(aligned_generation, demand.total_kw, strict=True), strict=True
     ):
         if use_tariff_tou:
             result = simulate_timestep_tou(
@@ -495,7 +516,7 @@ def simulate_home(
         import_cost=import_pricing.import_cost,
         export_revenue=export_revenue,
         tariff_rate=import_pricing.tariff_rate,
-        heat_pump_load=heat_pump_load_series,
+        heat_pump_load=demand.heat_pump_kw,
         grid_charge_cost=import_pricing.grid_charge_cost,
         grid_charge=grid_charge_series,
     )
