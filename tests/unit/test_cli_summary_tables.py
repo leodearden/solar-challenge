@@ -158,8 +158,8 @@ class TestFleetSummaryRows:
             ("", ""),
             ("Per-Home Generation (min/max)", "8.0 / 12.0 kWh"),
             ("Per-Home Generation (mean)", "10.0 kWh"),
-            ("Self-Consumption Ratio (min/max)", "50.0% / 70.0%"),
-            ("Self-Consumption Ratio (mean)", "58.0%"),
+            ("Per-Home Self-Consumption Ratio (min/max)", "50.0% / 70.0%"),
+            ("Per-Home Self-Consumption Ratio (mean)", "58.0%"),
         )
 
     @pytest.mark.parametrize(("field", "metric"), _FLEET_MONEY_FIELDS_AND_METRICS)
@@ -213,8 +213,8 @@ class TestPrintedSummaryTables:
             "",
             "Per-Home Generation (min/max)",
             "Per-Home Generation (mean)",
-            "Self-Consumption Ratio (min/max)",
-            "Self-Consumption Ratio (mean)",
+            "Per-Home Self-Consumption Ratio (min/max)",
+            "Per-Home Self-Consumption Ratio (mean)",
         ]
 
     @pytest.mark.parametrize(

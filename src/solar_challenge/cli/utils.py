@@ -271,11 +271,11 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
             f"{summary.per_home_generation_mean_kwh:.1f} kWh",
         ),
         (
-            "Self-Consumption Ratio (min/max)",
+            "Per-Home Self-Consumption Ratio (min/max)",
             f"{summary.per_home_self_consumption_ratio_min:.1%} / {summary.per_home_self_consumption_ratio_max:.1%}",
         ),
         (
-            "Self-Consumption Ratio (mean)",
+            "Per-Home Self-Consumption Ratio (mean)",
             f"{summary.per_home_self_consumption_ratio_mean:.1%}",
         ),
     )
