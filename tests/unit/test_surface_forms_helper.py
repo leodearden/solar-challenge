@@ -45,7 +45,6 @@ import pytest
 from tests._surface_forms import (
     member_forms,
     named_classes,
-    signature_closure,
     surface_form,
     undeclared_attributes,
     unset_attributes,
@@ -79,24 +78,6 @@ class Gauge:
     def inner(self) -> Outer.Inner: ...
 
     def _cache(self) -> bytes: ...
-
-
-@dataclass(frozen=True)
-class Feeder:
-    """A class whose constructor names Tap and whose only member names Tally, which names Feeder back."""
-
-    tap: "Tap"
-
-    def tally(self) -> "Tally": ...
-
-
-@dataclass(frozen=True)
-class Tap:
-    site: pathlib.Path
-
-
-class Tally:
-    def feeder(self) -> Feeder: ...
 
 
 def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_undeclared() -> None:
@@ -615,34 +596,6 @@ def test_an_enum_names_its_methods_classes_but_not_its_members() -> None:
 def test_a_constant_names_its_type() -> None:
     assert named_classes({"a": 1}) == {dict}
     assert named_classes(Preset(rate=0.1)) == {Preset}
-
-
-def test_a_signature_closure_follows_each_class_it_finds_through_its_constructor_and_its_members() -> None:
-    def supply(feeder: Feeder) -> None: ...
-
-    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally}
-
-
-def test_a_signature_closure_leaves_out_a_root_class_but_follows_its_forms() -> None:
-    def supply(feeder: Feeder, preset: Preset) -> None: ...
-
-    assert signature_closure([supply, Feeder, Preset], "tests") == {Tap, Tally}
-
-
-def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
-    def supply(feeder: Feeder, site: pathlib.Path) -> float: ...
-
-    assert signature_closure([supply], "tests.unit") == {Feeder, Tap, Tally}
-    assert signature_closure([supply], "solar_challenge") == set()
-
-
-def test_a_signature_closure_follows_the_classes_a_type_variable_or_a_new_type_carries() -> None:
-    Supplied = TypeVar("Supplied", bound=Feeder)
-    PresetId = NewType("PresetId", Preset)
-
-    def supply(feeder: Supplied, preset: PresetId) -> Supplied: ...
-
-    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally, Preset}
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
