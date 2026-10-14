@@ -256,8 +256,9 @@ def quick(
         progress.update(task, completed=True)
 
     summary = calculate_summary(results)
-    table = create_summary_table(home_summary_rows(summary), title="Quick Simulation Results")
-    console.print(table)
+    console.print(
+        create_summary_table(home_summary_rows(summary), title="Quick Simulation Results")
+    )
 
     if output is not None:
         export_to_csv(results, output)
