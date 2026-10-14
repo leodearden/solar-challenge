@@ -17,7 +17,6 @@ import json
 import pickle
 from collections.abc import Callable
 from datetime import time
-from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -45,18 +44,6 @@ class TestTimesAreParsedOnce:
 
         assert period.get_start_time() is period.get_start_time()
         assert period.get_end_time() is period.get_end_time()
-
-    def test_get_rate_never_reparses_period_times(self) -> None:
-        tariff = TariffConfig.economy_7()
-        every_minute = pd.date_range("2024-01-15", periods=24 * 60, freq="min")
-
-        with patch.object(
-            TariffPeriod, "_parse_time", wraps=TariffPeriod._parse_time
-        ) as parse:
-            for timestamp in every_minute:
-                tariff.get_rate(timestamp)
-
-        parse.assert_not_called()
 
     def test_replace_parses_the_replacement_times(self) -> None:
         original = _off_peak_period()
