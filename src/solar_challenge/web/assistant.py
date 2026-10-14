@@ -76,6 +76,9 @@ MAX_HISTORY_TURNS = 20
 # from looping and streaming forever (hanging the single worker / test suite).
 MAX_TOOL_ITERATIONS = 10
 
+# The text that ends a reply whose model still calls tools after MAX_TOOL_ITERATIONS calls.
+TOOL_CALL_LIMIT_NOTICE = "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
+
 # ---------------------------------------------------------------------------
 # Grounded metric table — canonical UK benchmark bands
 # Keyed by normalized metric id (lowercase, spaces/hyphens → underscores).
@@ -1041,16 +1044,10 @@ def chat() -> Response:
                 cur_messages.append({"role": "user", "content": tool_result_content})
                 params["messages"] = cur_messages
             else:
-                # for/else: loop completed without a break, meaning stop_reason was
-                # "tool_use" on every iteration — the cap was reached.  Emit a brief
-                # notice so the user isn't left with an empty or unexplained response.
-                _cap_notice = (
-                    "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
-                )
-                accumulated += _cap_notice
+                accumulated += TOOL_CALL_LIMIT_NOTICE
                 yield (
                     f"event: delta\n"
-                    f"data: {json.dumps({'text': _cap_notice})}\n\n"
+                    f"data: {json.dumps({'text': TOOL_CALL_LIMIT_NOTICE})}\n\n"
                 )
             ending = _FINISHED
 
