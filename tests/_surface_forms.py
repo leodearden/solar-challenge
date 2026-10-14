@@ -9,7 +9,8 @@ some names' forms name, directly or through another such class. member_forms rea
 bodies, so undeclared_attributes and unset_attributes check the attributes a class
 declares against those its own source sets on self.
 
-tests/unit/test_surface_forms_helper.py pins each function's rules, one rule per test.
+tests/unit/surface_forms_helper/test_<function>.py pins each function's rules, one rule
+per test.
 
 Usage::
 
