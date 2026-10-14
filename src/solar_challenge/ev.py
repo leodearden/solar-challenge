@@ -47,7 +47,7 @@ _PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
     SmartChargingMode.SOLAR: ((10 * _MINUTES_PER_HOUR, 16 * _MINUTES_PER_HOUR),),
     SmartChargingMode.OFF_PEAK: ((30, 7 * _MINUTES_PER_HOUR + 30),),
 }
-"""Each mode's preferred charging windows, as [start, end) minutes of the day: solar 10:00-16:00, off_peak Economy 7's 00:30-07:30."""
+"""Each mode's preferred charging windows, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times."""
 
 
 @dataclass(frozen=True)
@@ -205,13 +205,17 @@ def generate_ev_charging_profile(
     ``arrival_hour``. It charges in one unbroken session at the charger's full
     power, for as many whole minutes as ``required_charge_kwh`` needs. The
     session lies inside that stay, so the charge is always delivered before
-    departure. Of all such sessions it is the one covering the most of the
-    minutes ``_PREFERRED_WINDOWS`` lists for the mode, on either day of an
-    overnight stay, and the earliest on a tie. So "none" charges from arrival,
-    and a stay holding one window too short for the charge uses it whole,
-    charging the rest just before it opens, or from arrival when that is later.
+    departure. Of all such sessions it is the one covering the most minutes of
+    the mode's preferred window, on either day of an overnight stay, and the
+    earliest on a tie. "solar" prefers 10:00-16:00 and "off_peak" Economy 7's
+    00:30-07:30, the windows ``_PREFERRED_WINDOWS`` holds; "none" prefers no
+    time, so it charges from arrival. A stay holding one window too short for
+    the charge uses it whole, charging the rest just before it opens, or from
+    arrival when that is later.
 
-    The period holds only its own days' sessions: one still running when the
+    The period is laid out as 1,440 minutes a day from its first midnight, so
+    after a clock change inside it the times above run an hour off the wall
+    clock. It holds only its own days' sessions: one still running when the
     period ends is cut there, and the first morning has none from the evening
     before.
 
