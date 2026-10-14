@@ -15,7 +15,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.shared import NotAJsonObject
+from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, resolve_location
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_END,
@@ -812,3 +812,49 @@ class TestParseHomeConfigSEG:
         """A malformed seg is refused with the ValueError every web caller answers with HTTP 400."""
         with pytest.raises(ValueError, match="seg"):
             parse_home_config({**VALID_HOME_PAYLOAD, "seg": [1, 2]})
+
+
+class TestParseHomeConfigLocation:
+    """parse_home_config's location is the value sent as resolve_location reads it, 'bristol' when absent."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("london", id="preset"),
+            pytest.param("51.5,-0.1", id="coordinates"),
+            pytest.param(" Edinburgh ", id="padded-title-case-preset"),
+        ],
+    )
+    def test_a_location_it_resolves_is_the_homes_location(self, value: str) -> None:
+        """A location resolve_location resolves is the home's location, the string read as sent."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "location": value}
+        )
+        assert home_config.location == resolve_location(value)
+
+    def test_absent_location_is_bristol(self) -> None:
+        """A home config without a location is a home at the Bristol preset."""
+        without_location = {
+            key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "location"
+        }
+        home_config, _start, _end, _name = parse_home_config(without_location)
+        assert home_config.location == LOCATION_PRESETS["bristol"]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param(5, id="number"),
+            pytest.param([51.5, -0.1], id="array"),
+            pytest.param("Paris", id="unknown-place"),
+        ],
+    )
+    def test_a_location_it_cannot_resolve_is_refused_naming_the_value_as_sent(
+        self, value: object
+    ) -> None:
+        """A location resolve_location refuses is refused with its refusal, which names the value as sent: null as None, not as the string 'None'."""
+        with pytest.raises(ValueError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "location": value})
+        with pytest.raises(ValueError) as resolver_refusal:
+            resolve_location(value)
+        assert str(refusal.value) == str(resolver_refusal.value)

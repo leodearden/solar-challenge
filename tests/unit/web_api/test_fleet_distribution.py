@@ -22,6 +22,7 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
     sample_distribution,
 )
+from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -383,6 +384,29 @@ class TestFleetFromDistribution:
             "got days 1 with start '2024-03-01' and end '2024-03-31'"
         )
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            pytest.param("Paris", id="unknown-place"),
+            pytest.param("95,0", id="latitude-out-of-range"),
+            pytest.param(5, id="number"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_location_it_cannot_resolve_returns_400_carrying_the_refusal_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, location: object
+    ) -> None:
+        """A location resolve_location refuses, a value that is not a string included, is a 400 whose error is its refusal, never a fleet at Bristol or a 500; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "location": location},
+        )
+        assert resp.status_code == 400
+        mock_job_manager.submit_fleet_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            resolve_location(location)
+        assert resp.get_json() == {"error": str(refusal.value)}
 
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock

@@ -2,6 +2,7 @@
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
 import math
+from collections.abc import Callable
 from unittest.mock import NonCallableMagicMock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
@@ -392,7 +394,7 @@ class TestSimulateFleetAPI:
 
 
 class TestParseHomeConfigErrorPaths:
-    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, and a window set by both days and start/end."""
+    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, and a location they cannot resolve."""
 
     def test_invalid_tariff_returns_400(
         self, client: FlaskClient
@@ -586,6 +588,57 @@ class TestParseHomeConfigErrorPaths:
         ) in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            pytest.param("Paris", id="unknown-place"),
+            pytest.param("95,0", id="latitude-out-of-range"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                lambda location: {**VALID_HOME_PAYLOAD, "location": location},
+                id="home",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                lambda location: {
+                    "homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "location": location}]
+                },
+                id="fleet-later-home",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                lambda location: {
+                    "min": 1,
+                    "max": 5,
+                    "steps": 2,
+                    "base_config": {"location": location},
+                },
+                id="sweep",
+            ),
+        ],
+    )
+    def test_location_it_cannot_resolve_returns_400_carrying_the_refusal_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        url: str,
+        body: Callable[[str], dict[str, object]],
+        location: str,
+    ) -> None:
+        """A location resolve_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
+        resp = client.post(url, json=body(location))
+        assert resp.status_code == 400
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            resolve_location(location)
+        assert str(refusal.value) in resp.get_json()["error"]
 
 
 class TestParseHomeConfigPVAge:

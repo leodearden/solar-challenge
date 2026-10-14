@@ -22,6 +22,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
@@ -726,6 +727,23 @@ class TestRunHomeSimulation:
         }
         jm.submit_home_job.assert_not_called()
 
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A location the model sends that resolve_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_home_simulation(
+            {"pv_kw": 4, "days": 7, "location": "Cardiff"},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        jm.submit_home_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            resolve_location("Cardiff")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
 
 class TestRunFleetSimulation:
     """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
@@ -894,6 +912,23 @@ class TestRunFleetSimulation:
             date(2024, 3, 1),
             date(2024, 3, 5),
         )
+
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A location the model sends that resolve_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_fleet_simulation(
+            {"n_homes": 3, "pv_kw": 4, "days": 7, "location": "Cardiff"},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        jm.submit_fleet_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            resolve_location("Cardiff")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
 @pytest.mark.slow
