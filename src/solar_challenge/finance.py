@@ -1064,9 +1064,9 @@ class MultiYearCurve:
     ``points`` covers years 0 .. asset_life_years - 1 (one :class:`YearPoint`
     per year).  ``sampled_ages`` records the ages at which the driver actually
     ran simulations; the remaining years are filled by PCHIP interpolation.
-    ``interp_error_estimate`` is the maximum interpolation deviation as a
-    percentage of the annual-scale value at the time the adaptive loop
-    converged (or was capped at ``MAX_NODES``).
+    ``interp_error_estimate`` is the maximum interpolation deviation, as a
+    percentage of the magnitude of that metric's age-0 value, when the
+    adaptive loop converged (or was capped at ``MAX_NODES``).
     """
 
     points: tuple[YearPoint, ...]
@@ -1634,13 +1634,13 @@ def project_multi_year(
 
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
-    # to percentages by each metric's age-0 value.  This ensures interp_error_estimate
-    # bounds ALL interpolated curves (own-use, export, import, revenue),
-    # not just own-use.
-    annual_scale_own_use: float = max(sampled_data[0].fleet_billed_own_use, 1e-9)
-    annual_scale_exp: float = max(sampled_data[0].fleet_exp, 1e-9)
-    annual_scale_imp: float = max(sampled_data[0].fleet_imp, 1e-9)
-    annual_scale_rev: float = max(sampled_data[0].fleet_revenue, 1e-9)
+    # to percentages by the magnitude of each metric's age-0 value.  This ensures
+    # interp_error_estimate bounds ALL interpolated curves (own-use, export, import,
+    # revenue), not just own-use, whatever the revenue's sign.
+    annual_scale_own_use: float = max(abs(sampled_data[0].fleet_billed_own_use), 1e-9)
+    annual_scale_exp: float = max(abs(sampled_data[0].fleet_exp), 1e-9)
+    annual_scale_imp: float = max(abs(sampled_data[0].fleet_imp), 1e-9)
+    annual_scale_rev: float = max(abs(sampled_data[0].fleet_revenue), 1e-9)
     max_deviation: float = 0.0
     capped: bool = False
 
