@@ -471,23 +471,15 @@ def _price_imports(
     )
 
 
-def _export_revenue(config: HomeConfig, flows: Sequence[EnergyFlowResult], minutes: pd.DatetimeIndex) -> pd.Series:
-    """Each minute's export valued at the home's SEG rate, never its import rate, or at nothing without an SEG.
-
-    A tariffed home without an SEG also gets a UserWarning, attributed to the
-    code that called simulate_home, which holds only while simulate_home calls
-    this directly.
-    """
-    if config.seg_tariff is not None:
-        return pd.Series([calculate_seg_revenue(flow.grid_export, config.seg_tariff) for flow in flows], index=minutes)
-    if config.tariff_config is not None:
-        warnings.warn(
-            "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
-            "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
-            UserWarning,
-            stacklevel=3,
-        )
-    return pd.Series([0.0] * len(flows), index=minutes)
+def _export_revenue(
+    seg_tariff: Optional[SEGTariff],
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+) -> pd.Series:
+    """Each minute's export valued at the SEG rate, never the import rate, or at nothing without an SEG."""
+    if seg_tariff is None:
+        return pd.Series([0.0] * len(flows), index=minutes)
+    return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=minutes)
 
 
 _MINUTE_KWH_TO_KW = 1 / HOURS_PER_MINUTE
@@ -565,7 +557,14 @@ def simulate_home(
     dispatch = _dispatch_path(config)
     flows = _minute_flows(dispatch.timestep, generation_kw, demand.total_kw, validate_balance)
     import_pricing = _price_imports(config.tariff_config, flows, minutes)
-    export_revenue = _export_revenue(config, flows, minutes)
+    export_revenue = _export_revenue(config.seg_tariff, flows, minutes)
+    if config.tariff_config is not None and config.seg_tariff is None:
+        warnings.warn(
+            "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
+            "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
+            UserWarning,
+            stacklevel=2,
+        )
     return _results(
         flows,
         minutes,
