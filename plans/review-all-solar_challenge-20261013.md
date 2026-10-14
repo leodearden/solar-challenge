@@ -399,7 +399,7 @@ Measurements, proposal and the skeptic's note: in the findings JSON and in the s
 
 #### fk-b867cc3e5653 (R8) — `src/solar_challenge/web/assistant.py::chat`
 
-tags kind:defect, h10, kind:critical-path, kind:deep-read · severity **high** · verdict confirmed · class mechanical · re-observed · disposition ticket:tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ
+tags kind:defect, h10, kind:critical-path, kind:deep-read · severity **high** · verdict confirmed · class mechanical · re-observed · disposition filed:701
 
 **Statement.** chat() breaks the chat_messages invariant it exists to keep (one assistant row with real content after every user row) on two paths. (1) An API error before the first streamed token (rate limit after retries, 529 overload, a bad key or SOLAR_ASSISTANT_MODEL, a network fault) lands in the except at assistant.py:1012-1022, which saves an assistant row whose content is the empty accumulated text. The next request replay…
 
@@ -513,9 +513,9 @@ The cost of the next change sits in config.py. It is 2815 lines with a prose sha
 
 _new_
 - fk-35b8ddcf5565 · `src/solar_challenge/battery.py::BatteryConfig` · medium · ✓ confirmed · structural · open — BatteryConfig holds two facts (charge and discharge efficiency) in three fields: efficiency, charge_efficiency…
-- fk-48447960eb2c · `src/solar_challenge/pv.py::_get_cec_module` · medium · ~ weakened · mechanical · ticket:tkt_0RVRX9E6WMFNP7R4EEKCYE757V — Every default PV simulation uses one CEC module, and nothing names it. It is found by substring search over pv…
+- fk-48447960eb2c · `src/solar_challenge/pv.py::_get_cec_module` · medium · ~ weakened · mechanical · filed:756 — Every default PV simulation uses one CEC module, and nothing names it. It is found by substring search over pv…
 - fk-7ef1099d24e8 · `src/solar_challenge/timebase.py` · low · ✓ confirmed · structural · open — The simulation's cadence is one axis handled three ways. (1) timebase.HOURS_PER_MINUTE is documented both as a…
-- fk-b97bf2325eda · `src/solar_challenge/load.py::calculate_annual_consumption` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E7YAWM44X1SG3GG6SM31 — calculate_annual_consumption does not compute an annual figure. Its docstring opens 'Despite the name (kept fo…
+- fk-b97bf2325eda · `src/solar_challenge/load.py::calculate_annual_consumption` · low · ✓ confirmed · mechanical · filed:757 — calculate_annual_consumption does not compute an annual figure. Its docstring opens 'Despite the name (kept fo…
 - fk-d6f16d95b126 · `src/solar_challenge/heat_pump.py::calculate_cop` · low · ✓ confirmed · structural · open — The heat-pump type vocabulary is written out in five places and the per-type COP curve in a sixth: (1) the Hea…
 - fk-6a52ed98b18e · `src/solar_challenge/cli/utils.py::create_summary_table` · medium · ✓ confirmed · structural · open — create_summary_table takes `summary: Any` and picks its rows by testing for attribute names (hasattr and getat…
 - fk-ac39320dcf1d · `src/solar_challenge/config.py::detect_sweep_spec` · medium · ✓ confirmed · structural · open — Where a YAML-defined sweep may sit is decided in one hard-coded place, while the grammar accepts it in 19.
@@ -537,31 +537,31 @@ _re-observed_
 - fk-06035cd76226 · `src/solar_challenge/weather.py::get_weather_cache` · medium · ✓ confirmed · structural · open
 - fk-e4549a3a6b54 · `src/solar_challenge/weather.py::WeatherCache` · low · ~ weakened · structural · open
 - fk-a98db49f3fd7 · `src/solar_challenge/pv.py::_module_rating_w` · low · ✓ confirmed · mechanical · filed:699
-- fk-7dcdc5559d22 · `src/solar_challenge/location.py::Location.__post_init__` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ
+- fk-7dcdc5559d22 · `src/solar_challenge/location.py::Location.__post_init__` · low · ✓ confirmed · mechanical · filed:382
 - fk-370b3e49b67c · `src/solar_challenge/battery.py::BatteryConfig` · medium · ✓ confirmed · structural · open
 - fk-50a3985fae0f · `src/solar_challenge/battery.py::compute_soh` · medium · ✓ confirmed · structural · open
-- fk-664e2030921e · `src/solar_challenge/community.py::simulate_community` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ
+- fk-664e2030921e · `src/solar_challenge/community.py::simulate_community` · medium · ✓ confirmed · mechanical · filed:706
 - fk-f622bbaa9f2e · `src/solar_challenge/dispatch.py::DispatchDecision` · medium · ✓ confirmed · structural · open
-- fk-740e9a804a4f · `src/solar_challenge/ev.py::generate_ev_charging_profile` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M
-- fk-e58042aef503 · `src/solar_challenge/fleet.py::simulate_fleet` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5
+- fk-740e9a804a4f · `src/solar_challenge/ev.py::generate_ev_charging_profile` · medium · ✓ confirmed · mechanical · filed:708
+- fk-e58042aef503 · `src/solar_challenge/fleet.py::simulate_fleet` · medium · ✓ confirmed · mechanical · filed:709
 - fk-491014934d1e · `src/solar_challenge/flow.py::simulate_timestep_tou` · medium · ✓ confirmed · mechanical · filed:270
-- fk-a80aa8f942eb · `src/solar_challenge/home.py::simulate_home` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19
-- fk-89777ec9faad · `src/solar_challenge/load.py::_get_daily_profile_kwh` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY
+- fk-a80aa8f942eb · `src/solar_challenge/home.py::simulate_home` · medium · ✓ confirmed · mechanical · filed:710
+- fk-89777ec9faad · `src/solar_challenge/load.py::_get_daily_profile_kwh` · medium · ✓ confirmed · mechanical · filed:711
 - fk-2f88003e22c8 · `src/solar_challenge/tariff.py::TariffConfig` · medium · ✓ confirmed · structural · open
-- fk-dc5cf2ec9b84 · `src/solar_challenge/community.py::simulate_community` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DZBRAR585D0B29P7HB7T
-- fk-00cb82820af9 · `src/solar_challenge/dispatch.py::TOUOptimizedStrategy.decide_action` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DZVYZCZDEBPKC358NKVG
+- fk-dc5cf2ec9b84 · `src/solar_challenge/community.py::simulate_community` · low · ✓ confirmed · mechanical · filed:743
+- fk-00cb82820af9 · `src/solar_challenge/dispatch.py::TOUOptimizedStrategy.decide_action` · low · ✓ confirmed · mechanical · filed:744
 - fk-99244625d7f2 · `src/solar_challenge/dispatch.py::compute_grid_charge_power_kw` · low · ✓ confirmed · structural · open
-- fk-7fa120a8bb98 · `src/solar_challenge/ev.py::EVConfig` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ
-- fk-e0e34ef46058 · `src/solar_challenge/fleet.py::FleetConfig.create_uniform` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5
+- fk-7fa120a8bb98 · `src/solar_challenge/ev.py::EVConfig` · low · ✓ confirmed · mechanical · filed:745
+- fk-e0e34ef46058 · `src/solar_challenge/fleet.py::FleetConfig.create_uniform` · low · ✓ confirmed · mechanical · filed:746
 - fk-8995288451e6 · `src/solar_challenge/fleet.py::FleetResults` · low · ✓ confirmed · structural · open
-- fk-f7b19fc4c8b5 · `src/solar_challenge/fleet.py::simulate_multi_sweep_iter` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E1CACMDFE1CZCAQ557EE
+- fk-f7b19fc4c8b5 · `src/solar_challenge/fleet.py::simulate_multi_sweep_iter` · low · ✓ confirmed · mechanical · filed:747
 - fk-f2f8a5512feb · `src/solar_challenge/home.py::SummaryStatistics` · low · ✓ confirmed · structural · open
 - fk-ef13881623be · `src/solar_challenge/home.py::calculate_summary` · low · ✓ confirmed · structural · open
 - fk-c78416de5500 · `src/solar_challenge/load.py::_try_richardsonpy_profile` · low · ✓ confirmed · structural · open
 - fk-998f0cb69410 · `src/solar_challenge/pv.py::simulate_pv_output` · low · ✓ confirmed · mechanical · filed:284
 - fk-606a9211b34d · `src/solar_challenge/seg.py::SEGTariff` · low · ✓ confirmed · structural · open
-- fk-97213a0e9ab2 · `src/solar_challenge/tariff.py::TariffPeriod` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E23FMHKAR68JP92FXFKR
-- fk-756c0ef9e9d9 · `src/solar_challenge/validation.py::_check_annual_yield` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E2M34QMQSQPSFGVS17B0
+- fk-97213a0e9ab2 · `src/solar_challenge/tariff.py::TariffPeriod` · low · ✓ confirmed · mechanical · filed:748
+- fk-756c0ef9e9d9 · `src/solar_challenge/validation.py::_check_annual_yield` · low · ✓ confirmed · mechanical · filed:749
 - fk-835a87838a52 · `src/solar_challenge/validation.py::validate_self_consumption_pv_only` · low · ✓ confirmed · structural · open
 - fk-2b16cc8bcf46 · `src/solar_challenge/scenario_writer.py::_pv_block` · medium · ✓ confirmed · structural · open
 - fk-e2aaf2bfe651 · `src/solar_challenge/config.py::parse_home_block` · medium · ✓ confirmed · structural · open
@@ -576,8 +576,8 @@ _re-observed_
 - fk-f2e1ad46df4b · `src/solar_challenge/config.py::_DistributionSampler` · medium · ✓ confirmed · mechanical · filed:297
 - fk-a2b33a420bcf · `src/solar_challenge/config.py::generate_homes_from_distribution` · medium · ✓ confirmed · mechanical · filed:675
 - fk-dfeefbe95640 · `src/solar_challenge/config.py::generate_homes_from_distribution` · medium · ✓ confirmed · structural · open
-- fk-e79170280adf · `src/solar_challenge/config.py::substitute_config_variables` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN
-- fk-41767a1bc146 · `src/solar_challenge/output.py::calculate_seasonal_metrics` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DN45JN0G4Z79T7KJMZPF
+- fk-e79170280adf · `src/solar_challenge/config.py::substitute_config_variables` · medium · ✓ confirmed · mechanical · filed:707
+- fk-41767a1bc146 · `src/solar_challenge/output.py::calculate_seasonal_metrics` · medium · ✓ confirmed · mechanical · filed:712
 - fk-caad5305a3be · `src/solar_challenge/config.py::run_parameter_sweep` · low · ✓ confirmed · mechanical · filed:237
 - fk-ae20e1833a19 · `src/solar_challenge/output.py` · low · ✓ confirmed · structural · open
 
@@ -602,18 +602,18 @@ _re-observed_
 - fk-3f4daea21220 · `src/solar_challenge/finance.py::BillDistribution` · medium · ✓ confirmed · structural · open
 - fk-808be5588896 · `src/solar_challenge/finance.py::CostRecoverySolution` · medium · ✓ confirmed · structural · open
 - fk-d432a549b03f · `src/solar_challenge/finance.py::FinanceConfig` · medium · ✓ confirmed · structural · open
-- fk-62dbe0f34b68 · `src/solar_challenge/finance.py::YearPoint` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DB1G4SQ89R5NGRPJBB87
+- fk-62dbe0f34b68 · `src/solar_challenge/finance.py::YearPoint` · medium · ✓ confirmed · mechanical · filed:702
 - fk-758b2f309cab · `src/solar_challenge/finance.py::project_multi_year` · medium · ✓ confirmed · structural · open
 - fk-da69830bb2d6 · `src/solar_challenge/gridservices.py::EventWindow` · medium · ✓ confirmed · structural · open
 - fk-3b0a239d0489 · `src/solar_challenge/optimize.py::_evaluate_config` · medium · ✓ confirmed · structural · open
 - fk-6cd8a932665c · `src/solar_challenge/finance.py` · low · ✓ confirmed · mechanical · filed:581
 - fk-0b791f2be2d6 · `src/solar_challenge/finance.py::_resolve_homes` · low · ✓ confirmed · mechanical · filed:485
-- fk-50cf1dd5df58 · `src/solar_challenge/finance.py::_seg_export_income_gbp` · low · ~ weakened · mechanical · ticket:tkt_0RVRX9DS5VEBHATPHAQMZPHPJM
-- fk-9fa18977ec68 · `src/solar_challenge/finance.py::bill` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4
+- fk-50cf1dd5df58 · `src/solar_challenge/finance.py::_seg_export_income_gbp` · low · ~ weakened · mechanical · filed:715
+- fk-9fa18977ec68 · `src/solar_challenge/finance.py::bill` · low · ✓ confirmed · mechanical · filed:716
 - fk-5b34adae950b · `src/solar_challenge/finance.py::solve_cost_recovery_rate` · low · ~ weakened · structural · open
 - fk-0f24b7f66eb2 · `src/solar_challenge/gridservices.py::GRID_SERVICES_RATE_BANDS` · low · ✓ confirmed · structural · open
-- fk-72fdec5965a1 · `src/solar_challenge/optimize.py` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DTECVB2PAD54KH3F6PWM
-- fk-0b4f5e04067c · `src/solar_challenge/optimize.py::sensitivity_panel` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DTY3CFM9KTW2K03XKADN
+- fk-72fdec5965a1 · `src/solar_challenge/optimize.py` · low · ✓ confirmed · mechanical · filed:717
+- fk-0b4f5e04067c · `src/solar_challenge/optimize.py::sensitivity_panel` · low · ✓ confirmed · mechanical · filed:718
 
 ### web-dashboard
 
@@ -652,14 +652,14 @@ _re-observed_
 - fk-8f4f4d63f917 · `src/solar_challenge/web/api.py::history_delete_run` · medium · ✓ confirmed · structural · open
 - fk-da0e3a4df6e7 · `src/solar_challenge/web/api.py::simulate_fleet_api` · medium · ✓ confirmed · structural · open
 - fk-194e5b40da23 · `src/solar_challenge/web/assistant.py::METRIC_TABLE` · medium · ✓ confirmed · structural · open
-- fk-ab16fff6f6c3 · `src/solar_challenge/web/assistant.py::chat` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DNQGS7ZCSDRR850EC339
+- fk-ab16fff6f6c3 · `src/solar_challenge/web/assistant.py::chat` · medium · ✓ confirmed · mechanical · filed:713
 - fk-0593b530a371 · `src/solar_challenge/web/shared.py::resolve_location` · medium · ✓ confirmed · structural · open
 - fk-df9d0fc1b2d3 · `src/solar_challenge/web/storage.py::RunStorage` · medium · ✓ confirmed · structural · open
 - fk-34a6679f1ef3 · `src/solar_challenge/web/api.py::history_list_runs` · low · ✓ confirmed · structural · open
-- fk-cdcdf320a9e8 · `src/solar_challenge/web/api.py::preview_distribution` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E37BXVSY8TX6JCTZG6M6
-- fk-2ac79d7a1989 · `src/solar_challenge/web/api.py::simulate_sweep` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ
+- fk-cdcdf320a9e8 · `src/solar_challenge/web/api.py::preview_distribution` · low · ✓ confirmed · mechanical · filed:153
+- fk-2ac79d7a1989 · `src/solar_challenge/web/api.py::simulate_sweep` · low · ✓ confirmed · mechanical · filed:750
 - fk-f6c905f91d32 · `src/solar_challenge/web/app.py::create_app` · low · ✓ confirmed · structural · open
-- fk-93d3bd7aa219 · `src/solar_challenge/web/assistant.py::dispatch_tool` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E45EQSJM25M8Y2RRH9D0
+- fk-93d3bd7aa219 · `src/solar_challenge/web/assistant.py::dispatch_tool` · low · ✓ confirmed · mechanical · filed:751
 - fk-7aaa879bf0ac · `src/solar_challenge/web/jobs.py::shutdown_all_managers` · low · ✓ confirmed · structural · open
 - fk-9dd1d9389dd2 · `src/solar_challenge/web/builder_form.py::_distribution_spec` · medium · ✓ confirmed · mechanical · filed:697
 - fk-7893b49b92c3 · `src/solar_challenge/web/fleet_config.py::_draw_samples` · medium · ✓ confirmed · structural · open
@@ -673,7 +673,7 @@ _re-observed_
 - fk-ff5b90768f66 · `src/solar_challenge/web/templates/components/macros.html` · medium · ✓ confirmed · structural · open
 - fk-2e7ddcee2379 · `tests/_css_classes.py` · low · ~ weakened · structural · open
 - fk-657669b23e71 · `src/solar_challenge/web/static/dist/style.css` · low · ~ weakened · structural · open
-- fk-ce345e3b013d · `src/solar_challenge/web/charts.py::financial_breakdown` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DPVHGS94FVA07MRXC2P0
+- fk-ce345e3b013d · `src/solar_challenge/web/charts.py::financial_breakdown` · medium · ✓ confirmed · mechanical · filed:714
 - fk-55f4e4ea396d · `src/solar_challenge/web/charts.py::sweep_parameter_chart` · medium · ✓ confirmed · structural · open
 - fk-1df9dbc0d971 · `src/solar_challenge/web/fleet_components.py::FleetComponent` · medium · ✓ confirmed · structural · open
 - fk-8107696f0b02 · `src/solar_challenge/web/fleet_config.py::_build_distribution_dict` · medium · ✓ confirmed · structural · open
@@ -681,13 +681,13 @@ _re-observed_
 - fk-88374e6e3553 · `src/solar_challenge/web/fleet_config.py::sample_distribution` · medium · ✓ confirmed · structural · open
 - fk-70edc755ede4 · `src/solar_challenge/web/simulation_params.py::_parse_heat_pump_block` · medium · ✓ confirmed · mechanical · filed:245
 - fk-d303b6dbf669 · `src/solar_challenge/web/static/js/scenario-builder.js::loadPreset` · medium · ✓ confirmed · structural · open
-- fk-02500b87f3cb · `src/solar_challenge/web/charts.py::overlaid_power_flows` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM
+- fk-02500b87f3cb · `src/solar_challenge/web/charts.py::overlaid_power_flows` · low · ✓ confirmed · mechanical · filed:752
 - fk-f8b7b3ab709d · `src/solar_challenge/web/fleet_config.py::MAX_FLEET_HOMES` · low · ✓ confirmed · mechanical · filed:376
-- fk-3cd0d3f3b512 · `src/solar_challenge/web/fleet_config.py::_parse_component_distribution` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ
+- fk-3cd0d3f3b512 · `src/solar_challenge/web/fleet_config.py::_parse_component_distribution` · low · ✓ confirmed · mechanical · filed:753
 - fk-c3625a25eed4 · `src/solar_challenge/web/fleet_config.py::form_to_fleet_distribution_config` · low · ✓ confirmed · structural · open
-- fk-d8ad51b22de5 · `src/solar_challenge/web/fleet_scenario.py::_read_battery` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0
-- fk-ba29e186122f · `src/solar_challenge/web/simulation_params.py::_HOME_CONFIG_DEFAULTS` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR
-- fk-5827f41eb082 · `src/solar_challenge/web/simulation_params.py::parse_home_config` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E6CW14E0CSSD7PF5G0D5
+- fk-d8ad51b22de5 · `src/solar_challenge/web/fleet_scenario.py::_read_battery` · low · ✓ confirmed · mechanical · filed:754
+- fk-ba29e186122f · `src/solar_challenge/web/simulation_params.py::_HOME_CONFIG_DEFAULTS` · low · ✓ confirmed · mechanical · filed:755
+- fk-5827f41eb082 · `src/solar_challenge/web/simulation_params.py::parse_home_config` · low · ✓ confirmed · mechanical · filed:517
 
 ### repo
 
@@ -698,7 +698,7 @@ The repo slice is the project's test infrastructure: 32 tests/_*.py helper modul
 Most of it is healthy and reads well in isolation. Each helper has a one-sentence purpose, a usage block and typed returns. Each helper test drives the public function against a real throwaway project with no mocks: _lane_collection, _collect_on…
 
 _new_
-- fk-789558b03270 · `slug:tracked-claude-symlink` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9E92RCRJJY71CTB2D1J1C — The tree tracks `.claude` as a symlink (git mode 120000, blob 6ddfab8) whose target is `../../../../.claude`.…
+- fk-789558b03270 · `slug:tracked-claude-symlink` · medium · ✓ confirmed · mechanical · filed:758 — The tree tracks `.claude` as a symlink (git mode 120000, blob 6ddfab8) whose target is `../../../../.claude`.…
 - fk-5de02e56b3af · `tests/unit/test_lint.py::test_the_package_passes_the_lint` · low · ✓ confirmed · structural · open — Heuristic 10, uniformly enforced: the verify's static gates cover src/solar_challenge and one test helper.
 - t…
 - fk-3667e4e32155 · `tests/unit/test_marker_registration.py::TestNetworkedUnitClassesExcludedButPureKept` · low · ✓ confirmed · structural · open — test_marker_registration.py guards network access by hand-kept lists, which the offline guard has since made a…
@@ -708,7 +708,7 @@ _re-observed_
 - fk-ca5301a6f39f · `tests/_surface_forms.py::_parsed` · medium · ✓ confirmed · structural · open
 - fk-d2881616c782 · `tests/_surface_forms.py::_Unevaluated` · medium · ✓ confirmed · structural · open
 - fk-dc5370224a78 · `tests/unit/test_public_api_surface.py::_drift_message` · low · ✓ confirmed · structural · open
-- fk-b0607cc5a685 · `tests/_surface_forms.py::_attributes_set_on_self` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y
+- fk-b0607cc5a685 · `tests/_surface_forms.py::_attributes_set_on_self` · low · ✓ confirmed · mechanical · filed:700
 - fk-ac70915ba435 · `tests/_surface_forms.py::_type_checking_imports` · low · ✓ confirmed · structural · open
 - fk-1abd62632ae1 · `tests/_lane_collection.py::collect_lane_job` · medium · ~ weakened · structural · open
 - fk-eec3806e584e · `tests/conftest.py::pytest_runtest_protocol` · medium · ✓ confirmed · structural · open
@@ -716,19 +716,19 @@ _re-observed_
 - fk-a0b751097301 · `tests/_orchestrator_config.py::lane_job_directory` · low · ~ weakened · structural · open
 - fk-a9aad5f6d1b2 · `dark-factory-orchestrator.yaml` · low · ✓ confirmed · structural · open
 - fk-dd434cb2d4b9 · `tests/_collect_only.py::collected_node_ids` · low · ✓ confirmed · structural · open
-- fk-89afcb2b57f7 · `src/solar_challenge/cli/finance.py::run` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DBXBX6YFXFJY8SE512C2
+- fk-89afcb2b57f7 · `src/solar_challenge/cli/finance.py::run` · medium · ✓ confirmed · mechanical · filed:703
 - fk-f99038047a27 · `src/solar_challenge/cli/finance.py::run` · medium · ✓ confirmed · structural · open
-- fk-71b4ca35efe0 · `src/solar_challenge/cli/optimize.py::_SENSITIVITY_ALIAS_MAP` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4
-- fk-2106d1fbaed0 · `src/solar_challenge/cli/utils.py::create_summary_table` · medium · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DDJQRX888NDPPZ6YMFBP
+- fk-71b4ca35efe0 · `src/solar_challenge/cli/optimize.py::_SENSITIVITY_ALIAS_MAP` · medium · ✓ confirmed · mechanical · filed:704
+- fk-2106d1fbaed0 · `src/solar_challenge/cli/utils.py::create_summary_table` · medium · ✓ confirmed · mechanical · filed:705
 - fk-e756dab8077e · `src/solar_challenge/cli/utils.py::load_config_with_overrides` · medium · ✓ confirmed · mechanical · filed:681
-- fk-78587492a799 · `src/solar_challenge/__init__.py::_SYMBOL_MODULE` · low · ~ weakened · mechanical · ticket:tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2
-- fk-f66948b9528c · `src/solar_challenge/cli/finance.py::run` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q
-- fk-19457544d6b6 · `src/solar_challenge/cli/fleet.py::_print_community_section` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DW24Y634X5PAF8Z13NWW
-- fk-32d5e6707fb5 · `src/solar_challenge/cli/fleet.py::sweep` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9
-- fk-6b7c45f8d766 · `src/solar_challenge/cli/home.py::quick` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DX15A4E6CS8TMYYRPAM2
-- fk-d89ee8df893c · `src/solar_challenge/cli/home.py::run` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DXRJARDDEC5PNCW9JPPP
-- fk-b523bff3e51c · `src/solar_challenge/cli/optimize.py::configs` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3
-- fk-31fd9d5d4c68 · `src/solar_challenge/cli/utils.py::CliFleetSimulator` · low · ✓ confirmed · mechanical · ticket:tkt_0RVRX9DYW08FP6M8W075B2BWXC
+- fk-78587492a799 · `src/solar_challenge/__init__.py::_SYMBOL_MODULE` · low · ~ weakened · mechanical · filed:719
+- fk-f66948b9528c · `src/solar_challenge/cli/finance.py::run` · low · ✓ confirmed · mechanical · filed:738
+- fk-19457544d6b6 · `src/solar_challenge/cli/fleet.py::_print_community_section` · low · ✓ confirmed · mechanical · filed:722
+- fk-32d5e6707fb5 · `src/solar_challenge/cli/fleet.py::sweep` · low · ✓ confirmed · mechanical · filed:739
+- fk-6b7c45f8d766 · `src/solar_challenge/cli/home.py::quick` · low · ✓ confirmed · mechanical · filed:731
+- fk-d89ee8df893c · `src/solar_challenge/cli/home.py::run` · low · ✓ confirmed · mechanical · filed:740
+- fk-b523bff3e51c · `src/solar_challenge/cli/optimize.py::configs` · low · ✓ confirmed · mechanical · filed:741
+- fk-31fd9d5d4c68 · `src/solar_challenge/cli/utils.py::CliFleetSimulator` · low · ✓ confirmed · mechanical · filed:742
 
 ### cross-area
 
@@ -737,16 +737,16 @@ _new_
 - fk-463e82417506 · `src/solar_challenge/web/routes.py::simulate_home_page` · medium · ✓ confirmed · structural · open — What 'Economy 7' and 'Economy 10' cost has two disagreeing homes.
 
 **Library:** TariffConfig.economy_7 default…
-- fk-94cab00e114e · `src/solar_challenge/config.py::SimulationPeriod` · low · ~ weakened · mechanical · ticket:tkt_0RVRX9E9F0N69K1RXY450XEMB7 — The default simulation window has no home in the library.
+- fk-94cab00e114e · `src/solar_challenge/config.py::SimulationPeriod` · low · ~ weakened · mechanical · filed:759 — The default simulation window has no home in the library.
 
 - **Library:** config.SimulationPeriod declares no…
 - fk-753ec8e6e149 · `src/solar_challenge/weather.py::_fetch_mean_annual_ghi_kwh_per_m2` · low · ~ weakened · mechanical · open — Two PVGIS request policies live in weather.py, and only one of them has a single home.
 
 - **TMY request:** a f…
-- fk-cca5fd81afda · `src/solar_challenge/web/database.py::get_db` · low · ~ weakened · mechanical · ticket:tkt_0RVRX9E9QVNJQBDZSVFDFE046G — How the dashboard opens a SQLite connection is written three times:
+- fk-cca5fd81afda · `src/solar_challenge/web/database.py::get_db` · low · ~ weakened · mechanical · filed:760 — How the dashboard opens a SQLite connection is written three times:
 - database.init_db (database.py:63-65) set…
 - fk-b3dfd41a4d6a · `src/solar_challenge/config.py::DispatchStrategyConfig` · medium · ~ weakened · structural · open — Two domain value types, DispatchStrategyConfig (config.py:356) and GridChargeConfig (config.py:254), are defin…
-- fk-601c5b5f6415 · `src/solar_challenge/config.py::ConfigurationError` · medium · ~ weakened · mechanical · ticket:tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT — ConfigurationError is the exception that domain value objects raise when a domain invariant fails, but it is d…
+- fk-601c5b5f6415 · `src/solar_challenge/config.py::ConfigurationError` · medium · ~ weakened · mechanical · filed:177 — ConfigurationError is the exception that domain value objects raise when a domain invariant fails, but it is d…
 - fk-b0f648b0e6d0 · `src/solar_challenge/finance.py::project_multi_year` · medium · ~ weakened · structural · open — finance.py, at 2,376 lines and over the 2,000-line alarm, holds two strata, and the layering cost appears as f…
 - fk-8047de9b6789 · `src/solar_challenge/config.py::ScenarioConfig` · medium · ~ weakened · structural · open — ScenarioConfig encodes 'the homes of a scenario' as an either/or of `home` and `homes`, and 'the SEG rate' as…
 - fk-66f886576b3f · `src/solar_challenge/location.py::Location` · low · ✓ confirmed · structural · open — The two front ends each define their own location-string grammar, because no stratum below them owns one. loca…
@@ -769,7 +769,7 @@ _new_
 - fk-44fdf5fb356b · `src/solar_challenge/weather.py::get_tmy_data` · low · ✓ confirmed · structural · open — get_tmy_data reads its cache from a module global (_weather_cache) that anyone can replace through the public…
 - fk-cc292d7ce407 · `src/solar_challenge/cli/utils.py::set_status_quiet` · low · ~ weakened · structural · open — --quiet travels by mutating a module-global Rich Console. cli/main.py's callback calls set_status_quiet(quiet)…
 - fk-188af6c13d71 · `src/solar_challenge/config.py::ScenarioConfig` · low · ~ weakened · mechanical · filed:485 — ScenarioConfig holds 'the homes this scenario simulates' as two fields: `home` and `homes`, exactly one set (_…
-- fk-2228ae61ef4e · `src/solar_challenge/optimize.py::_pareto_baseline` · low · ~ weakened · mechanical · ticket:tkt_0RVRX9EB021JEZX6C7RDY95ACM — optimize.py keeps three private one-line shims whose only callers are tests: _split_infeasible, _rank_feasible…
+- fk-2228ae61ef4e · `src/solar_challenge/optimize.py::_pareto_baseline` · low · ~ weakened · mechanical · filed:717 — optimize.py keeps three private one-line shims whose only callers are tests: _split_infeasible, _rank_feasible…
 
 _re-observed_
 - fk-59fdc80fdded · `src/solar_challenge/config.py::run_parameter_sweep` · medium · ✓ confirmed · structural · open
@@ -1256,72 +1256,72 @@ none
 | fk-9dd1d9389dd2 | hotspot-survey-solar_challenge-20261013 | none | 697 | filed:697 |
 | fk-acdc650baeb8 | hotspot-survey-solar_challenge-20261013 | none | 698 | filed:698 |
 | fk-a98db49f3fd7 | hotspot-survey-solar_challenge-20261013 | none | 699 | filed:699 |
-| fk-7dcdc5559d22 | hotspot-survey-solar_challenge-20261013 | none | tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ | ticket:tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ |
+| fk-7dcdc5559d22 | hotspot-survey-solar_challenge-20261013 | none | 382 | filed:382 |
 | fk-8f26d000b68d | hotspot-survey-solar_challenge-20261013 | 2 | 674 | filed:674 |
-| fk-b0607cc5a685 | hotspot-survey-solar_challenge-20261013 | none | tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y | ticket:tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y |
-| fk-b867cc3e5653 | review-solar_challenge-20261013 | none | tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ | ticket:tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ |
-| fk-62dbe0f34b68 | review-solar_challenge-20261013 | none | tkt_0RVRX9DB1G4SQ89R5NGRPJBB87 | ticket:tkt_0RVRX9DB1G4SQ89R5NGRPJBB87 |
-| fk-89afcb2b57f7 | review-solar_challenge-20261013 | none | tkt_0RVRX9DBXBX6YFXFJY8SE512C2 | ticket:tkt_0RVRX9DBXBX6YFXFJY8SE512C2 |
-| fk-71b4ca35efe0 | review-solar_challenge-20261013 | none | tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4 | ticket:tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4 |
-| fk-2106d1fbaed0 | review-solar_challenge-20261013 | none | tkt_0RVRX9DDJQRX888NDPPZ6YMFBP | ticket:tkt_0RVRX9DDJQRX888NDPPZ6YMFBP |
+| fk-b0607cc5a685 | hotspot-survey-solar_challenge-20261013 | none | 700 | filed:700 |
+| fk-b867cc3e5653 | review-solar_challenge-20261013 | none | 701 | filed:701 |
+| fk-62dbe0f34b68 | review-solar_challenge-20261013 | none | 702 | filed:702 |
+| fk-89afcb2b57f7 | review-solar_challenge-20261013 | none | 703 | filed:703 |
+| fk-71b4ca35efe0 | review-solar_challenge-20261013 | none | 704 | filed:704 |
+| fk-2106d1fbaed0 | review-solar_challenge-20261013 | none | 705 | filed:705 |
 | fk-e756dab8077e | review-solar_challenge-20261013 | 2 | 681 | filed:681 |
-| fk-664e2030921e | review-solar_challenge-20261013 | none | tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ | ticket:tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ |
+| fk-664e2030921e | review-solar_challenge-20261013 | none | 706 | filed:706 |
 | fk-f2e1ad46df4b | review-solar_challenge-20261013 | 2 | 297 | filed:297 |
 | fk-a2b33a420bcf | review-solar_challenge-20261013 | 2 | 675 | filed:675 |
-| fk-e79170280adf | review-solar_challenge-20261013 | none | tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN | ticket:tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN |
-| fk-740e9a804a4f | review-solar_challenge-20261013 | none | tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M | ticket:tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M |
-| fk-e58042aef503 | review-solar_challenge-20261013 | none | tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5 | ticket:tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5 |
+| fk-e79170280adf | review-solar_challenge-20261013 | none | 707 | filed:707 |
+| fk-740e9a804a4f | review-solar_challenge-20261013 | none | 708 | filed:708 |
+| fk-e58042aef503 | review-solar_challenge-20261013 | none | 709 | filed:709 |
 | fk-491014934d1e | review-solar_challenge-20261013 | 2 | 270 | filed:270 |
-| fk-a80aa8f942eb | review-solar_challenge-20261013 | none | tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19 | ticket:tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19 |
-| fk-89777ec9faad | review-solar_challenge-20261013 | none | tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY | ticket:tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY |
-| fk-41767a1bc146 | review-solar_challenge-20261013 | none | tkt_0RVRX9DN45JN0G4Z79T7KJMZPF | ticket:tkt_0RVRX9DN45JN0G4Z79T7KJMZPF |
+| fk-a80aa8f942eb | review-solar_challenge-20261013 | none | 710 | filed:710 |
+| fk-89777ec9faad | review-solar_challenge-20261013 | none | 711 | filed:711 |
+| fk-41767a1bc146 | review-solar_challenge-20261013 | none | 712 | filed:712 |
 | fk-0097b5aaa45c | review-solar_challenge-20261013 | 2 | 564 | filed:564 |
-| fk-ab16fff6f6c3 | review-solar_challenge-20261013 | none | tkt_0RVRX9DNQGS7ZCSDRR850EC339 | ticket:tkt_0RVRX9DNQGS7ZCSDRR850EC339 |
-| fk-ce345e3b013d | review-solar_challenge-20261013 | none | tkt_0RVRX9DPVHGS94FVA07MRXC2P0 | ticket:tkt_0RVRX9DPVHGS94FVA07MRXC2P0 |
+| fk-ab16fff6f6c3 | review-solar_challenge-20261013 | none | 713 | filed:713 |
+| fk-ce345e3b013d | review-solar_challenge-20261013 | none | 714 | filed:714 |
 | fk-70edc755ede4 | review-solar_challenge-20261013 | 2 | 245 | filed:245 |
 | fk-6cd8a932665c | review-solar_challenge-20261013 | 2 | 581 | filed:581 |
 | fk-0b791f2be2d6 | review-solar_challenge-20261013 | 2 | 485 | filed:485 |
-| fk-50cf1dd5df58 | review-solar_challenge-20261013 | none | tkt_0RVRX9DS5VEBHATPHAQMZPHPJM | ticket:tkt_0RVRX9DS5VEBHATPHAQMZPHPJM |
-| fk-9fa18977ec68 | review-solar_challenge-20261013 | none | tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4 | ticket:tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4 |
-| fk-72fdec5965a1 | review-solar_challenge-20261013 | none | tkt_0RVRX9DTECVB2PAD54KH3F6PWM | ticket:tkt_0RVRX9DTECVB2PAD54KH3F6PWM |
-| fk-0b4f5e04067c | review-solar_challenge-20261013 | none | tkt_0RVRX9DTY3CFM9KTW2K03XKADN | ticket:tkt_0RVRX9DTY3CFM9KTW2K03XKADN |
-| fk-78587492a799 | review-solar_challenge-20261013 | none | tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2 | ticket:tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2 |
-| fk-f66948b9528c | review-solar_challenge-20261013 | none | tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q | ticket:tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q |
-| fk-19457544d6b6 | review-solar_challenge-20261013 | none | tkt_0RVRX9DW24Y634X5PAF8Z13NWW | ticket:tkt_0RVRX9DW24Y634X5PAF8Z13NWW |
-| fk-32d5e6707fb5 | review-solar_challenge-20261013 | none | tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9 | ticket:tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9 |
-| fk-6b7c45f8d766 | review-solar_challenge-20261013 | none | tkt_0RVRX9DX15A4E6CS8TMYYRPAM2 | ticket:tkt_0RVRX9DX15A4E6CS8TMYYRPAM2 |
-| fk-d89ee8df893c | review-solar_challenge-20261013 | none | tkt_0RVRX9DXRJARDDEC5PNCW9JPPP | ticket:tkt_0RVRX9DXRJARDDEC5PNCW9JPPP |
-| fk-b523bff3e51c | review-solar_challenge-20261013 | none | tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3 | ticket:tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3 |
-| fk-31fd9d5d4c68 | review-solar_challenge-20261013 | none | tkt_0RVRX9DYW08FP6M8W075B2BWXC | ticket:tkt_0RVRX9DYW08FP6M8W075B2BWXC |
-| fk-dc5cf2ec9b84 | review-solar_challenge-20261013 | none | tkt_0RVRX9DZBRAR585D0B29P7HB7T | ticket:tkt_0RVRX9DZBRAR585D0B29P7HB7T |
+| fk-50cf1dd5df58 | review-solar_challenge-20261013 | none | 715 | filed:715 |
+| fk-9fa18977ec68 | review-solar_challenge-20261013 | none | 716 | filed:716 |
+| fk-72fdec5965a1 | review-solar_challenge-20261013 | none | 717 | filed:717 |
+| fk-0b4f5e04067c | review-solar_challenge-20261013 | none | 718 | filed:718 |
+| fk-78587492a799 | review-solar_challenge-20261013 | none | 719 | filed:719 |
+| fk-f66948b9528c | review-solar_challenge-20261013 | none | 738 | filed:738 |
+| fk-19457544d6b6 | review-solar_challenge-20261013 | none | 722 | filed:722 |
+| fk-32d5e6707fb5 | review-solar_challenge-20261013 | none | 739 | filed:739 |
+| fk-6b7c45f8d766 | review-solar_challenge-20261013 | none | 731 | filed:731 |
+| fk-d89ee8df893c | review-solar_challenge-20261013 | none | 740 | filed:740 |
+| fk-b523bff3e51c | review-solar_challenge-20261013 | none | 741 | filed:741 |
+| fk-31fd9d5d4c68 | review-solar_challenge-20261013 | none | 742 | filed:742 |
+| fk-dc5cf2ec9b84 | review-solar_challenge-20261013 | none | 743 | filed:743 |
 | fk-caad5305a3be | review-solar_challenge-20261013 | 2 | 237 | filed:237 |
-| fk-00cb82820af9 | review-solar_challenge-20261013 | none | tkt_0RVRX9DZVYZCZDEBPKC358NKVG | ticket:tkt_0RVRX9DZVYZCZDEBPKC358NKVG |
-| fk-7fa120a8bb98 | review-solar_challenge-20261013 | none | tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ | ticket:tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ |
-| fk-e0e34ef46058 | review-solar_challenge-20261013 | none | tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5 | ticket:tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5 |
-| fk-f7b19fc4c8b5 | review-solar_challenge-20261013 | none | tkt_0RVRX9E1CACMDFE1CZCAQ557EE | ticket:tkt_0RVRX9E1CACMDFE1CZCAQ557EE |
+| fk-00cb82820af9 | review-solar_challenge-20261013 | none | 744 | filed:744 |
+| fk-7fa120a8bb98 | review-solar_challenge-20261013 | none | 745 | filed:745 |
+| fk-e0e34ef46058 | review-solar_challenge-20261013 | none | 746 | filed:746 |
+| fk-f7b19fc4c8b5 | review-solar_challenge-20261013 | none | 747 | filed:747 |
 | fk-998f0cb69410 | review-solar_challenge-20261013 | 2 | 284 | filed:284 |
-| fk-97213a0e9ab2 | review-solar_challenge-20261013 | none | tkt_0RVRX9E23FMHKAR68JP92FXFKR | ticket:tkt_0RVRX9E23FMHKAR68JP92FXFKR |
-| fk-756c0ef9e9d9 | review-solar_challenge-20261013 | none | tkt_0RVRX9E2M34QMQSQPSFGVS17B0 | ticket:tkt_0RVRX9E2M34QMQSQPSFGVS17B0 |
-| fk-cdcdf320a9e8 | review-solar_challenge-20261013 | none | tkt_0RVRX9E37BXVSY8TX6JCTZG6M6 | ticket:tkt_0RVRX9E37BXVSY8TX6JCTZG6M6 |
-| fk-2ac79d7a1989 | review-solar_challenge-20261013 | none | tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ | ticket:tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ |
-| fk-93d3bd7aa219 | review-solar_challenge-20261013 | none | tkt_0RVRX9E45EQSJM25M8Y2RRH9D0 | ticket:tkt_0RVRX9E45EQSJM25M8Y2RRH9D0 |
-| fk-02500b87f3cb | review-solar_challenge-20261013 | none | tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM | ticket:tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM |
+| fk-97213a0e9ab2 | review-solar_challenge-20261013 | none | 748 | filed:748 |
+| fk-756c0ef9e9d9 | review-solar_challenge-20261013 | none | 749 | filed:749 |
+| fk-cdcdf320a9e8 | review-solar_challenge-20261013 | none | 153 | filed:153 |
+| fk-2ac79d7a1989 | review-solar_challenge-20261013 | none | 750 | filed:750 |
+| fk-93d3bd7aa219 | review-solar_challenge-20261013 | none | 751 | filed:751 |
+| fk-02500b87f3cb | review-solar_challenge-20261013 | none | 752 | filed:752 |
 | fk-f8b7b3ab709d | review-solar_challenge-20261013 | 2 | 376 | filed:376 |
-| fk-3cd0d3f3b512 | review-solar_challenge-20261013 | none | tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ | ticket:tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ |
-| fk-d8ad51b22de5 | review-solar_challenge-20261013 | none | tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0 | ticket:tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0 |
-| fk-ba29e186122f | review-solar_challenge-20261013 | none | tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR | ticket:tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR |
-| fk-5827f41eb082 | review-solar_challenge-20261013 | none | tkt_0RVRX9E6CW14E0CSSD7PF5G0D5 | ticket:tkt_0RVRX9E6CW14E0CSSD7PF5G0D5 |
-| fk-48447960eb2c | review-all-solar_challenge-20261013 | none | tkt_0RVRX9E6WMFNP7R4EEKCYE757V | ticket:tkt_0RVRX9E6WMFNP7R4EEKCYE757V |
-| fk-b97bf2325eda | review-all-solar_challenge-20261013 | none | tkt_0RVRX9E7YAWM44X1SG3GG6SM31 | ticket:tkt_0RVRX9E7YAWM44X1SG3GG6SM31 |
+| fk-3cd0d3f3b512 | review-solar_challenge-20261013 | none | 753 | filed:753 |
+| fk-d8ad51b22de5 | review-solar_challenge-20261013 | none | 754 | filed:754 |
+| fk-ba29e186122f | review-solar_challenge-20261013 | none | 755 | filed:755 |
+| fk-5827f41eb082 | review-solar_challenge-20261013 | none | 517 | filed:517 |
+| fk-48447960eb2c | review-all-solar_challenge-20261013 | none | 756 | filed:756 |
+| fk-b97bf2325eda | review-all-solar_challenge-20261013 | none | 757 | filed:757 |
 | fk-f4d53977c642 | review-all-solar_challenge-20261013 | lead-weakened | None | open |
-| fk-789558b03270 | review-all-solar_challenge-20261013 | none | tkt_0RVRX9E92RCRJJY71CTB2D1J1C | ticket:tkt_0RVRX9E92RCRJJY71CTB2D1J1C |
-| fk-94cab00e114e | review-all-solar_challenge-20261013 | none | tkt_0RVRX9E9F0N69K1RXY450XEMB7 | ticket:tkt_0RVRX9E9F0N69K1RXY450XEMB7 |
+| fk-789558b03270 | review-all-solar_challenge-20261013 | none | 758 | filed:758 |
+| fk-94cab00e114e | review-all-solar_challenge-20261013 | none | 759 | filed:759 |
 | fk-753ec8e6e149 | review-all-solar_challenge-20261013 | lead-weakened | None | open |
-| fk-cca5fd81afda | review-all-solar_challenge-20261013 | none | tkt_0RVRX9E9QVNJQBDZSVFDFE046G | ticket:tkt_0RVRX9E9QVNJQBDZSVFDFE046G |
-| fk-601c5b5f6415 | review-all-solar_challenge-20261013 | none | tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT | ticket:tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT |
+| fk-cca5fd81afda | review-all-solar_challenge-20261013 | none | 760 | filed:760 |
+| fk-601c5b5f6415 | review-all-solar_challenge-20261013 | none | 177 | filed:177 |
 | fk-8376e0ab00db | review-all-solar_challenge-20261013 | lead-weakened | None | open |
 | fk-188af6c13d71 | review-all-solar_challenge-20261013 | 2 | 485 | filed:485 |
-| fk-2228ae61ef4e | review-all-solar_challenge-20261013 | none | tkt_0RVRX9EB021JEZX6C7RDY95ACM | ticket:tkt_0RVRX9EB021JEZX6C7RDY95ACM |
+| fk-2228ae61ef4e | review-all-solar_challenge-20261013 | none | 717 | filed:717 |
 | (164 structural findings) | review-all, review, hotspot-survey | structural, contract §6 | — | open → deliberation (keys in the findings JSON and in the stream list above) |
 
 ## Next

@@ -570,7 +570,7 @@
    "statement": "Every default PV simulation uses one CEC module, and nothing names it. It is found by substring search over pvlib's CECMod library for columns containing both 'Canadian_Solar' and '400', taking the first match in catalogue column order. Two looser fallbacks follow: any 380-420 W STC row, then column 0. With the locked pvlib 0.15.1 the library has 21,535 columns, two of which match: Canadian_Solar_Inc__CS1U_400MS (STC 400.428 W) and Canadian_Solar_Inc__CS3W_400P (400.158 W). The first is used. The function's comments say it uses 'Canadian Solar CS6K-400MS' (pv.py:157, 162), a row the catalogue does not hold. The picked row's numbers are restated as facts elsewhere: wired_dc_capacity_kw's doctest (400.428 W), docs/pv-inverter-string-matching.md:66 (400.428 W, V_mp_ref 44.1 V), docs/pv-annual-yield-benchmark.md:12, and tests/unit/test_validation.py:132, 303-305 and 380. Inverters get a guard, _require_cec_library_row, that refuses an unknown name; the module has no equivalent.",
    "proposal": "Name the module row as a constant and require it the way _require_cec_library_row requires inverter rows, failing with a message naming the row. Delete the substring search and both fallbacks. Correct the comment to the row actually used.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9E6WMFNP7R4EEKCYE757V",
+   "disposition": "filed:756",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -709,7 +709,7 @@
    "statement": "calculate_annual_consumption does not compute an annual figure. Its docstring opens 'Despite the name (kept for backward compatibility), this function simply integrates whatever Series is passed — it is NOT limited to full-year profiles.' Its in-module caller in _try_richardsonpy_profile needs a 3-line comment (load.py:378-380) to say it measures the window's energy. Its sibling scale_profile_to_annual(target_annual_kwh) has the same mismatch: it scales to any total. Neither name is in solar_challenge.__all__, so the backward compatibility protects only load.py and tests/unit/test_load.py (9 references). The prose came from commit dbc1758, 'amend: log fallback warning; clarify calculate_annual_consumption naming', which clarified the name in prose rather than renaming.",
    "proposal": "Rename both to say what they do, e.g. energy_kwh(profile) and scale_profile_to_energy(profile, target_kwh). Update test_load.py and delete the disclaimer and the explanatory comment.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E7YAWM44X1SG3GG6SM31",
+   "disposition": "filed:757",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -2299,7 +2299,7 @@
    "statement": "The tree tracks `.claude` as a symlink (git mode 120000, blob 6ddfab8) whose target is `../../../../.claude`. It was added in a4c2970 (2026-02-20, 'auto-claude: subtask-4-4 - End-to-end verification...') from a worktree nested four levels deep, where that path reached the main repo's .claude.\n\nAt this repo's layout the target is wrong everywhere:\n- From the main checkout it resolves to /.claude, which does not exist.\n- From every orchestrator task worktree (.worktrees/<N>/.claude) it resolves to /home/leo/.claude, the user's global Claude configuration. That directory holds agents/, CLAUDE.md, cache/ and backups/.\n\nSo this repo can hold no project-scoped .claude content. In main a write fails. In a task worktree, the project scope is the user's global scope: outside git, outside review, and shared with every other project. The breakage is already absorbed in test infrastructure rather than fixed: tests/_working_tree.py::copy_working_tree's docstring and test_working_tree_helper.py::test_leaves_out_a_listed_path_that_is_not_a_regular_file special-case 'a worktree's .claude symlink'.",
    "proposal": "Remove the tracked symlink (git rm .claude). If project-level Claude config is wanted, commit a real .claude/ directory. Reword the _working_tree docstring and its test to a generic symlink case.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E92RCRJJY71CTB2D1J1C",
+   "disposition": "filed:758",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -2747,7 +2747,7 @@
    "statement": "The default simulation window has no home in the library.\n\n- **Library:** config.SimulationPeriod declares no default, and _parse_period requires both dates.\n- **Web:** web/simulation_params.py holds the policy as FULL_YEAR_START = 2024-01-01, FULL_YEAR_END = 2024-12-31 and DAYS_WINDOW_START = 2024-06-01 (:34, :37, :42). assistant.py derives from these.\n- **CLI:** it restates the same values as string literals in every command, with no import of either. These are --start/--end option defaults in cli/home.py run (:78, :85), cli/fleet.py run (:134, :141) and sweep (:274, :281), and cli/finance.py run (:83, :90). cli/optimize.py configs has its own fallback (:238-239).\n- **Days window:** `home quick` starts it at the literal pd.Timestamp('2024-06-01') (cli/home.py:243), under the comment '# Default to starting today'.\n- **Templates and JS:** `config template` emits the full-year pair twice (cli/config.py:40-41, 124-125), and scenario-builder.js restates it twice (:110-111, :136-137).\n\nThe copies agree today. Changing the reference year, or the days-window start that both `home quick` and the web's days requests use, takes 21 independent edits across 8 files in Python, YAML-in-strings and JS, and no test ties them together.",
    "proposal": "Define the default full-year window and the days-window start once, as constants beside SimulationPeriod or in timebase.py. Have the CLI option defaults, cli/optimize's fallback, cli/config's templates, `home quick` and web/simulation_params import them, and have the builder page receive them from its route.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9E9F0N69K1RXY450XEMB7",
+   "disposition": "filed:759",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -2863,7 +2863,7 @@
    "statement": "How the dashboard opens a SQLite connection is written three times:\n- database.init_db (database.py:63-65) sets journal_mode=WAL and row_factory, but not foreign_keys.\n- database.get_db (database.py:243-245) sets row_factory and foreign_keys=ON. It serves 19 call sites in 7 files.\n- jobs.JobManager._run_job (jobs.py:598-600) copies get_db's two setup lines for its long-lived per-job connection.\n\nforeign_keys matters because the schema's jobs.run_id has REFERENCES runs(id) ON DELETE CASCADE (database.py:91). SQLite enforces that only on connections that set the pragma.\n\nThe history shows the drift mechanism. 82dc6c8 (2026-03-10, 'enable WAL mode and foreign key enforcement') changed database.py only. cded581, the same day, introduced jobs.py's own connection by copying the setup. A future pragma, such as busy_timeout for the WAL writer contention that a background job and request handlers share, must be added at both places, and init_db's connection already differs from both.",
    "proposal": "Extract one database.connect(db_path) that applies the connection policy. get_db, init_db and jobs._run_job's long-lived connection all call it.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9E9QVNJQBDZSVFDFE046G",
+   "disposition": "filed:760",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -3016,7 +3016,7 @@
    "statement": "ConfigurationError is the exception that domain value objects raise when a domain invariant fails, but it is defined in config.py (line 35), the parser that imports 13 domain modules at top level. finance.py and gridservices.py raise it, and they can reach it only through function-local imports, which import_graph marks closes_cycle=true:\n- finance.py: lines 119 and 1540.\n- gridservices.py: lines 237, 240, 243, 246, 251, 256, 261, 266 and 345.\n\nThose 11 imports are the whole of the hidden cycle config -> finance -> gridservices -> config. The workaround costs prose: a 7-line 'Import cycle note' in gridservices' module docstring (lines 35-41), an 11-line '.. important::' block in EventWindow.__post_init__ (lines 224-234), a further docstring and comment explanation in GridServicesEventsConfig.__post_init__ (lines 337-345), and an inline comment at finance.py:119. Each new validation branch in EventWindow must repeat the import inside the branch, because DEFAULT_EVENT_WINDOWS constructs EventWindow at module load.\n\nThe rest of the domain does not use it. The other 18 domain modules raise ValueError only (battery 15, dispatch 26, pv 14, optimize 21, and so on). finance mixes the two (10 ConfigurationError, 22 ValueError), as does gridservices (14 ConfigurationError, 3 ValueError). A caller cannot tell from a module's stratum which exception a refused value raises.",
    "proposal": "Give the package a bottom stratum for its shared error vocabulary, and make 'which exception a domain invariant raises' one decision recorded there.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT",
+   "disposition": "filed:177",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -4768,7 +4768,7 @@
    "statement": "optimize.py keeps three private one-line shims whose only callers are tests: _split_infeasible, _rank_feasible and _pareto_baseline (optimize.py:919-934). Each delegates to a public function already in optimize.__all__ (feasible_split, rank, pareto_baseline), and their docstrings say 'Delegate to public ... (single source of truth)'. src has no caller of any of the three; run_sweep's docstring merely cites _rank_feasible. tests/integration/test_optimize_sweep.py imports all three and references them 28 times, so the tests pin a private path, not the public seam. test_optimize_sensitivity.py likewise imports the private _build_axis_configs, 12 references.",
    "proposal": "Delete the three shims, repoint test_optimize_sweep.py at feasible_split, rank and pareto_baseline, fix the run_sweep docstring reference, and drive test_optimize_sensitivity through sensitivity_panel or a public axis builder.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9EB021JEZX6C7RDY95ACM",
+   "disposition": "filed:717",
    "first_seen": "review-all-solar_challenge-20261013",
    "last_seen": [],
    "supersedes": [],
@@ -5313,7 +5313,7 @@
    "statement": "Location.__post_init__ checks `self.altitude < -500`, which is False for NaN, so altitude=nan passes (and inf passes by design); the same sequence of range checks is not written to refuse non-finite values the way PVConfig's was after task 332. timezone is any string: a typo such as 'Europe/Londn' is accepted at construction and fails only inside PVLibLocation in create_model_chain_picking_from, or later in the load profile's tz handling, far from the config that caused it. Locations are the cache key input for fleet._tmy_by_location and WeatherCache._make_key. This is the 'checked in some constructors and not others' pattern PVConfig had.",
    "proposal": "In Location.__post_init__, require math.isfinite on altitude and validate the timezone with zoneinfo.ZoneInfo (error naming the field and value), so that the construction and use points both agree. A unit test over (nan, inf, -inf) for every float field closes the class.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ",
+   "disposition": "filed:382",
    "first_seen": "hotspot-survey-solar_challenge-20261013",
    "last_seen": [
     "hotspot-survey-solar_challenge-20261013",
@@ -5531,7 +5531,7 @@
    "statement": "Heuristic 10 (and INV-11, no silent fail-soft): simulate_community ignores, without a word, two configurations the community parser accepts. (1) _parse_community_config builds the community_battery with the full home-battery grammar (config.py:2775-2777, _BATTERY_BLOCK_KEYS 751-756), so a community_battery block holding dispatch_strategy {strategy_type: peak_shaving, import_limit_kw: 20} and grid_charging {target_soc_fraction: 0.9} parses (verified). simulate_community then always dispatches with SelfConsumptionStrategy through simulate_timestep, never simulate_timestep_tou (community.py:292-318). The briefing documents the hardcoding; what contradicts it is accepting configuration that asks for something else. (2) A billing block with a tariff but no SEG parses to CommunityBillingConfig(tariff=..., seg_rate_pence_per_kwh=None) (verified; config.py:2737-2739). simulate_community computes billing only when both are present (community.py:343-347), so the result, the CLI table (cli/fleet.py, 'only when VNM billing was computed') and the report all show no billing and no warning. No task covers either.",
    "proposal": "Refuse, in CommunityConfig.__post_init__ or the community parser, a community_battery carrying dispatch_strategy or grid_charging, naming the keys and the self-consumption-only rule. Either refuse a billing block with only one of tariff/SEG, or price the import leg alone with export revenue 0. Contained in community.py and config.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ",
+   "disposition": "filed:706",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5603,7 +5603,7 @@
    "statement": "Smart-charging modes keep charging after the car has left, contradicting the docstring's 'All strategies ensure the required charge is delivered before departure'. When the preferred window is shorter than the charge time, the code starts at the window's opening and charges min(needed, available) minutes from there (ev.py:234-237, 266-268, 285-287), where available is measured from ARRIVAL. Measured: off_peak, 3.6 kW, 35 kWh, arrive 18:00, depart 07:00 charges 00:30-10:13; solar, 3.6 kW, 30 kWh, arrive 08:00, depart 17:00 charges 10:00-18:20. Charging that runs past the window's last minute is silently dropped by numpy slicing (ev.py:300), and overflow into the next day's slots overwrites rather than adds. The function's cognitive complexity is 42 (complexipy; Sonar threshold 15) with the off-peak same-day and overnight branches written out twice, which is where the deadline rule was lost. The positional-minute DST displacement it shares with load.py is reported under load.py::generate_load_profile.",
    "proposal": "Compute each session as an interval ending no later than departure: take the preferred window's overlap first, then fill the remainder backwards from the window start (or forwards from arrival) but never past departure; express the three modes as one window-selection function plus one shared scheduler instead of three branch families. Outputs change for configs where the window is too short; no signature change.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M",
+   "disposition": "filed:708",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5638,7 +5638,7 @@
    "statement": "Tests stance and the briefing's key scenario 'the same seed reproduces the identical fleet and per-home stochastic profiles regardless of parallel execution order': no test that any lane runs checks it. Five classes in tests/unit/test_fleet.py are marked slow: TestSimulateFleetIter (440), TestParallelMatchesSequential (504), TestSimulateHomeWeatherData (529), TestMultiSweepIter (567) and TestCollectMultiSweepResults (647). They are slow only because they build Bristol fleets without seeding the weather_cache fixture, so they would fetch PVGIS. The verify runs `-m 'not slow and not e2e'` (dark-factory-orchestrator.yaml:52), and the only slow tests a lane runs are tests/integration/test_pvgis.py, so these classes run nowhere. CLAUDE.md asks for 'slow' only when a live service is needed. The one parallel-vs-sequential comparison (test_fleet.py:508-526) compares only generation, on create_uniform homes with unseeded stochastic loads. TestParallelFleetWeather (794 onward, not slow) compares parallel with simulate_home only for use_stochastic=False loads. So seeded stochastic loads drawn in worker processes have no executed test. tests/integration/test_fleet_simulation.py and test_ev_fleet.py are slow-marked too. The tests reach no private names of config, fleet, community, output or scenario_writer: an AST scan of tests/ found no imports, attribute reads or dotted-path patches of their _-prefixed names.",
    "proposal": "Seed weather_cache with synthetic_june_weather in those classes and drop their slow marks. Add a non-slow test that builds a seeded fleet_distribution with use_stochastic=True and asserts identical per-home demand from simulate_fleet with parallel=False and with parallel=True under forkserver and spawn. Tests only.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5",
+   "disposition": "filed:709",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5710,7 +5710,7 @@
    "statement": "simulate_home simulates a home AND prices it: in one 180-line body (home.py:292-472, radon cyclomatic 32 = grade E, complexipy cognitive 37) it fetches weather, validates heat-pump weather length, runs PV, expands it, generates load, adds heat-pump load, aligns, builds the battery, chooses between the two dispatch paths with a three-flag predicate and re-branches on it every timestep (home.py:374-415), then prices import cost, grid-charge cost and SEG export revenue with its own warning policy (home.py:424-454) before assembling results. The pricing is the briefing's SEG-valuation convention's enforcement point, so a change to physics orchestration and a change to pricing edit the same function.",
    "proposal": "Split into private steps with one purpose each - demand assembly (load + heat pump), dispatch-path selection returning one per-timestep callable, the timestep loop, and a pricing step that turns flows into import cost, grid-charge cost and SEG revenue - leaving simulate_home a short composition; no public signature changes.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19",
+   "disposition": "filed:710",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5745,7 +5745,7 @@
    "statement": "A full year of demand falls 2.2% short of LoadConfig.annual_consumption_kwh (documented as the 'Target annual electricity consumption'; generate_load_profile says it is 'scaled to match the configured annual consumption'). Each day gets annual/365 x SEASONAL_FACTORS[month] (load.py:159-166), and the stochastic path rescales to the same sum (load.py:371-377, a second copy of the formula), but the day-weighted mean of SEASONAL_FACTORS is 0.978, not 1. Measured: a 2023 Jan-Dec profile for annual_consumption_kwh=3400 totals 3,325.0 kWh on both the Elexon and the seeded richardsonpy path (2024: about 3,336). Every simulated home therefore demands ~75 kWh/yr less than configured, which moves import, self-consumption and Basis-C own-use; docs/finance-spreadsheet-reconciliation.md §4.1 reasons with calibration homes that 'demand 3,400 kWh/yr' and derives its 642.5 kWh over-billing figure from it, so the doc and the simulator disagree. validation.validate_consumption's 20% tolerance (validation.py:304-309) cannot see the gap.",
    "proposal": "Normalise the seasonal weights by their day-weighted mean over the simulated year at the point of use (one private helper both paths call), so a calendar-year run delivers annual_consumption_kwh exactly; SEASONAL_FACTORS (in __all__) keeps its values. Outputs move by +2.2% demand (release note); re-check the reconciliation doc's §4.1 figures.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY",
+   "disposition": "filed:711",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5814,7 +5814,7 @@
    "statement": "Comments stance: community.py is 42% prose by radon (C+M % L), the highest of the five modules, and the prose has drifted. 'Per-step ◆ invariant (PRD §3.2) — mirrors home.simulate_home:299-300' (community.py:319) points at home.py lines that are now simulate_home's signature. The validate_energy_balance call is at home.py:418. The module and its docstrings use planning-slice labels a reader cannot resolve: α, γ, ε, ◆, 'task-34', 'PRD §3' (lines 5, 10, 14, 43-44, 76, 237, 251-252, 286, 339) with no path to the PRD, which is docs/prds/inter-home-community-energy-sharing.md. The module docstring also re-lists the exported symbols (8-14). output.py repeats the pattern, e.g. 'The δ-owned scaffold; η extends it additively' and 'None (default) reproduces the δ output exactly' (output.py:562-563, 573, 582, 664, 734, 753, 769): prose written for reviewers that belongs in commit messages.",
    "proposal": "Replace the slice labels and line-number pointers with one docs/prds/inter-home-community-energy-sharing.md path where the rationale must persist, and delete the reviewer-answering prose and the symbol re-list. Docstring-only edits in community.py and output.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DZBRAR585D0B29P7HB7T",
+   "disposition": "filed:743",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5847,7 +5847,7 @@
    "statement": "These modules carry reviewer-answering prose and pointers no agent can follow: the 9-line 'Seam note' defending the cheap-period authority and naming the internal codename 'gamma function path' (dispatch.py:499-507); compute_grid_charge_power_kw's 'Frame note' citing the tests that pin it (dispatch.py:129-139); 'PRD §3.1', 'PRD §3.2', 'PRD §4', 'PRD §11 OQ3' pointers that never name docs/prds/tou-grid-charging-battery-arbitrage.md (flow.py:166, 179, 245, 275, 296; dispatch.py:126, 596); Battery.__init__'s NOTE pointing at 'task zeta (project_multi_year)' (battery.py:305-313); seg.resolve_seg_tariff's 'wiring ... is owned by subsequent tasks' although config.py:1858 calls it (seg.py:44-48); HomeConfig.seg_tariff's 'cross-PRD seam field: the web UI (P2) sets it' (home.py:62-64); validation.py's 'VAL-00x acceptance criteria' blocks; load.py's DST off-by-one history (284-288). dispatch.py is 289 prose lines (docstrings plus comments) beside 295 source lines (radon raw).",
    "proposal": "Move the rationale that must persist into the named PRD/docs with a file-path pointer, delete the reviewer-answering and task-history prose (it belongs in commit messages), and fix the stale seg docstring.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DZVYZCZDEBPKC358NKVG",
+   "disposition": "filed:744",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5917,7 +5917,7 @@
    "statement": "EVConfig carries charger_type as a meaningful string ('3.6kW', '7kW', '22kW') turned into power by an ad-hoc parser, float(self.charger_type.replace('kW', '')) (ev.py:114-121), and smart_charging_mode as a string routed on == compares in generate_ev_charging_profile (ev.py:216, 242), each validated against a list literal (ev.py:62, 95). The same module defines EVChargerType and SmartChargingMode enums with exactly those values (ev.py:11-35), which nothing in src/ references.",
    "proposal": "Use the enums as the field types (parsing strings at the YAML/web boundary) and derive charger power from the enum, or delete the unused enums. EVConfig is in FROZEN_CLOSURE, so changing the field types is a breaking change (version bump); deleting the enums is not.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ",
+   "disposition": "filed:745",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -5951,7 +5951,7 @@
    "statement": "The briefing convention 'fleet simulations must be reproducible from a single seed: per-home seed = fleet_seed + index' is enforced only in generate_homes_from_distribution (config.py:1752-1754). FleetConfig's own public constructors cannot express it. create_uniform (fleet.py:49-82) gives every home the same LoadConfig object, so a seeded LoadConfig makes all homes draw an identical stochastic profile, and the default LoadConfig (use_stochastic=True, seed=None) is irreproducible. create_heterogeneous (84-129) always builds unseeded stochastic LoadConfigs. Verified on the pinned tree: three simulate_fleet runs of create_uniform(4, PVConfig(4.0), LoadConfig(annual_consumption_kwh=3400)) on one synthetic day gave different per-home peak demand every run, under both fork and forkserver. Neither constructor has a src/ caller (tests use them), but both are public members of the frozen FleetConfig.",
    "proposal": "Give both constructors a seed parameter that applies seed + index per home. That is an additive signature change to a frozen-surface member, so under the briefing's contract it needs a version bump. Otherwise document on each that it builds unseeded loads. Contained in fleet.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5",
+   "disposition": "filed:746",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -6020,7 +6020,7 @@
    "statement": "Heuristic 11, SPOT: the process-pool fan-out policy is written twice. simulate_multi_sweep_iter (fleet.py:502-571) repeats simulate_fleet_iter (315-371), which is its one-sweep case: the TMY prefetch (343 / 531), the sequential fallback (345 / 538), the worker-count formula `max_workers or min(n, os.cpu_count() or 4)` (356 / 553), the submit/as_completed loop (357-371 / 554-571), and two worker functions (261 / 276) that differ only in a tag. Neither loop puts the home's index or name on a worker's exception: the futures dicts (358, 555) map each future to its index, but `yield future.result()` (371, 571) never uses it, and simulate_home's errors (home.py) carry no home name. A failed home in a 100-home run therefore raises an error that does not say which home failed. The executor's context exit then waits for every pending home to finish, because shutdown runs without cancel_futures. Any fix for that has to land in both copies. Cognitive complexity of simulate_multi_sweep_iter: 20. No task covers this.",
    "proposal": "Write simulate_fleet_iter as simulate_multi_sweep_iter over one sweep, or both over one private fan-out helper. In that helper, wrap a worker failure with the home's index and name, and cancel pending futures on error. Contained in fleet.py; public signatures unchanged.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E1CACMDFE1CZCAQ557EE",
+   "disposition": "filed:747",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -6227,7 +6227,7 @@
    "statement": "tests/unit/test_tariff_period_time_cache.py::TestTimesAreParsedOnce::test_get_rate_never_reparses_period_times patches the private TariffPeriod._parse_time (line 54) to pin a caching implementation. The seam exists because TariffPeriod carries its times as 'HH:MM' strings parsed by an ad-hoc split(':') parser (tariff.py:43-68) into cached_property values kept out of fields() because 'web/storage.py's JSON round-trip walks fields() and cannot encode a datetime.time' (tariff.py:70-72): a domain type's representation set by a web persistence detail.",
    "proposal": "Assert the behaviour through the public accessors (the identity test beside it already does) and drop the private patch; longer term parse to datetime.time at the boundary and teach storage to encode it - changing start_time/end_time's type is a breaking change to a class in __all__ (version bump).",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E23FMHKAR68JP92FXFKR",
+   "disposition": "filed:748",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -6260,7 +6260,7 @@
    "statement": "The 'annual yield' check divides the WHOLE run's generation by wired kWp without annualising (validation.py:87-93), so any run of 365+ days other than one year is misjudged: a two-year series at 1,000 kWh/kWp/yr reports 'Annual yield (2000 kWh/kWp ...) outside the expected UK range' and fails (verified). validate_consumption, beside it, does annualise with 365/duration_days (validation.py:299-302).",
    "proposal": "Annualise (total x 365 / duration_days) as validate_consumption does, ideally through one shared helper.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E2M34QMQSQPSFGVS17B0",
+   "disposition": "filed:749",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -6981,7 +6981,7 @@
    "statement": "Heuristic 10, informatively enforced invariants: `${VAR}` substitution accepts a variable that appears nowhere in the document, so a CLI sweep can silently run identical fleets. _substitute_variables (config.py:2078-2107) substitutes only a string that fullmatches the pattern (2089) and never checks that each supplied variable was used. `fleet sweep --param` passes one variable per point (cli/fleet.py:399-405). Verified by probe: a fleet_distribution whose battery multiplier is '${BATTERY_RATIO:1.0}', substituted with {'BATTERY_RATI0': 0.5} and then {'BATTERY_RATI0': 2.0}, gives battery capacities [4.0, 4.0] both times. The CLI would label the points with different parameter values over one fleet. A placeholder inside a longer string ('fleet-${BATTERY_RATIO}') is left literal; a non-numeric default ('${X:abc}') raises a bare ValueError ('could not convert string to float: 'abc'') naming no variable (2096). The variable grammar is regex-parsed out of every string value, mid-module after an `import re` placed at 2072. No task covers this.",
    "proposal": "Make substitution report the placeholders it replaced, and have substitute_config_variables refuse a supplied variable that matched none, a placeholder embedded in a longer string, and a non-numeric default, each with ConfigurationError naming the variable and its key path. Contained in config.py plus the sweep CLI's message.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN",
+   "disposition": "filed:707",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7016,7 +7016,7 @@
    "statement": "Heuristic 11, SPOT (and heuristic 1, the names lie for battery homes): calculate_seasonal_metrics (output.py:233-320) re-derives self-consumption as min(generation, demand) per minute (273-280) and grid dependency as demand minus that (299-308), from only the demand and generation series it takes. The simulator's own definition, flow.py:294/416, is min(direct + battery_discharge, demand), and it is already in SimulationResults.self_consumption. So every battery home's seasonal figures leave out battery discharge. Measured on the pinned tree, for a 4 kW PV, 5 kWh battery home on a clear 21 June (synthetic TMY): calculate_summary gives 7.452 kWh self-consumption and 0.0 grid dependency, but calculate_seasonal_metrics gives 4.983 kWh and 0.331. Its consumer, web/charts.py:530 (the Seasonal Comparison chart for runs of 180 days or more), plots the 'Self-Consumption' bars from it, beside page figures from calculate_summary that disagree. It also converts with HOURS_PER_MINUTE (282-288), assuming 1-minute rows, where compute_community_metrics uses step_hours. No task covers this.",
    "proposal": "Take the SimulationResults and sum its own self_consumption and grid_import per season, or per_minute_amounts() resampled by season, instead of recomputing from demand and generation. The signature changes, but calculate_seasonal_metrics is outside __all__ and its one caller is web/charts.py. Spans output.py and web/charts.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DN45JN0G4Z79T7KJMZPF",
+   "disposition": "filed:712",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7604,7 +7604,7 @@
    "statement": "Heuristic 1, informative names. YearPoint.fleet_self_consumption_kwh (finance.py:1019) holds different things on its two producers. On project_multi_year's path it is the fleet's billed own-use: basis C, demand − import, or the capped override own-use. On spreadsheet_revenue_curve's path it is fraction × generation. A 22-line docstring note (1022-1041) explains that the name should be read as 'fleet billed own-use kWh'. That is the comment escalation the Comments stance names as a clarity symptom. The name points at exactly the quantity the briefing forbids substituting: the Basis-C convention says not to 'fix' own-use to physics self-consumption. Yet solve_cost_recovery_rate uses this field as its rate base (2303), and _NodeData.fleet_sc (1353) repeats the misnomer. A second smaller lie: fleet_revenue_gbp's docstring (1050) says it 'may have any sign', but its only physics producer clamps it at max(0.0, ...) (1779). YearPoint is outside the frozen surface: it is not in solar_challenge.__all__ and not in FROZEN_SURFACE or FROZEN_CLOSURE in test_public_api_surface.py. The field has no src consumer outside finance.py and 37 test references.",
    "proposal": "Rename the field to fleet_billed_own_use_kwh (and _NodeData.fleet_sc to fleet_own_use) and delete the 22-line apology. Because YearPoint is outside the frozen contract, this is not a frozen-surface break, but the platform may import it from solar_challenge.finance, so the release notes should mention it. Also correct the 'any sign' docstring or drop the dead clamp. This is a mechanical rename within finance.py and its tests.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DB1G4SQ89R5NGRPJBB87",
+   "disposition": "filed:702",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7815,7 +7815,7 @@
    "statement": "Heuristic 11, SPOT. A home's SEG rate has one home, HomeConfig.seg_tariff, which _reconcile_seg_homes fills from the scenario rate. On the override path, _seg_export_income_gbp (finance.py:650-695) re-derives that rate as physics export revenue ÷ physics export kWh and falls back to 0 when physics export is 0 (689-694). The override's export is then valued at £0 although a SEG tariff is configured. Measured: with override 0.7, generation 4,000 kWh and demand 3,400 kWh, the override exports 1,200 kWh. That earns £0.00 when physics export was 0 kWh, and £49.20 at 4.1 p when physics export was 1 kWh. A zero-export window is plausible for the short winter windows the model doc's §7.6 describes. householder_bill's sibling re-derivation of the import rate (955-960) falls back to retail instead, so the two ratio reconstructions disagree on what an empty denominator means. No path values export at the import rate, so the briefing's export convention holds. The doc (§4 line 289) documents the zero fallback.",
    "proposal": "Pass the home's SEG rate as a structured value: carry seg_tariff, or its rate, on the per-home record the projection reads, and price override export at that rate rather than reconstructing it from a ratio. Update the doc's §4 override line. The change is local to finance.py and the doc, and it changes CBS revenue only on zero-export windows.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9DS5VEBHATPHAQMZPHPJM",
+   "disposition": "filed:715",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7850,7 +7850,7 @@
    "statement": "Heuristic 11, SPOT, applied to the bill identities. bill() (finance.py:751-864) is the arithmetic single source of truth: householder_bill (872-975) only resolves inputs and duplicates no arithmetic, and no bill arithmetic exists outside finance.py. VAT is applied once, to import + standing + own-use. But the identity list has three prose homes, and they have drifted. BillBreakdown's docstring (199-209, 233, 250, 268-279) describes annual figures ('Annual grid standing charge', 'Total annual householder outlay'). It also gives self_consumption_saving = sc × (retail − own_use) and a baseline at the retail rate. bill() is period-native and uses eff_rate = baseline_import_cost/demand. Measured: bill(period_days=30, ...) returns standing_charge_gbp=18.0, not an annual figure. With a 50 £ baseline on 280 kWh, self_consumption_saving_gbp is 3.0, where BillBreakdown's documented formula gives 8.4. The model doc traces VAT, outlay and saving to householder_bill() (§3 line 112; Summary table lines 796-803) and never names bill(), so a reviewer following the doc-to-code gate lands on a function with no VAT arithmetic. Separately, the same Summary table's capex row (806) drops the inverter term that §6 and project_economics both carry.",
    "proposal": "Keep the identity list only in bill()'s docstring. Make BillBreakdown's field docstrings say 'for the billed period' and point to bill(). Point the model doc's §3 and Summary rows at bill() as the arithmetic and householder_bill() as the annual wrapper, and add the inverter term to the Summary capex row. These are documentation-only changes in one module and one doc.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4",
+   "disposition": "filed:716",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7955,7 +7955,7 @@
    "statement": "Tests stance. tests/integration/test_optimize_sweep.py:35-37 imports _pareto_baseline, _rank_feasible and _split_infeasible, and tests/integration/test_optimize_sensitivity.py imports _build_axis_configs (9 call sites). The first three (optimize.py:919-934) have zero callers in src: run_sweep calls the public feasible_split, rank and pareto_baseline directly (1082-1089). They are pure one-line delegators kept only so the tests resolve, which is heuristic 13's shim symptom, and run_sweep's docstring (1027) still sends readers to _rank_feasible. _build_axis_configs is reached because sensitivity_panel exposes no seam for 'one knob applied to the configs'. No test patches an optimize private name.",
    "proposal": "Retarget the sweep tests to the public rank, feasible_split and pareto_baseline, delete the three delegators, and fix run_sweep's docstring. Either make knob application public (apply_knob) or test it through sensitivity_panel with an injected simulate. Mechanical and local.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DTECVB2PAD54KH3F6PWM",
+   "disposition": "filed:717",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -7989,7 +7989,7 @@
    "statement": "Heuristic 2, simple control flows. sensitivity_panel (optimize.py:506-639) scores 26 cognitive (complexipy) and 14 cyclomatic (radon C). Most of the branching exists because the retained-cash floor has two setters: a FinanceConfig field reachable through _build_axis_configs, and run_sweep's retained_cash_floor_gbp override, which would clobber it. The loop therefore special-cases the floor axis by its literal name (598-606), short-circuits it against the panel floor (600-601), and keeps a (name, value) cache (582-614). _build_axis_configs (440-503, cognitive 13) routes knob names through three string-matched branches (heuristic 3 and heuristic 12 in miniature).",
    "proposal": "Give the floor one setter: either run_sweep stops overriding the floor and the panel applies it through _build_axis_configs like any other FinanceConfig knob, or the reverse. The floor special case and its short-circuit then go away. This is local to optimize, with one design choice.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DTY3CFM9KTW2K03XKADN",
+   "disposition": "filed:718",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -8356,7 +8356,7 @@
    "statement": "chat() breaks the chat_messages invariant it exists to keep (one assistant row with real content after every user row) on two paths. (1) An API error before the first streamed token (rate limit after retries, 529 overload, a bad key or SOLAR_ASSISTANT_MODEL, a network fault) lands in the except at assistant.py:1012-1022, which saves an assistant row whose content is the empty accumulated text. The next request replays it as a non-final message (assistant.py:879-883). Probe: a fake client whose first stream raises before any delta, then a normal second turn; the second call was sent [{'role':'user','content':'hello'},{'role':'assistant','content':''},{'role':'user','content':'again'}]. The Messages API refuses empty content on any message but an optional final assistant message, so every later turn in that browser session 400s, and each 400 runs the same except and appends another empty row; nothing in the assistant blueprint or assistant.js starts a new conversation, and the session cookie is not permanent, so this lasts until the browser session ends. The API refusal itself could not be exercised offline; the replayed request is confirmed. (2) A client disconnect mid-reply raises GeneratorExit at a yield. It is a BaseException, so neither the except (1012) nor the success save (1028) runs. Probe: read the first delta frame, close the response; /assistant/history then holds only the user row, and the reply the user saw is lost, together with any run_home_simulation/run_fleet_simulation job the turn submitted. The rationale comment at 1013-1016 says a dangling user row is what the API rejects with a 400; the claude-api reference says consecutive same-role turns are combined, so the comment defends the shape that is harmless and hides the one that is not.",
    "proposal": "Give the assistant turn one persistence point that runs on every exit (try/finally around the loop, GeneratorExit included). It must never persist empty content: either store a non-empty placeholder (e.g. the error notice the user was shown) or skip the row and drop the dangling user turn from the replayed window. The replay window should also skip empty assistant rows already in existing databases. Pin both paths with tests: an error before the first token followed by a second turn, and a disconnect after the first frame. Replace the stale comment with a pointer to that test. This choice stays inside assistant.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ",
+   "disposition": "filed:701",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -8532,7 +8532,7 @@
    "statement": "Heuristic 4 (small function scopes) and heuristic 2 (simple control flows): chat() spans assistant.py:824-1034, about 210 lines. complexipy scores it 47, against the doc's Sonar threshold of 15; it is the highest of the six web server modules (get_job_progress is next at 22, simulate_sweep at 17). One nested generator holds the API-key and empty-message prechecks, client construction, saving the user turn, history windowing with role repair, run-context injection, request assembly, the bounded agentic loop with tool dispatch and SSE framing, the cap notice, and two more persistence sites. Persistence is split across three save_chat_message calls (874, 1017, 1028) with different metadata shapes. Heuristic 6 (well-defined purpose): the function's purpose cannot be stated without several 'and's. The Comments stance: about 25 inline comment lines explain the loop's invariants, and one of them (1013-1016) is already wrong (see the kind:defect finding at this anchor). The persistence defects sit exactly where this structure scatters the turn's lifecycle.",
    "proposal": "Split chat() into named steps with stateless interfaces: a function that builds the request messages from stored history and an optional run context (pure, testable without Flask); a function that runs the tool loop and yields typed events (delta, tool, cap, done, error); a single turn-recorder that persists the outcome once; and the route, which only frames events as SSE. Move the loop's invariants into tests and drop the inline commentary. The work stays within assistant.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DNQGS7ZCSDRR850EC339",
+   "disposition": "filed:713",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -8676,7 +8676,7 @@
    "statement": "Heuristic 13 (files make sense in isolation; function-local imports are a symptom): four function-local imports in the server modules break no cycle and save no cost, and each silences the lint that would flag it with # noqa: PLC0415. api.py:373 imports fleet_config inside preview_distribution, though api's own top-level import of fleet_scenario has already loaded it (verified: building the app leaves solar_challenge.web.fleet_config in sys.modules). api.py:530 imports uuid and api.py:555 imports math inside simulate_sweep. routes.py:34 imports get_db inside _get_aggregate_stats, though database is already loaded through storage. The charts deferrals (routes.py:122, 192; history.py:88) do have a reason: building the app leaves plotly unimported. The reason is recorded nowhere and pinned by no test, unlike the anthropic deferral (test_building_the_app_does_not_import_the_anthropic_sdk). web/__init__.py:15-22 is a lazy re-export shim of create_app typed as returning Any, so the CLI's app is untyped.",
    "proposal": "Hoist the four no-reason imports to module level and drop their noqa. For charts, keep the deferral and pin it as the anthropic one is (a test that building the app does not import plotly), with a pointer from the import. Type web/__init__.create_app's return as Flask under TYPE_CHECKING. Mechanical.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E37BXVSY8TX6JCTZG6M6",
+   "disposition": "filed:153",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -8711,7 +8711,7 @@
    "statement": "Heuristic 1 (informative names): sweep_id (api.py:579, 597) is a fresh uuid4 that identifies nothing. No row, file or endpoint records it; the sweep page only displays it ('Sweep ID', templates/scenarios/sweep.html:170). Each point is stored as an ordinary 'home' run named 'Sweep <parameter>=<value>' (api.py:592). The 'sweep' member of RunType (database.py:22), which History's type filter offers (templates/history/runs.html:26), is never written by any code, so that filter always comes back empty. Heuristic 10: the 2-50 step range lives only in the page (sweep.html:55); the server checks steps >= 2 and nothing above (api.py:546-547), so one POST can submit any number of jobs, each with a runs and a jobs row.",
    "proposal": "Either record the sweep (store its runs with type 'sweep' and a sweep id the History page can group by) or drop sweep_id and the dead 'sweep' RunType and filter option. Enforce the step ceiling on the server from one constant the page also renders. Mechanical within api.py, database.py and the two templates.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ",
+   "disposition": "filed:750",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -8781,7 +8781,7 @@
    "statement": "Heuristics 11 and 12: each tool's name is written in TOOLS (assistant.py:321-486) and again in dispatch_tool's string if-chain (720-742), with ad hoc input coercion per branch (str(), float(), int() with silent defaults). Heuristic 3: each tool's schema and its handler live in different places, so adding or renaming one is a lockstep edit in two places, and a third: the literal name list in test_tool_use.py:77-84. A mismatch is found only at runtime, as the model receiving an 'Unknown tool' error dict. Six stable tools in a frozen-posture repo keep the cost low.",
    "proposal": "Declare each tool once as a (schema, input reader, handler) record, derive TOOLS from the records in their fixed order, and dispatch through a name-to-record mapping. Stays in assistant.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E45EQSJM25M8Y2RRH9D0",
+   "disposition": "filed:751",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9438,7 +9438,7 @@
    "statement": "The results page's 'Cumulative Net Savings' line (charts.py:467-475, axis title :486) is cumulative export revenue minus import cost: cumulative_savings = (-(daily_cost - daily_revenue)).cumsum() (charts.py:441-444). That is the run's net energy position, not a saving against any baseline. For an ordinary home whose import cost exceeds its SEG revenue, the 'savings' line falls below zero all year. The package's finance layer defines savings as the difference against a no-solar baseline (finance.bill / householder_bill; BillBreakdown's saving vs baseline). Under the CBS model the export revenue the chart credits to the household belongs to the CBS (briefing finance key_scenarios). So the same word means two different quantities on either side of the web/finance boundary, and the chart's meaning is the one a householder would misread. [Also observed by web-forms:] Heuristic 1, informative names. The pricing is right: daily cost and revenue are aggregate_daily's import_cost_gbp and export_revenue_gbp, the engine-priced series, with no hardcoded rates. But the line labelled 'Cumulative Net Savings (GBP)' (charts.py:444, 469, 486; palette role net_savings) is the running sum of export revenue minus import cost, the negative of SummaryStatistics.net_cost_gbp. It is not a saving against anything. The finance layer defines saving as baseline_bill_gbp minus total_outlay_gbp (finance.py:209, saving_vs_baseline_gbp). For an ordinary tariffed home whose import cost exceeds its SEG revenue, the 'savings' line falls below zero all year, which reads as the system losing money. This is the chart the briefing names as a key scenario.",
    "proposal": "Rename the trace and axis to what is plotted (e.g. 'Cumulative net energy cost' with the sign flipped). Alternatively, plot a true saving against a no-solar baseline priced from the run's tariff_rate series and demand. Renaming is mechanical; a baseline line is a design choice.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DPVHGS94FVA07MRXC2P0",
+   "disposition": "filed:714",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9720,7 +9720,7 @@
    "statement": "Heuristic 9: the module's interface carries a builder nothing uses. overlaid_power_flows (charts.py:626-674), documented 'for run comparison page', has no caller anywhere in src (grep across .py, .html and .js). The compare page draws only comparison_bar_chart and comparison_radar (history.py:88-93). It has had no production caller since it landed with the compare page in bcdc278. Four test files exercise it, and test_web_chart_colours.py requires a test case for every public charts function, which keeps an orphan looking used.",
    "proposal": "Delete it and its test cases, or wire it into the compare page if the overlay is wanted (a product choice).",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM",
+   "disposition": "filed:752",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9787,7 +9787,7 @@
    "statement": "Comments stance. fleet_config.py is 54% prose by docstring and comment lines (235 of 435 non-blank lines, AST count), against fleet_scenario.py at 44%, simulation_params.py at 39% and builder_form.py at 24%. Much of it is Raises sections that retrace the private call graph ('see :func:`_component_block`', 'see :func:`_refuse_battery_dispatch_strategy`', 'see :func:`_parse_component_distribution`'), and those drift whenever a helper changes. form_to_fleet_distribution_config has a 26-line docstring over about 13 lines of code, and _parse_component_distribution a 22-line docstring over about 12. simulation_params.py:331-334 is inline prose written to answer a reviewer: 'Range validation ... is delegated to PVConfig.__post_init__ ... PVConfig is the single source of truth for these bounds'.",
    "proposal": "Keep each public reader's contract (what it refuses, and what the refusal names). Drop the call-graph tracing in private Raises sections, and move the inline defence to the commit history. Best done with the h3 and h6 rework.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ",
+   "disposition": "filed:753",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9854,7 +9854,7 @@
    "statement": "Heuristic 1. The docstrings of fleet_form_from_scenario and _read_battery say 'A null battery capacity reads as 0 kWh: a home with no battery either way' (fleet_scenario.py:184-185, 427). But _null_capacity_as_zero (444-448) maps only nulls inside a distribution's values list. A scalar capacity_kwh: null and {type: fixed, value: null}, both of which the loaders accept, are refused. Measured: 'fleet_distribution.battery.capacity_kwh must be a fixed value or one of the fleet page's distributions ..., got None' and '... .value must be a finite number, got None'.",
    "proposal": "Either map a scalar or fixed null capacity to 0 as documented, or narrow the docstrings to the values-list case.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0",
+   "disposition": "filed:754",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9887,7 +9887,7 @@
    "statement": "Heuristic 11, SPOT. _HOME_CONFIG_DEFAULTS (simulation_params.py:56-75) restates engine defaults instead of leaving fields unset: azimuth 180 and tilt 35 (PVConfig, pv.py:70-71), system_age_years 0.0 and degradation_rate_per_year 0.005 (PVConfig's defaults), occupants 3 (LoadConfig, load.py:52), and pv_kw 4.0 (config._PV_CAPACITY_KW_WHEN_OMITTED). The battery settings in the same map follow the other policy: null means unset, which leaves BatteryConfig's default (simulation_params.py:242-261). The copies matter because the assistant's trigger tools send only pv, battery, consumption, occupants, location and window (assistant.py:425-450), so those runs take PV geometry and ageing from these literals, and a change to PVConfig's defaults would not reach them. stochastic is False here against LoadConfig's use_stochastic True, a policy difference stated nowhere.",
    "proposal": "Use the battery's pattern for every engine field: an absent field is not passed, so the dataclass default applies. Keep in the map only web-specific defaults (location, stochastic), and say why stochastic differs.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR",
+   "disposition": "filed:755",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -9920,7 +9920,7 @@
    "statement": "Heuristic 10. parse_home_config coerces three fields instead of reading them. stochastic = bool(params['stochastic']) (:342) turns the string 'false' into True, measured. name passes any JSON value into HomeConfig.name, a str field, and into the run name; {'a': 1} measured. location is str() of any value before resolve_location. parse_fleet_form likewise takes name as Any (ParsedFleetForm.name: Any, fleet_scenario.py:64, 100) and keeps a present null as the name. fleet_scenario._read_name (:297-307) refuses a non-string name on import, so one field is read two ways across the module pair.",
    "proposal": "Read stochastic as a JSON boolean and name as a string, with absent or null meaning the default. Refuse anything else, naming the field and the value, through number_fields-style readers. Type ParsedFleetForm.name as str.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9E6CW14E0CSSD7PF5G0D5",
+   "disposition": "filed:517",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10097,7 +10097,7 @@
    "statement": "_attributes_set_on_self walks the whole class source with ast.walk and matches `Attribute(value=Name(id='self'), ctx=Store())` and the literal `object.__setattr__(self, '<const>', ...)`. I ran it on a fixture. An attribute set by a nested helper class (`class _Helper: def __init__(self): self.leaked = 1`) is attributed to the outer class: undeclared_attributes reported {'leaked'} and also {'ok'} for the outer. A @staticmethod whose first parameter happens to be named self (`self.fromstatic = 1`) is counted. Setting through any other receiver name (`def configure(this, v): this.renamed = v`), `setattr(self, 'x', v)` or `self.__dict__['x'] = v` is missed silently. The home.py SimulationResults case (`object.__setattr__(self, name, series.rename(column))` in a loop) already shows non-constant names occur in pinned classes; there they are declared fields, so the guard passes by luck. The guard enforces the 'declare every attribute you set' invariant of task 426, so a miss lets an unpinned public attribute escape the member lock.",
    "proposal": "Scan each function defined directly in the class body (not nested ClassDef) and take its receiver as the first parameter of any non-static method. Collect Store targets on that name, plus constant-name setattr/__setattr__ on it. Fail closed with a TypeError on a non-constant setattr or `__dict__` write on the receiver, naming the class, since the guard cannot tell what it sets. Add the three fixtures above to test_surface_forms_helper.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y",
+   "disposition": "filed:700",
    "first_seen": "hotspot-survey-solar_challenge-20261013",
    "last_seen": [
     "hotspot-survey-solar_challenge-20261013",
@@ -10456,7 +10456,7 @@
    "statement": "Heuristic 1, informative names: the board-facing model document names a command that does not exist. docs/cost-recovery-finance-model.md:28 says a board member 'can reproduce a live `solar-challenge fleet run --cost-recovery` run by hand', and §9 (line 762) says 'Running `solar-challenge fleet run --cost-recovery` appends a ## Cost-Recovery Analysis block'. `fleet run` has no such option; the invocation exits 2 with 'No such option: --cost-recovery'. The flag belongs to `finance run` (cli/finance.py:98-108). §9 also cites its source as `render_cost_recovery_report()` in output.py (line 760), which does not exist; the block is rendered inside generate_finance_report (output.py:542, ## Cost-Recovery Analysis at :714). The doc has carried both names since 0fcd81f (2026-06-17). The briefing's doc-to-code verification convention requires a board member to be able to reproduce the run from this document.",
    "proposal": "Correct the two command references to `solar-challenge finance run <scenario> --cost-recovery`, and the renderer reference to generate_finance_report. Docs-only, one file.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DBXBX6YFXFJY8SE512C2",
+   "disposition": "filed:703",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10527,7 +10527,7 @@
    "statement": "Heuristic 11, SPOT: the board-facing sensitivity bands for the W3 ranking report are defined only in the CLI (cli/optimize.py:35-56). Its grid_services band (1.5, 12.0, 48.0) is a second copy of flex.FLEX_VALUE_BANDS' grid_services_per_kw_gbp values (flex.py:114-139, which carry provenance). docs/prds/discrete-install-config-sweep.capability-manifest.md:21 names the producer as `flex.resolve_grid_services_band`. That function exists (flex.py:163) but only tests call it, so a revised flex band would not reach the sensitivity panel. The other four bands (retained floor 15/27/40, battery 200/300/450 £/kWh, PV 800/1200/1800 £/kWp, inverter 100/200/350 £/kW) exist nowhere in the library. The downstream platform, which consumes optimize.sensitivity_panel through the library, cannot reproduce the CLI's panel without copying them. Under heuristic 6, the CLI module owns finance assumptions as well as argument parsing.",
    "proposal": "Move the default sensitivity axes into optimize.py next to sensitivity_panel, deriving the grid-services band from flex.FLEX_VALUE_BANDS. The CLI keeps only the alias-to-field mapping. Adding a public constant to optimize.py does not touch the frozen surface, because optimize is not in __all__.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4",
+   "disposition": "filed:704",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10563,7 +10563,7 @@
    "statement": "Heuristic 3, carefully factored orthogonal dimensions of variability: one renderer serves two summary types, SummaryStatistics and FleetSummary. It takes `summary: Any` and picks rows by six `hasattr` probes on attribute-name strings (utils.py:233-261). FleetSummary names its fields fleet_self_consumption_ratio, fleet_grid_dependency_ratio, total_net_cost_gbp and total_seg_revenue_gbp, so the probes miss them. Rendering a real FleetSummary gave exactly: Total Generation, Total Demand, Self-Consumption, Grid Import, Grid Export, Number of Homes, Simulation Days, Grid Import Cost, Grid Export Revenue. So `fleet run` never shows the fleet self-consumption ratio, grid dependency, net cost or SEG revenue, yet it shows two of the four financial rows. The comment at utils.py:252 ('guarded so FleetSummary is unaffected') was written on 2026-05-31 (741520b). FleetSummary gained total_import_cost_gbp and total_export_revenue_gbp on 2026-06-16 (d803bae), which silently changed the fleet table. The unit test meant to cover the fleet case (tests/unit/test_cli.py:1056-1072) builds a SimpleNamespace 'FleetSummary-like' double with self_consumption_ratio, which the real class lacks, so it pins the probe's assumption rather than the real type.",
    "proposal": "Give each summary type its own row builder: a function per type, or a rows() method in the CLI layer keyed by type. Rows then come from typed attribute access that mypy checks, and the test renders a real FleetSummary. Contained in cli/utils.py and cli/fleet.py, with no contract change.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DDJQRX888NDPPZ6YMFBP",
+   "disposition": "filed:705",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10632,7 +10632,7 @@
    "statement": "Tests stance: tests/unit/test_init_lazy_surface.py::test_every_name_resolves_and_caches (:50-66) reads the package's private solar_challenge._SYMBOL_MODULE and _SOURCE_NAME (two `# type: ignore[attr-defined]`) to compute each name's expected origin. Its expected value is therefore the implementation's own map, so a wrong mapping passes. It also pins the caching detail (`name in vars(solar_challenge)`). The origin pinning it attempts is done through the public seam by test_public_api_surface.py's FROZEN_SURFACE/EXPECTED_KIND, and test_tariffperiod_collision_resolved checks the one alias by identity. Under heuristic 11, the same test file restates the surface count as a literal, `assert len(as_list) == 69` (:39), next to a comment saying T4 pins the names to 'avoid maintaining a second EXPECTED_ALL copy'. A version bump likewise edits pyproject.toml, __init__.__version__ and test_package.py::test_version_is_release_target, though test_pyproject_version_matches_dunder already ties the first two. The laziness itself and the import-time sync check are documented decisions and are not in question.",
    "proposal": "Check resolution against public facts: each __all__ name's object is the one importable from its documented submodule, taken from FROZEN_SURFACE's grouping or the TYPE_CHECKING block that the sync test already parses. Drop the private-map read, the vars() caching assertion and the literal 69. Tests-only. The public surface is unchanged, so no version bump.",
    "verdict": "weakened",
-   "disposition": "ticket:tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2",
+   "disposition": "filed:719",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10667,7 +10667,7 @@
    "statement": "Heuristic 4, small function scopes, and heuristic 2, simple control flows: `finance run` is one 240-line command body (cli/finance.py:57-298) that does all of the following in sequence: loads and parses the finance block, resolves the flex band, threads SEG, parses dates, simulates, computes capacity-at-events grid services, builds one or two bill distributions, builds a ScenarioConfig, optionally projects economics, optionally solves cost recovery, and renders. complexipy measures cognitive complexity 26, over the Sonar threshold of 15; radon measures cyclomatic complexity 30 (D). The render step repeats generate_finance_report three times, with six identical keyword arguments, differing only in which distribution is first and whether bill_spreadsheet is passed (:262-296). Five `assert x is not None` lines (:249, :257, :263, :285, :286) restate the mode logic that set those values. optimize configs has the same shape: cognitive 29, CC 22 (D).",
    "proposal": "After the scenario-reader consolidation, build the (primary, spreadsheet) distribution pair once and make one generate_finance_report call. Extract the economics and cost-recovery steps into a helper that returns both results. Local to cli/finance.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q",
+   "disposition": "filed:738",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10702,7 +10702,7 @@
    "statement": "Heuristic 13, files make internal sense in isolation: the CLI's function-local imports serve neither to break a cycle nor to save import cost, so the reader is left to guess why they are local. cli/fleet.py imports rich.table.Table inside _print_community_section (:61) and _print_sweep_summary (:491), although cli/utils.py, config.py and validate.py import Table at module level and rich is loaded before any command runs. fleet.py imports CommunityResults under TYPE_CHECKING (:11-12) while importing solar_challenge.community at runtime at :23. cli/finance.py imports gridservices inside run (:187-188) under the opaque aliases _GSAtEvents and _cgs (heuristic 1), although the module is already in sys.modules: measured, importing solar_challenge.cli.main loads solar_challenge.gridservices, via config.py. Under heuristic 5, _print_community_section takes a `fleet_results` parameter (:57) it never reads. By contrast, cli/web.py's local import of solar_challenge.web (:51-52) is a legitimate deferral of the optional web extra.",
    "proposal": "Hoist the three imports to module level under their real names, drop the redundant TYPE_CHECKING guard and the unused parameter. Mechanical.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DW24Y634X5PAF8Z13NWW",
+   "disposition": "filed:722",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10736,7 +10736,7 @@
    "statement": "Heuristic 2, simple control flows: complexipy measures `fleet sweep` (cli/fleet.py:257-486) at cognitive complexity 20, over the threshold of 15. It inlines both sweep modes (CLI --param substitution, :386-405; YAML-defined, :407-420) in one body, and reuses `sweep_spec` across two types behind a `# type: ignore[assignment]` (:409). Under heuristic 3, the mode axis is decided twice: param_name is set from the mode at :384/:394, then the nested on_sweep_complete closure branches on `param is not None` again to name the output file (:446-449), producing the same name `f\"{param_name}_...\"` either way. Two nested closures, on_sweep_complete and progress_iter, capture mutable locals. cli/utils.py passes by measurement: create_summary_table and load_config_with_overrides are at cognitive 11 and 12, so no heuristic 2 finding there.",
    "proposal": "Have each mode return its (param_name, sweep_configs) pair from a small function, and name output files from param_name alone. Drop the type: ignore. Local to cli/fleet.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9",
+   "disposition": "filed:739",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10771,7 +10771,7 @@
    "statement": "Heuristic 11, SPOT: `home quick` declares its own default annual consumption, --consumption-kwh 3400.0 (home.py:208), and always passes it explicitly to LoadConfig. Every other default home, from `home run` with no file or override, parse_home_block and LoadConfig(), takes the model's default: annual_consumption_kwh None, giving Ofgem TDCV for household_occupants=3, which is 3200 kWh (load.py:24-30, 51-52). So `home quick 4` and `home run --pv-kw 4` simulate different default homes. The comment '# Default to starting today' (home.py:242) sits above a hard-coded `pd.Timestamp(\"2024-06-01\")` (:243), a comment that lies. No test runs `home quick` to completion: tests/unit/test_cli_battery_capacity.py:61-69 covers only the refusal path, and test_cli.py:122-127 only --help.",
    "proposal": "Default --consumption-kwh to None and let LoadConfig derive the TDCV figure. Delete or correct the comment. Add one CliRunner test that runs quick to completion against a seeded weather_cache. Local to cli/home.py.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DX15A4E6CS8TMYYRPAM2",
+   "disposition": "filed:731",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10805,7 +10805,7 @@
    "statement": "Tests stance: TestHomeRunFullConfigParity (tests/unit/test_cli.py:1107-1244) captures the HomeConfig that `home run` simulates by monkeypatching the CLI module's own import binding. It imports solar_challenge.cli.home as _cli_home_module (:22) and calls monkeypatch.setattr(_cli_home_module, \"simulate_home\", spy_simulate_home) (:1161). The patch pins how cli/home.py imports simulate_home, not what the command does. The seam it reaches through is the defect: home run has no injectable simulator, while the fleet-finance commands have CliFleetSimulator. The test's question, which HomeConfig the file yields, is already answered by the public home_config_for_run (home.py:33), which test_cli_battery_capacity.py:90 calls directly. This is the only test that patches one of this seat's modules by attribute. No test imports a `_`-prefixed name from solar_challenge.cli.*. Every CLI command has a CliRunner test against the real implementation except `home quick`, whose only run test is a refusal path.",
    "proposal": "Assert on home_config_for_run(path) for the parity cases, and keep one CliRunner run per case against a seeded weather_cache for the SEG-revenue output. Alternatively, give home commands a context-object simulator seam like CliFleetSimulator. Tests-only, or a CLI-internal seam change.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DXRJARDDEC5PNCW9JPPP",
+   "disposition": "filed:740",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10838,7 +10838,7 @@
    "statement": "Comments stance: the cost rationale for the large-sweep warning (cli/optimize.py:252-256) says 'Each config may require up to 3 fleet simulations (age-0 baseline + two cost-recovery solves)'. optimize.run_sweep's own note (optimize.py:1051-1060) lists three calls per config, two of which are project_multi_year. Each project_multi_year simulates at least three seed ages ({0, L/2, L-1}, finance.py:1549) and then adaptive bisection nodes, so a config costs at least 8 fleet simulations, not 3. The rest of the CLI's inline prose is task history or reviewer-answering rather than rationale the next agent needs: 'task E / PRD §3.6 / §10-E' (optimize.py:3), 'δ surface' (finance.py:3), '(ε / task-76)' (finance.py:185), '(task ε / #34) Strictly additive ... byte-unchanged' (fleet.py:91-92, 242), the false 'pre-CR5' rationale (finance.py:239-241), and the eight-line defence of omitting a SEG row (home.py:165-172).",
    "proposal": "Correct the simulation-count comment, or drop it and keep the threshold. Move the task-history and defence prose to commit messages and keep only pointers to docs. Mechanical, one pass over cli/.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3",
+   "disposition": "filed:741",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -10873,7 +10873,7 @@
    "statement": "Comments stance, and heuristic 1, informative names: cli/utils.py's module docstring (:15-17) states as a rule that 'A command that simulates a fleet reads its simulator from Click's context object, ctx.ensure_object(CliFleetSimulator).simulate'. Only `finance run` (cli/finance.py:182) and `optimize configs` (cli/optimize.py:285) do. `fleet run` and `fleet sweep` take no typer.Context and call fleet.simulate_fleet_iter and simulate_multi_sweep_iter directly (cli/fleet.py:194, :458). Under heuristic 3, simulator injection therefore has two mechanisms, the context seam and none. The fleet commands' tests reach the simulator only through a seeded weather cache, and home run's test patches a module binding (see the tests finding on cli/home.py::run).",
    "proposal": "Either route fleet run and sweep through the CliFleetSimulator seam, by widening it to the iterator form they need, or narrow the docstring to the two commands that use it. The first changes the seam's shape inside the CLI only.",
    "verdict": "confirmed",
-   "disposition": "ticket:tkt_0RVRX9DYW08FP6M8W075B2BWXC",
+   "disposition": "filed:742",
    "first_seen": "review-solar_challenge-20261013",
    "last_seen": [
     "review-solar_challenge-20261013",
@@ -15996,9 +15996,14 @@
     "hotspot-survey-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ",
-   "disposition": "ticket:tkt_0RVRX9D1YJ6BRTQF9EGHW942PJ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "382",
+   "disposition": "filed:382",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "combined",
+    "task_id": "382",
+    "reason": "drop: Task 382 (pending) already covers Location altitude NaN/inf guard among the config dataclasses; timezone validation is a minor addition."
+   }
   },
   {
    "key": "fk-8f26d000b68d",
@@ -16016,9 +16021,14 @@
     "hotspot-survey-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y",
-   "disposition": "ticket:tkt_0RVRX9D7DR5Q4KH8S23QQ4J96Y",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "700",
+   "disposition": "filed:700",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "700",
+    "reason": "create: New defect in tests/_surface_forms.py::_attributes_set_on_self receiver scanning; no pool task covers it. Related tasks are done or touch different concerns."
+   }
   },
   {
    "key": "fk-b867cc3e5653",
@@ -16026,9 +16036,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ",
-   "disposition": "ticket:tkt_0RVRX9D9NS5NXHZMY3S6XKQ7AZ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "701",
+   "disposition": "filed:701",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "701",
+    "reason": "create: High-priority chat() persistence bug (empty assistant rows, GeneratorExit); no pool task covers it, and combining would burden unrelated pending tasks."
+   }
   },
   {
    "key": "fk-62dbe0f34b68",
@@ -16036,9 +16051,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DB1G4SQ89R5NGRPJBB87",
-   "disposition": "ticket:tkt_0RVRX9DB1G4SQ89R5NGRPJBB87",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "702",
+   "disposition": "filed:702",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "702",
+    "reason": "create: YearPoint field rename and docstring fix is not covered by any pool task. Task 581 is prose rehoming after the split, and 350 is a file split. Combining would add a rename to large unrelated tasks."
+   }
   },
   {
    "key": "fk-89afcb2b57f7",
@@ -16046,9 +16066,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DBXBX6YFXFJY8SE512C2",
-   "disposition": "ticket:tkt_0RVRX9DBXBX6YFXFJY8SE512C2",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "703",
+   "disposition": "filed:703",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "703",
+    "reason": "create: The doc fix for the wrong `fleet run --cost-recovery` command and the nonexistent renderer name is not covered by any pool task. The candidate's file list names cli/finance.py but the actual change is docs-only. No combine-eligible task fits."
+   }
   },
   {
    "key": "fk-71b4ca35efe0",
@@ -16056,9 +16081,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4",
-   "disposition": "ticket:tkt_0RVRX9DD5E5TBXNNAZAYDC5DE4",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "704",
+   "disposition": "filed:704",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "704",
+    "reason": "create: Moving the default sensitivity axes into optimize.py and deriving the grid-services band from flex is new. Task 296 is about the SEG helper, and the others in the pool don't cover it."
+   }
   },
   {
    "key": "fk-2106d1fbaed0",
@@ -16066,9 +16096,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DDJQRX888NDPPZ6YMFBP",
-   "disposition": "ticket:tkt_0RVRX9DDJQRX888NDPPZ6YMFBP",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "705",
+   "disposition": "filed:705",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "705",
+    "reason": "create: No pool task covers FleetSummary vs SummaryStatistics row builders in cli/utils.py::create_summary_table; existing tasks touching cli/utils.py are unrelated."
+   }
   },
   {
    "key": "fk-e756dab8077e",
@@ -16086,9 +16121,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ",
-   "disposition": "ticket:tkt_0RVRX9DDZ1KSC87V7BXWEEMXRJ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "706",
+   "disposition": "filed:706",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "706",
+    "reason": "create: No pool task covers simulate_community ignoring community_battery dispatch/grid_charging or half-specified billing; distinct concern from other config tasks."
+   }
   },
   {
    "key": "fk-f2e1ad46df4b",
@@ -16116,9 +16156,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN",
-   "disposition": "ticket:tkt_0RVRX9DFB36ZQB96MB8AXJ4FRN",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "707",
+   "disposition": "filed:707",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "707",
+    "reason": "create: No pool task covers ${VAR} substitution validation in config.py; sweep tasks cover different defects. Create rather than speculative combine."
+   }
   },
   {
    "key": "fk-740e9a804a4f",
@@ -16126,9 +16171,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M",
-   "disposition": "ticket:tkt_0RVRX9DG1NZ0FT0KAHVT38PX5M",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "708",
+   "disposition": "filed:708",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "708",
+    "reason": "create: EV smart-charging deadline defect in generate_ev_charging_profile; no pool task covers it (382/675 are about config validation, not scheduling)."
+   }
   },
   {
    "key": "fk-e58042aef503",
@@ -16136,9 +16186,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5",
-   "disposition": "ticket:tkt_0RVRX9DGMYDEWN2PH2JZ9N8WG5",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "709",
+   "disposition": "filed:709",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "709",
+    "reason": "create: New test-coverage work for seeded parallel fleet reproducibility; no pool task covers it (460 is done and a different fix)."
+   }
   },
   {
    "key": "fk-491014934d1e",
@@ -16156,9 +16211,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19",
-   "disposition": "ticket:tkt_0RVRX9DHQWPFCJ2BA7H3DP6M19",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "710",
+   "disposition": "filed:710",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "710",
+    "reason": "create: Refactor of simulate_home into private steps; no existing task covers this decomposition, and combining with pricing/other pending tasks would be incoherent."
+   }
   },
   {
    "key": "fk-89777ec9faad",
@@ -16166,9 +16226,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY",
-   "disposition": "ticket:tkt_0RVRX9DKX54ZBRVAT58EZ4NBPY",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "711",
+   "disposition": "filed:711",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "711",
+    "reason": "create: Seasonal-factor normalisation defect in load.py; no pool task covers it. Pending load.py tasks (395) are about occupants parsing, unrelated."
+   }
   },
   {
    "key": "fk-41767a1bc146",
@@ -16176,9 +16241,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DN45JN0G4Z79T7KJMZPF",
-   "disposition": "ticket:tkt_0RVRX9DN45JN0G4Z79T7KJMZPF",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "712",
+   "disposition": "filed:712",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "712",
+    "reason": "create: calculate_seasonal_metrics self-consumption redefinition is a distinct defect; task 408 (done) only covers the /60 factor spelling. No pending task covers it; combine targets are unrelated."
+   }
   },
   {
    "key": "fk-0097b5aaa45c",
@@ -16196,9 +16266,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DNQGS7ZCSDRR850EC339",
-   "disposition": "ticket:tkt_0RVRX9DNQGS7ZCSDRR850EC339",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "713",
+   "disposition": "filed:713",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "713",
+    "reason": "create: Refactoring chat() into steps overlaps task 701 (in-progress, not combine-eligible) only partially; it is a distinct structural refactor. Pending assistant.py tasks are unrelated small fixes, so create."
+   }
   },
   {
    "key": "fk-ce345e3b013d",
@@ -16206,9 +16281,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DPVHGS94FVA07MRXC2P0",
-   "disposition": "ticket:tkt_0RVRX9DPVHGS94FVA07MRXC2P0",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "714",
+   "disposition": "filed:714",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "714",
+    "reason": "create: Chart 'Cumulative Net Savings' mislabel/semantics in financial_breakdown; tasks 665/667/661 concern the no-tariff note, not this trace. No clear overlap."
+   }
   },
   {
    "key": "fk-70edc755ede4",
@@ -16246,9 +16326,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DS5VEBHATPHAQMZPHPJM",
-   "disposition": "ticket:tkt_0RVRX9DS5VEBHATPHAQMZPHPJM",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "715",
+   "disposition": "filed:715",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "715",
+    "reason": "create: Distinct defect: _seg_export_income_gbp override path derives SEG rate from a ratio; no pool task covers it (task 690 is about import cost)."
+   }
   },
   {
    "key": "fk-9fa18977ec68",
@@ -16256,9 +16341,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4",
-   "disposition": "ticket:tkt_0RVRX9DSTY7ZKZF4QR06EY8HH4",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "716",
+   "disposition": "filed:716",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "716",
+    "reason": "create: Doc/docstring SPOT for bill identities in finance.py and the model doc; not covered by pool tasks (581 is about history prose, 702 is a rename and in-progress)."
+   }
   },
   {
    "key": "fk-72fdec5965a1",
@@ -16266,9 +16356,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DTECVB2PAD54KH3F6PWM",
-   "disposition": "ticket:tkt_0RVRX9DTECVB2PAD54KH3F6PWM",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "717",
+   "disposition": "filed:717",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "717",
+    "reason": "create: No pool task covers deleting optimize.py's test-only delegators and retargeting sweep tests; combining into broad pending tasks would add unrelated scope."
+   }
   },
   {
    "key": "fk-0b4f5e04067c",
@@ -16276,9 +16371,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DTY3CFM9KTW2K03XKADN",
-   "disposition": "ticket:tkt_0RVRX9DTY3CFM9KTW2K03XKADN",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "718",
+   "disposition": "filed:718",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "718",
+    "reason": "create: Refactoring the retained-cash floor setter in sensitivity_panel is distinct work; no pool task covers it."
+   }
   },
   {
    "key": "fk-78587492a799",
@@ -16286,9 +16386,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2",
-   "disposition": "ticket:tkt_0RVRX9DVAA4YTWQ23QERJ0BDG2",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "719",
+   "disposition": "filed:719",
+   "why": "No live task covers this cost at this anchor in the search hits.",
+   "resolve": {
+    "status": "created",
+    "task_id": "719",
+    "reason": "create: Tests-only cleanup of test_init_lazy_surface.py's private-map reads is not covered by any pool task; task 515 touches the file only incidentally."
+   }
   },
   {
    "key": "fk-f66948b9528c",
@@ -16296,9 +16401,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q",
-   "disposition": "ticket:tkt_0RVRX9DVQDDGKD8TE0FWZM9K2Q",
-   "why": "Task 186 covers duplicated scenario loading between finance run and optimize configs, not the 240-line body, triple generate_finance_report render or its complexity."
+   "ticket_or_task": "738",
+   "disposition": "filed:738",
+   "why": "Task 186 covers duplicated scenario loading between finance run and optimize configs, not the 240-line body, triple generate_finance_report render or its complexity. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "738",
+    "reason": "create: Refactor of finance run body; task 186 (loader collapse) and 287 touch the same function but aren't the same work; combining would add concerns. Create."
+   }
   },
   {
    "key": "fk-19457544d6b6",
@@ -16306,9 +16416,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DW24Y634X5PAF8Z13NWW",
-   "disposition": "ticket:tkt_0RVRX9DW24Y634X5PAF8Z13NWW",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "722",
+   "disposition": "filed:722",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "722",
+    "reason": "drop: Task 722 (done) already covers dropping the unused fleet_results parameter and hoisting Table import in cli/fleet.py; create is unnecessary for those items. Remaining gridservices alias hoist is minor."
+   }
   },
   {
    "key": "fk-32d5e6707fb5",
@@ -16316,9 +16431,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9",
-   "disposition": "ticket:tkt_0RVRX9DWJNJ5CRTX7N4MT7DDT9",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "739",
+   "disposition": "filed:739",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "739",
+    "reason": "create: Complexity refactor of fleet sweep body; pending tasks 707/732 touch it for behavior, not structure, and are medium priority; keep separate."
+   }
   },
   {
    "key": "fk-6b7c45f8d766",
@@ -16326,9 +16446,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DX15A4E6CS8TMYYRPAM2",
-   "disposition": "ticket:tkt_0RVRX9DX15A4E6CS8TMYYRPAM2",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "731",
+   "disposition": "filed:731",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "731",
+    "reason": "combine: Same function (home quick) in cli/home.py; candidate subsumes the stale-comment fix and adds the consumption default fix plus a test. Single module lock, small tasks."
+   }
   },
   {
    "key": "fk-d89ee8df893c",
@@ -16336,9 +16461,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DXRJARDDEC5PNCW9JPPP",
-   "disposition": "ticket:tkt_0RVRX9DXRJARDDEC5PNCW9JPPP",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "740",
+   "disposition": "filed:740",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "740",
+    "reason": "create: Test-seam refactor of TestHomeRunFullConfigParity in test_cli.py; not covered by any pool task (422/681 change home run behaviour, not this test's patching seam)."
+   }
   },
   {
    "key": "fk-b523bff3e51c",
@@ -16346,9 +16476,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3",
-   "disposition": "ticket:tkt_0RVRX9DYBMQK3PY9SSQEH7ZKD3",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "741",
+   "disposition": "filed:741",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "741",
+    "reason": "create: Comment-correction pass across cli/ (optimize, finance, fleet, home); no pool task covers it, and combining into a single-file task would widen the lock."
+   }
   },
   {
    "key": "fk-31fd9d5d4c68",
@@ -16356,9 +16491,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DYW08FP6M8W075B2BWXC",
-   "disposition": "ticket:tkt_0RVRX9DYW08FP6M8W075B2BWXC",
-   "why": "Done task 488 moved finance run onto the context seam; the remaining defect (fleet run/sweep bypass it, docstring rule overstated) is not covered by any live task."
+   "ticket_or_task": "742",
+   "disposition": "filed:742",
+   "why": "Done task 488 moved finance run onto the context seam; the remaining defect (fleet run/sweep bypass it, docstring rule overstated) is not covered by any live task. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "742",
+    "reason": "create: No pool task covers the CliFleetSimulator seam/docstring mismatch for fleet run/sweep; Task 739 is a different refactor in fleet.py and Task 488 is done. Create fresh."
+   }
   },
   {
    "key": "fk-dc5cf2ec9b84",
@@ -16366,9 +16506,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DZBRAR585D0B29P7HB7T",
-   "disposition": "ticket:tkt_0RVRX9DZBRAR585D0B29P7HB7T",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "743",
+   "disposition": "filed:743",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "743",
+    "reason": "create: Docstring/prose cleanup in community.py and output.py is not covered by any pool task; Task 706 is a behavioral change touching different concerns, and Task 581 targets finance modules."
+   }
   },
   {
    "key": "fk-caad5305a3be",
@@ -16386,9 +16531,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9DZVYZCZDEBPKC358NKVG",
-   "disposition": "ticket:tkt_0RVRX9DZVYZCZDEBPKC358NKVG",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "744",
+   "disposition": "filed:744",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "744",
+    "reason": "create: Prose cleanup across dispatch.py, flow.py, battery.py, seg.py, home.py, validation.py, load.py has no matching pool task; pending dispatch tasks (382, 659, 673) are validation fixes and combining would spread locks."
+   }
   },
   {
    "key": "fk-7fa120a8bb98",
@@ -16396,9 +16546,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ",
-   "disposition": "ticket:tkt_0RVRX9E0DAM94ZCVESMQ86ADKJ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "745",
+   "disposition": "filed:745",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "745",
+    "reason": "create: EV enum vs string dead-code cleanup is not covered by any pool task; neighbouring EV tasks address other defects."
+   }
   },
   {
    "key": "fk-e0e34ef46058",
@@ -16406,9 +16561,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5",
-   "disposition": "ticket:tkt_0RVRX9E0SXZ6CYFGS58KVHVFV5",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "746",
+   "disposition": "filed:746",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "746",
+    "reason": "create: Seeded per-home reproducibility in FleetConfig.create_uniform/create_heterogeneous is new; no pool task covers it."
+   }
   },
   {
    "key": "fk-f7b19fc4c8b5",
@@ -16416,9 +16576,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E1CACMDFE1CZCAQ557EE",
-   "disposition": "ticket:tkt_0RVRX9E1CACMDFE1CZCAQ557EE",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "747",
+   "disposition": "filed:747",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "747",
+    "reason": "create: Fan-out policy dedup in fleet.py with home-named errors is new; task 460 is done and different."
+   }
   },
   {
    "key": "fk-998f0cb69410",
@@ -16436,9 +16601,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E23FMHKAR68JP92FXFKR",
-   "disposition": "ticket:tkt_0RVRX9E23FMHKAR68JP92FXFKR",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "748",
+   "disposition": "filed:748",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "748",
+    "reason": "create: Test/representation cleanup of TariffPeriod time parsing is not covered; task 204 is done and different."
+   }
   },
   {
    "key": "fk-756c0ef9e9d9",
@@ -16446,9 +16616,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E2M34QMQSQPSFGVS17B0",
-   "disposition": "ticket:tkt_0RVRX9E2M34QMQSQPSFGVS17B0",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "749",
+   "disposition": "filed:749",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "749",
+    "reason": "create: Annualisation defect in _check_annual_yield is not covered by done tasks 239/282/324 (they changed denominator/band, not duration annualising); no pending validation.py task to combine into."
+   }
   },
   {
    "key": "fk-cdcdf320a9e8",
@@ -16456,9 +16631,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E37BXVSY8TX6JCTZG6M6",
-   "disposition": "ticket:tkt_0RVRX9E37BXVSY8TX6JCTZG6M6",
-   "why": "Task 153 (pending) hoists api.py's noqa'd imports and 454 routes.py's charts imports, but neither covers routes.py:34 get_db, pinning the plotly deferral with a test, or typing web/__init__.create_app; partial overlap, curator may fold into 153."
+   "ticket_or_task": "153",
+   "disposition": "filed:153",
+   "why": "Task 153 (pending) hoists api.py's noqa'd imports and 454 routes.py's charts imports, but neither covers routes.py:34 get_db, pinning the plotly deferral with a test, or typing web/__init__.create_app; partial overlap, curator may fold into 153. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "153",
+    "reason": "combine: Hoisting function-local imports in web/api.py is the same work as pending task 153 (api.py imports incl. uuid, math, fleet_config, get_db); same single file."
+   }
   },
   {
    "key": "fk-2ac79d7a1989",
@@ -16466,9 +16646,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ",
-   "disposition": "ticket:tkt_0RVRX9E3MJH2BHG8KJ01E7ETVJ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "750",
+   "disposition": "filed:750",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "750",
+    "reason": "create: Dead sweep_id/RunType 'sweep' and server-side step ceiling touch api.py, database.py and templates; task 140 covers only the step-limit source, not recording/dropping sweep_id or the dead RunType, and combining would add database.py module."
+   }
   },
   {
    "key": "fk-93d3bd7aa219",
@@ -16476,9 +16661,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E45EQSJM25M8Y2RRH9D0",
-   "disposition": "ticket:tkt_0RVRX9E45EQSJM25M8Y2RRH9D0",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "751",
+   "disposition": "filed:751",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "751",
+    "reason": "create: Structural refactor of TOOLS/dispatch_tool into single records; no pool task covers it, and pending tasks touching dispatch_tool (440, 506, 547) have different concerns. Default to create."
+   }
   },
   {
    "key": "fk-02500b87f3cb",
@@ -16486,9 +16676,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM",
-   "disposition": "ticket:tkt_0RVRX9E4TYBDZ9JGD75RYBKVYM",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "752",
+   "disposition": "filed:752",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "752",
+    "reason": "create: Removing the unused overlaid_power_flows builder is not covered by any pool task; 629 only moves its tests."
+   }
   },
   {
    "key": "fk-f8b7b3ab709d",
@@ -16506,9 +16701,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ",
-   "disposition": "ticket:tkt_0RVRX9E56ZVFRKPP3RVB90C8GZ",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "753",
+   "disposition": "filed:753",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "753",
+    "reason": "create: Comment/docstring trimming in fleet_config.py is not covered by any pool task; pending fleet_config tasks are behavioural and combining would drag them."
+   }
   },
   {
    "key": "fk-d8ad51b22de5",
@@ -16516,9 +16716,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0",
-   "disposition": "ticket:tkt_0RVRX9E5GSYCYDGTB5KSRZ46A0",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "754",
+   "disposition": "filed:754",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "754",
+    "reason": "create: fleet_scenario.py::_read_battery null-capacity docstring/behavior mismatch is not covered by any pool task; create."
+   }
   },
   {
    "key": "fk-ba29e186122f",
@@ -16526,9 +16731,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR",
-   "disposition": "ticket:tkt_0RVRX9E5TXPGM2A7T6RJMYM3XR",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "755",
+   "disposition": "filed:755",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "755",
+    "reason": "create: _HOME_CONFIG_DEFAULTS SPOT cleanup is distinct from pool tasks (610 adds system_losses input, 612 PV bound); create."
+   }
   },
   {
    "key": "fk-5827f41eb082",
@@ -16536,9 +16746,14 @@
     "review-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E6CW14E0CSSD7PF5G0D5",
-   "disposition": "ticket:tkt_0RVRX9E6CW14E0CSSD7PF5G0D5",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "517",
+   "disposition": "filed:517",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "517",
+    "reason": "combine: Non-string name refusal in parse_home_config is already covered by pending task 517 (same simulation_params name check); fold stochastic/location/ParsedFleetForm.name typing into it, same web module locks."
+   }
   },
   {
    "key": "fk-48447960eb2c",
@@ -16546,9 +16761,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E6WMFNP7R4EEKCYE757V",
-   "disposition": "ticket:tkt_0RVRX9E6WMFNP7R4EEKCYE757V",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "756",
+   "disposition": "filed:756",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "756",
+    "reason": "create: No pool task names the default CEC module row as a constant with a require-guard. Task 699 (_module_rating_w) is adjacent but a distinct concern, so the work is not merged."
+   }
   },
   {
    "key": "fk-b97bf2325eda",
@@ -16556,9 +16776,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E7YAWM44X1SG3GG6SM31",
-   "disposition": "ticket:tkt_0RVRX9E7YAWM44X1SG3GG6SM31",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "757",
+   "disposition": "filed:757",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "757",
+    "reason": "create: Renaming calculate_annual_consumption and scale_profile_to_annual is not covered by any pool task. Task 711 changes seasonal normalisation and task 408 (done) changed the /60 factor, so neither overlaps."
+   }
   },
   {
    "key": "fk-f4d53977c642",
@@ -16576,9 +16801,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E92RCRJJY71CTB2D1J1C",
-   "disposition": "ticket:tkt_0RVRX9E92RCRJJY71CTB2D1J1C",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "758",
+   "disposition": "filed:758",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "758",
+    "reason": "create: Removing the broken tracked .claude symlink and rewording the _working_tree helper docstring and test is not covered by any pool task. The CLAUDE.md and project_id tasks are unrelated."
+   }
   },
   {
    "key": "fk-94cab00e114e",
@@ -16586,9 +16816,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E9F0N69K1RXY450XEMB7",
-   "disposition": "ticket:tkt_0RVRX9E9F0N69K1RXY450XEMB7",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "759",
+   "disposition": "filed:759",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "759",
+    "reason": "create: Default simulation window constants across library, CLI, web and JS; no pool task covers it, and combining would add modules beyond the config lock."
+   }
   },
   {
    "key": "fk-753ec8e6e149",
@@ -16606,9 +16841,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9E9QVNJQBDZSVFDFE046G",
-   "disposition": "ticket:tkt_0RVRX9E9QVNJQBDZSVFDFE046G",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "760",
+   "disposition": "filed:760",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "created",
+    "task_id": "760",
+    "reason": "create: SQLite connection helper in web/database.py; no pool task covers a shared connect(); related tasks are done or concern other things."
+   }
   },
   {
    "key": "fk-601c5b5f6415",
@@ -16616,9 +16856,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT",
-   "disposition": "ticket:tkt_0RVRX9EAAMRDYC3Z5HD5WWTCBT",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "177",
+   "disposition": "filed:177",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "177",
+    "reason": "drop: Task 177 already covers moving ConfigurationError into errors.py to break the config/finance/gridservices cycle."
+   }
   },
   {
    "key": "fk-8376e0ab00db",
@@ -16646,9 +16891,14 @@
     "review-all-solar_challenge-20261013"
    ],
    "step": "none",
-   "ticket_or_task": "tkt_0RVRX9EB021JEZX6C7RDY95ACM",
-   "disposition": "ticket:tkt_0RVRX9EB021JEZX6C7RDY95ACM",
-   "why": "No live task covers this cost at this anchor in the search hits."
+   "ticket_or_task": "717",
+   "disposition": "filed:717",
+   "why": "No live task covers this cost at this anchor in the search hits. (resubmitted after server restart)",
+   "resolve": {
+    "status": "combined",
+    "task_id": "717",
+    "reason": "drop: Task 717 covers the same finding: delete the three shims, retarget test_optimize_sweep.py, fix the run_sweep docstring, and handle _build_axis_configs."
+   }
   }
  ],
  "standing": [],
