@@ -7,8 +7,9 @@ derive them.
 
 Usage::
 
-    from tests._web_runs import store_fleet_run
+    from tests._web_runs import store_fleet_run, store_home_run
 
+    store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1), name="North Roof")
     store_fleet_run(storage, "fleet-1", make_fleet_results(n_homes=2, days=1), name="Community Fleet")
 """
 
@@ -21,6 +22,8 @@ from solar_challenge.home import calculate_summary
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import HomeConfig, SimulationResults
+    from solar_challenge.web.database import RunStatus
     from solar_challenge.web.storage import RunStorage
 
 
@@ -39,5 +42,27 @@ def store_fleet_run(
         fleet_summary=calculate_fleet_summary(fleet_results),
         per_home_summaries=[calculate_summary(results) for results in fleet_results.per_home_results],
         name=name,
+        created_at=created_at,
+    )
+
+
+def store_home_run(
+    storage: RunStorage,
+    run_id: str,
+    config: HomeConfig,
+    results: SimulationResults,
+    *,
+    name: str | None = None,
+    status: RunStatus = "completed",
+    created_at: str | None = None,
+) -> None:
+    """Save *config*'s *results* to *storage* as home run *run_id*, with the summary a finished home job saves."""
+    storage.save_home_run(
+        run_id=run_id,
+        config=config,
+        results=results,
+        summary=calculate_summary(results),
+        name=name,
+        status=status,
         created_at=created_at,
     )
