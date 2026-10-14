@@ -515,6 +515,18 @@ class TestValidateConsumption:
         assert target_check.passed is True
         assert target_check.value == pytest.approx(3400.0)
 
+    def test_a_window_across_the_spring_clock_change_is_scaled_from_its_calendar_days(
+        self,
+    ) -> None:
+        march = pd.date_range("2024-03-01", "2024-03-31 23:59", freq="1min", tz="Europe/London")
+        assert len(march) == (31 * 24 - 1) * 60
+        demand = pd.Series(3400.0 * 31 / 365 / (len(march) / 60), index=march)
+
+        results = validate_consumption(demand, target_annual_kwh=3400.0)
+
+        target_check = next(r for r in results if r.check_name == "annual_consumption_target")
+        assert target_check.value == pytest.approx(3400.0)
+
 
 class TestSelfConsumptionBenchmarks:
     """Tests for self-consumption benchmark validation (VAL-003, VAL-004)."""
