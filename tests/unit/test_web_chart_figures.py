@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Each chart on a results page is drawn from the figure its container carries, so the
-page writes each chart's id once.
+"""Each chart the dashboard builds on the server, on the results pages and on the run
+comparison page (/history/compare), is drawn from the figure its container carries, so
+its page writes each chart's id once.
 
 components/macros.html's chart_panel writes a chart's id on its container, with the
 chart's figure in data-chart-figure. static/js/chart-renderer.js draws each container
 that carries one, so no script on the page names a chart's id. A chart whose figure has
-nothing to draw gets no container.
+nothing to draw gets no container. No other dashboard source, template or script, calls
+Plotly.
 """
 
 import dataclasses
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import (
     make_fleet_results,
     make_home_config,
@@ -32,16 +36,19 @@ from tests._finance_builders import (
 from tests._html_page import chart_figures, element_ids, script_texts, texts
 from tests._web_app import build_test_app
 
+_CHART_RENDERER_KEY = "static/js/chart-renderer.js"
+_PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
+
 
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
     return build_test_app(tmp_path)
 
 
-def _home_results_page(
+def _saved_home_run(
     app: Flask, results: SimulationResults, battery_config: BatteryConfig | None = None
 ) -> str:
-    """The results page of a run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
+    """The id of a new run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
     run_id = str(uuid.uuid4())
     storage: RunStorage = app.extensions["storage"]
     storage.save_home_run(
@@ -50,6 +57,14 @@ def _home_results_page(
         results,
         calculate_summary(results),
     )
+    return run_id
+
+
+def _home_results_page(
+    app: Flask, results: SimulationResults, battery_config: BatteryConfig | None = None
+) -> str:
+    """The results page of a run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
+    run_id = _saved_home_run(app, results, battery_config)
 
     response = app.test_client().get(f"/results/home/{run_id}")
 
@@ -127,6 +142,21 @@ def test_each_chart_on_the_fleet_results_page_is_drawn_from_the_figure_its_conta
     )
 
 
+def test_each_chart_on_the_compare_page_is_drawn_from_the_figure_its_container_carries(
+    app: Flask,
+) -> None:
+    """Comparing two saved runs draws both charts, the energy totals and the efficiency ratios."""
+    results = make_sim_results(days=1)
+    run_ids = [_saved_home_run(app, results) for _ in range(2)]
+
+    response = app.test_client().get(f"/history/compare?ids={','.join(run_ids)}")
+
+    assert response.status_code == 200
+    _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
+        response.get_data(as_text=True), {"chart-comparison-bar", "chart-comparison-radar"}
+    )
+
+
 def test_a_home_run_whose_charts_have_nothing_to_draw_gets_no_container_for_them(
     app: Flask,
 ) -> None:
@@ -139,3 +169,24 @@ def test_a_home_run_whose_charts_have_nothing_to_draw_gets_no_container_for_them
         page, {"chart-daily-balance", "chart-power-flow", "chart-financial"}
     )
     assert texts(page).count("Seasonal comparison requires at least 180 days of simulation data.") == 1
+
+
+def test_no_dashboard_source_but_chart_renderer_js_calls_plotly() -> None:
+    sources = {**dashboard_template_sources(), **dashboard_script_sources()}
+    assert _PLOTLY_CALL.search(sources.get(_CHART_RENDERER_KEY, "")), (
+        f"read no Plotly call from {_CHART_RENDERER_KEY}, so this guard would pass vacuously"
+    )
+
+    calls = {
+        path: found
+        for path, source in sources.items()
+        if path != _CHART_RENDERER_KEY and (found := sorted(set(_PLOTLY_CALL.findall(source))))
+    }
+
+    listing = "".join(f"\n  {path}: {' '.join(found)}" for path, found in calls.items())
+    assert calls == {}, (
+        f"These dashboard sources call Plotly themselves:{listing}\n"
+        f"Only {_CHART_RENDERER_KEY} calls Plotly, so that every chart is drawn in the theme's "
+        "colours, waits for its hidden tab to be shown and reports a failed draw. Draw the chart "
+        "through components/macros.html's chart_panel, whose container chart-renderer.js draws."
+    )

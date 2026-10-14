@@ -1,16 +1,25 @@
 """End-to-end tests for the Compare page (/history/compare).
 
 Verifies page loading, metrics table, delta columns, color coding,
-and the empty state shown when no IDs are given.
+the comparison charts, and the empty state shown when no IDs are given.
+The charts are the Energy Totals bar chart and the Efficiency Ratios
+radar chart, each in a tab of its own: the radar chart's tab is hidden
+on load, so its chart is drawn only once the tab is shown, and then
+fills its container; both charts draw without errors, with titles and
+legends legible in light and dark mode.
 Uses seeded run pair fixtures.
 """
 
 import re
+from collections.abc import Sequence
 
 import pytest
 from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
+
+_BAR_CHART = "#chart-comparison-bar"
+_RADAR_CHART = "#chart-comparison-radar"
 
 
 # -- Compare page loads with valid IDs --------------------------------------
@@ -88,6 +97,137 @@ def test_compare_delta_coloring_direction(
     expect(positive_deltas).to_have_count(2)
     for delta in positive_deltas.all():
         expect(delta).to_have_class(re.compile(r"\btext-red-"))
+
+
+# -- The comparison charts ----------------------------------------------------
+
+_WCAG_AA_CONTRAST = 4.5
+_LUMINANCE_WEIGHTS = (0.2126, 0.7152, 0.0722)
+_TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS = r"""charts => charts.flatMap(chart => {
+    let backdrop = null;
+    for (let el = chart.querySelector('.main-svg'); el && !backdrop; el = el.parentElement) {
+        const rgba = getComputedStyle(el).backgroundColor.match(/[\d.]+/g).map(Number);
+        if (rgba.length === 3 || rgba[3] === 1) backdrop = rgba.slice(0, 3);
+    }
+    return [...chart.querySelectorAll('.gtitle, .legendtext')].map(text => ({
+        chart: '#' + chart.id,
+        text: text.textContent,
+        fill: getComputedStyle(text).fill.match(/[\d.]+/g).map(Number).slice(0, 3),
+        backdrop,
+    }));
+})"""
+
+
+def _show_tab(page: Page, tab_name: str, chart: str) -> None:
+    """Click tab_name's tab and wait until Plotly has drawn its chart, the element the selector chart selects, visible."""
+    page.get_by_role("button", name=tab_name, exact=True).click()
+    expect(page.locator(f"{chart}.js-plotly-plot")).to_be_visible()
+
+
+def _relative_luminance(rgb: Sequence[float]) -> float:
+    """The WCAG 2 relative luminance of the sRGB colour whose red, green and blue, each 0 to 255, are rgb."""
+    linear = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in (channel / 255 for channel in rgb))
+    return sum(weight * channel for weight, channel in zip(_LUMINANCE_WEIGHTS, linear))
+
+
+def _contrast_ratio(foreground: Sequence[float], background: Sequence[float]) -> float:
+    """The WCAG 2 contrast ratio of two sRGB colours, each given as its red, green and blue, 0 to 255."""
+    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_compare_radar_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown_and_fills_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """The radar chart, in the Efficiency Ratios tab hidden on load, is not drawn until its tab is shown, and is then as wide as its container.
+
+    The tab is shown only once no CSS transition runs: base.html slides the main column in
+    as Alpine starts, and a chart drawn before that settles is sized for the wider column,
+    which task 736 fixes in chart-renderer.js.
+    """
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    expect(page.locator(f"{_RADAR_CHART}.js-plotly-plot")).to_have_count(0)
+
+    page.wait_for_function(
+        "() => document.getAnimations().every(animation => !(animation instanceof CSSTransition))"
+    )
+    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+
+    drawn_width, container_width = page.locator(_RADAR_CHART).evaluate(
+        "chart => [Number(chart.querySelector('.main-svg').getAttribute('width')), chart.clientWidth]"
+    )
+    assert abs(drawn_width - container_width) <= 1, (
+        f"The radar chart is drawn {drawn_width} px wide in its {container_width} px wide container"
+    )
+
+
+def test_compare_page_shows_both_chart_tabs_without_errors(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+    page_errors: list[str],
+) -> None:
+    """Loading the page and showing each of its chart tabs logs no console error and throws no uncaught exception.
+
+    chart-renderer.js draws the radar chart only once its tab is shown, so both tabs are shown.
+    """
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    url = f"/history/compare?ids={id1},{id2}"
+    page.goto(live_server + url)
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+    _show_tab(page, "Energy Totals", _BAR_CHART)
+
+    assert page_errors == [], f"Errors on {url}: {page_errors}"
+
+
+@pytest.mark.parametrize(
+    ("dark_on_load", "switched_to_dark"),
+    [
+        pytest.param(False, False, id="light"),
+        pytest.param(True, False, id="dark-on-load"),
+        pytest.param(False, True, id="switched-to-dark"),
+    ],
+)
+def test_compare_chart_titles_and_legends_are_legible(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+    dark_on_load: bool,
+    switched_to_dark: bool,
+) -> None:
+    """Each chart's title and legend texts reach WCAG AA's 4.5:1 contrast with the first opaque background behind the chart.
+
+    The page is in dark mode when it loads, or is switched to dark mode once its first chart is drawn, or stays light.
+    """
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    if dark_on_load:
+        page.evaluate("() => localStorage.setItem('theme', 'dark')")
+        page.reload()
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    if switched_to_dark:
+        page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
+    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+
+    texts = page.locator(".js-plotly-plot").evaluate_all(_TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS)
+
+    assert {text["chart"] for text in texts} >= {_BAR_CHART, _RADAR_CHART}, (
+        f"Expected title or legend texts in both charts; read {texts}"
+    )
+    illegible = [
+        (text["chart"], text["text"], text["fill"], text["backdrop"], round(ratio, 2))
+        for text in texts
+        if (ratio := _contrast_ratio(text["fill"], text["backdrop"])) < _WCAG_AA_CONTRAST
+    ]
+    assert illegible == [], (
+        f"These chart texts, as (chart, text, fill, backdrop, contrast), fall short of WCAG AA's "
+        f"{_WCAG_AA_CONTRAST}:1 contrast with the background behind their chart: {illegible}"
+    )
 
 
 # -- Compare without IDs shows empty state ---------------------------------
