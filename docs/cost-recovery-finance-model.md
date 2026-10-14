@@ -25,10 +25,11 @@ collected own-use revenue to service the project loan, cover opex, and retain a
 minimum cash surplus per home.
 
 This document specifies the cost-recovery model precisely enough that a board member
-can reproduce a live `solar-challenge fleet run --cost-recovery` run by hand, and that
-a future code-reviewer can verify any code change against this spec.  Every equation
-traces to a function in `finance.py`; every reported number in §7 matches a live
-calibration run captured by `tests/integration/test_cost_recovery_calibration.py`.
+can reproduce a live `solar-challenge finance run <scenario> --cost-recovery` run by
+hand, and that a future code-reviewer can verify any code change against this spec.
+Every equation traces to a function in `finance.py`; every reported number in §7
+matches a live calibration run captured by
+`tests/integration/test_cost_recovery_calibration.py`.
 
 ---
 
@@ -757,10 +758,11 @@ solves at a lower rate.
 
 ## 9. The Rendered Cost-Recovery Report (output.py)
 
-Source: `src/solar_challenge/output.py` (`render_cost_recovery_report()`).
+Source: `src/solar_challenge/output.py` (`generate_finance_report()`).
 
-Running `solar-challenge fleet run --cost-recovery` appends a `## Cost-Recovery Analysis`
-block to the markdown summary.  The block renders the `CostRecoverySolution` fields:
+Running `solar-challenge finance run <scenario> --cost-recovery`, where `<scenario>` is a
+scenario YAML with a `finance:` block, appends a `## Cost-Recovery Analysis` block to the
+markdown finance report it prints.  The block renders the `CostRecoverySolution` fields:
 
 ```markdown
 ## Cost-Recovery Analysis
