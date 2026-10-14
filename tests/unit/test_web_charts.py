@@ -303,7 +303,10 @@ class TestChartTotals:
 
         bars = {name: dict(zip(trace["x"], trace["y"])) for name, trace in traces_by_name(figure).items()}
 
-        # 0.3, 0.15 and 0.1 kWh a row of generation, demand and self-consumption, over 2,160 winter rows (Jan, Feb and Dec 1-30 of 2020) and 2,208 summer rows.
+        # make_sim_results spreads each total evenly over its 8,760 hourly rows from 2020-01-01:
+        # 0.3, 0.15 and 0.1 kWh a row of generation, demand and self-consumption. 2020 is a leap
+        # year, so the 365 days end on 30 December. Winter is then 2,160 rows (Jan, Feb and
+        # Dec 1-30) and summer 2,208 (Jun-Aug).
         assert bars == {
             "Winter (Dec-Feb)": {"Generation (kWh)": 648.0, "Demand (kWh)": 324.0, "Self-Consumption (kWh)": 216.0},
             "Summer (Jun-Aug)": {"Generation (kWh)": 662.4, "Demand (kWh)": 331.2, "Self-Consumption (kWh)": 220.8},
