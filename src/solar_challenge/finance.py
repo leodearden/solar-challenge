@@ -1749,7 +1749,7 @@ def project_multi_year(
             fleet_billed_own_use_kwh=max(0.0, own_use_per_year[y]),
             fleet_export_kwh=max(0.0, exp_per_year[y]),
             fleet_import_kwh=max(0.0, imp_per_year[y]),
-            fleet_revenue_gbp=max(0.0, rev_per_year[y]),
+            fleet_revenue_gbp=rev_per_year[y],
         )
         for y in range(asset_life)
     )
@@ -2200,19 +2200,6 @@ def solve_cost_recovery_rate(
     are the projection's annualised figures, so a short window is solved
     like-for-like against the annual opex, debt and floor, but carries that
     window's seasonal bias.
-
-    **Affine-line precondition** (Suggestion 3 / robustness note):
-
-    Step 2 is exact while the ``max(0.0, rev_per_year[y])`` clamp that
-    ``project_multi_year`` applies to ``fleet_revenue_gbp`` does not bind.  It
-    cannot bind today: every CBS revenue term is non-negative (own-use = rate
-    (≥ 0) × billed own-use kWh (≥ 0); SEG ≥ 0; grid-services ≥ 0 under both
-    models, the event model paying gross × (1 − aggregator_share)), and the
-    PCHIP interpolation is shape-preserving, so no
-    interpolated year falls below its non-negative nodes.  A future negative
-    revenue term would reintroduce a bounded error in the linear
-    reconstruction; callers needing exact results would then re-simulate at
-    the returned rate.
 
     **Cost note** (Suggestion 4 / performance):
 
