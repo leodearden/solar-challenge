@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
+from rich.table import Table
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -53,13 +54,8 @@ def _export_fleet_results(results: FleetResults, output: Path) -> None:
     df.to_csv(output)
 
 
-def _print_community_section(
-    fleet_results: FleetResults,
-    community_results: "CommunityResults",
-) -> None:
+def _print_community_section(community_results: "CommunityResults") -> None:
     """Print a community sharing summary after the fleet summary table."""
-    from rich.table import Table
-
     m = compute_community_metrics(community_results)
 
     table = Table(title="Community Sharing Results")
@@ -243,7 +239,7 @@ def run(
     community_config = load_community_config(config)
     if community_config is not None:
         community_results = simulate_community(results, community_config)
-        _print_community_section(results, community_results)
+        _print_community_section(community_results)
         if community_report is not None:
             community_report.write_text(generate_community_report(community_results))
             print_success(f"Community report saved to {community_report}")
@@ -488,8 +484,6 @@ def sweep(
 
 def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     """Print sweep summary table."""
-    from rich.table import Table
-
     table = Table(title="Sweep Results Summary")
     table.add_column("Value", justify="right")
     table.add_column("Self-Consumption", justify="right")
