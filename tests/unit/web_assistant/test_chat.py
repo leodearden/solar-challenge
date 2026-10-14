@@ -627,6 +627,53 @@ class TestHistoryWindowAlternation:
         )
 
 
+class TestEveryTurnStoresAReplyWithText:
+    """Every turn that reaches the model stores one reply with text, and the replay skips a reply without text.
+
+    The Messages API refuses a message with empty content anywhere but last,
+    while it combines consecutive user turns into one. So one stored empty reply
+    makes every later request of the session fail, and a user turn left
+    unanswered does not.
+
+    Every turn that reaches the model therefore stores one reply with text,
+    however it ends: finished; failed, i.e. an API error before any text
+    (overload, rate limit after retries, bad key or model, network); or cut
+    short, i.e. a client disconnect closes the response and raises GeneratorExit
+    at a yield, which ``except Exception`` does not catch.
+
+    The replay leaves out a stored reply without text, which earlier releases
+    stored for a failed turn.
+    """
+
+    @pytest.mark.parametrize("stored_reply", ["", " \n"], ids=["empty", "whitespace"])
+    def test_a_stored_reply_without_text_is_left_out_of_the_replay(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        stored_reply: str,
+    ) -> None:
+        """A reply stored without text, as the old error path stored one, is not replayed."""
+        db_path = app.config["DATABASE"]
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "replay-skip-sid"
+        save_chat_message(db_path, "replay-skip-sid", "user", "hello")
+        save_chat_message(
+            db_path,
+            "replay-skip-sid",
+            "assistant",
+            stored_reply,
+            metadata={"error": "overloaded_error: Overloaded", "truncated": True},
+        )
+
+        client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
+
+        assert anthropic_api.last_kwargs["messages"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": "again"},
+        ]
+
+
 def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
     """GET /assistant → 200 with chat shell markers (chat-messages + chat-input containers)."""
     resp = client.get("/assistant")
