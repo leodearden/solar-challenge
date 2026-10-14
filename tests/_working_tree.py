@@ -19,7 +19,7 @@ def copy_working_tree(checkout: Path, destination: Path) -> Path:
     """Copy each file git lists in *checkout*, tracked or untracked but not ignored, to its path under *destination*.
 
     A tracked file deleted from the tree is not copied, nor is a listed path that
-    is not a regular file, such as a worktree's .claude symlink to a directory.
+    is not a regular file, such as a symlink to a directory.
     In a directory git does not know as a checkout, it raises CalledProcessError
     naming the command. Returns *destination*.
     """
