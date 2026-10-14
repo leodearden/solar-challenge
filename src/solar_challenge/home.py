@@ -59,9 +59,7 @@ class HomeConfig:
     """Smart Export Guarantee tariff for pricing grid exports.
 
     When set, simulate_home prices export_revenue using calculate_seg_revenue()
-    at this SEG rate (pence/kWh) rather than the import tariff rate.  This is
-    the cross-PRD seam field: the web UI (P2) sets it via HomeConfig so the
-    simulation automatically uses SEG pricing with no further wiring required.
+    at this SEG rate (pence/kWh); when None, export_revenue is 0.
     """
 
 
