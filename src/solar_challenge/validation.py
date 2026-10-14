@@ -75,21 +75,32 @@ class ValidationReport:
 
 
 _UK_YIELD_BENCHMARK_KWH_PER_KWP = (300.0, 1200.0)
+_DAYS_PER_YEAR = 365
+
+
+def _days_covered(index: pd.DatetimeIndex) -> int:
+    """The days index covers: the whole days elapsed from its first timestamp to its last, plus one."""
+    return int((index[-1] - index[0]).days) + 1
+
+
+def _annual_equivalent_kwh(power_kw: pd.Series) -> float:
+    """The energy of power_kw, 1-minute kW, scaled from the days it covers to _DAYS_PER_YEAR days."""
+    kwh = float(power_kw.sum() * HOURS_PER_MINUTE)
+    return kwh * _DAYS_PER_YEAR / _days_covered(power_kw.index)
 
 
 def _check_annual_yield(
     generation: pd.Series, config: PVConfig
 ) -> Optional[ValidationResult]:
-    """The year's AC energy per kWp of the DC wired for config, against the UK benchmark band.
+    """A 365-day year's AC energy per kWp of the DC wired for config, against the UK benchmark band.
 
-    generation is 1-minute kW; None when it spans under 365 days.
+    generation is 1-minute kW; None when it covers under 365 days, and a longer run is scaled to
+    365 days.
     """
-    duration_days = (generation.index[-1] - generation.index[0]).days + 1
-    if duration_days < 365:
+    if _days_covered(generation.index) < _DAYS_PER_YEAR:
         return None
-    total_kwh = float(generation.sum() * HOURS_PER_MINUTE)
     wired_kw = wired_dc_capacity_kw(config)
-    yield_per_kwp = total_kwh / wired_kw
+    yield_per_kwp = _annual_equivalent_kwh(generation) / wired_kw
     low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
     passed = low <= yield_per_kwp <= high
     placement = "within" if passed else "outside"
@@ -138,7 +149,7 @@ def validate_pv_generation(
     - Generation is never negative
     - Generation is zero at night (approximately)
     - Peak generation within 10% over the DC the PV model wires (pv.wired_dc_capacity_kw)
-    - Annual yield per kWp wired within the UK benchmark band (if full year data)
+    - Annual yield per kWp wired within the UK benchmark band (needs 365 days or more, judged per 365 days)
 
     docs/pv-annual-yield-benchmark.md records the band's source and the wired DC both checks use.
 
@@ -147,7 +158,8 @@ def validate_pv_generation(
         pv_config: The PVConfig that produced generation. The peak check and
             the annual yield both use the DC the PV model wires for it
             (pv.wired_dc_capacity_kw), custom_module_params included.
-        check_annual: Whether to check annual yield (requires ~1 year data)
+        check_annual: Whether to check annual yield, which needs 365 days or more of
+            data and judges a longer run per 365 days
 
     Returns:
         List of ValidationResult objects
@@ -289,11 +301,7 @@ def validate_consumption(
 
     # Check 4: Annual total matches target (if provided)
     if target_annual_kwh is not None:
-        total_kwh = float(demand.sum() * HOURS_PER_MINUTE)
-        duration_days = (demand.index[-1] - demand.index[0]).days + 1
-
-        # Scale to annual equivalent
-        annual_equivalent = total_kwh * (365 / duration_days)
+        annual_equivalent = _annual_equivalent_kwh(demand)
 
         # Allow 20% tolerance
         tolerance = 0.20
