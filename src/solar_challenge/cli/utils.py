@@ -20,6 +20,7 @@ fleet.simulate_fleet_iter and fleet.simulate_multi_sweep_iter themselves.
 """
 
 import dataclasses
+from collections.abc import Iterable
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
@@ -212,11 +213,11 @@ def verbatim_table_title(title: str) -> Text:
     return Text(title, style="table.title")
 
 
-def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Table:
-    """Create a Rich table from summary statistics.
+def create_summary_table(rows: Iterable[tuple[str, str]], title: str = "Simulation Summary") -> Table:
+    """Create a Rich table of summary rows.
 
     Args:
-        summary: SummaryStatistics or FleetSummary object
+        rows: (metric, value) pairs, printed in order under the title
         title: Table title, printed exactly as it is, never read as Rich markup or emoji codes
 
     Returns:
@@ -225,45 +226,8 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     table = Table(title=verbatim_table_title(title))
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="green")
-
-    # Energy totals
-    table.add_row("Total Generation", f"{summary.total_generation_kwh:.1f} kWh")
-    table.add_row("Total Demand", f"{summary.total_demand_kwh:.1f} kWh")
-    table.add_row("Self-Consumption", f"{summary.total_self_consumption_kwh:.1f} kWh")
-    table.add_row("Grid Import", f"{summary.total_grid_import_kwh:.1f} kWh")
-    table.add_row("Grid Export", f"{summary.total_grid_export_kwh:.1f} kWh")
-
-    # Ratios
-    if hasattr(summary, "self_consumption_ratio"):
-        table.add_row(
-            "Self-Consumption Ratio",
-            f"{summary.self_consumption_ratio:.1%}",
-        )
-    if hasattr(summary, "grid_dependency_ratio"):
-        table.add_row(
-            "Grid Dependency",
-            f"{summary.grid_dependency_ratio:.1%}",
-        )
-
-    # Fleet-specific
-    if hasattr(summary, "n_homes"):
-        table.add_row("Number of Homes", str(summary.n_homes))
-
-    # Simulation duration
-    if hasattr(summary, "simulation_days"):
-        table.add_row("Simulation Days", str(summary.simulation_days))
-
-    # Financial rows — present on SummaryStatistics; guarded so FleetSummary is unaffected
-    if hasattr(summary, "total_import_cost_gbp") and summary.total_import_cost_gbp is not None:
-        table.add_row("Grid Import Cost", f"£{summary.total_import_cost_gbp:.2f}")
-    if hasattr(summary, "total_export_revenue_gbp") and summary.total_export_revenue_gbp is not None:
-        table.add_row("Grid Export Revenue", f"£{summary.total_export_revenue_gbp:.2f}")
-    if hasattr(summary, "net_cost_gbp") and summary.net_cost_gbp is not None:
-        table.add_row("Net Cost", f"£{summary.net_cost_gbp:.2f}")
-    seg_rev = getattr(summary, "seg_revenue_gbp", None)
-    if seg_rev is not None:
-        table.add_row("SEG Revenue", f"£{seg_rev:.2f}")
-
+    for metric, value in rows:
+        table.add_row(metric, value)
     return table
 
 

@@ -19,6 +19,7 @@ from solar_challenge.cli.utils import (
     console,
     create_fleet_progress,
     create_summary_table,
+    fleet_summary_rows,
     handle_errors,
     print_info,
     print_success,
@@ -210,29 +211,9 @@ def run(
 
     summary = calculate_fleet_summary(results)
 
-    # Create and display summary table
-    table = create_summary_table(summary, title=f"Fleet Results: {fleet_config.name or 'Fleet'}")
-
-    # Add fleet-specific stats
-    table.add_row("", "")  # Separator
-    table.add_row(
-        "Per-Home Generation (min/max)",
-        f"{summary.per_home_generation_min_kwh:.1f} / {summary.per_home_generation_max_kwh:.1f} kWh",
+    console.print(
+        create_summary_table(fleet_summary_rows(summary), title=f"Fleet Results: {fleet_config.name or 'Fleet'}")
     )
-    table.add_row(
-        "Per-Home Generation (mean)",
-        f"{summary.per_home_generation_mean_kwh:.1f} kWh",
-    )
-    table.add_row(
-        "Self-Consumption Ratio (min/max)",
-        f"{summary.per_home_self_consumption_ratio_min:.1%} / {summary.per_home_self_consumption_ratio_max:.1%}",
-    )
-    table.add_row(
-        "Self-Consumption Ratio (mean)",
-        f"{summary.per_home_self_consumption_ratio_mean:.1%}",
-    )
-
-    console.print(table)
 
     if output is not None:
         _export_fleet_results(results, output)

@@ -14,6 +14,7 @@ from solar_challenge.cli.utils import (
     create_progress,
     create_summary_table,
     handle_errors,
+    home_summary_rows,
     load_config_with_overrides,
     print_info,
     print_report,
@@ -173,7 +174,7 @@ def run(
         # section.
         summary = calculate_summary(results)
         console.print(
-            create_summary_table(summary, title=f"Simulation Results: {home_config.name}")
+            create_summary_table(home_summary_rows(summary), title=f"Simulation Results: {home_config.name}")
         )
 
     # Export CSV if requested
@@ -255,7 +256,7 @@ def quick(
         progress.update(task, completed=True)
 
     summary = calculate_summary(results)
-    table = create_summary_table(summary, title="Quick Simulation Results")
+    table = create_summary_table(home_summary_rows(summary), title="Quick Simulation Results")
     console.print(table)
 
     if output is not None:
