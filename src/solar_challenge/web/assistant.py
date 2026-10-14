@@ -847,6 +847,51 @@ def _replay_window(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return window[first_user:]
 
 
+def request_messages(
+    history: Sequence[Mapping[str, Any]], user_message: str, run_context: str = ""
+) -> list[dict[str, Any]]:
+    """Return the messages a chat turn sends the model.
+
+    They are the stored *history*, replayed, then *user_message* with
+    *run_context* in front.
+    """
+    return _replay_window([*history, {"role": "user", "content": run_context + user_message}])
+
+
+def _run_context(run_id: str, storage: RunStorage) -> str:
+    """Return the preamble that tells the model the name and summary of the run *run_id* names.
+
+    Empty when *run_id* is empty or names no run in *storage*.
+    """
+    if not run_id:
+        return ""
+    run = get_run_results(run_id, storage)
+    if "error" in run:
+        return ""
+    return (
+        f"[Run context for run_id={run_id!r}, name={run['name']!r}: "
+        f"{json.dumps(run['summary'], ensure_ascii=False)}]\n\n"
+    )
+
+
+def _model_request(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the Messages API request asking *model* to answer *messages*.
+
+    It offers TOOLS and sends SIMULATOR_SYSTEM_PROMPT as the cached system block.
+    """
+    return {
+        "model": model,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "low"},
+        "max_tokens": 4096,
+        "system": [
+            {"type": "text", "text": SIMULATOR_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        ],
+        "messages": messages,
+        "tools": TOOLS,
+    }
+
+
 _DONE_FRAME = "event: done\ndata: {}\n\n"
 _NO_REPLY_TEXT = "[No reply text was received.]"
 
@@ -929,42 +974,11 @@ def chat() -> Response:
             yield _error_frame(f"Could not initialise Anthropic client: {exc}")
             return
 
-        history = database.get_chat_history(db_path, sid)
-        messages = _replay_window([*history, {"role": "user", "content": user_message}])
-
-        # Run-context injection: when the request carries a run_id,
-        # prepend a compact preamble to the final (user) message in-memory ONLY.
-        # - NOT written to chat_messages (keeps stored history clean).
-        # - NOT placed in the cached system block (preserves prompt-cache stability).
-        # - Graceful no-op when run_id is absent/empty or the run is not found.
-        if run_id and messages and messages[-1]["role"] == "user":
-            run_data = get_run_results(run_id, storage)
-            if "error" not in run_data:
-                preamble = (
-                    f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "
-                    f"{json.dumps(run_data.get('summary', {}), ensure_ascii=False)}]\n\n"
-                )
-                original_content: str = str(messages[-1]["content"])
-                messages[-1] = dict(messages[-1])
-                messages[-1]["content"] = preamble + original_content
-
+        messages = request_messages(
+            database.get_chat_history(db_path, sid), user_message, _run_context(run_id, storage)
+        )
         model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
-        system_block: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": SIMULATOR_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-        params: dict[str, Any] = {
-            "model": model,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "low"},
-            "max_tokens": 4096,
-            "system": system_block,
-            "messages": messages,
-            "tools": TOOLS,
-        }
+        params = _model_request(model, messages)
 
         database.save_chat_message(db_path, sid, "user", user_message)
         accumulated = ""
