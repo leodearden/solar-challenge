@@ -19,6 +19,10 @@ if TYPE_CHECKING:
     from solar_challenge.optimize import RankedSweep, SensitivityPanel
 
 
+_WINTER_MONTHS = (12, 1, 2)
+_SUMMER_MONTHS = (6, 7, 8)
+
+
 def export_to_csv(
     results: SimulationResults,
     filepath: Union[str, Path],
@@ -98,8 +102,8 @@ def generate_summary_report(
         if results.heat_pump_load is not None:
             # Calculate seasonal heat pump metrics
             months = results.heat_pump_load.index.month
-            winter_mask = months.isin([12, 1, 2])
-            summer_mask = months.isin([6, 7, 8])
+            winter_mask = months.isin(_WINTER_MONTHS)
+            summer_mask = months.isin(_SUMMER_MONTHS)
 
             winter_hp_load = results.heat_pump_load[winter_mask]
             summer_hp_load = results.heat_pump_load[summer_mask]
@@ -230,93 +234,49 @@ def calculate_export_ratio(results: SimulationResults) -> float:
     return summary.export_ratio
 
 
-def calculate_seasonal_metrics(
-    demand: pd.Series,
-    generation: pd.Series,
-) -> dict[str, float]:
-    """Calculate seasonal breakdown of energy metrics (winter vs summer).
+def _share(part: float, whole: float) -> float:
+    """part / whole, or 0.0 when whole is not positive, the rule of calculate_summary's ratios."""
+    return float(part / whole) if whole > 0 else 0.0
 
-    Winter is defined as December, January, February.
-    Summer is defined as June, July, August.
+
+def calculate_seasonal_metrics(results: SimulationResults) -> dict[str, float]:
+    """The run's winter (Dec-Feb) and summer (Jun-Aug) totals and ratios.
+
+    Each total is the season's sum of the run's own per-minute amounts, so self-consumption
+    counts battery discharge as calculate_summary's does. The ratios are calculate_summary's,
+    of the season's totals.
 
     Args:
-        demand: Demand time series with datetime index (kW)
-        generation: Generation time series with datetime index (kW)
+        results: Simulation results
 
     Returns:
-        Dictionary containing seasonal metrics including:
+        Dictionary of the seasonal metrics:
         - winter_generation_kwh: Total winter generation
         - winter_demand_kwh: Total winter demand
-        - winter_self_consumption_kwh: Winter self-consumption
+        - winter_self_consumption_kwh: Total winter self-consumption
         - winter_self_consumption_ratio: Winter self-consumption / generation
-        - winter_grid_dependency_ratio: Winter grid dependency
+        - winter_grid_dependency_ratio: Winter grid import / demand
         - summer_generation_kwh: Total summer generation
         - summer_demand_kwh: Total summer demand
-        - summer_self_consumption_kwh: Summer self-consumption
+        - summer_self_consumption_kwh: Total summer self-consumption
         - summer_self_consumption_ratio: Summer self-consumption / generation
-        - summer_grid_dependency_ratio: Summer grid dependency
+        - summer_grid_dependency_ratio: Summer grid import / demand
     """
-    # Extract month from index
-    months = demand.index.month
-
-    # Define seasons (Northern Hemisphere)
-    winter_mask = months.isin([12, 1, 2])
-    summer_mask = months.isin([6, 7, 8])
-
-    # Filter data by season
-    winter_demand = demand[winter_mask]
-    winter_generation = generation[winter_mask]
-    summer_demand = demand[summer_mask]
-    summer_generation = generation[summer_mask]
-
-    # Calculate self-consumption (minimum of generation and demand at each timestep)
-    winter_self_consumption = pd.Series(
-        [min(g, d) for g, d in zip(winter_generation, winter_demand)],
-        index=winter_generation.index,
-    )
-    summer_self_consumption = pd.Series(
-        [min(g, d) for g, d in zip(summer_generation, summer_demand)],
-        index=summer_generation.index,
-    )
-
-    winter_generation_kwh = float(winter_generation.sum() * HOURS_PER_MINUTE)
-    winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE)
-    winter_self_consumption_kwh = float(winter_self_consumption.sum() * HOURS_PER_MINUTE)
-
-    summer_generation_kwh = float(summer_generation.sum() * HOURS_PER_MINUTE)
-    summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE)
-    summer_self_consumption_kwh = float(summer_self_consumption.sum() * HOURS_PER_MINUTE)
-
-    # Calculate ratios with safety checks
-    winter_self_consumption_ratio = (
-        winter_self_consumption_kwh / winter_generation_kwh if winter_generation_kwh > 0 else 0.0
-    )
-    summer_self_consumption_ratio = (
-        summer_self_consumption_kwh / summer_generation_kwh if summer_generation_kwh > 0 else 0.0
-    )
-
-    # Grid dependency = (demand - self_consumption) / demand
-    winter_grid_import_kwh = max(0.0, winter_demand_kwh - winter_self_consumption_kwh)
-    winter_grid_dependency_ratio = (
-        winter_grid_import_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
-    )
-
-    summer_grid_import_kwh = max(0.0, summer_demand_kwh - summer_self_consumption_kwh)
-    summer_grid_dependency_ratio = (
-        summer_grid_import_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
-    )
-
+    amounts = results.per_minute_amounts()
+    months = amounts.index.month
+    winter = amounts[months.isin(_WINTER_MONTHS)].sum()
+    summer = amounts[months.isin(_SUMMER_MONTHS)].sum()
     return {
-        "winter_generation_kwh": winter_generation_kwh,
-        "winter_demand_kwh": winter_demand_kwh,
-        "winter_self_consumption_kwh": winter_self_consumption_kwh,
-        "winter_self_consumption_ratio": winter_self_consumption_ratio,
-        "winter_grid_dependency_ratio": winter_grid_dependency_ratio,
-        "summer_generation_kwh": summer_generation_kwh,
-        "summer_demand_kwh": summer_demand_kwh,
-        "summer_self_consumption_kwh": summer_self_consumption_kwh,
-        "summer_self_consumption_ratio": summer_self_consumption_ratio,
-        "summer_grid_dependency_ratio": summer_grid_dependency_ratio,
+        "winter_generation_kwh": float(winter["generation_kwh"]),
+        "winter_demand_kwh": float(winter["demand_kwh"]),
+        "winter_self_consumption_kwh": float(winter["self_consumption_kwh"]),
+        "winter_self_consumption_ratio": _share(winter["self_consumption_kwh"], winter["generation_kwh"]),
+        "winter_grid_dependency_ratio": _share(winter["grid_import_kwh"], winter["demand_kwh"]),
+        "summer_generation_kwh": float(summer["generation_kwh"]),
+        "summer_demand_kwh": float(summer["demand_kwh"]),
+        "summer_self_consumption_kwh": float(summer["self_consumption_kwh"]),
+        "summer_self_consumption_ratio": _share(summer["self_consumption_kwh"], summer["generation_kwh"]),
+        "summer_grid_dependency_ratio": _share(summer["grid_import_kwh"], summer["demand_kwh"]),
     }
 
 

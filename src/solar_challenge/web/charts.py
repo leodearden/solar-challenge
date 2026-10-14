@@ -527,7 +527,7 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     if sim_days < 180:
         return None
 
-    metrics = calculate_seasonal_metrics(results.demand, results.generation)
+    metrics = calculate_seasonal_metrics(results)
 
     fig = go.Figure(data=[
         _season_bar("Winter (Dec-Feb)", "winter", {
