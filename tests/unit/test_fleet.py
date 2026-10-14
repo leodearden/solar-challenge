@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import parse_fleet_config
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
@@ -446,6 +447,15 @@ def bristol_june_tmy(weather_cache: WeatherCache) -> None:
     weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
 
 
+@pytest.fixture
+def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
+    """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+    previous = multiprocessing.get_start_method(allow_none=True)
+    multiprocessing.set_start_method(request.param, force=True)
+    yield request.param
+    multiprocessing.set_start_method(previous, force=True)
+
+
 @pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
@@ -533,6 +543,41 @@ class TestParallelMatchesSequential:
             seq_gen = sequential_results[i].generation
             par_gen = parallel_results[i].generation
             pd.testing.assert_series_equal(seq_gen, par_gen)
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_seeded_stochastic_homes_get_their_sequential_results_from_parallel_workers(
+        self, worker_start_method: str
+    ) -> None:
+        """Four homes differing only in their seed, shared by two forkserver or spawn workers so a worker draws one home's demand after another's, each get exactly the results a sequential run gives them."""
+        fleet = parse_fleet_config(
+            {
+                "fleet_distribution": {
+                    "n_homes": 4,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400.0, "use_stochastic": True},
+                }
+            }
+        )
+
+        in_sequence = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=False)
+        distinct_demands = {tuple(results.demand) for results in in_sequence.per_home_results}
+        assert len(distinct_demands) == len(fleet.homes), (
+            f"premise: the {len(fleet.homes)} homes, differing only in their seed, drew "
+            f"{len(distinct_demands)} distinct demand profiles; profiles drawn from their own seeds differ, "
+            "the deterministic Elexon fallback's do not"
+        )
+
+        in_parallel = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=True, max_workers=2)
+        for home, from_workers, from_sequence in zip(
+            fleet.homes, in_parallel.per_home_results, in_sequence.per_home_results, strict=True
+        ):
+            pd.testing.assert_frame_equal(
+                from_workers.to_dataframe(),
+                from_sequence.to_dataframe(),
+                check_exact=True,
+                obj=f"{home.name}'s results from {worker_start_method} workers",
+            )
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
@@ -806,14 +851,6 @@ class TestParallelFleetWeather:
     _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
     _DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
     _LOAD = LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
-
-    @pytest.fixture
-    def worker_start_method(self, request: pytest.FixtureRequest) -> Iterator[str]:
-        """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
-        previous = multiprocessing.get_start_method(allow_none=True)
-        multiprocessing.set_start_method(request.param, force=True)
-        yield request.param
-        multiprocessing.set_start_method(previous, force=True)
 
     @pytest.fixture(autouse=True)
     def bristol_and_bath_tmys(
