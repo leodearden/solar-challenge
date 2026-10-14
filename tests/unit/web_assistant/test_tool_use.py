@@ -32,7 +32,7 @@ from solar_challenge.web.assistant import (
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
-from tests._sse import parse_sse_events
+from tests._sse import SseFrame, parse_sse_events
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -172,6 +172,29 @@ class TestToolUseLoop:
         assert tool_events[0].data["name"] == "explain_metric", (
             f"Expected tool frame with name='explain_metric', got: {tool_events[0].data}"
         )
+
+    def test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """The reply the model streams after a tool call reaches the client as it streams, one
+        delta frame per chunk, as a reply without a tool call does. A loop that only sees each
+        model call's whole message would send it as one frame."""
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_stream_001", "explain_metric", {"metric": "self_sufficiency"}),
+            make_end_turn_stream(["Self-sufficiency is", " the share of demand", " met on site."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-sufficiency?"})
+
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame(event="tool", data={"name": "explain_metric"}),
+            SseFrame(event="delta", data={"text": "Self-sufficiency is"}),
+            SseFrame(event="delta", data={"text": " the share of demand"}),
+            SseFrame(event="delta", data={"text": " met on site."}),
+            SseFrame(event="done", data={}),
+        ]
 
     def test_stream_called_twice_and_tool_result_has_canonical_band(
         self,

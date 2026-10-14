@@ -936,7 +936,9 @@ def _reply_events(
     """Yield the events of the model's reply to *request*, running each tool it calls with *run_tool*.
 
     The model is called at most MAX_TOOL_ITERATIONS times; a reply that still
-    calls tools then ends with TOOL_CALL_LIMIT_NOTICE as its text.
+    calls tools then ends with TOOL_CALL_LIMIT_NOTICE as its text. The text of
+    every call, those after a tool call included, is yielded as it streams:
+    tests/unit/web_assistant/test_tool_use.py::TestToolUseLoop::test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk
     """
     messages = list(request["messages"])
     for _ in range(MAX_TOOL_ITERATIONS):
