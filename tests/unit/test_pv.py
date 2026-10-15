@@ -11,11 +11,13 @@ import pvlib
 import pytest
 from solar_challenge.location import Location
 from solar_challenge.pv import (
+    DEFAULT_CEC_MODULE,
     CecInverter,
     PVConfig,
     apply_degradation,
     calculate_degradation_factor,
     candidate_cec_inverters,
+    cec_module_params,
     create_model_chain,
     create_model_chain_picking_from,
     create_pv_system,
@@ -263,6 +265,36 @@ class TestCECLibraryReuse:
             assert efficiency == pytest.approx(config.inverter_efficiency), (
                 f"a system configured at {config.inverter_efficiency} runs its inverter "
                 f"at Paco/Pdco = {efficiency:.4f}"
+            )
+
+
+class TestTheDefaultModuleIsANamedCecLibraryRow:
+    """A PVConfig without custom_module_params wires the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names; cec_module_params reads a row by name."""
+
+    def test_a_default_system_wires_the_row_default_cec_module_names(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        system = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        for array in system.arrays:
+            pd.testing.assert_series_equal(
+                pd.Series(array.module_parameters),
+                cec_module_library[DEFAULT_CEC_MODULE],
+                check_names=False,
+            )
+
+    def test_cec_module_params_is_the_named_row_of_pvlibs_cec_module_library(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        for name in (
+            DEFAULT_CEC_MODULE,
+            cec_module_library.columns[0],
+            cec_module_library.columns[-1],
+        ):
+            pd.testing.assert_series_equal(
+                pd.Series(cec_module_params(name)),
+                cec_module_library[name],
+                check_names=False,
             )
 
 
@@ -765,6 +797,12 @@ def overcast_january_daytime() -> pd.DataFrame:
         {"ghi": diffuse, "dni": 0, "dhi": diffuse, "temp_air": 5, "wind_speed": 2},
         index=index,
     )
+
+
+@pytest.fixture(scope="module")
+def cec_module_library() -> pd.DataFrame:
+    """pvlib's CEC module library, read once for the module's tests."""
+    return pvlib.pvsystem.retrieve_sam("CECMod")
 
 
 class TestInverterMatchesStringVoltage:
