@@ -6,6 +6,8 @@ These tests enforce that:
    ``-m 'not slow'``.
 3. Specific network-touching unit-test classes are also deselected under
    ``-m 'not slow'``, while pure-logic unit-test classes remain selected.
+4. Every test in OFFLINE_INTEGRATION_FILES, the integration modules that run
+   offline from a seeded weather cache, stays selected under ``-m 'not slow'``.
 
 All assertions run pytest in a subprocess so they reflect the *effective*
 pytest configuration, not just TOML parsing.  These tests must NOT be marked
@@ -19,6 +21,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests._lane_collection import suite_node_ids_matching
+
 # Repo root is three levels up from tests/unit/this_file.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,6 +37,11 @@ INTEGRATION_FILES = [
     "tests/integration/test_tariff_integration.py",
     "tests/integration/test_ev_fleet.py",
     "tests/integration/test_pv_performance_ratio.py",
+]
+
+# Integration modules that run offline from a seeded weather cache, so the verify must run every test in them.
+OFFLINE_INTEGRATION_FILES = [
+    "tests/integration/test_fleet_simulation.py",
 ]
 
 
@@ -134,6 +145,18 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
             f"but got {filtered.returncode}. One or more integration test "
             "classes is missing the ``@pytest.mark.slow`` decorator.\n"
             f"stdout:\n{filtered.stdout}\nstderr:\n{filtered.stderr}"
+        )
+
+
+class TestOfflineIntegrationFilesKeptUnderNotSlow:
+    """Verify that ``-m 'not slow'`` keeps every test of the integration modules that run offline."""
+
+    @pytest.mark.parametrize("path", OFFLINE_INTEGRATION_FILES)
+    def test_no_test_is_marked_slow(self, path: str) -> None:
+        slow = suite_node_ids_matching(REPO_ROOT, path, "slow")
+        assert not slow, (
+            f"{len(slow)} tests in {path} are marked slow, so the verify's ``-m 'not slow and not e2e'`` "
+            f"never runs them, though they run offline from a seeded weather cache: {list(slow)}"
         )
 
 
