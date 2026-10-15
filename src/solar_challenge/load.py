@@ -377,7 +377,6 @@ def _try_richardsonpy_profile(
         return scale_profile_to_energy(profile, target_window_kwh)
 
     except Exception as exc:  # noqa: BLE001
-        # Defensive fallback: any richardsonpy runtime error → Elexon profile.
         # Log a warning so the fallback is observable; a silent fallback would
         # hide API-mismatch regressions in production (only unit tests, via the
         # call-count assertions, would catch the silent degradation).
@@ -402,8 +401,9 @@ def generate_load_profile(
     Uses the windowed richardsonpy stochastic model when config.use_stochastic
     is True (the default).  richardsonpy is a hard dependency so this path is
     always available.  Falls back to the deterministic Elexon Profile Class 1
-    shape only when use_stochastic=False, or defensively if richardsonpy raises
-    a runtime error.
+    shape only when use_stochastic=False, or defensively if the stochastic
+    profile cannot be built: richardsonpy raises a runtime error, or its window
+    has no energy to scale.
 
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption using seasonal factors.
