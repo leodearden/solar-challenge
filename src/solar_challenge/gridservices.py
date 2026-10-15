@@ -73,17 +73,9 @@ class GridServicesRateBand:
         """Validate non-negativity.
 
         .. note::
-            This class intentionally raises ``ValueError`` rather than
-            ``ConfigurationError`` (unlike :class:`EventWindow` and
-            :class:`GridServicesEventsConfig`).  The module constant
-            :data:`GRID_SERVICES_RATE_BANDS` is constructed at *import time*
-            before ``config.py`` has necessarily been loaded, so importing
-            ``ConfigurationError`` inside ``__post_init__`` here would
-            re-introduce the import cycle this module was designed to avoid.
-            Callers that parse user-supplied rates through a config dict
-            receive errors wrapped as ``ConfigurationError`` by the
-            :func:`~solar_challenge.config.parse_finance_config` layer.
-            This mirrors the convention in :class:`~solar_challenge.flex.FlexibilityValueBand`.
+            For now this class intentionally raises ``ValueError`` rather than
+            ``ConfigurationError``, as :class:`~solar_challenge.flex.FlexibilityValueBand`
+            does; docs/prds/errors-leaf.md (contract C4) plans the conversion of both.
         """
         if self.availability_gbp_per_kw_per_event < 0:
             raise ValueError(
