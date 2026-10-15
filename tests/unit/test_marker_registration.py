@@ -6,8 +6,9 @@ These tests enforce that:
    ``-m 'not slow'``.
 3. Specific network-touching unit-test classes are also deselected under
    ``-m 'not slow'``, while pure-logic unit-test classes remain selected.
-4. Every test in OFFLINE_INTEGRATION_FILES, the integration modules that run
-   offline from a seeded weather cache, stays selected under ``-m 'not slow'``.
+4. The verify's mark expression selects every test in OFFLINE_INTEGRATION_FILES,
+   the integration modules that run offline from a seeded weather cache, and at
+   least one in each.
 
 All assertions run pytest in a subprocess so they reflect the *effective*
 pytest configuration, not just TOML parsing.  These tests must NOT be marked
@@ -42,6 +43,9 @@ OFFLINE_INTEGRATION_FILES = [
     "tests/integration/test_fleet_simulation.py",
     "tests/integration/test_ev_fleet.py",
 ]
+
+# The mark expression of the verify's test_command in dark-factory-orchestrator.yaml.
+VERIFY_MARK_EXPRESSION = "not slow and not e2e"
 
 
 class TestMarkerRegistration:
@@ -147,15 +151,20 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
         )
 
 
-class TestOfflineIntegrationFilesKeptUnderNotSlow:
-    """Verify that ``-m 'not slow'`` keeps every test of the integration modules that run offline."""
+class TestOfflineIntegrationFilesSelectedByTheVerify:
+    """Verify that the verify's mark expression selects every test of the integration modules that run offline."""
 
     @pytest.mark.parametrize("path", OFFLINE_INTEGRATION_FILES)
-    def test_no_test_is_marked_slow(self, path: str) -> None:
-        slow = suite_node_ids_matching(REPO_ROOT, path, "slow")
-        assert not slow, (
-            f"{len(slow)} tests in {path} are marked slow, so the verify's ``-m 'not slow and not e2e'`` "
-            f"never runs them, though they run offline from a seeded weather cache: {list(slow)}"
+    def test_the_verify_selects_every_test(self, path: str) -> None:
+        dropped = suite_node_ids_matching(REPO_ROOT, path, f"not ({VERIFY_MARK_EXPRESSION})")
+        assert not dropped, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` drops {len(dropped)} of the tests in {path}, "
+            f"though they run offline from a seeded weather cache: {list(dropped)}"
+        )
+        selected = suite_node_ids_matching(REPO_ROOT, path, VERIFY_MARK_EXPRESSION)
+        assert selected, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` selects no test in {path}, "
+            "so the check that it drops none holds vacuously"
         )
 
 
