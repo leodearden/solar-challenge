@@ -34,7 +34,6 @@ INTEGRATION_FILES = [
     "tests/integration/test_dispatch_strategies.py",
     "tests/integration/test_tou_dispatch.py",
     "tests/integration/test_tariff_integration.py",
-    "tests/integration/test_ev_fleet.py",
     "tests/integration/test_pv_performance_ratio.py",
 ]
 
