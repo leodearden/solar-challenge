@@ -415,11 +415,8 @@ def financial_breakdown(results: SimulationResults) -> str:
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
-    The line is the running total of each day's import cost less its export
-    revenue: the run's net cost to date, so it ends at the run's
-    SummaryStatistics.net_cost_gbp, to the penny. It is a cost, not the
-    finance layer's saving against a no-solar baseline
-    (finance.BillBreakdown.saving_vs_baseline_gbp).
+    The line is the run's net cost to date: the running total of each day's
+    import cost less its export revenue.
 
     The chart carries a note exactly when the run's import is not priced: its
     tariff rate is zero throughout, as for a run simulated without a tariff.
