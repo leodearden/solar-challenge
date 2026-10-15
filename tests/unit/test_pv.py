@@ -263,6 +263,12 @@ class TestCECLibraryReuse:
 class TestTheDefaultModuleIsANamedCecLibraryRow:
     """A PVConfig without custom_module_params wires the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names; cec_module_params reads a row by name."""
 
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_module_library(cls) -> pd.DataFrame:
+        """pvlib's CEC module library, read once for this class's tests."""
+        return pvlib.pvsystem.retrieve_sam("CECMod")
+
     def test_a_default_system_wires_the_row_default_cec_module_names(
         self, cec_module_library: pd.DataFrame
     ) -> None:
@@ -796,12 +802,6 @@ def overcast_january_daytime() -> pd.DataFrame:
         {"ghi": diffuse, "dni": 0, "dhi": diffuse, "temp_air": 5, "wind_speed": 2},
         index=index,
     )
-
-
-@pytest.fixture(scope="module")
-def cec_module_library() -> pd.DataFrame:
-    """pvlib's CEC module library, read once for the module's tests."""
-    return pvlib.pvsystem.retrieve_sam("CECMod")
 
 
 class TestInverterMatchesStringVoltage:
