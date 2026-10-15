@@ -2,9 +2,9 @@
 
 Two contracts are pinned here:
 
-* ``TariffConfig.get_rate`` sits on the per-minute hot path of every
-  time-of-use simulation, so a period must parse its start and end strings
-  when it is built, not on every call.
+* ``get_start_time`` and ``get_end_time`` return the same parsed
+  ``datetime.time`` object on every call. A re-parse would hand back an equal
+  but different object, because ``datetime.time`` objects are not interned.
 * The parsed times are a derived cache, not part of a period's identity. They
   must stay out of ``dataclasses.fields()``: field-driven serialisers (the
   JSON run storage in ``web/storage.py``, ``dataclasses.asdict``) cannot
@@ -37,7 +37,7 @@ def _pickle_round_trip(period: TariffPeriod) -> TariffPeriod:
 
 
 class TestTimesAreParsedOnce:
-    """A period pays the HH:MM parsing cost at construction, never per call."""
+    """The accessors parse each HH:MM string once and return that same object."""
 
     def test_accessors_return_the_same_parsed_time_object_every_call(self) -> None:
         period = _off_peak_period()
