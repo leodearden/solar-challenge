@@ -5,8 +5,8 @@ that a class on the same element declares in a stylesheet base.html links.
 An inline declaration beats every stylesheet declaration without !important, so the
 class's declaration of that property is dead on the element, and the property has two
 sources of truth. Task 232 found .chart-container's width and min-height overridden by
-the inline style on every chart div the dashboard drew. tests/_css_classes.py lists what
-counts as a declaration and the known gaps, each of which makes this guard miss an
+the inline style on every element that carried the class. tests/_css_classes.py lists
+what counts as a declaration and the known gaps, each of which makes this guard miss an
 override.
 """
 
