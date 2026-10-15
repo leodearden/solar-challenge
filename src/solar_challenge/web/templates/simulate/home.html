@@ -438,7 +438,7 @@ document.addEventListener('alpine:init', () => {
 
     <!-- Error display -->
     <template x-if="errorMsg">
-        <div class="mt-4 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
+        <div role="alert" class="mt-4 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
             <span x-text="errorMsg"></span>
         </div>
     </template>
