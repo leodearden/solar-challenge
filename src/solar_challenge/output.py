@@ -519,7 +519,7 @@ def generate_community_report(
 | Discharged | {m.battery_discharge_kwh:.2f} |
 """
 
-    # Community Billing section — only when VNM billing was computed (task ε / #34)
+    # Community Billing section — only when simulate_community priced the grid flows
     if community_results.community_savings_gbp is not None:
         report += f"""
 ## Community Billing (£)
@@ -559,8 +559,6 @@ def generate_finance_report(
 
     When ``bill_spreadsheet`` is provided the report includes side-by-side
     Physics vs Spreadsheet columns (the ``--assumptions both`` surface).
-    The δ-owned scaffold; η extends it additively with a project-economics
-    block.
 
     Args:
         bill_physics: BillDistribution from the physics self-consumption path.
@@ -570,17 +568,16 @@ def generate_finance_report(
         economics: Optional :class:`~solar_challenge.finance.ProjectEconomics`
             from :func:`~solar_challenge.finance.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
-            bill block.  ``None`` (default) reproduces the δ output exactly.
+            bill block; ``None`` (default) omits it.
         cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
             from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
-            provided, a ``## Cost-Recovery Analysis`` block is appended (CR5).
-            ``None`` (default) reproduces the existing output exactly.
+            provided, a ``## Cost-Recovery Analysis`` block is appended;
+            ``None`` (default) omits it.
         flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`
             from :func:`~solar_challenge.flex.resolve_flex_band`; when provided,
             a ``## Flexibility Value (per battery home)`` block is appended
             showing the per-battery-home time-shift saving and grid-services
-            figures for the named band (W1 γ).  ``None`` (default) reproduces
-            the existing output exactly (additive; bit-identical default).
+            figures for the named band; ``None`` (default) omits it.
         flex_band_name: Optional human-readable label for the flexibility band
             (e.g. ``"central"``); used in the report header.  Ignored when
             ``flex_band`` is ``None``.
@@ -590,9 +587,8 @@ def generate_finance_report(
             when provided (and ``flex_band`` is also set), renders a
             "Grid services (capacity-at-events)" sub-section inside the
             flexibility-value block showing the event-derived annual fleet
-            income and per-event available capacity.  ``None`` (default)
-            reproduces the existing output exactly (additive; bit-identical
-            default).
+            income and per-event available capacity; ``None`` (default)
+            omits it.
 
     Returns:
         A markdown-formatted finance report string.
@@ -606,7 +602,7 @@ def generate_finance_report(
     rep = bill_physics.representative
 
     if bill_spreadsheet is None:
-        # ---- Physics-only path (CR3: own-use payment + total outlay; no SEG) --
+        # ---- Physics-only path (own-use payment + total outlay; no SEG) --
         report = f"""{title}
 
 ## Householder Bill (Physics Assumptions)
@@ -633,7 +629,7 @@ def generate_finance_report(
 | Max | £{bill_physics.max_gbp:.2f} |
 """
     else:
-        # ---- Physics vs Spreadsheet side-by-side (CR3) --------------------
+        # ---- Physics vs Spreadsheet side-by-side --------------------
         rep_s = bill_spreadsheet.representative
         report = f"""{title}
 
@@ -661,7 +657,7 @@ def generate_finance_report(
 | Max | £{bill_physics.max_gbp:.2f} | £{bill_spreadsheet.max_gbp:.2f} |
 """
 
-    # ---- Optional project-economics block (η) --------------------------------
+    # ---- Optional project-economics block --------------------------------
     if economics is not None:
         # Format IRR: NaN → "n/a"
         if math.isnan(economics.equity_irr):
@@ -699,7 +695,7 @@ def generate_finance_report(
 | Payback | {payback_str} |
 """
 
-    # ---- Optional cost-recovery block (CR5) ----------------------------------
+    # ---- Optional cost-recovery block ----------------------------------
     if cost_recovery is not None:
         # Human-readable binding/feasibility label
         if cost_recovery.binding == "floor":
@@ -731,7 +727,7 @@ def generate_finance_report(
 | Max | £{cr.outlay.max_gbp:.2f} |
 """
 
-    # ---- Optional flexibility-value block (W1 γ) ----------------------------
+    # ---- Optional flexibility-value block ----------------------------
     if flex_band is not None:
         band_label = flex_band_name if flex_band_name else "—"
         report += f"""
@@ -750,7 +746,7 @@ Time-shift basis: net import-cost reduction (off-peak charge cost captured in
 grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
 (PRD §6).*
 """
-        # ε: optional capacity-at-events sub-section (additive; None → bit-identical)
+        # Optional capacity-at-events sub-section
         if grid_services_at_events is not None:
             _avail_kw = sum(grid_services_at_events.per_window_avail_kw)
             report += f"""
@@ -766,7 +762,7 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
 
 
 # ---------------------------------------------------------------------------
-# generate_config_ranking_report  (W3 task E, PRD §3.6 / §10-E)
+# generate_config_ranking_report
 # ---------------------------------------------------------------------------
 
 # Human-readable binding/feasibility label map (reused from generate_finance_report).
@@ -796,7 +792,7 @@ def generate_config_ranking_report(
     ranked: "RankedSweep",
     panel: "Optional[SensitivityPanel]" = None,
 ) -> str:
-    """Generate the W3 board-readable config-ranking report.
+    """Generate the board-readable config-ranking report.
 
     Renders two markdown tables and an optional sensitivity section:
 
@@ -813,9 +809,7 @@ def generate_config_ranking_report(
       :class:`~solar_challenge.optimize.ConfigPoint` objects without baseline
       economics; they remain visible in Table 1's infeasible list.
     - **Sensitivity section** (rendered only when ``panel`` is not ``None``):
-      per-axis sub-tables and the panel-level ``rank_stability``.  When
-      ``panel`` is ``None`` the output is bit-identical to the two-table form,
-      mirroring :func:`generate_finance_report`'s additive-optional idiom.
+      per-axis sub-tables and the panel-level ``rank_stability``.
 
     Args:
         ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
@@ -899,9 +893,6 @@ def generate_config_ranking_report(
             )
 
     # ---- Optional sensitivity section ----------------------------------------
-    # Rendered only when panel is not None.  When panel is None the output is
-    # bit-identical to the two-table form, mirroring generate_finance_report's
-    # additive-optional idiom (economics/cost_recovery/flex_band=None behaviour).
     if panel is not None:
         report += "\n## Sensitivity Analysis\n\n"
         report += f"Rank stability: **{panel.rank_stability:.1%}** "
