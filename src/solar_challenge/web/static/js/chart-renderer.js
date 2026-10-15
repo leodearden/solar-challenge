@@ -5,8 +5,8 @@
  *
  * Charts are drawn in the theme's colours (AC9), and each drawn chart is
  * recoloured on theme-changed once it is shown (AC10): at once if it is, else
- * when its tab is next shown. A chart that cannot be drawn, whether its
- * drawing fails at once or after Plotly.newPlot returns, logs a console error
+ * when its tab is next shown. A chart that cannot be drawn or recoloured,
+ * whether Plotly fails at once or after it returns, logs a console error
  * naming its container's id, and the page's other charts still draw.
  *
  * Plotly must load first.
@@ -46,9 +46,9 @@
         };
     }
 
-    /** Layout overrides for the active theme. */
-    function _themeOverrides() {
-        return _isDark() ? _darkOverrides() : _lightOverrides();
+    /** Layout overrides for dark mode if dark is true, else for light mode. */
+    function _themeOverrides(dark) {
+        return dark ? _darkOverrides() : _lightOverrides();
     }
 
     /**
@@ -91,24 +91,43 @@
     }
 
     /**
-     * Draws the chart of container's figure. A throw, or a rejection of the
-     * promise Plotly.newPlot returns, logs one console error naming container.
+     * Calls plotlyCall, which throws or returns the promise of a Plotly call,
+     * and then onSuccess, if given, once that promise resolves. Either failure,
+     * a throw or a rejection, logs one console error naming the activity and
+     * the id of container.
+     */
+    function _attempt(container, activity, plotlyCall, onSuccess) {
+        new Promise(function (resolve) {
+            resolve(plotlyCall());
+        }).then(onSuccess, function (e) {
+            console.error('chart-renderer.js: failed to ' + activity + ' #' + container.id, e);
+        });
+    }
+
+    /**
+     * Draws the chart of container's figure in the active theme's colours. The
+     * theme-changed listener recolours only drawn charts, so a chart whose
+     * drawing finishes after a theme change is recoloured here.
      */
     function _draw(container) {
-        new Promise(function (resolve) {
+        var drawnDark = _isDark();
+        _attempt(container, 'draw the figure of', function () {
             var fig = JSON.parse(container.dataset.chartFigure);
-            var overrides = _themeOverrides();
-            resolve(Plotly.newPlot(container, fig.data, _applyOverrides(fig.layout || {}, overrides), SOLAR_CHART_CONFIG));
-        }).then(function () {
+            var layout = _applyOverrides(fig.layout || {}, _themeOverrides(drawnDark));
+            return Plotly.newPlot(container, fig.data, layout, SOLAR_CHART_CONFIG);
+        }, function () {
             _drawn.push(container);
-        }, function (e) {
-            console.error('chart-renderer.js: failed to draw the figure of #' + container.id, e);
+            if (_isDark() !== drawnDark) {
+                _recolourOnceShown.observe(container);
+            }
         });
     }
 
     /** Applies the active theme's overrides to the chart of container, which is drawn, and changes nothing else of it. */
     function _recolour(container) {
-        Plotly.relayout(container, _attributePaths(_themeOverrides()));
+        _attempt(container, 'recolour the chart of', function () {
+            return Plotly.relayout(container, _attributePaths(_themeOverrides(_isDark())));
+        });
     }
 
     /**
