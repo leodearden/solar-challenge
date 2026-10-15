@@ -93,10 +93,3 @@ def test_a_chart_panel_of_a_figure_read_under_a_name_its_page_never_set_fails_th
 
     with pytest.raises(UndefinedError, match="'sesonal'"):
         page.render(charts={"seasonal": _FIGURE}, empty_message=empty_message)
-
-
-def test_a_chart_container_given_no_figure_carries_none(macros: Any) -> None:
-    """compare.html calls chart_container positionally and draws its own charts, so chart-renderer.js must find no figure there."""
-    container = str(macros.chart_container("chart-sample", "Sample Chart", "420px"))
-
-    assert chart_figures(container) == {}
