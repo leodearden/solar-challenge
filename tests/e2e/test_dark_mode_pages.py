@@ -222,3 +222,72 @@ def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_wa
     power_flow_after = _layout_features(page, "chart-power-flow")
 
     assert (daily_balance_after, power_flow_after) == (daily_balance_before, power_flow_before)
+
+
+# A drawing that finishes late: from now on, each Plotly.newPlot paints its chart at once but holds the
+# promise chart-renderer.js waits for until the function this snippet returns is called.
+_HOLD_EVERY_DRAWING_UNTIL_RELEASED = """() => {
+    const newPlot = Plotly.newPlot;
+    const releases = [];
+    Plotly.newPlot = function () {
+        return newPlot.apply(this, arguments).then(chart => new Promise(resolve => releases.push(() => resolve(chart))));
+    };
+    return () => releases.forEach(release => release());
+}"""
+
+
+def test_toggling_the_theme_while_a_chart_is_still_drawing_recolours_it_once_the_drawing_finishes(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """chart-power-flow, painted in the starting theme but still drawing at the toggle, takes the toggled theme's colours once the drawing finishes.
+
+    The toggle recolours only the charts chart-renderer.js has finished drawing, so a chart still drawing at it must be recoloured once drawn.
+    """
+    run_id, _ = seeded_home_run
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
+    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    release_drawings = page.evaluate_handle(_HOLD_EVERY_DRAWING_UNTIL_RELEASED)
+
+    _show_tab(page, "Power Flow")
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    _toggle_theme(page)
+    release_drawings.evaluate("release => release()")
+
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+
+
+_FAILED_RECOLOURING = "the recolouring failed after Plotly.relayout returned"
+_REJECT_THE_RECOLOURING_OF = """([chartId, failure]) => {
+    const relayout = Plotly.relayout;
+    Plotly.relayout = function (container) {
+        if (container.id === chartId) return Promise.reject(new Error(failure));
+        return relayout.apply(this, arguments);
+    };
+}"""
+
+
+def test_a_chart_whose_recolouring_fails_after_plotly_relayout_returns_logs_one_error_naming_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Plotly.relayout returns a promise, which rejects when a recolouring fails; that failure is one error naming the chart, not an uncaught rejection."""
+    run_id, _ = seeded_home_run
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
+    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    page.evaluate(_REJECT_THE_RECOLOURING_OF, ["chart-daily-balance", _FAILED_RECOLOURING])
+
+    with page.expect_console_message(lambda message: "chart-daily-balance" in message.text, timeout=5_000):
+        _toggle_theme(page)
+
+    errors_naming_the_chart = [error for error in page_errors if "chart-daily-balance" in error]
+    uncaught_failures = [
+        error for error in page_errors if _FAILED_RECOLOURING in error and "chart-daily-balance" not in error
+    ]
+    assert (len(errors_naming_the_chart), uncaught_failures) == (1, []), (
+        f"expected one error naming 'chart-daily-balance' and no other carrying {_FAILED_RECOLOURING!r}, "
+        f"but the page logged: {page_errors}"
+    )
