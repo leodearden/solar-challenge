@@ -171,7 +171,7 @@ def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_i
 ) -> None:
     """chart-power-flow, drawn and then hidden with its tab, takes the toggled theme's colours once its tab is shown again.
 
-    The shown tab's chart-daily-balance takes them at the toggle.
+    The shown tab's chart-daily-balance, drawn in the starting theme, takes them at the toggle.
     """
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", starting_theme)
@@ -181,6 +181,7 @@ def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_i
 
     _show_tab(page, "Overview")
     expect(page.locator("#chart-power-flow")).to_be_hidden()
+    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
 
     _toggle_theme(page)
     expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
