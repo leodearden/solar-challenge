@@ -51,7 +51,7 @@ The YAML twin `simulation-window-and-cadence.capability-manifest.yaml` carries t
 | The engine takes a cadence parameter | `grep:flow.py::simulate_timestep` / `simulate_timestep_tou` `timestep_minutes: float = 1.0`; `grep:battery.py::Battery.charge` / `discharge` `duration_minutes` | PASS |
 | `simulate_home` feeds it a literal | `grep:home.py::simulate_home` `timestep_minutes=1.0` (×2), `minute_kwh_to_kw = 1 / HOURS_PER_MINUTE` | PASS |
 | B10 rejection: `simulate_community` refuses an uneven index | `producer:α` (`of_index` raises on unevenness); `grep:community.py::simulate_community` and `_price_grid_flows` call `step_hours`, so γ1 routes both through `of_index` and observes the refusal on B2's index | PASS |
-| `load.calculate_annual_consumption` and heat-pump's degree-minute conversion integrate at a fixed minute | `grep:load.py::calculate_annual_consumption` `profile.sum() * HOURS_PER_MINUTE`; `grep:heat_pump.py::generate_heat_pump_load` `/ HOURS_PER_MINUTE` | PASS |
+| `load.energy_kwh` and heat-pump's degree-minute conversion integrate at a fixed minute | `grep:load.py::energy_kwh` `profile.sum() * HOURS_PER_MINUTE`; `grep:heat_pump.py::generate_heat_pump_load` `/ HOURS_PER_MINUTE` | PASS |
 
 ## γ2 — readers read the window; `step_hours` goes (leaf)
 
