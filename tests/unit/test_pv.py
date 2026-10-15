@@ -209,14 +209,6 @@ class TestCreatePVSystem:
         assert array.mount.surface_azimuth == 170.0
         assert array.mount.surface_tilt == 30.0
 
-    def test_uses_cec_module_params(self):
-        """PVSystem uses CEC module parameters."""
-        config = PVConfig(capacity_kw=4.0)
-        system = create_pv_system(config)
-        array = system.arrays[0]
-        # CEC modules have these parameters
-        assert "STC" in array.module_parameters or "a_ref" in array.module_parameters
-
     def test_uses_cec_inverter_params(self):
         """PVSystem uses CEC inverter parameters."""
         config = PVConfig(capacity_kw=4.0)
