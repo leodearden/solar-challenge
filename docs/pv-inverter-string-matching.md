@@ -63,9 +63,9 @@ In outline:
   4328.13 kWh, as `simulate_home` does over a whole year. A producing hour has sunlight
   on the cells. Counting `p_mp > 0` instead would add 518 night hours, where the diode
   solver leaves about 1e-43 W.
-- **Module.** The representative CEC module: 400.428 W at STC, `V_mp_ref` 44.1 V,
-  `V_oc_ref` 53.4 V, `beta_oc` −0.147064 V/K. The CEC library has no V_mp temperature
-  coefficient.
+- **Module.** The default CEC module, `Canadian_Solar_Inc__CS1U_400MS`
+  (`pv.DEFAULT_CEC_MODULE`): 400.428 W at STC, `V_mp_ref` 44.1 V, `V_oc_ref` 53.4 V,
+  `beta_oc` −0.147064 V/K. The CEC library has no V_mp temperature coefficient.
 - **Sizing.** Each configuration gets its inverter and wiring from pv.py's own
   selection. An alternative sizing in §4 divides every catalogue `Mppt_high` by its
   factor before that selection runs, which is the same check as multiplying the string
