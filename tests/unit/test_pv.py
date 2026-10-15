@@ -297,6 +297,13 @@ class TestTheDefaultModuleIsANamedCecLibraryRow:
                 check_names=False,
             )
 
+    def test_a_name_with_no_row_in_pvlibs_cec_module_library_is_refused(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape("pvlib's CECMod library has no row named 'Not a CEC module'"),
+        ):
+            cec_module_params("Not a CEC module")
+
 
 class TestCreateModelChain:
     """Test PV-003: pvlib ModelChain creation."""
@@ -1030,10 +1037,7 @@ class TestPickingFromGivenCandidates:
         """The system takes the picked inverter's parameters from that row."""
         with pytest.raises(
             ValueError,
-            match=re.escape(
-                "A CEC inverter must name a row in pvlib's CECInverter library, "
-                "got 'Not a CEC inverter'"
-            ),
+            match=re.escape("pvlib's CECInverter library has no row named 'Not a CEC inverter'"),
         ):
             dataclasses.replace(other, name="Not a CEC inverter")
 
