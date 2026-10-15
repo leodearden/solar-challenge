@@ -1,6 +1,7 @@
 """Integration tests for fleet simulation.
 
-These tests make real PVGIS API calls and may be slow.
+The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
+Each fleet runs in this process (parallel=False); tests/unit/test_fleet.py covers the worker pool.
 VAL-006: Integration test for fleet simulation
 """
 
@@ -18,9 +19,34 @@ from solar_challenge.fleet import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
+from tests._synthetic_weather import synthetic_june_weather
+
+_FIRST_DAY = pd.Timestamp("2024-06-21")
+_SEEDED_DAYS = 7
 
 
-@pytest.mark.slow
+@pytest.fixture
+def bristol_june_tmy(weather_cache: WeatherCache) -> None:
+    """Serve _SEEDED_DAYS clear June days from _FIRST_DAY as Bristol's TMY, the location of every home these tests simulate."""
+    weather_cache.put(
+        synthetic_june_weather(_FIRST_DAY, irradiance_scale_per_day=(1.0,) * _SEEDED_DAYS),
+        "tmy",
+        Location.bristol(),
+    )
+
+
+def _simulate_june_days(config: FleetConfig, days: int) -> FleetResults:
+    """The fleet simulated in this process over the first *days* seeded days, with every minute's energy balance validated."""
+    assert 1 <= days <= _SEEDED_DAYS, (
+        f"a {days}-day window outruns the {_SEEDED_DAYS} days bristol_june_tmy seeds; a day it does not seed has no sun"
+    )
+    return simulate_fleet(
+        config, _FIRST_DAY, _FIRST_DAY + pd.Timedelta(days=days - 1), validate_balance=True, parallel=False
+    )
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestFleetSimulation:
     """Test VAL-006: Integration test for fleet simulation."""
@@ -59,10 +85,7 @@ class TestFleetSimulation:
 
     def test_simulates_10_homes_for_7_days(self, heterogeneous_fleet_config):
         """Simulates 10 homes for 7 days successfully."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")  # 7 days
-
-        results = simulate_fleet(heterogeneous_fleet_config, start, end)
+        results = _simulate_june_days(heterogeneous_fleet_config, 7)
 
         # Verify 10 homes simulated
         assert len(results) == 10
@@ -70,25 +93,21 @@ class TestFleetSimulation:
 
     def test_per_home_results_accessible(self, heterogeneous_fleet_config):
         """Per-home results are accessible by index."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")  # 3 days for speed
-
-        results = simulate_fleet(heterogeneous_fleet_config, start, end)
+        days = 3
+        results = _simulate_june_days(heterogeneous_fleet_config, days)
 
         # Access each home's results
         for i in range(10):
             home_results = results[i]
-            assert len(home_results.generation) == 3 * 1440  # 3 days of minutes
-            assert len(home_results.demand) == 3 * 1440
+            assert len(home_results.generation) == days * 1440
+            assert len(home_results.demand) == days * 1440
             assert (home_results.generation >= 0).all()
             assert (home_results.demand >= 0).all()
 
     def test_fleet_aggregates_calculated(self, uniform_fleet_config):
         """Fleet aggregates are calculated correctly."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")  # 2 days for speed
-
-        results = simulate_fleet(uniform_fleet_config, start, end)
+        days = 2
+        results = _simulate_june_days(uniform_fleet_config, days)
 
         # Verify aggregate properties
         total_gen = results.total_generation
@@ -98,7 +117,7 @@ class TestFleetSimulation:
         total_self = results.total_self_consumption
 
         # All should be series with correct length
-        expected_len = 2 * 1440
+        expected_len = days * 1440
         assert len(total_gen) == expected_len
         assert len(total_demand) == expected_len
         assert len(total_import) == expected_len
@@ -111,15 +130,13 @@ class TestFleetSimulation:
 
     def test_fleet_summary_statistics(self, heterogeneous_fleet_config):
         """Fleet summary statistics are calculated correctly."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")  # 7 days
-
-        results = simulate_fleet(heterogeneous_fleet_config, start, end)
+        days = 7
+        results = _simulate_june_days(heterogeneous_fleet_config, days)
         summary = calculate_fleet_summary(results)
 
         assert isinstance(summary, FleetSummary)
         assert summary.n_homes == 10
-        assert summary.simulation_days == 7
+        assert summary.simulation_days == days
 
         # Totals should be positive
         assert summary.total_generation_kwh > 0
@@ -136,13 +153,8 @@ class TestFleetSimulation:
 
     def test_no_errors_or_warnings(self, heterogeneous_fleet_config):
         """Simulation completes without errors."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")
-
         # This should complete without raising any exceptions
-        results = simulate_fleet(
-            heterogeneous_fleet_config, start, end, validate_balance=True
-        )
+        results = _simulate_june_days(heterogeneous_fleet_config, 3)
 
         # All homes should have valid results
         for i in range(len(results)):
@@ -155,14 +167,12 @@ class TestFleetSimulation:
 
     def test_aggregate_dataframe_output(self, uniform_fleet_config):
         """Fleet aggregate DataFrame is generated correctly."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-
-        results = simulate_fleet(uniform_fleet_config, start, end)
+        days = 1
+        results = _simulate_june_days(uniform_fleet_config, days)
         df = results.to_aggregate_dataframe()
 
         assert isinstance(df, pd.DataFrame)
-        assert len(df) == 1440  # 1 day of minutes
+        assert len(df) == days * 1440
         assert "generation_kw" in df.columns
         assert "demand_kw" in df.columns
         assert "self_consumption_kw" in df.columns
@@ -171,10 +181,7 @@ class TestFleetSimulation:
 
     def test_heterogeneous_configs_preserved(self, heterogeneous_fleet_config):
         """Different home configurations produce different results."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")
-
-        results = simulate_fleet(heterogeneous_fleet_config, start, end)
+        results = _simulate_june_days(heterogeneous_fleet_config, 3)
         summary = calculate_fleet_summary(results)
 
         # Heterogeneous fleet should have variation in per-home generation

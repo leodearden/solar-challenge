@@ -31,7 +31,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INTEGRATION_FILES = [
     "tests/integration/test_pvgis.py",
     "tests/integration/test_home_simulation.py",
-    "tests/integration/test_fleet_simulation.py",
     "tests/integration/test_dispatch_strategies.py",
     "tests/integration/test_tou_dispatch.py",
     "tests/integration/test_tariff_integration.py",
@@ -82,10 +81,10 @@ class TestMarkerRegistration:
 
 
 class TestIntegrationSuiteExcludedUnderNotSlow:
-    """Verify that all integration test classes are deselected by ``-m 'not slow'``."""
+    """Verify that every test in INTEGRATION_FILES is deselected by ``-m 'not slow'``."""
 
     def test_integration_suite_excluded_under_not_slow(self):
-        """No integration test should be collected under ``-m 'not slow'``.
+        """No test in INTEGRATION_FILES should be collected under ``-m 'not slow'``.
 
         This check is intentionally dynamic — it does not enumerate class names.
         Instead it verifies that the unfiltered collection finds *something*
