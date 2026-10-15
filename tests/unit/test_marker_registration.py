@@ -41,6 +41,7 @@ INTEGRATION_FILES = [
 # Integration modules that run offline from a seeded weather cache, so the verify must run every test in them.
 OFFLINE_INTEGRATION_FILES = [
     "tests/integration/test_fleet_simulation.py",
+    "tests/integration/test_ev_fleet.py",
 ]
 
 
