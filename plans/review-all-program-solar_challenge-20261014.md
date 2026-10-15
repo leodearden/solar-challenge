@@ -253,7 +253,7 @@ Deletable: Every transitional re-export or dual field a stream kept only until t
 | Stored-run format version and runs schema version (owner: storage/database; readers every loader) | S19 | every other stream that reads it |
 | Run type -> behaviour table (owner: storage.RunRecord; readers api, routes, templates, assistant) | S19 | every other stream that reads it |
 | SSE frame and event payload types (owner: one web module; readers assistant.js, progress-tracker.js, parameter-sweep.js) | S20 | every other stream that reads it |
-| Theme tokens (owner: one table; readers tailwind.config.js, chart-renderer.js, charts.py _AMBER) | S21 | every other stream that reads it |
+| Theme tokens (owner: static/src/theme-tokens.json; readers tailwind.config.js and charts.py; chart-renderer.js through the compiled theme, D39) | S21 | every other stream that reads it |
 | ChartPanel rendered by chart_container (owner: macros.html) | S21 | every other stream that reads it |
 | Benchmark constants (owner: load.py and validation.py; reader assistant.py) | S22 | every other stream that reads it |
 | FROZEN_SURFACE as the one home of the surface (owner: tests/_surface_forms.py; readers the merged test module, release notes) | S23 | every other stream that reads it |
@@ -618,6 +618,76 @@ Consequence that decided it: two run kinds with one loader table; no orphaned ru
 
 Keys: fk-2ac79d7a1989 fk-8f4f4d63f917 fk-81e62b2640a7
 
+### D34. Economy 7 / Economy 10 reference rates (S11 Q1) — ruled_by: human
+
+tariff.PRESET_RATES carries the web's rates, 0.13/0.35 (Economy 7) and the matching Economy 10 pair, closer to 2024 retail; the library's 0.09/0.25 and 0.08/0.27 defaults move to them, so every rate-less economy block's runs and the three board-facing scenarios move once their restatements go. The S11 PRD was written to the library default and is amended by the S11 decompose session.
+
+Options considered: library rates 0.09/0.25; web rates 0.13/0.35.
+
+Consequence that decided it: one reference set that matches retail; board scenarios re-price.
+
+Keys: fk-463e82417506
+
+### D35. task 195 (S14 Q1) — ruled_by: human
+
+Task 195, whose finished branch retires PVConfig.module_efficiency and temperature_coefficient against D14, is cancelled as superseded by the S14 PRD (x_superseded_by stamped on the S14 ζ leaf at decompose); escalations esc-195-2, esc-195-3 and esc-224-2 are closed as superseded; task 224 loses its dependency on 195.
+
+Options considered: cancel and dismiss; leave for Leo.
+
+Consequence that decided it: a branch contradicting D14 cannot merge by a stale escalation being resolved as moot.
+
+Keys: fk-f5cd69400ce6
+
+### D36. task 468 (S19) — ruled_by: human
+
+Task 468, architect-routed with a plan contradicting the run-store stream, is cancelled now with x_superseded_by the S19 PRD; 547, 355 and 614 are cancelled at S19's decompose.
+
+Options considered: cancel now; let it run.
+
+Consequence that decided it: no second owner of the runs table lands under the stream.
+
+Keys: (cross-cutting)
+
+### D37. theme token scope (S21 R1, ruled in the S21 /prd session, 2026-10-15) — ruled_by: human
+
+static/src/theme-tokens.json names the accent and every UI role that reuses amber today (warning banner, running status, PV component card), each a built-in Tailwind palette name, plus the chart hues and roles; templates switch amber-* to primary-* or role classes with no visual change; _AMBER_ROLES and its meta-tests are deleted.
+
+Options considered: accent only; role palettes.
+
+Consequence that decided it: one colour table for Tailwind and charts.
+
+Keys: fk-93ee9a05751a
+
+### D38. sweep chart (S21 R2) — ruled_by: human
+
+sweep_parameter_chart is kept and drawn server-side, the optimum chosen by each metric's direction; the Chart.js path is deleted.
+
+Options considered: Chart.js in the browser; server-side Plotly panel.
+
+Consequence that decided it: one renderer for every chart.
+
+Keys: fk-55f4e4ea396d
+
+### D39. chart chrome (S21 R3) — ruled_by: human
+
+chart-renderer.js holds no colour: it reads text and grid colours from the computed style of the chart container, whose classes name theme colours; figure backgrounds stay transparent. The program's seam row reads: theme tokens (owner static/src/theme-tokens.json; readers tailwind.config.js and charts.py; chart-renderer.js through the compiled theme).
+
+Options considered: tokens emitted to JS; computed style.
+
+Consequence that decided it: no second colour channel.
+
+Keys: fk-93ee9a05751a fk-8f26d000b68d
+
+### D40. fk-657669b23e71 accepted (S21 R4) — ruled_by: human
+
+The committed compiled stylesheet drifting is accepted as standing: D22 names the css-build lane job as the guard, the per-task sandbox cannot reach npm, and the lane has filed 2 reds since 2026-10-05 and none since the pin. Filed as a cancelled task carrying x_acceptance_reason at S21's decompose.
+
+Options considered: fix (an in-sandbox rebuild check); accept as standing.
+
+Consequence that decided it: an accepted disposition with an owner, re-verified next run.
+
+Keys: fk-657669b23e71
+
 ## Lead rulings on PRD open questions
 
 - L1 (S1; non-numeric input refusals (S1 lead Q1)): S4 converts the non-numeric ValueError refusals of the input types in the same edits as the numeric ones; invariant 1's test asserts the type; S17 depends on S4.
@@ -635,9 +705,20 @@ Keys: fk-2ac79d7a1989 fk-8f4f4d63f917 fk-81e62b2640a7
 - L13 (S15; get_tmy_data at the bump (Q1); cache-dir environment variable (Q2)): get_tmy_data is retired at the S29 bump in the held ε leaf (one public way to obtain weather); SOLAR_CHALLENGE_WEATHER_CACHE_DIR is confirmed as the one user-facing variable, read by WeatherCache() alone.
 - L14 (S19; pre-existing tasks 468, 547, 355, 614; S10 η vs contract C10): 547, 355 and 614 are cancelled with x_superseded_by at S19's decompose after the step-1 lookup; 468 is Leo's (D36). S10's held leaf 784 (SummaryStatistics.window required) gains a dependency on S19's stored-run migration leaf (contract C10), so no pre-existing run becomes unreadable; the S19 decompose session returns that leaf id and the lead adds the edge.
 - L15 (S2 decompose; cross-reference lines returned): S3's anchors drifted after task 710 (re-read before decomposing); the S11 tariff-clock arm leaf and S3's routing leaf each add_dependency on 790 (S2 ε); where the S2 PRD §10 says 'add no line', the leaves follow D29 instead.
+- L16 (S4; ordering against S5 (Q1); β after S14 ζ, γ after S11 α (Q2); S3 takes the engine checks (Q3); keys staying with 517 and 707 (Q4); invariant 1 premise (Q5)): All accepted: S5's partition depends on S4 α and S4 ε depends on S5's partition; β depends on S14 ζ and γ on S11 α (ι converts stragglers); S3's engine checks go through Interval.admits and depend on α, so fk-a9c609ecb8ef closes when S4 ι and S3 land; fk-5827f41eb082 stays with task 517 and fk-e79170280adf with 707, with the edge 707 -> α; invariant 1's checkable text becomes 'every input type' plus the reasoned classification of computed results.
+- L17 (S21; supersessions at decompose (Q1); R1-R4 numbering (Q2); task 454 (Q3); form-label macro (Q4); edges on 691 and 736 (Q5); seam wording (Q6)): Q1 all supersessions as listed (123, 135 -> η; 129, 456 -> δ; 492, 565, 575, 629 -> ζ; 628 -> ε; 735, 737 -> γ; 153's charts item -> δ, 153 stays for api.py). Q2: R1-R4 are D37-D40. Q3: Leo rules on closing esc-454-3; until then δ carries no edge on 454 and does the hoist itself. Q4: the form-label macro is offered to S18 (cross-reference). Q5: the edges on 691 and 736 stay (they serialise edits to chart-renderer.js). Q6: seam wording adopted in D39.
+- L18 (S24; setuptools floor under D23 (Q1)): Build requirements are outside uv.lock, so D23 has no referent for setuptools>=77.0.0: the declared floor stays and tests/unit/test_build_system.py is deleted with the other capability-claim tests.
+- L19 (S28; with_round_trip shape (Q1); transitional refusal (Q2); throughput unit (Q3); γ -> S19 κ edge (Q4)): Defaults accepted: with_round_trip is a method on a config; the transitional refusal ships in α; throughput is discharged energy, one cycle per usable capacity, and finance's accrual matches; the lead adds the γ -> S19 migration-leaf edge when S19 files.
+- L20 (S14; task 195 (Q1) and the escalation cluster): Done 2026-10-15: esc-195-3 closed with members esc-195-2 and esc-224-2 as superseded, task 195 cancelled with x_superseded_by_prd, task 224 no longer depends on 195 (D35). Task 468 cancelled (D36).
 
 ## Cross-reference lines applied by the lead
 
+- S5 (from S4): the config.py partition depends on S4 α (Interval and the checker at the package leaf); S4 ε depends on the partition; S5 moves nothing of ε or ζ.
+- S3 (from S4): the engine checks (dispatch, flow, battery) go through Interval.admits and depend on S4 α; fk-a9c609ecb8ef closes when S4 ι and S3 land.
+- S18 (from S21): the form-label macro is offered to S18; invariant 11 window half beside S11 γ.
+- S19 (from S28, S21): the S28 γ migration step and the S21 panel changes depend on the S19 format-version leaf; the lead adds the edges when S19 files.
+- S29 (from S4, S21, S24, S28): release section includes S28 (efficiency field retired, held), S4 (public checker names), S24 (raised floors are not surface) and S21 (none).
+- Tasks (from S21): 123, 135, 129, 456, 492, 565, 575, 629, 628, 735, 737 are superseded at S21 decompose; 153 keeps api.py; 691 and 736 keep their serialising edges.
 - S3 (from S2 decompose): anchors drifted after task 710; the routing leaf add_dependency on 790 (S2 ε) and on S11 β (tariff-clock arm); a tariff-clocked TOUOptimizedStrategy reproduces simulate_timestep_tou on bristol-arbitrage.yaml, so retiring the inline path is a routing change.
 - S11 (from S2 decompose): the tariff-clock arm leaf add_dependency on 790; S11 β makes TOUOptimizedStrategyConfig.peak_hours optional and adds the flat-tariff grid-charging refusal; S11 δ adds ev.require_tariff_for_smart_charging to the HomeConfig.__post_init__ S2 β creates; the decompose adds edge 230 -> S11 α.
 - S12 (from S11): owns solar-mode EV charging following the home PV series, taking the solar half of fk-bd03fe349ffd; the EV contribution keeps receiving the home tariff.

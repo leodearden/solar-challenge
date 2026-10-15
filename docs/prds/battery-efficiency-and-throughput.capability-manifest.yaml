@@ -1,0 +1,154 @@
+# Machine-readable twin of battery-efficiency-and-throughput.capability-manifest.md
+# (review-all stream S28). task_id values stay null until commit_planning stamps them.
+# γ is held for S29 (x_seam_wait) and excluded from this batch's commit_planning.
+# Code anchors verified against main 9625529565087fb3405efa390cc1c55049b26ce0 (2026-10-15); checks are pattern-anchored.
+prd: docs/prds/battery-efficiency-and-throughput.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "Round-trip efficiency is a constructor, and every reader builds through it"
+    capabilities:
+      - name: "with-round-trip-defined"
+        binding: "delivered by α; absent on main (grep: no with_round_trip in src)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def with_round_trip\\("
+          paths: ["src/solar_challenge/battery.py"]
+          expect: present
+      - name: "split-rule-has-one-home"
+        binding: "grep: BatteryConfig.__post_init__ inlines math.sqrt(self.efficiency) twice on main; α moves it into _one_way_efficiency"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "math\\.sqrt\\(self\\.efficiency\\)"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "replace-caveat-deleted"
+        binding: "grep: BatteryConfig docstring's replace() caveat 'will not take effect' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "will not take effect"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "writer-writes-the-pair"
+        binding: "grep: scenario_writer._battery_block writes {\"efficiency\": battery.efficiency} when set on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"efficiency\": battery\\.efficiency"
+          paths: ["src/solar_challenge/scenario_writer.py"]
+          expect: absent
+      - name: "web-form-stops-setting-the-field"
+        binding: "grep: web/simulation_params._parse_battery sets settings[\"efficiency\"] on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "settings\\[\"efficiency\"\\]"
+          paths: ["src/solar_challenge/web/simulation_params.py"]
+          expect: absent
+      - name: "web-form-builds-through-with-round-trip"
+        binding: "delivered by α; the form's one BatteryConfig construction is _parse_battery"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.with_round_trip\\("
+          paths: ["src/solar_challenge/web/simulation_params.py"]
+          expect: present
+      - name: "surface-member-listed"
+        binding: "grep: the BatteryConfig member table (tests/unit/test_public_api_surface.py on main) holds nominal_usable_capacity_kwh and default_5kwh; D29 additive entry"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"with_round_trip\":"
+          paths: ["tests/"]
+          expect: present
+      - name: "consumer-guide-names-with-round-trip"
+        binding: "grep: docs/domain-library-consumption.md carries Unreleased-on-main lines and no with_round_trip on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "with_round_trip"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "both-forms-block-refused"
+        binding: "rejection-check: validate config on example-economy7.yaml + charge_efficiency beside efficiency exits 0 on main (absence observed); a ConfigurationError from _parse_battery_config surfaces as an ERROR row naming home.battery, exit 1 (observed with an unknown key)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI exit code and ERROR row asserted by α's own test (PRD §9 row 2); the refusal's code shape is tactical"
+      - name: "contradicting-efficiency-refused"
+        binding: "rejection-check: replace(BatteryConfig(5, efficiency=0.81), charge_efficiency=0.99) returns 0.9 silently on main (absence observed); replace(cfg, soh=0.7) re-passes exactly math.sqrt(0.81) (probed)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "raise and its message asserted by α's own test (PRD §9 row 6)"
+      - name: "configuration-error-is-a-value-error"
+        binding: "producer: task 774 (S1-β), upstream of α"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "delivered and checked by 774's own delivered check"
+  - label: "β"
+    task_id: null
+    title: "compute_soh counts one equivalent full cycle per usable capacity discharged"
+    capabilities:
+      - name: "efc-not-halved"
+        binding: "grep: compute_soh computes cumulative_throughput_kwh / (2.0 * usable_capacity_kwh) and its docstring says (2 * usable_capacity_kwh) on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "2(\\.0)? \\* usable_capacity_kwh"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "finance-doc-names-the-unit"
+        binding: "grep: no 'equivalent full cycle' in docs/cost-recovery-finance-model.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "equivalent full cycle"
+          paths: ["docs/cost-recovery-finance-model.md"]
+          expect: present
+      - name: "consumer-guide-names-compute-soh"
+        binding: "grep: no compute_soh in docs/domain-library-consumption.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "compute_soh"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "closed-form-values"
+        binding: "identity: compute_soh(12, 12000, 4, default) = 0.61 (main 0.685); project_multi_year with 800 kWh/yr on a 10 kWh battery, calendar 0.005, cycle 1e-4 = 1 - 0.015y within 1.1e-16 (main 1 - 0.01y); ran on a scratch tree"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "values asserted by β's closed-form test (PRD §9 rows 8-9)"
+  - label: "γ"
+    task_id: null
+    title: "Retire BatteryConfig.efficiency at the bump (held for S29)"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; excluded from this batch's commit_planning until S29 releases it. Also depends on S19 κ (stored-run step mechanism), added by the lead when S19 files."
+    capabilities:
+      - name: "field-retired"
+        binding: "grep: BatteryConfig declares efficiency: Optional[float] = None and documents it on main; producer α has moved every src construction off it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^\\s+efficiency:"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "frozen-signature-without-efficiency"
+        binding: "grep: the frozen BatteryConfig signature in tests/unit/test_public_api_surface.py names efficiency: float | None = None on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "[ (]efficiency: float [|] None = None"
+          paths: ["tests/"]
+          expect: absent
+      - name: "stored-runs-migrate"
+        binding: "producer: S19 κ (RunDocumentStep, strict reader) and ι (web migrate), upstream; queued prerequisite, not yet filed"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a pre-γ stored run loading after web migrate is asserted by γ's own test (PRD §9 row 10)"

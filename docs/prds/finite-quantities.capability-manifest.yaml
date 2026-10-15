@@ -1,0 +1,402 @@
+# Machine-readable twin of finite-quantities.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main 962552956508 (2026-10-15); checks are pattern-anchored.
+# task_id stays null until commit_planning stamps it. Every `absent` check's idiom was grepped present on main first.
+prd: docs/prds/finite-quantities.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "number_fields moves to the package leaf with intervals and ConfigurationError"
+    capabilities:
+      - name: "leaf-module-exists"
+        binding: "delivered by α (git mv from web/); absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["src/solar_challenge/number_fields.py"]
+          expect: present
+      - name: "web-copy-gone"
+        binding: "grep: src/solar_challenge/web/number_fields.py exists on main"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["src/solar_challenge/web/number_fields.py"]
+          expect: absent
+      - name: "no-importer-of-the-web-path"
+        binding: "grep: 20 references to solar_challenge.web.number_fields in src and tests on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "solar_challenge\\.web\\.number_fields"
+          paths: ["src/", "tests/"]
+          expect: absent
+      - name: "interval-is-a-value"
+        binding: "new in α (PRD §5.1)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class Interval\\b"
+          paths: ["src/solar_challenge/number_fields.py"]
+          expect: present
+      - name: "field-reader-exists"
+        binding: "new in α (PRD §5.1, N6)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def read_field\\("
+          paths: ["src/solar_challenge/number_fields.py"]
+          expect: present
+      - name: "readers-raise-configuration-error"
+        binding: "producer: 774 upstream (ConfigurationError(ValueError)); N4"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "raise ConfigurationError\\("
+          paths: ["src/solar_challenge/number_fields.py"]
+          expect: present
+      - name: "leaf-imports-only-errors-and-whole-numbers"
+        binding: "pattern of tests/unit/test_init_lazy_surface.py (-I subprocess, sys.modules); P1"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a sys.modules property observed in a subprocess by α's own test"
+  - label: "β"
+    task_id: null
+    title: "Component and fleet inputs read their numbers through the leaf"
+    capabilities:
+      - name: "location-altitude-idiom-replaced"
+        binding: "grep: `self.altitude < -500` in Location.__post_init__ on main (NaN passes)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.altitude < -500"
+          paths: ["src/solar_challenge/location.py"]
+          expect: absent
+      - name: "location-checks-time-zone"
+        binding: "probe: ZoneInfo('Europe/Londn') raises ZoneInfoNotFoundError; every zone in use resolves"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "zoneinfo"
+          paths: ["src/solar_challenge/location.py"]
+          expect: present
+      - name: "heat-pump-idiom-replaced"
+        binding: "grep: `self.thermal_capacity_kw <= 0` in HeatPumpConfig on main (NaN passes)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.thermal_capacity_kw <= 0"
+          paths: ["src/solar_challenge/heat_pump.py"]
+          expect: absent
+      - name: "ev-idiom-replaced"
+        binding: "grep: `self.required_charge_kwh <= 0` in EVConfig on main (NaN passes); EVConfig('7kW', 17.5) constructs (probe)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.required_charge_kwh <= 0"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: absent
+      - name: "ev-hours-read-as-whole-numbers"
+        binding: "producer: α (as_whole_number, read_field) upstream"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "read_field\\(self, \"arrival_hour\", as_whole_number"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: present
+      - name: "pv-capacity-read-through-the-leaf"
+        binding: "probe: PVConfig(capacity_kw=True) constructs on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "read_field\\(self, \"capacity_kw\""
+          paths: ["src/solar_challenge/pv.py"]
+          expect: present
+      - name: "battery-power-limit-delegates"
+        binding: "grep: `not 0 < kw < math.inf` in battery.require_valid_power_limit on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "not 0 < kw < math\\.inf"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "cli-refusals-named-not-traceback"
+        binding: "ran on main: validate config accepts capacity_kw true / thermal_capacity_kw .nan / altitude .nan / Europe/Londn; azimuth south tracebacks with TypeError"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI exit code and ERROR row judged by β's own CliRunner tests (C2, D1-D3)"
+  - label: "γ"
+    task_id: null
+    title: "Tariff, SEG, finance, grid-services, flexibility, community and install-point inputs read their numbers through the leaf"
+    capabilities:
+      - name: "seg-idiom-replaced"
+        binding: "grep: `self.rate_pence_per_kwh < 0` in SEGTariff on main; SEGTariff('x', nan) constructs (probe)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.rate_pence_per_kwh < 0"
+          paths: ["src/solar_challenge/seg.py"]
+          expect: absent
+      - name: "tariff-rate-read-through-the-leaf"
+        binding: "probe: TariffPeriod('00:00','00:00',nan) constructs on main; S11 α swaps the idiom first"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "read_field\\(self, \"rate_per_kwh\""
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: present
+      - name: "event-window-idioms-replaced"
+        binding: "grep: `self.event_hours <= 0` and `self.events_per_year <= 0` in EventWindow on main; validate config accepts event_hours .inf (ran)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.(event_hours|events_per_year) <= 0"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "flex-idiom-replaced"
+        binding: "grep: `self.time_shift_gbp < 0` in FlexibilityValueBand on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self\\.time_shift_gbp < 0"
+          paths: ["src/solar_challenge/flex.py"]
+          expect: absent
+      - name: "finance-config-loop-replaced"
+        binding: "grep: `not 0.0 <= value < math.inf` and `not 0.0 < value < math.inf` in FinanceConfig.__post_init__ on main (computed classes use other names)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "not 0\\.0 <?= value < math\\.inf"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "community-billing-rate-read"
+        binding: "grep: CommunityBillingConfig.seg_rate_pence_per_kwh: Optional[float] has no check on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "read_field\\(self, \"seg_rate_pence_per_kwh\""
+          paths: ["src/solar_challenge/community.py"]
+          expect: present
+      - name: "event-hours-refused-by-cli"
+        binding: "ran on main: validate config on bristol-phase1-flex.yaml with event_hours .inf -> Configuration is valid"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI exit code and ERROR row judged by γ's own test (C3)"
+  - label: "δ"
+    task_id: null
+    title: "Dispatch inputs read their numbers through the leaf"
+    capabilities:
+      - name: "import-limit-idiom-replaced"
+        binding: "grep: `import_limit_kw <= 0` in dispatch.py on main; producer 786 moves validators into dispatch.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "import_limit_kw <= 0"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "dispatch-reads-through-the-leaf"
+        binding: "producer: α and 786 upstream; S2 PRD §5.1 extension point"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "from solar_challenge\\.number_fields import"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "bool-limits-refused"
+        binding: "True passes every comparison idiom; task 558 measured target_soc_fraction true accepted"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal of import_limit_kw/target_soc_fraction True judged by δ's own tests (D4) and validate config run"
+  - label: "ε"
+    task_id: null
+    title: "Config's block readers construct through one wrap and pass values as written"
+    capabilities:
+      - name: "wrap-exists"
+        binding: "new in ε (PRD §5.3); lands in config.py or S5's scenario_blocks.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def _constructed\\("
+          paths: ["src/solar_challenge/"]
+          expect: present
+      - name: "number-coercion-helper-deleted"
+        binding: "grep: `def _number` in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def _number\\b"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "coercion-tables-deleted"
+        binding: "grep: _FINANCE_SCALAR_COERCIONS (3) in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_SCALAR_COERCIONS"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "pathless-non-numeric-message-deleted"
+        binding: "grep: '{window_path} contains a non-numeric value', 'grid_services_events block …' and 'finance block …' in config.py on main; cli/optimize's `--{flag} contains a non-numeric value` is not S4's and the pattern skips it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "(window_path\\}|block) contains a non-numeric value"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "ev-reader-truncation-deleted"
+        binding: "grep: `arrival_hour=int(` (2) in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "arrival_hour=int\\("
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "key-path-in-cli-refusal"
+        binding: "ran on main: arrival_hour 18.9 and capacity_kw true validate; producers β, γ, δ upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ERROR-row text naming the block path judged by ε's CliRunner tests (C1-C3)"
+  - label: "ζ"
+    task_id: null
+    title: "The fleet grammar reads its numbers at construction and rounds sampled counts"
+    capabilities:
+      - name: "n-homes-truncation-deleted"
+        binding: "grep: `n_homes=int(` in parse_fleet_distribution_config on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "n_homes=int\\("
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "pool-count-truncation-deleted"
+        binding: "grep: `tuple(int(c) for c` in _build_shuffled_pool_spec on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tuple\\(int\\(c\\) for c"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "float-or-none-deleted"
+        binding: "grep: _float_or_none (4) in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_float_or_none"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "sampled-ev-hours-not-truncated"
+        binding: "grep: `int(arrival_hour_val)` in generate_homes_from_distribution on main; producer 395 (sample_count) upstream"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "int\\((arrival|departure)_hour_val\\)"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "scalar-arm-refuses-bool"
+        binding: "grep: `isinstance(data, (int, float))` then float(data) in _parse_distribution_spec on main (task 521)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "isinstance\\(data, \\(int, float\\)\\)"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "rounded-ev-means-on-shipped-scenario"
+        binding: "probe: bristol-with-evs.yaml 30 EV homes, rounded draws 17.933 / 7.200 vs int() 17.433 / 6.533; bound ≥ 17.9 / ≥ 7.1"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "fleet means judged by ζ's own test over the shipped scenario (C5)"
+  - label: "η"
+    task_id: null
+    title: "The web stops pre-reading numbers ahead of config"
+    capabilities:
+      - name: "invented-defaults-deleted"
+        binding: "grep: `def _spec_number` in web/fleet_config.py on main; probe maps mena->mean 0, std 1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _spec_number"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "ahead-of-the-loaders-pre-read-deleted"
+        binding: "grep: _read_fleet_size_and_seed (2) in web/fleet_scenario.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_read_fleet_size_and_seed"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "sweep-bare-float-deleted"
+        binding: "grep: `float(data.get(\"min\"` in api.simulate_sweep on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "float\\(data\\.get\\(\"(min|max)\""
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "pv-field-pre-read-comment-deleted"
+        binding: "grep: 'PVConfig is the single source of truth' in simulation_params.parse_home_config on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "PVConfig is the single source of truth"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "form-refusals-are-configs"
+        binding: "probe on main: {type: normal, mena: 4, std: 1} becomes N(0,1); {type: fixed, value: 30} is cut and refused; fleet-from-distribution returns 201 / 400"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "HTTP status and error text judged by η's Flask test-client tests (C6, C7)"
+  - label: "θ"
+    task_id: null
+    title: "Summary and step results are frozen values; a step result refuses a non-finite flow"
+    capabilities:
+      - name: "results-frozen"
+        binding: "census: SummaryStatistics and EnergyFlowResult frozen=False on main; no field assignment in src or tests"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "FrozenInstanceError judged by θ's tests and FROZEN_SURFACE's frozen flag (R1); a one-line grep cannot see the decorator's target class"
+      - name: "step-result-refuses-non-finite"
+        binding: "probe on main: simulate_timestep(inf, 1.0, None) returns generation=inf, grid_export=inf"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ValueError naming generation and inf judged by θ's own test (R1)"
+      - name: "consumer-guide-records-the-freeze"
+        binding: "consumption guide's Unreleased-on-main convention (task 436 precedent); EnergyFlowResult is already named by task 567's line, so presence of the name proves nothing"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the new Unreleased line wraps across lines; the reviewer reads it"
+  - label: "ι"
+    task_id: null
+    title: "Invariant 1 guard: every input type refuses a non-finite, bool or non-number value by name"
+    capabilities:
+      - name: "guard-test-exists"
+        binding: "delivered by ι (new file); absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_input_type_numbers.py"]
+          expect: present
+      - name: "briefing-points-at-the-guard"
+        binding: "grep: review/briefing.yaml has a `conventions:` list; no entry names the guard on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_input_type_numbers"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "classification-two-way"
+        binding: "probe: 54 numeric dataclasses in top-level modules; PRD §5.4 classifies each; G1 seeded check bound in-leaf"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "classification reasons are a judgment the reviewer checks against PRD §5.4"
