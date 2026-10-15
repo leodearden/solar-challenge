@@ -372,10 +372,7 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
-        # calculate_annual_consumption integrates whatever Series is passed;
-        # here it measures the raw *window* energy in kWh — not a full-year
-        # figure — to compute the scale factor to the seasonal target.
-        raw_kwh = calculate_annual_consumption(profile)
+        raw_kwh = energy_kwh(profile)
         if raw_kwh > 0.0:
             profile = profile * (target_window_kwh / raw_kwh)
 
@@ -518,13 +515,8 @@ def _generate_elexon_profile(
     return pd.Series(power_values, index=minute_index, name="demand_kw")
 
 
-def calculate_annual_consumption(profile: pd.Series) -> float:
+def energy_kwh(profile: pd.Series) -> float:
     """Integrate a 1-minute power Series to total energy in kWh.
-
-    Despite the name (kept for backward compatibility), this function simply
-    integrates whatever Series is passed — it is NOT limited to full-year
-    profiles.  For a window shorter than a year the result is the window's
-    total energy, not an annualised figure.
 
     Args:
         profile: Power series in kW with 1-minute resolution
@@ -535,22 +527,22 @@ def calculate_annual_consumption(profile: pd.Series) -> float:
     return float(profile.sum() * HOURS_PER_MINUTE)
 
 
-def scale_profile_to_annual(
+def scale_profile_to_energy(
     profile: pd.Series,
-    target_annual_kwh: float,
+    target_kwh: float,
 ) -> pd.Series:
-    """Scale a load profile to match a target annual consumption.
+    """Scale a 1-minute power profile so that its total energy is target_kwh.
 
     Args:
-        profile: Power series in kW
-        target_annual_kwh: Target annual consumption in kWh
+        profile: Power series in kW with 1-minute resolution
+        target_kwh: Target total energy in kWh
 
     Returns:
         Scaled power series in kW
     """
-    current_annual = calculate_annual_consumption(profile)
-    if current_annual == 0:
+    current_kwh = energy_kwh(profile)
+    if current_kwh == 0:
         raise ValueError("Cannot scale profile with zero consumption")
 
-    scale_factor = target_annual_kwh / current_annual
+    scale_factor = target_kwh / current_kwh
     return profile * scale_factor
