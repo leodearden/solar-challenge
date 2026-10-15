@@ -1,17 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Community energy sharing layer (post-hoc, read-only over FleetResults).
+"""Community energy sharing: peer-to-peer netting over an already-simulated fleet.
 
-This module implements the peer-to-peer (P2P) community netting layer described
-in PRD §3.  Homes are NOT re-simulated; this layer consumes the public aggregate
-API of :class:`~solar_challenge.fleet.FleetResults` and derives shared grid flows.
-
-Exported symbols
-----------------
-CommunityBillingConfig  — forward-compatible billing data container (α; logic in ε)
-CommunityConfig         — frozen, picklable simulation configuration
-CommunityResults        — output of :func:`simulate_community`
-simulate_community      — run P2P netting over an existing FleetResults
-validate_community_balance — cross-check the COMMUNITY-BALANCE invariant (PRD §3.1)
+Homes are not re-simulated. This layer reads the public aggregate API of
+:class:`~solar_challenge.fleet.FleetResults` and nets the fleet's grid flows at
+the community's one connection point, optionally through a shared community
+battery. docs/prds/inter-home-community-energy-sharing.md §3.1 proves the
+COMMUNITY-BALANCE invariant that :func:`validate_community_balance` checks.
 """
 
 from __future__ import annotations
@@ -38,17 +32,18 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class CommunityBillingConfig:
-    """Forward-compatible billing data container.
+    """The community's import tariff and SEG export rate.
 
-    This is a pure data holder populated by γ (config parsing) and consumed by
-    ε (VNM pricing).  No pricing logic lives here.
+    :func:`simulate_community` prices the community's grid flows only when both
+    are set; otherwise the result's ``baseline_net_cost_gbp``,
+    ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
 
     Attributes
     ----------
     tariff:
-        Community import tariff configuration (optional; None = no cost tracking).
+        Community import tariff configuration.
     seg_rate_pence_per_kwh:
-        Smart Export Guarantee rate in pence per kWh (optional; None = no SEG).
+        Smart Export Guarantee rate in pence per kWh.
     """
 
     tariff: Optional[TariffConfig] = None
@@ -73,7 +68,8 @@ class CommunityConfig:
         provided when ``sharing_mode="community_battery"`` and *must not* be
         provided when ``sharing_mode="p2p"``.
     billing:
-        Optional billing container for γ/ε to populate; no pricing logic here.
+        The community's import tariff and SEG rate, for pricing its grid
+        flows; ``None`` (default) skips billing.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -233,10 +229,7 @@ def simulate_community(
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
         dividing by :func:`~solar_challenge.timebase.step_hours` of the fleet
-        index.  When *validate_balance* is ``True``, a per-step
-        :func:`~solar_challenge.flow.validate_energy_balance` check (◆) is
-        applied inside the loop before the tail
-        :func:`validate_community_balance` cross-check.
+        index.
 
     Parameters
     ----------
@@ -247,9 +240,10 @@ def simulate_community(
         ``"community_battery"`` mode, the shared battery's
         :class:`~solar_challenge.battery.BatteryConfig`.
     validate_balance:
-        When ``True`` (default), call :func:`validate_community_balance` on the
-        completed result to enforce the COMMUNITY-BALANCE invariant (PRD §3.1).
-        In ``community_battery`` mode a per-step ◆ check is also applied.
+        When ``True`` (default), check the completed result with
+        :func:`validate_community_balance` and, in ``community_battery`` mode,
+        each step's flow with :func:`~solar_challenge.flow.validate_energy_balance`
+        as it is dispatched.
 
     Returns
     -------
@@ -283,12 +277,7 @@ def simulate_community(
         )
     else:
         # Community battery dispatch — sequential because SOC is stateful.
-        # Reuses Battery + simulate_timestep + SelfConsumptionStrategy from α.
-        #
-        # Battery starts at the per-home default SOC envelope (initial_soc_kwh
-        # defaults to mid-range, usable window 10%–90%).  This is an intentional
-        # reuse of the per-home convention; callers that need a different starting
-        # state (e.g. start empty) should pass an adjusted BatteryConfig.
+        # Like each home's battery, it starts at the midpoint of its usable SOC window.
         battery = Battery(cb_config)
         strategy = SelfConsumptionStrategy()
 
@@ -316,7 +305,6 @@ def simulate_community(
                 timestamp=t.to_pydatetime(),
                 strategy=strategy,
             )
-            # Per-step ◆ invariant (PRD §3.2) — mirrors home.simulate_home:299-300.
             if validate_balance:
                 validate_energy_balance(r)
             # Scale kWh/step → kW; SOC is an energy state, kept in kWh.
@@ -336,7 +324,7 @@ def simulate_community(
             sharing_mode=config.sharing_mode,
         )
 
-    # --- VNM billing: baseline vs community net cost (ε / task-34) ---
+    # --- Virtual-net-metering billing: baseline vs community net cost ---
     # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
     # always receives non-None arguments (keeps it total / no None branches).
     billing = config.billing
@@ -382,7 +370,7 @@ def validate_community_balance(
     community_results: CommunityResults,
     tolerance: float = 0.001,
 ) -> bool:
-    """Validate the COMMUNITY-BALANCE invariant (PRD §3.1) at every timestep.
+    """Validate the COMMUNITY-BALANCE invariant at every timestep.
 
     The invariant (in kW on the 1-minute index) is::
 
