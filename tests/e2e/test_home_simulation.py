@@ -7,8 +7,9 @@ battery and its dispatch strategies, the heat pump, the import tariff and
 SEG export pricing. Also checks that the form lists an annual consumption
 outside the fleet load component's fixed range as an error, sending
 nothing, and sends either end of that range. It also checks that the form
-leaves a custom range's dates to the server, sending a single-day range,
-which the server accepts.
+leaves a custom range's dates to the server: it sends a single-day range,
+which the server accepts, and shows the server's refusal of a range that
+ends before it starts.
 """
 
 import re
@@ -306,3 +307,12 @@ def test_single_day_custom_range_is_accepted(page: Page, live_server: str) -> No
     response = submit_custom_range(page, "2024-06-01", "2024-06-01")
 
     assert response.status == 201, response.text()
+
+
+def test_reversed_custom_range_shows_the_servers_refusal(page: Page, live_server: str) -> None:
+    """Run a custom range that ends the day before it starts: /api/simulate/home refuses it (400), and the page shows the server's error as an alert."""
+    page.goto(live_server + "/simulate/home")
+    response = submit_custom_range(page, "2024-06-02", "2024-06-01")
+
+    assert response.status == 400, response.text()
+    expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
