@@ -150,13 +150,25 @@ def _sam_library(name: str) -> pd.DataFrame:
     return _shared_sam_library(name).copy(deep=False)
 
 
+def _require_cec_library_row(library: str, name: str) -> None:
+    """Refuse a name with no row in pvlib's CEC library `library`, CECMod or CECInverter, from which a system takes that row's parameters."""
+    if name not in _shared_sam_library(library).columns:
+        raise ValueError(f"pvlib's {library} library has no row named {name!r}")
+
+
+def _cec_library_row(library: str, name: str) -> dict[str, float]:
+    """The named row of pvlib's CEC library `library` as parameters of the caller's own, refusing a name with no row there."""
+    _require_cec_library_row(library, name)
+    return dict(_sam_library(library)[name])
+
+
 DEFAULT_CEC_MODULE = "Canadian_Solar_Inc__CS1U_400MS"
 """The row of pvlib's CEC module library (CECMod) that a PVConfig without custom_module_params wires: a 400 W-class monocrystalline module representative of modern domestic panels."""
 
 
 def cec_module_params(name: str) -> dict[str, float]:
     """The named row of pvlib's CEC module library as module parameters of the caller's own, e.g. for PVConfig.custom_module_params."""
-    return dict(_sam_library("CECMod")[name])
+    return _cec_library_row("CECMod", name)
 
 
 def create_simple_module_params(
@@ -282,14 +294,6 @@ _BATTERY_BUS_MAX_V = 60.0
 _MICROINVERTER_MAX_W = 1500.0
 
 
-def _require_cec_library_row(name: str) -> None:
-    """Refuse a name with no row in pvlib's CEC inverter library, from which a system takes its picked inverter's parameters."""
-    if name not in _shared_sam_library("CECInverter").columns:
-        raise ValueError(
-            f"A CEC inverter must name a row in pvlib's CECInverter library, got {name!r}"
-        )
-
-
 @dataclass(frozen=True)
 class CecInverter:
     """The catalogue numbers that decide whether a CEC inverter suits an array, under the name of its row in pvlib's CEC library."""
@@ -301,7 +305,7 @@ class CecInverter:
     mppt_high_v: float
 
     def __post_init__(self) -> None:
-        _require_cec_library_row(self.name)
+        _require_cec_library_row("CECInverter", self.name)
 
     def admits(self, string_voltage_v: float) -> bool:
         return self.mppt_low_v <= string_voltage_v <= self.mppt_high_v
@@ -441,8 +445,7 @@ class _Inverter:
 
 def _cec_library_inverter(name: str, efficiency: float) -> _Inverter:
     """The named row of pvlib's CEC inverter library, with Pdco set so that it runs at efficiency at rated output."""
-    _require_cec_library_row(name)
-    parameters = dict(_sam_library("CECInverter")[name])
+    parameters = _cec_library_row("CECInverter", name)
     parameters["Pdco"] = parameters["Paco"] / efficiency
     return _Inverter(name, parameters)
 
