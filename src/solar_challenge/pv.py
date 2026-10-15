@@ -46,7 +46,8 @@ class PVConfig:
         # Panel parameters (PV-004)
         module_efficiency: Panel efficiency as fraction (default 0.20 = 20%)
         temperature_coefficient: Power temp coefficient per °C (default -0.004 = -0.4%/°C)
-        custom_module_params: Optional custom pvlib module parameters dict
+        custom_module_params: Optional custom pvlib module parameters dict; None wires
+            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row)
 
         # Inverter parameters (PV-005)
         inverter_efficiency: Inverter efficiency at rated output (default 0.96 = 96%), as the
@@ -149,33 +150,13 @@ def _sam_library(name: str) -> pd.DataFrame:
     return _shared_sam_library(name).copy(deep=False)
 
 
-def _get_cec_module() -> dict[str, float]:
-    """Get a representative CEC module for simulation.
+DEFAULT_CEC_MODULE = "Canadian_Solar_Inc__CS1U_400MS"
+"""The row of pvlib's CEC module library (CECMod) that a PVConfig without custom_module_params wires: a 400 W-class monocrystalline module representative of modern domestic panels."""
 
-    Returns a ~400W module representative of modern panels.
-    """
-    # Use Canadian Solar CS6K-400MS as representative modern module
-    # Parameters for a ~400W module with ~20% efficiency
-    module_params = _sam_library("CECMod")
 
-    # Find a suitable module around 400W
-    # Canadian_Solar_Inc__CS6K_400MS or similar
-    target_modules = [
-        col for col in module_params.columns
-        if "Canadian_Solar" in col and "400" in col
-    ]
-
-    if target_modules:
-        return dict(module_params[target_modules[0]])
-
-    # Fallback: find any module around 380-420W
-    for col in module_params.columns:
-        params = module_params[col]
-        if 380 < params.get("STC", 0) < 420:
-            return dict(params)
-
-    # Last resort: use first available module
-    return dict(module_params.iloc[:, 0])
+def cec_module_params(name: str) -> dict[str, float]:
+    """The named row of pvlib's CEC module library as module parameters of the caller's own, e.g. for PVConfig.custom_module_params."""
+    return dict(_sam_library("CECMod")[name])
 
 
 def create_simple_module_params(
@@ -478,10 +459,10 @@ def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
 
 
 def _module_parameters(config: PVConfig) -> dict[str, float]:
-    """The custom module parameters, or the CEC module with the configured temperature coefficient."""
+    """The custom module parameters, or DEFAULT_CEC_MODULE's with the configured temperature coefficient."""
     if config.custom_module_params is not None:
         return config.custom_module_params
-    module_params = _get_cec_module()
+    module_params = cec_module_params(DEFAULT_CEC_MODULE)
     if config.temperature_coefficient != -0.004:
         module_params["gamma_pdc"] = config.temperature_coefficient
     return module_params
@@ -566,8 +547,9 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     """Create a pvlib PVSystem from configuration.
 
     Creates a PVSystem using CEC module and inverter databases for realistic
-    modelling parameters, or custom parameters if provided. The CEC inverter is
-    voltage-matched to the strings and runs at the configured
+    modelling parameters, or custom parameters if provided; it wires
+    DEFAULT_CEC_MODULE unless custom module parameters are given. The CEC
+    inverter is voltage-matched to the strings and runs at the configured
     inverter_efficiency at rated output; see _ranking_key and
     _wiring_within_window for how it is chosen from candidate_cec_inverters and
     how the modules are wired to it. A module with PVWatts parameters (pdc0 and
@@ -602,8 +584,8 @@ def wired_dc_capacity_kw(config: PVConfig) -> float:
     """The DC capacity, in kW, of the modules create_pv_system wires for config.
 
     The system holds a whole number of modules, so this differs from
-    config.capacity_kw unless the module's rating divides it: 0.3 kW of the
-    default 400.428 W module wires one module.
+    config.capacity_kw unless the module's rating divides it: 0.3 kW of
+    DEFAULT_CEC_MODULE, 400.428 W at STC, wires one module.
 
     Example:
         >>> round(wired_dc_capacity_kw(PVConfig(capacity_kw=0.3)), 3)
