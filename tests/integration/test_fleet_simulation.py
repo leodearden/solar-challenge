@@ -20,30 +20,21 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
-_FIRST_DAY = pd.Timestamp("2024-06-21")
-_SEEDED_DAYS = 7
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
 @pytest.fixture
 def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Serve _SEEDED_DAYS clear June days from _FIRST_DAY as Bristol's TMY, the location of every home these tests simulate."""
-    weather_cache.put(
-        synthetic_june_weather(_FIRST_DAY, irradiance_scale_per_day=(1.0,) * _SEEDED_DAYS),
-        "tmy",
-        Location.bristol(),
-    )
+    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
+    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
 
 def _simulate_june_days(config: FleetConfig, days: int) -> FleetResults:
-    """The fleet simulated in this process over the first *days* seeded days, with every minute's energy balance validated."""
-    assert 1 <= days <= _SEEDED_DAYS, (
-        f"a {days}-day window outruns the {_SEEDED_DAYS} days bristol_june_tmy seeds; a day it does not seed has no sun"
-    )
-    return simulate_fleet(
-        config, _FIRST_DAY, _FIRST_DAY + pd.Timedelta(days=days - 1), validate_balance=True, parallel=False
-    )
+    """The fleet simulated in this process over the first *days* of _JUNE_DAYS, with every minute's energy balance validated."""
+    start, end = _JUNE_DAYS.window(days)
+    return simulate_fleet(config, start, end, validate_balance=True, parallel=False)
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
