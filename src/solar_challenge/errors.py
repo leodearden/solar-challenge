@@ -10,4 +10,7 @@ class ConfigurationError(Exception):
     raises it for a scenario it refuses. A computed result whose own invariant breaks, such
     as an EnergyFlowResult or a BillBreakdown, is a defect, not a refusal, and raises plain
     ValueError.
+
+    Where an input type still raises plain ValueError, docs/prds/errors-leaf.md (contract C4
+    and §11) names the work that converts it.
     """
