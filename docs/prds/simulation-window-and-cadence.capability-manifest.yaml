@@ -5,7 +5,7 @@ prd: docs/prds/simulation-window-and-cadence.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 777
     title: "timebase.SimulationWindow and SimulationResults.window"
     capabilities:
       - name: "simulation-window-type-defined"
@@ -47,7 +47,7 @@ tasks:
           kind: manual
           reason: "refusal messages are asserted by B2's tests, not a grep"
   - label: "β"
-    task_id: null
+    task_id: 778
     title: "Summaries carry their window"
     capabilities:
       - name: "summary-day-count-not-timedelta"
@@ -79,7 +79,7 @@ tasks:
           kind: manual
           reason: "message content (both values) is asserted by B5's test"
   - label: "γ1"
-    task_id: null
+    task_id: 779
     title: "The engine and integration sources read the window"
     capabilities:
       - name: "no-literal-engine-cadence"
@@ -121,7 +121,7 @@ tasks:
           kind: manual
           reason: "behaviour asserted by B10's test"
   - label: "γ2"
-    task_id: null
+    task_id: 780
     title: "Readers read the window; step_hours goes"
     capabilities:
       - name: "no-inline-minute-integrations-in-output"
@@ -149,13 +149,15 @@ tasks:
           paths: ["src/solar_challenge/web/charts.py"]
           expect: absent
       - name: "aggregate-annual-rule-removed"
-        binding: "0 src callers; deletion awaits the lead's ruling (PRD open question 1)"
-        verdict: OPEN
+        binding: "grep:output.py::aggregate_annual, 0 src callers; deleted in γ2 by lead ruling L9"
+        verdict: PASS
         delivered_check:
-          kind: manual
-          reason: "awaiting open question 1; becomes grep absent '^def aggregate_annual' if the deletion is ruled"
+          kind: grep
+          pattern: "^def aggregate_annual\\("
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
   - label: "δ"
-    task_id: null
+    task_id: 781
     title: "Validation scales by the window"
     capabilities:
       - name: "validation-derives-window"
@@ -189,7 +191,7 @@ tasks:
           kind: manual
           reason: "CLI behaviour asserted by B7's CliRunner test"
   - label: "ε"
-    task_id: null
+    task_id: 782
     title: "Finance bills through the window"
     capabilities:
       - name: "threshold-rule-retired"
@@ -231,7 +233,7 @@ tasks:
           kind: manual
           reason: "message content asserted by INV-8's test (B6)"
   - label: "ζ"
-    task_id: null
+    task_id: 783
     title: "Board outputs and CLI counts read the window"
     capabilities:
       - name: "cli-has-no-timedelta-day-count"
@@ -259,7 +261,7 @@ tasks:
   - label: "η"
     task_id: null
     title: "Surface bump edits for the window (held for S29)"
-    note: "Held leaf: x_seam_wait {stream: S29, contract: one coordinated frozen-surface bump (D4)}; excluded from this batch's commit_planning until S29 releases it."
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning until S29 releases it. Includes D31: householder_bill and bill_distribution lose simulation_days."
     capabilities:
       - name: "householder-bill-parameter-renamed"
         binding: "grep:finance.py::householder_bill annual_self_consumption_kwh today"
@@ -284,6 +286,14 @@ tasks:
           kind: grep
           pattern: "def per_minute_amounts\\("
           paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "bill-signatures-drop-simulation-days"
+        binding: "grep:tests/unit/test_public_api_surface.py FROZEN_SURFACE pins householder_bill and bill_distribution with simulation_days: int today; D31 drops it at the bump"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '"(householder_bill|bill_distribution)": "\(.*simulation_days: int'
+          paths: ["tests/"]
           expect: absent
       - name: "surface-test-pins-new-forms"
         binding: "tests/unit/test_public_api_surface.py FROZEN_SURFACE/FROZEN_MEMBERS updated in the S29 bump"

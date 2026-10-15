@@ -1,0 +1,269 @@
+# Machine-readable twin of tariff-coverage-classifier-presets.capability-manifest.md
+# (review-all stream S11). task_id values stay null until commit_planning stamps them.
+# Every grep check fails on main 9d7b67e and passes once its leaf lands.
+prd: docs/prds/tariff-coverage-classifier-presets.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "TariffConfig tiles the day and owns the cheap-period classifier"
+    capabilities:
+      - name: "classifier-on-the-tariff"
+        binding: "built by α; flow._is_cheap_period is the classifier at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def is_cheap_at"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: present
+      - name: "cheap-minutes-of-day-member"
+        binding: "built by α; the 'has a cheap period' fact (L7) is its emptiness"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def cheap_minutes_of_day"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: present
+      - name: "flow-private-classifier-deleted"
+        binding: "flow._is_cheap_period and its mean_period_rate comparison exist at 9d7b67e; α deletes them"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_is_cheap_period"
+          paths: ["src/solar_challenge/flow.py"]
+          expect: absent
+      - name: "get-rate-gap-branch-gone"
+        binding: "TariffConfig.get_rate raises 'No tariff period matches timestamp' at 9d7b67e; tiling makes it unreachable and α deletes it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "No tariff period matches"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: absent
+      - name: "nan-permissive-rate-check-gone"
+        binding: "TariffPeriod.__post_init__ checks 'self.rate_per_kwh < 0' at 9d7b67e, admitting NaN and inf"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if self\\.rate_per_kwh < 0"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: absent
+      - name: "invariant-2-test"
+        binding: "built by α (D27 invariant candidate 2); the file does not exist at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def test_"
+          paths: ["tests/unit/test_tariff_tiling.py"]
+          expect: present
+      - name: "invariant-2-briefing-line"
+        binding: "review/briefing.yaml has a conventions section at 9d7b67e and no pointer to the tiling test"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_tariff_tiling"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "s1-configuration-error-below-config"
+        binding: "producer: S1-beta (errors-leaf.md leaf beta, ConfigurationError(ValueError) in errors.py), upstream out-of-batch dependency (id from the lead)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge, not a grep in this batch"
+      - name: "refusals-reach-validate-config"
+        binding: "observed: a negative rate prints an ERROR row and exits 1 today; gap, overlap and NaN print 'Configuration is valid'; α's tests observe the new refusals naming the clock ranges"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content is asserted by α's tests and the CLI rows of boundary row 2"
+      - name: "schedule-not-list-decides-dispatch"
+        binding: "measured: four- vs five-period tariff, home run 2024-01-10 on bristol-arbitrage.yaml: 10.2 kWh / GBP 1.67 vs 4.8 kWh / GBP 0.60; equal after α by the weighted-mean identity"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a simulation equality, asserted by α's boundary test with synthetic weather"
+  - label: "β"
+    task_id: null
+    title: "TOU dispatch on the tariff clock; peak_hours a checked override; no grid charging without a cheap period"
+    capabilities:
+      - name: "strategy-takes-the-tariff"
+        binding: "built by β; dispatch.py names no TariffConfig at 9d7b67e (S2 α adds the factory's 'tariff: TariffConfig | None,' with no default)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tariff: TariffConfig \\| None = None"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "flat-tariff-grid-charging-refusal"
+        binding: "built by β beside S2 β's refusal arms (L7)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _require_cheap_minutes_for_grid_charging"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "tariff-clock-test"
+        binding: "built by β (boundary rows 6-11); the file does not exist at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def test_"
+          paths: ["tests/unit/test_tou_tariff_clock.py"]
+          expect: present
+      - name: "home-form-default-window-builds-under-every-preset"
+        binding: "simulate/home.html defaults dispatch_peak_end to 21 at 9d7b67e; 16-21 covers E10's cheap 20:00-21:00"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "dispatch_peak_end: 21"
+          paths: ["src/solar_challenge/web/templates/simulate/home.html"]
+          expect: absent
+      - name: "fleet-form-default-window-builds-under-every-preset"
+        binding: "fleet-simulator.js defaults dispatchPeakEnd to 21 at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "dispatchPeakEnd: 21"
+          paths: ["src/solar_challenge/web/static/js/fleet-simulator.js"]
+          expect: absent
+      - name: "s2-alpha-variant-and-factory"
+        binding: "producer: S2 alpha (TOUOptimizedStrategyConfig, build_dispatch_strategy, _require_valid_peak_hours), upstream out-of-batch dependency (id from the lead)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
+      - name: "s2-beta-refusal-arms-and-home-check"
+        binding: "producer: S2 beta (refusal arms, HomeConfig.__post_init__, _runs_tariff_tou), upstream out-of-batch dependency (id from the lead)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
+      - name: "d7-contradiction-refused"
+        binding: "rejection-check: peak_hours [[7, 9]] under Economy 7 validates today; β's test observes ConfigurationError naming 07:00-07:30 and the tariff"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content is asserted by β's tests"
+      - name: "tariff-clock-equals-tariff-route"
+        binding: "measured: classifier-clocked TOUOptimizedStrategy subclass on bristol-arbitrage.yaml 2024-01-15 equals the home-level route (7.904248 kWh, GBP 1.336699, grid charge 2.124508 kWh)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a simulation equality, asserted by β's boundary test (row 6)"
+  - label: "γ"
+    task_id: null
+    title: "Economy preset rates in one table, read by the dashboard"
+    capabilities:
+      - name: "preset-rates-table"
+        binding: "built by γ; tariff.py states the rates only as classmethod defaults at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "PRESET_RATES"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: present
+      - name: "routes-pass-preset-rates"
+        binding: "web/routes passes seg_presets=SEG_PRESETS to both simulate pages at 9d7b67e and no tariff fact"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "PRESET_RATES"
+          paths: ["src/solar_challenge/web/routes.py"]
+          expect: present
+      - name: "home-form-rate-literals-gone"
+        binding: "simulate/home.html holds tariff_peak_rate: 0.35 and tariff_off_peak_rate: 0.13 at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tariff_(off_)?peak_rate: 0\\."
+          paths: ["src/solar_challenge/web/templates/simulate/home.html"]
+          expect: absent
+      - name: "fleet-form-rate-literals-gone"
+        binding: "fleet-simulator.js holds tariffPeakRate: 0.35 and tariffOffPeakRate: 0.13 at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tariff(Off)?PeakRate: 0\\."
+          paths: ["src/solar_challenge/web/static/js/fleet-simulator.js"]
+          expect: absent
+      - name: "scenario-restatements-gone"
+        binding: "bristol-arbitrage.yaml, bristol-phase1-flex.yaml and example-economy7.yaml restate off_peak_rate 0.09 and peak_rate 0.25 at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^ *(off_)?peak_rate: 0\\."
+          paths: ["scenarios/bristol-arbitrage.yaml", "scenarios/bristol-phase1-flex.yaml", "scenarios/example-economy7.yaml"]
+          expect: absent
+      - name: "rate-less-economy-import-fills"
+        binding: "fleet_scenario._FORM_TARIFF_SETTINGS reads economy rates with _required at 9d7b67e ('must be set: the fleet page always sets it'); γ's test observes the preset pair filled"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "form-state content is asserted by γ's test"
+  - label: "δ"
+    task_id: null
+    title: "EV off-peak charging reads the home tariff's cheap minutes"
+    capabilities:
+      - name: "ev-reads-cheap-minutes"
+        binding: "built by δ on task 708's _preferred_minutes; ev.py names no tariff member at 9d7b67e or on task/708"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "cheap_minutes_of_day"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: present
+      - name: "ev-economy-7-window-gone"
+        binding: "ev.py's docstring and comments name 'Economy 7' hours at 9d7b67e and on task/708"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Economy 7"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: absent
+      - name: "load-threads-the-tariff"
+        binding: "load.generate_load_profile takes no tariff at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tariff"
+          paths: ["src/solar_challenge/load.py"]
+          expect: present
+      - name: "no-tariff-refusal"
+        binding: "built by δ; ev.require_tariff_for_smart_charging does not exist at 9d7b67e"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def require_tariff_for_smart_charging"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: present
+      - name: "task-708-scheduler"
+        binding: "producer: task 708 (in-progress; branch task/708 has _PREFERRED_WINDOWS, _preferred_minutes, _daily_session), upstream out-of-batch dependency"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "in-flight task producer; gated by the add_dependency edge"
+      - name: "sessions-follow-the-tariff"
+        binding: "measured: 708's _daily_session with each tariff's cheap minutes: E10 00:00-04:59, E7 00:30-05:29, E7 23:00-06:00 from 23:00, flat from 18:00"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "schedule content is asserted by δ's tests"
+  - label: "ε"
+    task_id: null
+    title: "Retire TariffConfig.mean_period_rate at the bump"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; depends on α."
+    capabilities:
+      - name: "list-mean-retired"
+        binding: "TariffConfig.mean_period_rate exists and is pinned in FROZEN_MEMBERS at 9d7b67e; its one src reader goes with α"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def mean_period_rate"
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: absent
+      - name: "surface-bump-window"
+        binding: "producer: S29 releases ε (x_seam_wait)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "held for S29; gated by the seam wait, not a grep"

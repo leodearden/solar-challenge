@@ -1,0 +1,264 @@
+# Machine-readable twin of run-store-one-owner.capability-manifest.md (stream S19).
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it at decompose.
+# Every mechanical delivered_check was polarity-checked on main 1251be0 (2026-10-14):
+# each 'present' pattern is absent today and each 'absent' pattern is present today.
+prd: docs/prds/run-store-one-owner.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "Database: one connection policy for every SQLite connection"
+    capabilities:
+      - name: "database-value-holds-connection-policy"
+        binding: "own-task — Database(path).connect() applies WAL, Row factory, foreign_keys=ON"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class Database\\b"
+          paths: ["src/solar_challenge/web/database.py"]
+          expect: present
+      - name: "jobs-opens-no-connection-of-its-own"
+        binding: "grep:web/jobs.py JobManager._run_job sqlite3.connect (removed; connections come from Database)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "sqlite3\\.connect"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+  - label: "β"
+    task_id: null
+    title: "JobManager writes through the app's RunStorage; the jobs table is retired"
+    capabilities:
+      - name: "jobs-table-has-no-writer"
+        binding: "grep:web/jobs.py INSERT/UPDATE/DELETE on jobs (deleted); no production reader exists"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "INTO jobs|UPDATE jobs"
+          paths: ["src/solar_challenge/web"]
+          expect: absent
+      - name: "job-manager-takes-no-store-paths"
+        binding: "own-task — JobManager(storage, ...); submit_* lose db_path/data_dir"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "db_path: str"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+      - name: "run-lifecycle-visible-in-history-api"
+        binding: "grep:web/api.py history_get_run -> RunStorage.run_record (wired); own-task create_run/mark_run_failed/fail_interrupted_runs"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "observed through POST /api/simulate/home then GET /api/history/runs/<id> in the leaf's tests"
+  - label: "η"
+    task_id: null
+    title: "Drop the 'sweep' run type and sweep_id; refuse more than 50 sweep steps on the server"
+    capabilities:
+      - name: "sweep-id-gone"
+        binding: "grep:web/api.py simulate_sweep sweep_id; static/js/parameter-sweep.js sweepId (deleted)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "sweep_id|sweepId"
+          paths: ["src/solar_challenge/web"]
+          expect: absent
+      - name: "server-side-step-ceiling"
+        binding: "own-task — api._SWEEP_MAX_STEPS refused above with 400 and rendered into sweep.html"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_SWEEP_MAX_STEPS"
+          paths: ["src/solar_challenge/web/api.py"]
+          expect: present
+  - label: "ε"
+    task_id: null
+    title: "Run kinds on RunRecord and one /results/<run_id> route"
+    capabilities:
+      - name: "one-results-route"
+        binding: "grep:web/routes.py home_results/fleet_results (become redirects); own-task main.run_results"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"/results/<run_id>\""
+          paths: ["src/solar_challenge/web/routes.py"]
+          expect: present
+      - name: "no-type-built-results-url-in-templates"
+        binding: "grep:templates/history/runs.html '/results/' + run.type (replaced by run.results_url)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "results/' \\+ run\\.type"
+          paths: ["src/solar_challenge/web/templates"]
+          expect: absent
+      - name: "run-kinds-cover-run-type"
+        binding: "own-task — exhaustiveness test RUN_KINDS keys == get_args(RunType); assert_never in routes"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "exhaustiveness is a test plus a mypy property, not a grep"
+  - label: "γ"
+    task_id: null
+    title: "One run list, one typed summary, one headline"
+    capabilities:
+      - name: "run-headline-exists"
+        binding: "own-task — RunHeadline + run_headline(summary) with assert_never; FleetSummary.fleet_self_consumption_ratio populated by calculate_fleet_summary"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class RunHeadline"
+          paths: ["src/solar_challenge/web/storage.py"]
+          expect: present
+      - name: "no-runs-sql-in-api-assistant-routes"
+        binding: "grep:web/api.py history_list_runs, web/assistant.py list_recent_runs, web/routes.py _get_aggregate_stats (moved into RunStorage)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "FROM runs"
+          paths: ["src/solar_challenge/web/api.py", "src/solar_challenge/web/assistant.py", "src/solar_challenge/web/routes.py"]
+          expect: absent
+      - name: "untyped-summary-decoders-gone"
+        binding: "grep:web/storage.py RunRecord.decoded_summary (replaced by RunRecord.summary())"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "decoded_summary"
+          paths: ["src/solar_challenge/web"]
+          expect: absent
+  - label: "δ"
+    task_id: null
+    title: "Saved scenario presets owned by presets.py"
+    capabilities:
+      - name: "no-config-presets-sql-in-api"
+        binding: "grep:web/api.py scenarios_list_presets/scenarios_get_preset raw config_presets SQL (moved into presets.py)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "config_presets"
+          paths: ["src/solar_challenge/web/api.py"]
+          expect: absent
+      - name: "home-preset-not-served-as-scenario"
+        binding: "own-task — the saved-fleet-preset read filters type = 'fleet'; endpoint test GET /api/scenarios/presets/<home preset> -> 404"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "an endpoint behaviour, asserted by the leaf's HTTP test"
+  - label: "ζ"
+    task_id: null
+    title: "A run's default name has one home"
+    capabilities:
+      - name: "write-path-default-literals-gone"
+        binding: "grep:web/storage.py save-time defaults and web/jobs.py submit/save defaults (deleted; RunKind.default_name). Scoped to the write path: the templates' 'Unnamed Run' display fallbacks are ι's (they need the NOT NULL back-fill), and ι depends on ζ, so a wider scope would deadlock"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Unnamed Fleet Run|Unnamed Run|\"Web Simulation\"|\"Fleet Simulation\""
+          paths: ["src/solar_challenge/web/storage.py", "src/solar_challenge/web/jobs.py"]
+          expect: absent
+  - label: "θ"
+    task_id: null
+    title: "Deleting a run cancels its job; deletion wins"
+    capabilities:
+      - name: "job-manager-cancels-a-run"
+        binding: "own-task — JobManager.cancel_run; Future.cancel for queued jobs; per-job lock around check-and-save"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def cancel_run"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: present
+      - name: "deleted-run-never-resurrected"
+        binding: "own-task — B9/B10/B11 through POST /api/simulate/* and DELETE /api/history/runs/<id> with blocking fakes"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a concurrency property observed by the leaf's deterministic tests"
+  - label: "λ"
+    task_id: null
+    title: "One process per store: the DATA_DIR lock before recovery"
+    capabilities:
+      - name: "store-lock-uses-flock"
+        binding: "probe 2026-10-14: flock conflicts across fds within one process"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "fcntl\\.flock"
+          paths: ["src/solar_challenge/web"]
+          expect: present
+      - name: "debug-reloader-serves"
+        binding: "werkzeug 3.1.8 run_simple/is_running_from_reloader; subprocess test of web start --debug"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "observed by a subprocess test that GETs / from a --debug server"
+  - label: "ι"
+    task_id: null
+    title: "Schema version, ordered migrations, solar-challenge web migrate"
+    capabilities:
+      - name: "schema-version-written"
+        binding: "probe 2026-10-14: user_version is transactional; own-task schema.open_database/migrate_store"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "user_version"
+          paths: ["src/solar_challenge/web"]
+          expect: present
+      - name: "web-migrate-command"
+        binding: "grep:cli/web.py typer app (start registered); own-task migrate"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def migrate"
+          paths: ["src/solar_challenge/cli/web.py"]
+          expect: present
+      - name: "delete-the-database-policy-gone"
+        binding: "grep:web/database.py module docstring migration policy (replaced)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delete the database"
+          paths: ["src/solar_challenge/web/database.py"]
+          expect: absent
+      - name: "invariant-7-test"
+        binding: "own-task — fresh and pre-548 fixture databases; table_info(runs) == fields(RunRecord); migrated sqlite_master == fresh (rename-away rebuild, probed)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the invariant test's file name is chosen by the implementer"
+  - label: "κ"
+    task_id: null
+    title: "Stored-run format version, strict reader, StoredRunUnreadable"
+    capabilities:
+      - name: "stored-run-unreadable-error"
+        binding: "own-task — one error naming run id, document and field; replaces the four callers' exception sets"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class StoredRunUnreadable"
+          paths: ["src/solar_challenge/web"]
+          expect: present
+      - name: "invariant-6-test"
+        binding: "own-task — committed pre-469 run fixture under tests/fixtures/stored_runs/ plus a current run saved in the test"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "fixture and test file names are chosen by the implementer"
+  - label: "μ"
+    task_id: null
+    title: "Integration gate: invariant 4 and the end-to-end store scenario"
+    capabilities:
+      - name: "store-location-read-only-at-the-root"
+        binding: "producer:α,β,γ,δ upstream — every current_app.config store read removed outside app.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "current_app\\.config\\["
+          paths: ["src/solar_challenge/web/api.py", "src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "invariant-4-and-b16"
+        binding: "producer: every other label upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the gate's own tests (grep allow-list + end-to-end legacy-store scenario)"

@@ -5,7 +5,7 @@ prd: docs/prds/dispatch-configuration-below-config.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 786
     title: "dispatch.py owns the dispatch-configuration types and the strategy factory"
     capabilities:
       - name: "strategy-config-variants-defined-in-dispatch"
@@ -83,7 +83,7 @@ tasks:
           kind: manual
           reason: "round-trip equality is a test property"
   - label: "β"
-    task_id: null
+    task_id: 787
     title: "Refuse at construction what the dispatcher would ignore"
     capabilities:
       - name: "home-level-vocabulary-owned-by-home"
@@ -134,7 +134,7 @@ tasks:
           paths: ["review/briefing.yaml"]
           expect: present
   - label: "γ"
-    task_id: null
+    task_id: 788
     title: "The Battery answers the grid-charge target on its effective capacity"
     capabilities:
       - name: "battery-answers-grid-charge-target"
@@ -183,7 +183,7 @@ tasks:
           kind: manual
           reason: "a simulation result, asserted by γ's test"
   - label: "δ"
-    task_id: null
+    task_id: 789
     title: "One owner of the SOH-derated SOC envelope"
     capabilities:
       - name: "soc-envelope-value"

@@ -4,7 +4,7 @@ prd: docs/prds/errors-leaf.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 773
     title: "Errors leaf: ConfigurationError lives in solar_challenge/errors.py, imported at module top everywhere"
     capabilities:
       - name: "errors-module-exists"
@@ -61,7 +61,7 @@ tasks:
           kind: manual
           reason: "a sys.modules property observed in a subprocess by α's own test, not greppable"
   - label: "β"
-    task_id: null
+    task_id: 774
     title: "ConfigurationError subclasses ValueError; uniform raises; no refusal relabelled"
     capabilities:
       - name: "configuration-error-is-a-value-error"
@@ -113,7 +113,7 @@ tasks:
           kind: manual
           reason: "per-class raise type judged by β's tightened pytest.raises(ConfigurationError) cases"
   - label: "γ"
-    task_id: null
+    task_id: 775
     title: "Import-structure guard (INV-5): function-local package imports only by an owned allow-list"
     capabilities:
       - name: "guard-test-module-exists"

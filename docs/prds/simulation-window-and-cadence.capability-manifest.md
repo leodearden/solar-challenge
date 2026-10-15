@@ -11,9 +11,9 @@ The YAML twin `simulation-window-and-cadence.capability-manifest.yaml` carries t
 
 **Code anchors** verified against main `1251be0` (2026-10-14). Probes ran with `uv run --locked --extra dev python` (pandas 3.0.3). Anchors cite symbols; re-locate lines at implementation time.
 
-**Batch verdict: PASS, with one OPEN binding.** No binding resolves to `declared-only`, `test-only`, `producer-absent`, `producer-extent-short`, `producer-downstream` or `rejection-absent`.
+**Batch verdict: PASS.** No binding resolves to `declared-only`, `test-only`, `producer-absent`, `producer-extent-short`, `producer-downstream` or `rejection-absent`.
 
-- **OPEN:** γ2's `aggregate_annual` deletion waits on the lead's open question 1.
+- **Resolved at decompose (2026-10-14):** γ2's `aggregate_annual` binding was OPEN on open question 1; lead ruling L9 deletes it in γ2.
 - **External producer:** task 749 must land before δ.
 - **Held leaf:** η is held for S29 and is excluded from this batch's `commit_planning` until S29 releases it.
 
@@ -61,7 +61,7 @@ The YAML twin `simulation-window-and-cadence.capability-manifest.yaml` carries t
 | B4 (output rows): constant-power twins are exactly equal | `identity:` 0.4 × 10,080 × 1/60 = 0.4 × 336 × 0.5 = 67.2 kWh; float error ≪ 1e-9 relative | PASS |
 | B9: the 89-day window passes today's gate | `probe:` 2024-10-01..12-28 gives a timedelta count of 90 and a calendar count of 89; `grep:web/charts.py` monthly gate `sim_days < 90` | PASS |
 | `step_hours` callers are gone after γ1 and γ2 | `grep:` `step_hours(` in `community.py` (γ1) and `output.py::compute_community_metrics` (γ2) only | PASS |
-| `aggregate_annual` has no `src` caller | `grep:` `aggregate_annual` appears in `src` only at its definition (`output.py`); tests at `tests/unit/test_output.py` | OPEN: deletion awaits open question 1 |
+| `aggregate_annual` has no `src` caller, so γ2 deletes it (L9) | `grep:` `aggregate_annual` appears in `src` only at its definition (`output.py`); tests at `tests/unit/test_output.py`; not on the frozen surface (`solar_challenge.__init__` exports nothing from `output`) | PASS |
 
 ## δ — validation scales by the window (leaf)
 
@@ -102,5 +102,6 @@ The YAML twin `simulation-window-and-cadence.capability-manifest.yaml` carries t
 | capability asserted | evidence | status |
 |---|---|---|
 | The names to rename or retire exist today | `grep:finance.py::householder_bill` `annual_self_consumption_kwh`; `grep:home.py::SimulationResults.per_minute_amounts`; `grep:` `timestep_minutes: float = 1.0` in `flow.py` and `dispatch.py` | PASS |
+| D31: `householder_bill` and `bill_distribution` drop `simulation_days` | `grep:tests/unit/test_public_api_surface.py` pins both forms with `simulation_days: int` today | PASS |
 | The coordinated bump exists to release it | S29 (program stream, wave 4) | PASS (held via `x_seam_wait`) |
 | The defaults may sit on signatures S3 rewrites | S3 lands before S29; η edits whatever signatures exist then | PASS |

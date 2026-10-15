@@ -1,0 +1,340 @@
+# Machine-readable twin of pv-model-one-home.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main 9d7b67e (2026-10-15); checks are pattern-anchored.
+# task_id stays null until commit_planning stamps it. η is held for S29 (x_seam_wait).
+prd: docs/prds/pv-model-one-home.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "Name the default CEC module and require its catalogue row"
+    capabilities:
+      - name: "default-module-constant-defined"
+        binding: "probe: CECMod (21,535 columns) holds Canadian_Solar_Inc__CS1U_400MS; the constant is new in α"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^DEFAULT_CEC_MODULE(: str)? = \"Canadian_Solar_Inc__CS1U_400MS\""
+          paths: ["src/solar_challenge/pv.py"]
+          expect: present
+      - name: "substring-search-deleted"
+        binding: "grep: pv._get_cec_module filters columns with `\"Canadian_Solar\" in col and \"400\" in col` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"Canadian_Solar\" in col"
+          paths: ["src/"]
+          expect: absent
+      - name: "wrong-cs6k-comment-deleted"
+        binding: "grep: two CS6K comments in pv._get_cec_module on main; the catalogue holds no CS6K 400 row (probe)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "CS6K"
+          paths: ["src/", "tests/"]
+          expect: absent
+      - name: "module-fallbacks-deleted"
+        binding: "grep: the 380-420 W STC loop and module_params.iloc[:, 0] last resort in pv._get_cec_module on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "module_params\\.iloc\\[:, 0\\]|380 < params\\.get\\(\"STC\""
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "tests-read-the-row-not-a-literal"
+        binding: "grep: tests/unit/test_validation.py restates 400.428 at three sites on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "400\\.428"
+          paths: ["tests/"]
+          expect: absent
+      - name: "missing-row-refused-naming-it"
+        binding: "rejection-mechanism built by α: today a library without the row yields CS3W_400P (probe: match list [CS1U_400MS, CS3W_400P]); α's subprocess test observes the refusal naming the row and CECMod"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the refusal is observed by α's subprocess test with a patched retrieve_sam, not by a grep"
+  - label: "β"
+    task_id: null
+    title: "One run policy: pv.run_model_chain, used by simulate_pv_output, the scripts and tests"
+    capabilities:
+      - name: "run-model-chain-defined"
+        binding: "new in β; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def run_model_chain\\("
+          paths: ["src/solar_challenge/pv.py"]
+          expect: present
+      - name: "policy-copies-gone-from-scripts-and-tests"
+        binding: "grep: _chandrupatla filters in measure_pv_performance_ratio.in_plane_irradiation and measure_mppt_window.main on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_chandrupatla"
+          paths: ["scripts/", "tests/"]
+          expect: absent
+      - name: "broad-test-filters-gone"
+        binding: "grep: tests/unit/test_measurement_scripts._QUIET_DIODE_SOLVER and three filterwarnings marks in tests/unit/test_pv.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "invalid value encountered"
+          paths: ["tests/", "scripts/"]
+          expect: absent
+      - name: "scripts-run-chains-through-the-policy"
+        binding: "grep: three `.run_model(` calls in scripts on main (measure_pv_performance_ratio ×1, measure_mppt_window ×2)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.run_model\\("
+          paths: ["scripts/"]
+          expect: absent
+      - name: "chain-ages-on-dc"
+        binding: "producer:task-284 upstream (branch task/284 moves ageing into the DC losses step and removes simulate_pv_output's AC derate; merge-tree clean at 9d7b67e)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "ac_power = apply_degradation\\("
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "bare-run-warns-policy-run-does-not"
+        binding: "probe: a bare run_model over synthetic_june_weather('2024-06-21') emits 39 RuntimeWarnings from scipy/optimize/_chandrupatla.py; β's test runs run_model_chain under simplefilter('error')"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "warning behaviour is observed by β's B2 test, not a grep"
+  - label: "γ"
+    task_id: null
+    title: "One module rating; wired DC read from the built PVSystem"
+    capabilities:
+      - name: "four-hundred-watt-default-deleted"
+        binding: "grep: pv._module_rating_w returns module_params.get('STC', 400.0) on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "get\\(\"STC\", 400"
+          paths: ["src/"]
+          expect: absent
+      - name: "wired-dc-not-recomputed-from-helpers"
+        binding: "grep: wired_dc_capacity_kw returns _module_count(config, module_params) * _module_rating_w(module_params) / 1000 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_module_count\\(config, module_params\\) \\* _module_rating_w\\(module_params\\)"
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "pvwatts-dict-counted-by-pdc0"
+        binding: "probe: 4 kW of {pdc0: 300, gamma_pdc: -0.004} wires 10 modules and wired_dc_capacity_kw returns 4.0 today (clear-day peak 2.66 kW); after γ, round(4000/300) = 13 modules, 3.9 kWp"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "module count and wired DC are asserted by γ's B3 test"
+      - name: "module-without-rating-refused"
+        binding: "rejection-mechanism built by γ; its test observes the message naming pdc0 and STC"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal message asserted by γ's own test"
+  - label: "δ"
+    task_id: null
+    title: "Validation states what it applies: sourced public bands; size notes from the run's own totals"
+    capabilities:
+      - name: "pv-only-band-constant-public"
+        binding: "new in δ; validation.py applies the inline literals 20.0/45.0 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: present
+      - name: "battery-band-constant-public"
+        binding: "new in δ; validation.py applies the inline literals 50.0/90.0 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: present
+      - name: "yield-band-constant-public"
+        binding: "grep: _UK_YIELD_BENCHMARK_KWH_PER_KWP is private on main; δ renames it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_UK_YIELD_BENCHMARK_KWH_PER_KWP"
+          paths: ["src/", "tests/", "docs/pv-annual-yield-benchmark.md"]
+          expect: absent
+      - name: "rough-uk-yield-guess-deleted"
+        binding: "grep: two `capacity_kw * 900` sites in validation.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "capacity_kw \\* 900"
+          paths: ["src/"]
+          expect: absent
+      - name: "widened-band-comments-deleted"
+        binding: "grep: 'Slightly wider than strict' and 'Wider than strict' comments on the applied edges on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Slightly wider|Wider than strict"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: absent
+      - name: "band-source-doc-exists"
+        binding: "new in δ; precedent shape docs/pv-annual-yield-benchmark.md §2"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["docs/self-consumption-benchmark.md"]
+          expect: present
+      - name: "bands-sourced-not-fitted"
+        binding: "review judgment against docs/self-consumption-benchmark.md: each band cites a published UK reference and states its scope"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "source quality is a reviewer judgment"
+  - label: "ε"
+    task_id: null
+    title: "Cell temperature from the module: NOCT-SAM from its own T_NOCT and efficiency for every run; re-baseline"
+    note: "Session ruling (Leo, 2026-10-15): NOCT-SAM for every run, accepting that every default yield moves (Bristol default 4 kW ×1.0191)."
+    capabilities:
+      - name: "sapm-open-rack-set-gone"
+        binding: "grep: pv._arrays uses TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_glass'] on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "open_rack_glass_glass"
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "noct-parameters-from-module"
+        binding: "pvlib 0.15.1 ModelChain.infer_temperature_model returns noct_sam_temp for {'noct','module_efficiency'} (probe printed noct_sam_temp); the CECMod row has T_NOCT 45.1 and A_c 1.99"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"noct\":"
+          paths: ["src/solar_challenge/pv.py"]
+          expect: present
+      - name: "helper-efficiency-key-replaced-by-area"
+        binding: "grep: create_simple_module_params writes an unread \"efficiency\" key on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"efficiency\": efficiency"
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "cell-temperature-doc-exists"
+        binding: "new in ε"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["docs/pv-cell-temperature.md"]
+          expect: present
+      - name: "consumers-told-to-re-baseline"
+        binding: "docs/domain-library-consumption.md carries 'Unreleased on main' paragraphs (task 284's, 469's precedent)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "pv-cell-temperature\\.md"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "rebaseline-inside-slow-guard"
+        binding: "probe: Bristol 993.14 → 1012.12 kWh/kWp; ratio ≈ 0.819 inside tests/integration/test_pv_performance_ratio.py's 0.76–0.84"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the slow guard needs PVGIS and runs in the slow lane; ε records the offline Bristol re-measurement in docs"
+      - name: "default-clear-day-moves-and-efficiency-acts"
+        binding: "probe: default clear day 26.0119 → 26.8194 kWh (×1.031); η 0.10 ×0.9901, η 0.22 ×1.0018 against η 0.2012"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "energies asserted by ε's B5 tests"
+  - label: "ζ"
+    task_id: null
+    title: "PVConfig.module_efficiency and temperature_coefficient become live (D14): Optional, derived from the template, refused out of domain"
+    note: "A steeper γ is NOT asserted to lower annual yield: probe shows Bristol's year ×1.0055 at γ −0.005 (cells mostly below 25 °C); signals use the clear June day."
+    capabilities:
+      - name: "gamma-pdc-sentinel-deleted"
+        binding: "grep: `config.temperature_coefficient != -0.004` in pv._module_parameters on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "temperature_coefficient != -0\\.004"
+          paths: ["src/"]
+          expect: absent
+      - name: "fields-optional-on-pvconfig"
+        binding: "grep: PVConfig declares `module_efficiency: float = 0.20` and `temperature_coefficient: float = -0.004` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "module_efficiency: (float \\| None|Optional\\[float\\]) = None"
+          paths: ["src/solar_challenge/pv.py"]
+          expect: present
+      - name: "frozen-form-updated-in-leaf"
+        binding: "grep: FROZEN_SURFACE pins `module_efficiency: float = 0.2, temperature_coefficient: float = -0.004` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "module_efficiency: float \\| None = None, temperature_coefficient: float \\| None = None"
+          paths: ["tests/"]
+          expect: present
+      - name: "distribution-default-literal-gone"
+        binding: "grep: generate_homes_from_distribution passes `pv_module_eff if pv_module_eff is not None else 0.20` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "pv_module_eff if pv_module_eff is not None else 0\\.20"
+          paths: ["src/"]
+          expect: absent
+      - name: "stc-point-kept-and-gamma-reached"
+        binding: "identity: calcparams_cec uses Adjust only in alpha_sc·(1 − Adjust/100)·(T − T_ref); probe: P_mp(STC) 400.4281 W across Adjust −500…2000; γ linear in Adjust; template round-trip Adjust 7.312982"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "numeric exactness asserted by ζ's B6 test (γ within 1e-6/K, STC within 1e-9 relative)"
+      - name: "clear-day-bounds-achievable"
+        binding: "probe under NOCT-SAM: γ −0.005 ×0.97862 (bound ≥1.5% below), γ −0.003 ×1.00661 (bound above), η 0.10 ×0.99009 (bound ≥0.5% below)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "energies asserted by ζ's B6 test"
+      - name: "efficiency-acts-through-thermal-model"
+        binding: "producer: ε (NOCT-SAM reads the module's efficiency) upstream of ζ"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "dependency ordering, not a code pattern"
+      - name: "domain-and-form-refusals-fire"
+        binding: "rejection-mechanism built by ζ in PVConfig.__post_init__; its tests observe refusals naming the field for γ −0.02, η 0.95 and a set γ on a SAPM-form custom dict"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal messages asserted by ζ's own tests"
+      - name: "task-195-cancelled-first"
+        binding: "pre-condition: branch task/195 retires both fields and merges cleanly at 9d7b67e; only stale L2 esc-195-3 holds it (PRD open question 1)"
+        verdict: OPEN
+        delivered_check:
+          kind: manual
+          reason: "a lead action on task state, not a code check"
+  - label: "η"
+    task_id: null
+    title: "Retire apply_degradation from the public surface (held for S29)"
+    note: "Held: x_seam_wait = {stream: S29, contract: one coordinated frozen-surface bump (D4)}; supersedes task 609."
+    capabilities:
+      - name: "no-src-caller-after-284"
+        binding: "producer:task-284 upstream removes simulate_pv_output's call; grep finds no other src caller on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def apply_degradation\\("
+          paths: ["src/solar_challenge/pv.py"]
+          expect: absent
+      - name: "surface-entry-removed"
+        binding: "grep: apply_degradation in solar_challenge.__all__ and _SYMBOL_MODULE on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"apply_degradation\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: absent
