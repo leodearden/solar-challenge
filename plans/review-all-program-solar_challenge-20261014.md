@@ -688,6 +688,16 @@ Consequence that decided it: an accepted disposition with an owner, re-verified 
 
 Keys: fk-657669b23e71
 
+### D41. capacity-at-events firmness (S9 lead question 2, ruled by Leo in the fable /team investigation session, 2026-10-16) — ruled_by: human
+
+Firm spare capacity is measured per event day and booked at its mean over event days, under a named delivery baseline (operational, a DFS-style increment above own discharge, the default; or capacity, an NGED-style whole-window discharge), with the capacity available on 50% and 90% of event days and the evening self-use an event displaces reported beside the income. Carried by S9 as a new leaf α′ between α (801) and β (802), depending on 801 and 774. A successor PRD, the counterfactual event simulation (paired baseline and event-dispatch runs, delivery metered per product baseline, net income booked with its incidence), follows α′; the frozen-library posture does not bar simulator changes made for correctness. S16 is unaffected. The board hears the two §2.2 findings: the season-minimum rule priced the 100-home board fleet at about £3 a year, the per-event-day mean at £296 (SOH 1.0) and £143 (SOH 0.8), against £3,000 under the flat model.
+
+Options considered: season minimum (status quo, £0); per-event-day mean with a delivery baseline; capacity baseline; retire the events model.
+
+Consequence that decided it: the events model prices what a product would pay for; the board figure moves from £0 to a measured, baseline-named income.
+
+Keys: fk-758b2f309cab fk-4ddab794283a
+
 ## Lead rulings on PRD open questions
 
 - L1 (S1; non-numeric input refusals (S1 lead Q1)): S4 converts the non-numeric ValueError refusals of the input types in the same edits as the numeric ones; invariant 1's test asserts the type; S17 depends on S4.
@@ -710,9 +720,20 @@ Keys: fk-657669b23e71
 - L18 (S24; setuptools floor under D23 (Q1)): Build requirements are outside uv.lock, so D23 has no referent for setuptools>=77.0.0: the declared floor stays and tests/unit/test_build_system.py is deleted with the other capability-claim tests.
 - L19 (S28; with_round_trip shape (Q1); transitional refusal (Q2); throughput unit (Q3); γ -> S19 κ edge (Q4)): Defaults accepted: with_round_trip is a method on a config; the transitional refusal ships in α; throughput is discharged energy, one cycle per usable capacity, and finance's accrual matches; the lead adds the γ -> S19 migration-leaf edge when S19 files.
 - L20 (S14; task 195 (Q1) and the escalation cluster): Done 2026-10-15: esc-195-3 closed with members esc-195-2 and esc-224-2 as superseded, task 195 cancelled with x_superseded_by_prd, task 224 no longer depends on 195 (D35). Task 468 cancelled (D36).
+- L21 (S19 decompose; inbound edges; 750 and 760; task 140): Edges 784 -> 822 and 790 -> 822 added by the lead; S28 γ -> 822, S21 panels -> 822 and 814, S21 comparison -> 816 and S20 -> 806, 819, 814, 822 are passed to those sessions. The cancellation of 750 (x_superseded_by 807) and keeping 760 (α 805 depends on it) are ratified. Task 140 is left as filed unless the S19 session names a conflict.
+- L22 (S14 decompose; task 756; tasks 389 and 504; key on 284): Task 756 stays in progress and delivers α (γ 812 and ζ 825 depend on it), accepted. fk-998f0cb69410 is stamped on task 284. Tasks 389 and 504 depended on the cancelled 195: their dependency is removed and each is re-read against D14 at its next dispatch; neither is cancelled by the lead.
+- L23 (S15 decompose; task 366): Task 366 depends on 813 and seeds the e2e server through SOLAR_CHALLENGE_WEATHER_CACHE_DIR instead of set_weather_cache.
+- L24 (S9 α′; filing the firmness leaf): A follow-up decompose pass files α′ from the amended S9 PRD §5.10 between 801 and 802 (802 gains a dependency on it), carrying the keys of its parent finding (fk-758b2f309cab) and the x_finding_run; the successor counterfactual-event PRD is authored after α′ lands.
 
 ## Cross-reference lines applied by the lead
 
+- S8 (from S9 decompose): the project_multi_year move leaf depends on 801 (S9 α) and 802 (S9 β).
+- S25 (from S9 decompose, D41): the cli/finance.run restructure leaf depends on 802 and 803; the events income renders with its delivery baseline, the 50%/90% availability and the displaced evening self-use beside it.
+- S26 (from S9 decompose): the grid-services knob builds FlatGridServices(v) at 804 (S9 ε); 804 edits the registry entry if S26 has landed.
+- S4 (from S14 decompose): β depends on 825 (S14 ζ); S22 derives its PV facts from 818 and 823; S29 releases 826.
+- S16 (from S15 decompose): the runner leaf depends on 809 (S15 β); S29 releases 827.
+- S19 (from its decompose): 784 and 790 depend on 822; S28 γ -> 822; S21 panels -> 822 and 814, comparison -> 816; S20 -> 806, 819, 814, 822.
+- S9 (D41): new leaf α′ (firmness per event day under a named delivery baseline) between 801 and 802; a successor PRD for the counterfactual event simulation follows it.
 - S5 (from S4): the config.py partition depends on S4 α (Interval and the checker at the package leaf); S4 ε depends on the partition; S5 moves nothing of ε or ζ.
 - S3 (from S4): the engine checks (dispatch, flow, battery) go through Interval.admits and depend on S4 α; fk-a9c609ecb8ef closes when S4 ι and S3 land.
 - S18 (from S21): the form-label macro is offered to S18; invariant 11 window half beside S11 γ.
@@ -767,6 +788,7 @@ Keys: fk-657669b23e71
 - Tasks 681, 270, 581, 485, 674, 297, 675, 237, 284, 376, 564 and 245 pre-date this run and already cover 13 mechanical findings; do not duplicate them.
 - The `/review` instrument keyed cli/, tariff.py and seg.py under other areas (D1): until `/review-briefing` writes the member lists, a key lookup that misses may be a re-keyed twin; search by anchor as well.
 - `richardsonpy` load generation seeds process-global RNGs (S13); until S13 lands, parallel fleet tests that compare profiles are order-sensitive.
+- Follow-up candidates (not filed): a PVConfig mounting field for NOCT-SAM (S14 Q5, after 823); the finance capex basis, nameplate vs wired DC (S8, fk-8b8f9d686b86); the counterfactual event-simulation PRD after S9 α′ (D41); the D3 mid-term design follow-up (grid charging in every dispatcher) after S3 and S11 land (L8).
 - Instrument debt: none (both siblings ran whole in Phase 2); the dark-factory snapshot instrument needs task 6921 before the next run can measure this repo without the shim.
 
 ## FILED — program status
