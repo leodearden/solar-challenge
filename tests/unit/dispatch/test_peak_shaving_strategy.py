@@ -574,12 +574,11 @@ class TestPeakShavingStrategyGridCharging:
         assert decision.grid_charge_kw > 0.0
 
     # -------------------------------------------------------------------------
-    # Precedence / suppression (docs/prds/tou-grid-charging-battery-arbitrage.md §11 item 3)
+    # Precedence: peak-shaving discharge over grid charging
     # -------------------------------------------------------------------------
 
     def test_shaving_suppresses_grid_charge(self, standard_peak_shaving_strategy):
-        """Discharge guard (docs/prds/tou-grid-charging-battery-arbitrage.md §11 item 3):
-        peak-shaving discharge suppresses grid-charge.
+        """Discharge guard: peak-shaving discharge takes precedence over grid charging.
 
         gen=1.0, demand=5.0 → shortfall=4.0 > import_limit=2.0 → discharge=2.0 kW.
         discharge_kw > 0 → grid-charge gate is blocked; grid_charge_kw stays 0.0.
