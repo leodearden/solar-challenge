@@ -24,7 +24,7 @@ _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 @pytest.mark.integration
 class TestSingleHomeSimulation:
-    """Test VAL-005: Integration test for single home simulation."""
+    """Integration test for single home simulation."""
 
     @pytest.fixture
     def pv_only_config(self) -> HomeConfig:

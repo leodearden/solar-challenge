@@ -228,7 +228,7 @@ class TestValidationReport:
 
 
 class TestValidatePVGeneration:
-    """Tests for PV generation validation (VAL-001)."""
+    """Tests for PV generation validation."""
 
     def test_valid_generation(self) -> None:
         """Test validation of valid generation data."""
@@ -548,7 +548,7 @@ class TestOneWiredDcPerValidation:
 
 
 class TestValidateConsumption:
-    """Tests for consumption validation (VAL-002)."""
+    """Tests for consumption validation."""
 
     def test_valid_consumption(self) -> None:
         """Test validation of valid consumption data."""
@@ -659,7 +659,7 @@ class TestValidateConsumption:
 
 
 class TestSelfConsumptionBenchmarks:
-    """Tests for self-consumption benchmark validation (VAL-003, VAL-004)."""
+    """Tests for self-consumption benchmark validation, PV-only and with a battery."""
 
     def test_pv_only_in_range(self) -> None:
         """Test PV-only self-consumption within benchmark range."""

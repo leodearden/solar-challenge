@@ -3,7 +3,6 @@
 The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
 Each fleet runs in this process (parallel=False); tests/unit/test_fleet.py covers the worker pool.
 Tests that ask june_fleet_run for equal fleets over as many days share one simulation, which they only read.
-VAL-006: Integration test for fleet simulation
 """
 
 import pytest
@@ -42,7 +41,7 @@ def june_fleet_run() -> ComputedOnce[FleetResults]:
 @pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestFleetSimulation:
-    """Test VAL-006: Integration test for fleet simulation."""
+    """Integration test for fleet simulation."""
 
     @pytest.fixture
     def heterogeneous_fleet_config(self) -> FleetConfig:
