@@ -3,8 +3,8 @@
 
 from playwright.sync_api import Page, Response
 
-_FIRST_DAY = "2024-06-01"
-_LAST_DAY = "2024-06-02"
+FIRST_DAY = "2024-06-01"
+SECOND_DAY = "2024-06-02"
 
 
 def form_data(page: Page) -> dict[str, object]:
@@ -61,5 +61,5 @@ def submit_custom_range(page: Page, first_day: str, last_day: str) -> Response:
 
 
 def submit_two_day_run(page: Page) -> Response:
-    """Submit the two-day custom range 2024-06-01 to 2024-06-02 with submit_custom_range and return the server's answer."""
-    return submit_custom_range(page, _FIRST_DAY, _LAST_DAY)
+    """Submit the two-day custom range FIRST_DAY to SECOND_DAY with submit_custom_range and return the server's answer."""
+    return submit_custom_range(page, FIRST_DAY, SECOND_DAY)

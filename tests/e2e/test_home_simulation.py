@@ -21,7 +21,13 @@ from playwright.sync_api import Locator, Page, Route, expect
 
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from tests.e2e._home_form import open_tab, submit_custom_range, submit_two_day_run
+from tests.e2e._home_form import (
+    FIRST_DAY,
+    SECOND_DAY,
+    open_tab,
+    submit_custom_range,
+    submit_two_day_run,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -302,9 +308,9 @@ def test_consumption_at_either_end_of_the_load_range_is_sent_and_accepted(
 
 
 def test_single_day_custom_range_is_accepted(page: Page, live_server: str) -> None:
-    """Run a custom range that starts and ends on 2024-06-01: the form sends it, and /api/simulate/home accepts it (201)."""
+    """Run a custom range that starts and ends on the same day: the form sends it, and /api/simulate/home accepts it (201)."""
     page.goto(live_server + "/simulate/home")
-    response = submit_custom_range(page, "2024-06-01", "2024-06-01")
+    response = submit_custom_range(page, FIRST_DAY, FIRST_DAY)
 
     assert response.status == 201, response.text()
 
@@ -312,7 +318,7 @@ def test_single_day_custom_range_is_accepted(page: Page, live_server: str) -> No
 def test_reversed_custom_range_shows_the_servers_refusal(page: Page, live_server: str) -> None:
     """Run a custom range that ends the day before it starts: /api/simulate/home refuses it (400), and the page shows the server's error as an alert."""
     page.goto(live_server + "/simulate/home")
-    response = submit_custom_range(page, "2024-06-02", "2024-06-01")
+    response = submit_custom_range(page, SECOND_DAY, FIRST_DAY)
 
     assert response.status == 400, response.text()
     expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
