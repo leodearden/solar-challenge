@@ -253,7 +253,7 @@ Deletable: Every transitional re-export or dual field a stream kept only until t
 | Stored-run format version and runs schema version (owner: storage/database; readers every loader) | S19 | every other stream that reads it |
 | Run type -> behaviour table (owner: storage.RunRecord; readers api, routes, templates, assistant) | S19 | every other stream that reads it |
 | SSE frame and event payload types (owner: one web module; readers assistant.js, progress-tracker.js, parameter-sweep.js) | S20 | every other stream that reads it |
-| Theme tokens (owner: static/src/theme-tokens.json; readers tailwind.config.js and charts.py; chart-renderer.js through the compiled theme, D39) | S21 | every other stream that reads it |
+| Theme tokens (owner: one table; readers tailwind.config.js, chart-renderer.js, charts.py _AMBER) | S21 | every other stream that reads it |
 | ChartPanel rendered by chart_container (owner: macros.html) | S21 | every other stream that reads it |
 | Benchmark constants (owner: load.py and validation.py; reader assistant.py) | S22 | every other stream that reads it |
 | FROZEN_SURFACE as the one home of the surface (owner: tests/_surface_forms.py; readers the merged test module, release notes) | S23 | every other stream that reads it |

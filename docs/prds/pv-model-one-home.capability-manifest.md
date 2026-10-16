@@ -88,3 +88,10 @@ Mechanizes G3 (substrate exists) and G6 (premise valid) per leaf of `docs/prds/p
 | No src caller remains after task 284 | producer: task 284's diff removes `simulate_pv_output`'s `apply_degradation` call; grep on main finds no other src caller | PASS (producer upstream) |
 | It is a frozen name today | grep: `apply_degradation` in `solar_challenge.__all__`, `_SYMBOL_MODULE` and `FROZEN_SURFACE` | PASS |
 | Removal waits for S29's bump | D4/D29: a retirement is a held leaf; filed with `x_seam_wait` | PASS |
+
+## Decompose amendments (2026-10-15, main `0fcef8b`)
+
+- **α is task 756, not an S14 filing.** The contract §8 step 1 lookup found 756 (fk-48447960eb2c) in-progress in its merge phase, and its branch delivers α: `DEFAULT_CEC_MODULE`, the two-argument `_require_cec_library_row`, the substring search, both fallbacks and the CS6K comments deleted, and the docs naming the row. Its row reader is `cec_module_params` where the PRD says `_cec_library_module`. Task 800, 756's follow-up, names the row in `test_validation.py`'s prose and keeps the `400.428` data literals as deliberate pins, so α's "tests read the row" binding became a prose check bound to 800 (manual). The missing-row refusal is observed by 756's tests. γ (812) and ζ (825) depend on 756.
+- **β's two suppression checks were re-scoped** so that B2's own assertion on the warning cannot wedge them: `_chandrupatla` is checked absent in `scripts/` only, and `_QUIET_DIODE_SOLVER|ignore:invalid value encountered` absent in `tests/` and `scripts/`.
+- **ε's helper check was re-anchored** to `"A_c"` present in `pv.py`. The earlier absent-check on `"efficiency": efficiency` also matched `create_simple_inverter_params`, which ε does not touch, so it could never pass.
+- **ζ's 195 pre-condition is met.** The lead cancelled 195 (D35, L20), and 195 carries `x_superseded_by` 825.

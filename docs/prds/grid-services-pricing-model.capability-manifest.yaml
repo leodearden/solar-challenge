@@ -9,7 +9,7 @@ prd: docs/prds/grid-services-pricing-model.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 801
     title: "Grid-services income per simulated age, through one pricing method"
     capabilities:
       - name: "memo-deleted"
@@ -135,7 +135,7 @@ tasks:
           paths: ["docs/domain-library-consumption.md"]
           expect: present
   - label: "β"
-    task_id: null
+    task_id: 802
     title: "FinanceConfig refuses an inconsistent grid-services choice; no CLI ignores one"
     capabilities:
       - name: "local-selector-vocabulary-deleted"
@@ -215,7 +215,7 @@ tasks:
           kind: manual
           reason: "exit codes, stderr and the omission line judged by β's own CLI tests (PRD §9 C6-C8)"
   - label: "γ"
-    task_id: null
+    task_id: 803
     title: "One band vocabulary and one grid-services rate table"
     capabilities:
       - name: "band-vocabulary-exists"

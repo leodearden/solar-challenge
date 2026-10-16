@@ -6,8 +6,9 @@ prd: docs/prds/pv-model-one-home.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 756
     title: "Name the default CEC module and require its catalogue row"
+    note: "Bound by hand at decompose (2026-10-15), not filed by S14: the contract §8 step 1 lookup found task 756 (fk-48447960eb2c) in-progress in its merge phase, its branch delivering α (DEFAULT_CEC_MODULE, two-argument _require_cec_library_row, substring search, fallbacks and CS6K comments deleted, docs name the row; its row reader is cec_module_params where the PRD says _cec_library_module). Task 800, 756's follow-up, names the row in test_validation.py's prose. γ (812) and ζ (825) depend on 756. 756's metadata carries no delivered_checks: commit_planning never ran on it."
     capabilities:
       - name: "default-module-constant-defined"
         binding: "probe: CECMod (21,535 columns) holds Canadian_Solar_Inc__CS1U_400MS; the constant is new in α"
@@ -41,22 +42,20 @@ tasks:
           pattern: "module_params\\.iloc\\[:, 0\\]|380 < params\\.get\\(\"STC\""
           paths: ["src/solar_challenge/pv.py"]
           expect: absent
-      - name: "tests-read-the-row-not-a-literal"
-        binding: "grep: tests/unit/test_validation.py restates 400.428 at three sites on main"
-        verdict: PASS
-        delivered_check:
-          kind: grep
-          pattern: "400\\.428"
-          paths: ["tests/"]
-          expect: absent
-      - name: "missing-row-refused-naming-it"
-        binding: "rejection-mechanism built by α: today a library without the row yields CS3W_400P (probe: match list [CS1U_400MS, CS3W_400P]); α's subprocess test observes the refusal naming the row and CECMod"
+      - name: "tests-name-the-row-in-prose"
+        binding: "grep: tests/unit/test_validation.py restates 400.428 at three sites on main. Producer task 800 (756's follow-up) rewords the prose to name DEFAULT_CEC_MODULE and keeps the 400.428 data literals as deliberate pins (756's reviewed design: deriving them from the constant would make the tests circular), so the earlier absent-check on 400\\.428 in tests/ could never pass"
         verdict: PASS
         delivered_check:
           kind: manual
-          reason: "the refusal is observed by α's subprocess test with a patched retrieve_sam, not by a grep"
+          reason: "prose wording is a reviewer judgment; the data literals stay by design"
+      - name: "missing-row-refused-naming-it"
+        binding: "rejection-mechanism built by 756: today a library without the row yields CS3W_400P (probe: match list [CS1U_400MS, CS3W_400P]); 756's tests observe `pvlib's CECMod library has no row named ...` for an unknown name and the default system wiring the DEFAULT_CEC_MODULE row key for key; the default path reads the row through the same guard"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the refusal is observed by 756's own tests, not by a grep"
   - label: "β"
-    task_id: null
+    task_id: 810
     title: "One run policy: pv.run_model_chain, used by simulate_pv_output, the scripts and tests"
     capabilities:
       - name: "run-model-chain-defined"
@@ -67,20 +66,20 @@ tasks:
           pattern: "^def run_model_chain\\("
           paths: ["src/solar_challenge/pv.py"]
           expect: present
-      - name: "policy-copies-gone-from-scripts-and-tests"
-        binding: "grep: _chandrupatla filters in measure_pv_performance_ratio.in_plane_irradiation and measure_mppt_window.main on main"
+      - name: "policy-copies-gone-from-scripts"
+        binding: "grep: _chandrupatla filters in measure_pv_performance_ratio.in_plane_irradiation and measure_mppt_window.main on main. Scoped to scripts/ at decompose (2026-10-15): B2's own test in tests/ may name the solver when it asserts the bare run's warning"
         verdict: PASS
         delivered_check:
           kind: grep
           pattern: "_chandrupatla"
-          paths: ["scripts/", "tests/"]
+          paths: ["scripts/"]
           expect: absent
       - name: "broad-test-filters-gone"
-        binding: "grep: tests/unit/test_measurement_scripts._QUIET_DIODE_SOLVER and three filterwarnings marks in tests/unit/test_pv.py on main"
+        binding: "grep: tests/unit/test_measurement_scripts._QUIET_DIODE_SOLVER and three `ignore:invalid value encountered` filterwarnings marks in tests/unit/test_pv.py on main. Pattern targets the suppressions at decompose (2026-10-15), so B2's assertion on the warning text cannot wedge it"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "invalid value encountered"
+          pattern: "_QUIET_DIODE_SOLVER|ignore:invalid value encountered"
           paths: ["tests/", "scripts/"]
           expect: absent
       - name: "scripts-run-chains-through-the-policy"
@@ -106,7 +105,7 @@ tasks:
           kind: manual
           reason: "warning behaviour is observed by β's B2 test, not a grep"
   - label: "γ"
-    task_id: null
+    task_id: 812
     title: "One module rating; wired DC read from the built PVSystem"
     capabilities:
       - name: "four-hundred-watt-default-deleted"
@@ -138,7 +137,7 @@ tasks:
           kind: manual
           reason: "refusal message asserted by γ's own test"
   - label: "δ"
-    task_id: null
+    task_id: 818
     title: "Validation states what it applies: sourced public bands; size notes from the run's own totals"
     capabilities:
       - name: "pv-only-band-constant-public"
@@ -195,7 +194,7 @@ tasks:
           kind: manual
           reason: "source quality is a reviewer judgment"
   - label: "ε"
-    task_id: null
+    task_id: 823
     title: "Cell temperature from the module: NOCT-SAM from its own T_NOCT and efficiency for every run; re-baseline"
     note: "Session ruling (Leo, 2026-10-15): NOCT-SAM for every run, accepting that every default yield moves (Bristol default 4 kW ×1.0191)."
     capabilities:
@@ -216,13 +215,13 @@ tasks:
           paths: ["src/solar_challenge/pv.py"]
           expect: present
       - name: "helper-efficiency-key-replaced-by-area"
-        binding: "grep: create_simple_module_params writes an unread \"efficiency\" key on main"
+        binding: "grep: create_simple_module_params writes an unread \"efficiency\" key on main and no src file names A_c. Re-anchored at decompose (2026-10-15): the earlier absent-check on `\"efficiency\": efficiency` also matched create_simple_inverter_params, which ε does not touch, so it could never pass"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\"efficiency\": efficiency"
+          pattern: "\"A_c\""
           paths: ["src/solar_challenge/pv.py"]
-          expect: absent
+          expect: present
       - name: "cell-temperature-doc-exists"
         binding: "new in ε"
         verdict: PASS
@@ -251,7 +250,7 @@ tasks:
           kind: manual
           reason: "energies asserted by ε's B5 tests"
   - label: "ζ"
-    task_id: null
+    task_id: 825
     title: "PVConfig.module_efficiency and temperature_coefficient become live (D14): Optional, derived from the template, refused out of domain"
     note: "A steeper γ is NOT asserted to lower annual yield: probe shows Bristol's year ×1.0055 at γ −0.005 (cells mostly below 25 °C); signals use the clear June day."
     capabilities:
@@ -312,8 +311,8 @@ tasks:
           kind: manual
           reason: "refusal messages asserted by ζ's own tests"
       - name: "task-195-cancelled-first"
-        binding: "pre-condition: branch task/195 retires both fields and merges cleanly at 9d7b67e; only stale L2 esc-195-3 holds it (PRD open question 1)"
-        verdict: OPEN
+        binding: "pre-condition met 2026-10-15: task 195 cancelled by the lead with esc-195-3, esc-195-2 and esc-224-2 closed as superseded (program D35, L20); ζ stamps x_superseded_by on 195 at decompose"
+        verdict: PASS
         delivered_check:
           kind: manual
           reason: "a lead action on task state, not a code check"

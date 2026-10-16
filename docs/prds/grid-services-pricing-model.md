@@ -2,8 +2,8 @@
 
 - **Program:** review-all-solar_challenge-20261013, stream **S9** (`plans/review-all-program-solar_challenge-20261014.md`). Wave 1, size M, risk medium. Upstream: S1 (L5).
 - **Finding keys:** fk-758b2f309cab, fk-4ddab794283a, fk-aafe32daa988, fk-d432a549b03f, fk-0f24b7f66eb2, fk-71b4ca35efe0 (already filed as task 704; §2.3).
-- **Binding rulings:** D13 (capacity-at-events income is computed per projection age from that age's aged homes; the age-0 closure memo and finance.py's function-local gridservices import go; the compute-once tests become per-age tests; `FinanceConfig.grid_services_model` becomes a closed selector type), D29 (additive frozen-table edits land in-leaf with an "Unreleased on main" line; renames and retirements are held for S29), D4 (one coordinated surface bump; no shim or dual field survives it), L5 (S9's refusals depend on S1-β and raise `errors.ConfigurationError`).
-- **Status:** authored 2026-10-14 by an author-only /prd session. Not committed, not decomposed.
+- **Binding rulings:** D13 (capacity-at-events income is computed per projection age from that age's aged homes; the age-0 closure memo and finance.py's function-local gridservices import go; the compute-once tests become per-age tests; `FinanceConfig.grid_services_model` becomes a closed selector type), D29 (additive frozen-table edits land in-leaf with an "Unreleased on main" line; renames and retirements are held for S29), D4 (one coordinated surface bump; no shim or dual field survives it), L5 (S9's refusals depend on S1-β and raise `errors.ConfigurationError`). **Lead question 2 resolved 2026-10-16** (Leo, /team investigation session team-solar_challenge-3510552): firm capacity is measured per event day and booked at its mean over event days, under an explicit delivery baseline, with the evening self-use an event displaces reported beside the income (§5.10, leaf α′); the counterfactual event simulation that books net income with its incidence is a successor PRD (§8, §11).
+- **Status:** authored 2026-10-14 by an author-only /prd session; amended 2026-10-16 with leaf α′ (§5.10) and the §2.2 fleet measurement. Not committed, not decomposed.
 - **Approach:** B + H. The model is read by finance, both finance CLIs, optimize, flex and the scenario grammar, sits on the frozen surface, and is a seam for S8, S25 and S26. So it gets a contract (§5) and two-way boundary tests (§9).
 - **Code anchors** verified against main `9d7b67e` (2026-10-14). Main moves fast — cite-by-symbol; re-locate lines at implementation time. `finance.py`, `gridservices.py`, `flex.py`, `optimize.py`, `config.py`, `cli/finance.py` and `cli/optimize.py` are byte-identical to the review's pin `7dfea36`. `tests/integration/test_grid_services_events.py` moved 16 lines, but its two monkeypatching tests are unchanged. Task 704 (in merge) rewrites `cli/optimize._SENSITIVITY_ALIAS_MAP`. Task 702 (in progress) renames `YearPoint.fleet_self_consumption_kwh` and `_NodeData.fleet_sc` inside `project_multi_year`.
 
@@ -13,7 +13,7 @@ How grid-services income is priced becomes one closed choice: no income, a flat 
 
 What a user observes:
 
-1. **Event income follows battery health.** Take a fleet whose battery state of charge scales with each aged battery's SOH. `project_multi_year` books each simulated age's own event figure, so revenue at age 24 carries about half the age-0 event income: battery SOH falls to 0.50–0.52 by age 24 under the default fade. Today the age-0 figure is booked at every age. The board model doc (`docs/cost-recovery-finance-model.md` §4, §8.1) gains the capacity-at-events equation, with a worked figure of £9.97 per kW of firm spare capacity per year in the central band. On the board scenario this moves no figure, because its event income is £0 at every age (§2.2).
+1. **Event income follows battery health.** Take a fleet whose battery state of charge scales with each aged battery's SOH. `project_multi_year` books each simulated age's own event figure, so revenue at age 24 carries about half the age-0 event income: battery SOH falls to 0.50–0.52 by age 24 under the default fade. Today the age-0 figure is booked at every age. The board model doc (`docs/cost-recovery-finance-model.md` §4, §8.1) gains the capacity-at-events equation, with a worked figure of £9.97 per kW of firm spare capacity per year in the central band. On the board scenario α alone moves almost nothing, because the season-minimum firmness prices £3 a year at age 0 and £0 at SOH 0.8 (§2.2); after α′ the board's event income is about £300 a year at age 0 and about half that at SOH 0.8.
 2. **No inconsistent configuration is accepted.** These raise `ConfigurationError` at construction, so `finance run` and `optimize configs` exit 1 with `Configuration error:` before simulating:
    - `capacity_at_events` with no events configuration;
    - `capacity_at_events` with a non-zero flat rate;
@@ -32,6 +32,7 @@ What a user observes:
    - A scenario names its pricing once: `finance.grid_services_model: {type: capacity_at_events, …}` or `{type: flat, income_per_kw_per_year_gbp: …}`, and absent means none.
    - A file still carrying `grid_services_income_per_kw_per_year_gbp`, `grid_services_events` or a string `grid_services_model` is refused, naming the new location.
    - `FinanceConfig(grid_services_model="flat")` fails mypy --strict and raises at runtime.
+6. **Firm capacity is measured per event day (α′).** `compute_fleet_spare_capacity_kw` measures each home's firm spare capacity on each event day and books the mean over event days, so one minute at the SOC floor zeroes that day, not the season. The events configuration names its delivery baseline: `operational` (the increment above the battery's own discharge, as NESO's Demand Flexibility Service measures delivery; the default) or `capacity` (the battery's whole window discharge, as NGED baselines domestic storage). The report's capacity-at-events table shows the capacity available on 50% and 90% of event days and the evening self-use an event discharge displaces, which the income does not net off. On the board fleet the operational figure is about £300 a year, the capacity figure about £920, and the displaced self-use about £240 a year of householder import savings (§2.2).
 
 ## 2. Background (measured at 9d7b67e)
 
@@ -86,7 +87,24 @@ Probe: the first three battery homes of `scenarios/bristol-phase1-flex.yaml`, si
 
 Firm spare energy is the minimum of (SOC − floor) over every in-window minute of the season. The TOU fleet reaches its floor inside 16:00–19:00. So the board scenario's event income is £0 today and stays £0 under D13: per-age pricing moves no board figure until the firmness definition or the dispatch changes (lead question 2).
 
-D13's consequence names "more simulations per projection". Measured against the code, per-age pricing adds one reduction per simulated age and no simulation: `_simulate_age` already simulates each age. Bisection adds nodes only where per-age income bends the revenue curve. On the board scenario it does not, since the event income is flat at £0.
+**Fleet measurement (2026-10-16, lead question 2).** All 100 board homes, the full 2024 year, 87 winter event days per home (86 where the next morning is needed), SOH set as `_aged_homes` sets it, priced at the central band's £9.972 per kW-year. Scripts and results: `docs/analysis-and-context/scripts/2026-10-16-grid-services-firmness-measure.py`, `…-measure2.py` and `docs/analysis-and-context/outputs/2026-10-16-grid-services-firmness/`.
+
+| Firmness rule (per home, in-window minutes of winter weekdays 16:00–18:59; fleet = sum over 100 homes) | Fleet £/yr, SOH 1.0 | SOH 0.8 |
+|---|---|---|
+| Season minimum (today): `max(0, min(P − max discharge, min(soc − floor) / 3 h))` over every in-window minute of the season | 3 (three homes never reach the floor) | 0 |
+| Per event day, mean over days: the same reduction over each day's in-window minutes, then the mean of the 87 daily values | 296 | 143 |
+| Capacity available on 50% / 75% / 90% of event days (percentiles of the daily values) | 298 / 89 / 15 | 122 / 34 / 2 |
+| Time-averaged over in-window minutes | 611 | 413 |
+| Capacity baseline (NGED-style, the whole window discharge counts): `max(0, min(P, (soc at 16:00 − floor) / 3 h))`, mean over days | 919 | not measured |
+| Idle-only: energy still above the floor at 00:29, just before the overnight recharge, divided by 3 h | 23 | not measured |
+| Hold-back ceiling (analytic, no simulation): `min(P, (0.9 × capacity × SOH − floor) / 3 h)` = 1.333 kW per home | 1,330 | 1,064 |
+| Flat model, for comparison: 12 £/kW-yr × 2.5 kW × 100 | 3,000 | 3,000 |
+
+Diagnostics at SOH 1.0, per home per event day: SOC above the floor is 2.75 kWh at 16:00, 0.90 kWh at 19:00 and 0.07 kWh at 00:29; 64% of event days never touch the floor inside the window, 28% reach it part way, 8% sit at it all window; 88% are at the floor by 00:29. In-window discharge, 0.61 kW mean, all serves the home's own load (no export while discharging). Between 19:00 and 00:29 the battery discharges 0.81 kWh for the home's own load, so an event discharge displaces about 0.8 kWh of peak-rate import per home per event, about £0.20 at the 0.25 £/kWh peak rate, against a net central-band payment of about £0.25 per home per event.
+
+Three readings. First, the £0 is an artefact of the season minimum: no UK product contracts that way (DFS declares per event and scales pay by a delivery factor; NGED declares per window day-ahead and claws back proportionally). Second, the consulting £30 per home does not survive the physics under any rule: a 5 kWh battery charged to 90% holds 4.0 kWh above its floor, 1.33 kW over a 3-hour event, so even total reservation reaches 44% of the flat figure, and the arbitrage dispatch leaves a tenth of it. Third, almost no capacity escapes arbitrage: the energy the per-day rule prices is energy the home would have used before midnight, so under the operational baseline the CBS's £300 is roughly offset by £240 of householder import savings, and under the capacity baseline the community nets about £680. No reduction over the baseline series books that incidence; the successor PRD does (§11).
+
+D13's consequence names "more simulations per projection". Measured against the code, per-age pricing adds one reduction per simulated age and no simulation: `_simulate_age` already simulates each age. Bisection adds nodes only where per-age income bends the revenue curve. On the board scenario before α′ it does not, since the event income is flat at £0; after α′ the income falls with SOH and bisection may add nodes.
 
 ### 2.3 Tasks this PRD meets
 
@@ -118,6 +136,9 @@ All six keys were confirmed at `7dfea36`, and none is in D28's weakened list. Re
    - `project_multi_year` resolves the value once, before simulating, and `_simulate_age` books `pricing.annual_income_gbp(fleet_results)` for the fleet it just simulated.
    - The import moves to module top. The memo, guard, string branch, `assert` and the two monkeypatching tests go, replaced by per-age tests.
    - The model doc gets its equation, the docstring its CBS wording, and an unobserved window its warning.
+1a. **α′ — Firm capacity per event day.**
+   - `compute_fleet_spare_capacity_kw` reduces per event day and returns the mean over event days; `GridServicesEventsConfig` gains `delivery_baseline`; `GridServicesAtEvents` gains the 50% and 90% reliability capacities and the displaced self-use, which the report renders.
+   - The model doc's §8.1 states the per-day equation, the two baselines, the energy ceiling and that displaced self-use is reported, not netted.
 2. **β — Close the triple at construction.**
    - `FinanceConfig.__post_init__` calls `grid_services_model_of(self)`, which now refuses all three inconsistent combinations and replaces `_VALID_GS_MODELS`.
    - `cli/finance` renders the events breakdown when the value is an events configuration, with no silent `None` and no function-local import.
@@ -264,6 +285,8 @@ finance:
 | α | `GridServicesEventsConfig` gains `annual_income_gbp` (`FROZEN_MEMBERS`) | additive; Unreleased line in `docs/domain-library-consumption.md` |
 | α | `compute_grid_services_at_events` warns on an unobserved window | Unreleased line |
 | α | `project_multi_year` prices capacity-at-events income per simulated age | the model doc's header Unreleased line (that doc's own convention) |
+| α′ | `compute_fleet_spare_capacity_kw` and `compute_grid_services_at_events` measure firmness per event day (a model change: the figure rises from the season minimum to the mean over event days) | the model doc's header Unreleased line; Unreleased line in `docs/domain-library-consumption.md` |
+| α′ | `GridServicesEventsConfig` gains `delivery_baseline` (default `operational`) and `GridServicesAtEvents` gains four last fields (`FROZEN_MEMBERS`) | additive; Unreleased line |
 | β | `FinanceConfig` refuses the three inconsistent combinations | Unreleased line; consumers fix such inputs at re-pin |
 | γ | `GridServicesRateBand` gains a last field, `flat_gbp_per_kw_per_year` (default 0.0); band refusals share one message; `GridServicesRateBands.resolve` raises `ConfigurationError`, a `ValueError` | Unreleased line |
 | ε (held) | `FinanceConfig.grid_services_model: GridServicesModel = NoGridServices()`; the two fields retired; `NoGridServices`, `FlatGridServices` and `GridServicesBand` in `__all__`; `GridServicesEventsConfig.band: GridServicesBand`; `resolve` and `resolve_grid_services_rate_band` take `GridServicesBand` | Build the value: `FlatGridServices(r)`, or pass the events configuration itself. The platform needs no edit (measured). Scenario files move their keys. String band literals still work at runtime, through the str-mixin enum. |
@@ -280,6 +303,33 @@ finance:
 | C6 | One rate table: every grid-services rate per band lives in `GRID_SERVICES_RATE_BANDS`, and flex, `SENSITIVITY_BANDS` and the report read it | γ's equality tests |
 | C7 | `finance.py` and `cli/finance.py` import gridservices at module top | α, β; S1-γ's guard |
 | C8 | Importing finance or constructing `FinanceConfig` loads neither `config` nor pvlib (S1's C7 kept) | probe at 9d7b67e; S1-α's test |
+| C9 | Firmness is per event day: on every event day, each home's capacity is within that day's inverter headroom and that day's energy above the floor over `event_hours`; the booked figure is the mean over event days; the season-minimum figure never exceeds the 90% reliability figure, which never exceeds the 50% figure | α′'s tests (§9 P6, P7) |
+| C10 | The delivery baseline is explicit and closed: `operational` or `capacity`, refused otherwise; the displaced self-use is reported in the breakdown and never enters `annual_income_gbp` | α′'s tests (§9 P6–P8, C13) |
+
+### 5.10 Firm capacity per event day and the delivery baseline (α′)
+
+```python
+class GridServicesEventsConfig:            # frozen; gains a last field (additive, FROZEN_MEMBERS)
+    delivery_baseline: str = "operational"   # "operational" | "capacity"; else ConfigurationError
+
+@dataclass(frozen=True)
+class GridServicesAtEvents:                # frozen; gains four last fields (additive), each in window order
+    per_window_avail_p50_kw: tuple[float, ...] = ()           # capacity available on at least 50% of event days
+    per_window_avail_p90_kw: tuple[float, ...] = ()           # … on at least 90% of event days
+    per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = ()
+    per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()
+```
+
+- **Event day.** A calendar date, in the fleet index's timezone, holding at least one in-window timestep of the window. A home whose index lacks a date contributes 0 to that date.
+- **Per home, per event day `d`, window `w`** with `P = max_discharge_kw`, `floor = Battery(cfg).min_soc_kwh`, `h = w.event_hours`:
+  - `operational`: `avail(home, d) = max(0, min(P − max_{t∈d∩w} discharge(t), min_{t∈d∩w}(soc(t) − floor) / h))`. The increment above the battery's own discharge, as DFS measures delivery against an operational baseline.
+  - `capacity`: `avail(home, d) = max(0, min(P, (soc(t₀) − floor) / h))`, `t₀` the first in-window timestep of `d`. The whole window discharge counts, as NGED baselines domestic storage at its capacity.
+- **Fleet daily total** `A(d) = Σ_home avail(home, d)`. `per_window_avail_kw[w] = mean_d A(d)`, the figure the pricing formula multiplies, unchanged in form. `p50` is the 50th percentile of `A` over event days and `p90` the 10th percentile. The season-minimum figure is a lower bound of `p90`.
+- **Displaced self-use**, per home and event day: `min(avail(home, d) × h, Σ discharge(t) Δt)` over the timesteps after `d`'s last in-window timestep and before the first later timestep with `battery_charge > 0` or the next event day's first in-window timestep, whichever comes first. `per_window_displaced_self_use_kwh_per_event[w]` is the fleet sum's mean over event days. `per_window_displaced_import_gbp_per_year[w]` values each home-day's displaced energy at the mean `tariff_rate` over those timesteps, sums over homes, takes the mean over event days and multiplies by `w.events_per_year`. It is a reported figure: `annual_income_gbp` does not subtract it, and the model doc says so.
+- **Pricing** is §2.1's formula on `per_window_avail_kw`. A window with no event day keeps §5.4's warning and £0.
+- **Grammar.** `grid_services_events.delivery_baseline` is parsed where the events block is parsed today; an unknown value is refused naming the two values. ε's typed block carries it.
+- **Report.** The capacity-at-events table gains rows: capacity on 50% and on 90% of event days (kW), evening self-use displaced per event (kWh) and its value per year (£), with a one-line note that the income is gross of it.
+- **Board figure.** Recorded on the task, as §2.2 measures it: about £296 (operational) and £919 (capacity) at SOH 1.0, with about £242 a year displaced.
 
 ## 6. Resolved design decisions
 
@@ -295,6 +345,9 @@ finance:
 10. **One table holds both calibrations, declared independent, with no number changes.** The finding allowed deriving the events defaults from the flat bands instead. That would move the low and high event figures with no calibration basis, while both bands are already marked provisional (enhanced-grid-services PRD open-Q2).
 11. **The band vocabulary lives in gridservices.** flex then imports gridservices, which loads battery, timebase and pandas, all already loaded where flex is used, and not pvlib.
 12. **ε is one held leaf.** It holds the type, the retired fields, the grammar, the scenario files and the band annotations: one release's break, sharing `finance.py`, `gridservices.py`, the grammar and the same tests.
+13. **Firm per event day, booked at the mean (lead question 2, 2026-10-16).** DFS and NGED both declare per event or per window and scale pay by delivery, so an aggregator with day-ahead forecasts earns the expectation over event days; the season minimum, which no product requires, priced the board fleet at £3 (§2.2). The 50% and 90% reliability figures express the declaration risk without choosing a quantile for the board. The alternatives considered: keep the season minimum and report £0; a configurable reliability quantile as the booked figure; retire the events model (the flat figure prices 2.5 kW the battery's energy cannot sustain); a hold-back reserve dispatch (a dispatch change, the successor PRD's ground).
+14. **The delivery baseline is a named choice, default `operational`.** The window is DFS-shaped and the June PRD's "net of contention" reading is the DFS reading; NGED's capacity baseline is a different product with a figure three times larger, so the scenario says which it means rather than the code assuming one.
+15. **Displaced self-use is reported, not netted.** It lands on the householder's bill, not CBS revenue, and netting it needs a counterfactual run with an event-day dispatch, which the successor PRD owns (§11). The observational figure beside the income keeps the board from reading gross as net meanwhile.
 
 ## 7. Pre-conditions
 
@@ -312,7 +365,8 @@ No substrate has to be built first. §G3 of the gate record lists what was verif
 | S1 Errors leaf (773–775) | consumes / shrinks | `errors.ConfigurationError` for the rule and `FlatGridServices`; α and β delete their γ allow-list entries if 775 has landed | S1 | declared (L5) |
 | S8 Finance partition | consumed by | `project_multi_year` and `FinanceConfig` change shape here first; S8's move carries `grid_services_model_of` (until ε) and the per-age call | S9 (α, β) | **proposed:** S8's move leaf depends on S9 α and β |
 | S10 Window | shares | `_simulate_age` (textual); the grid-services term is annual by construction, so the window scale never multiplies it (C2) | S10 owns the window; S9 owns C2 | note only |
-| S25 Board reports | consumed by | `cli/finance.run`'s events breakdown, read from the pricing value (β); `--flex-band` typed `GridServicesBand` (γ); per-mode rendering stays S25's | S9 (β, γ) | **proposed:** S25's `cli/finance` leaf depends on S9 β and γ |
+| S25 Board reports | consumed by | `cli/finance.run`'s events breakdown, read from the pricing value (β); `--flex-band` typed `GridServicesBand` (γ); the reliability and displaced-self-use rows (α′); per-mode rendering stays S25's. Under the events model the flex block's consulting "Grid services (firm flex) £30/home" row and £280 headline contradict the events figure the economics use; S25 renders the events figure there | S9 (α′, β, γ) | **proposed:** S25's `cli/finance` leaf depends on S9 α′, β and γ, and renders the events figure in the flex block |
+| Successor PRD: counterfactual event simulation (to be authored by /prd after α′ lands) | produces for | on sampled event days, a paired baseline and event-dispatch run of the fleet measures delivery as the products meter it, the displaced householder import, round-trip loss and recharge, and books net income with its incidence; α′'s observational figure is its first approximation and standing cross-check; the §2.2 scripts are its measurement substrate | the successor | **proposed**; see §11 |
 | S26 Knob registry | consumed by | the grid-services knob's meaning: a flat rate, refused under the events model (β); builds `FlatGridServices(v)` (ε); an events-band knob would be new (lead question 3) | S9 owns the meaning; S26 hosts it | **proposed** cross-reference; ε edits the registry entry if S26 has landed |
 | S2 Dispatch configuration | touches | S2 δ edits one line of `compute_fleet_spare_capacity_kw` (`soc_envelope`) | S2 | file overlap only |
 | S4 Finite quantities | touches | `FlatGridServices`, the new rate-band field and flex's bands use the finite checker once it lands; until then, today's idiom | S4 | file overlap only |
@@ -328,12 +382,16 @@ No substrate has to be built first. §G3 of the gate record lists what was verif
 | P1 | producer | each value prices a fleet | synthetic `FleetResults`: two battery homes (2.5 and 3.0 kW discharge) and one PV-only home | `NoGridServices` → 0.0; `FlatGridServices(12.0)` → 66.0; events → `compute_grid_services_at_events(...).annual_income_gbp` | α |
 | P2 | producer | worked figure | one 5 kWh default battery home, a full-year index, SOC 3.5 kWh and discharge 0.5 kW constant (spare = min(2.0, 3.0 / 3) = 1.0 kW) | central `GridServicesEventsConfig()` → £9.972 (±1e-9); low → 4.986; high → 19.944; the doc's worked figure matches | α |
 | P3 | producer | unobserved window | June-only index, default winter window | one `UserWarning` naming months (11, 12, 1, 2) and the index span; income 0.0; a fleet with no battery home does not warn | α |
+| P6 | producer | firm per event day | synthetic two-home fleet over two winter weekdays; home A sits at its floor for one minute of day 1 only, 3.5 kWh otherwise, 0.5 kW discharge; home B 3.5 kWh and 0.5 kW throughout | per-day avails hand-computed (A: 0 and 1.0; B: 1.0 and 1.0); `per_window_avail_kw` = 1.5 (RED today: 1.0, the season minimum zeroes A); `p90` = 1.0 and `p50` = 2.0 or the hand-computed percentiles of (1.0, 2.0); the season-minimum figure ≤ p90 ≤ p50 | α′ |
+| P7 | producer | capacity baseline | the P6 fixture with `delivery_baseline="capacity"` | A: min(2.5, 3.0/3) = 1.0 on both days (own discharge not subtracted; the floor minute is after `t₀`); `delivery_baseline="metered"` raises `ConfigurationError` naming `operational` and `capacity` | α′ |
+| P8 | producer | displaced self-use | the P6 fixture extended past the window: 1.0 kW discharge for 90 minutes after 19:00, then a charge minute | displaced = min(1.0 × 3, 1.5) = 1.5 kWh per home per event; value = 1.5 × the fixture's tariff rate × 2 homes × events_per_year; `annual_income_gbp` unchanged by it | α′ |
 | P4 | producer | one vocabulary | — | `GridServicesEventsConfig(band="medium")`, `GRID_SERVICES_RATE_BANDS.resolve("medium")` and `resolve_flex_band("medium")` all raise `ConfigurationError` containing `must be one of low, central, high` | γ |
 | P5 | producer | one table | — | for each band, `FLEX_VALUE_BANDS[b].grid_services_per_kw_gbp == GRID_SERVICES_RATE_BANDS.resolve(b).flat_gbp_per_kw_per_year`; `SENSITIVITY_BANDS`' grid entry is that column in band order; item assignment on `FLEX_VALUE_BANDS` raises `TypeError` | γ |
 | C1 | consumer: projection | per-age events | board scenario homes; an energy-constant fake simulator whose battery SOC is 0.8 × capacity × each aged home's `battery_config.soh`, so the `NoGridServices` curve is exactly flat; events model vs `NoGridServices` | for every age a in the events curve's `sampled_ages`, `events.points[a].fleet_revenue_gbp − none.points[a].fleet_revenue_gbp` equals `compute_grid_services_at_events` of that age's simulated fleet (approx); the age-24 figure < the age-0 figure (RED today: every age books the age-0 figure) | α |
 | C2 | consumer: projection | bisection path | the C1 fake, tuned so event income dominates revenue. SOH's kink at the 0.5 floor then puts the PCHIP midpoint off by more than 1% (§G6), and bisection adds trial ages | `len(sampled_ages) > 3`, and every trial age satisfies C1's equality | α |
 | C3 | consumer: projection | flat unchanged | the existing flat-model tests (`test_flex_grid_services`, B4's flat half) | YearPoints identical to before α | α |
 | C4 | consumer: solve | affine premise | the existing B5 I4 rate-independence test, with the events model | still passes under per-age pricing | α |
+| C13 | consumer: CLI | reliability and displacement rows | the existing ε test (`finance run --flex-band central` on the flex scenario) with a fake whose battery sits at the floor on one of two in-window days | the capacity-at-events table carries "on 50% of event days", "on 90% of event days" and "Evening self-use displaced" rows with the hand-computed values, and the income row is the mean-over-days figure | α′ |
 | C5 | consumer: library | construction refusals | — | the three combinations of §5.2 raise `ConfigurationError` naming the fields (RED today: they construct); `pytest.raises(ValueError)` catches them | β |
 | C6 | consumer: CLI | events without configuration | a scenario with `grid_services_model: capacity_at_events` and no `grid_services_events`; a simulator that fails the test if called | `finance run` exits 1 with `Configuration error:` naming `grid_services_events` (RED today: exit 0, no events section) | β |
 | C7 | consumer: CLI | flat override under events | the flex scenario; `--grid-services-kw 20`; a simulator that fails if called | exit 1, stderr names `--grid-services-kw` and `capacity_at_events` (RED today: runs) | β |
@@ -382,6 +440,25 @@ No leaf is high or critical, so none joins trigger-chain gate 772.
 - **Consumer:** board readers of the projection, through `finance run --project` and `--cost-recovery` and `optimize configs`; β; ε; S8's move.
 - **Prereqs:** S1-α (773).
 
+**α′ — Firm capacity per event day, with a named delivery baseline and the displaced self-use beside it** (leaf; priority medium; no review finding key: it resolves lead question 2, so the task carries `x_lead_question = S9-Q2` and the program's review-all keys only through α's; the lead confirms the key form at decompose)
+
+- **Modules:**
+  - `src/solar_challenge/gridservices.py`: `compute_fleet_spare_capacity_kw` (per-event-day reduction, both baselines, the daily totals), `GridServicesEventsConfig.delivery_baseline`, `GridServicesAtEvents`' four fields, `compute_grid_services_at_events` (fills them; prices the mean);
+  - `src/solar_challenge/config.py` (or `scenario_blocks.py` after S5): the `delivery_baseline` key of the events block;
+  - `src/solar_challenge/output.py`: the capacity-at-events table's new rows and gross-of-displacement note;
+  - tests: `tests/unit/test_gridservices.py` (P6–P8), `tests/integration/test_grid_services_events.py` (C13; the ε test), `tests/unit/config/test_finance_block.py` (the key and its refusal), `tests/unit/test_public_api_surface.py` (`FROZEN_MEMBERS` for both classes);
+  - `docs/cost-recovery-finance-model.md` §8.1: the per-day equation, the two baselines, the energy ceiling (1.33 kW per 5 kWh battery over 3 h against the 2.5 kW the flat rate prices), "reported, not netted", and the header Unreleased line;
+  - `docs/domain-library-consumption.md`: an Unreleased line naming the model change and the five additive members;
+  - `docs/prds/enhanced-grid-services-capacity-at-events.md`: a dated note under decision 1 and open question 3 pointing here.
+- **Work:** §5.10. Invariant I2 of the June PRD becomes per event day (C9). Re-run the §2.2 fleet measurement at the leaf's base with the scripts in `docs/analysis-and-context/scripts/` and record the four board figures (operational and capacity at SOH 1.0; operational at SOH 0.8; displaced £/yr) on the task.
+- **Signal (user-observable):**
+  - `finance run scenarios/bristol-phase1-flex.yaml --flex-band central` renders an events income in the hundreds of pounds a year with the two reliability rows and the displaced-self-use rows beneath it. Today it renders £0 and 0.0 kW.
+  - P6: a one-minute floor touch zeroes one day, not the season (RED today).
+  - P7: `delivery_baseline: metered` in a scenario exits 1 with `Configuration error:` naming `operational` and `capacity`.
+  - The model doc's §8.1 states the per-day equation, both baselines and the ceiling.
+- **Consumer:** board readers of `finance run` and the projection; β (the board scenario file may name its baseline); S25's flex-block rendering; the successor PRD.
+- **Prereqs:** α; S1-β (774), for the refusal.
+
 **β — FinanceConfig refuses an inconsistent grid-services choice; no CLI ignores one** (leaf; priority medium; keys fk-aafe32daa988, fk-d432a549b03f)
 
 - **Modules:**
@@ -398,7 +475,7 @@ No leaf is high or critical, so none joins trigger-chain gate 772.
   - C8: the default sensitivity panel on the flex scenario prints the omission line and has no grid-services axis.
   - C5: `FinanceConfig(standing_charge_pence_per_day=60, grid_services_model="capacity_at_events")` raises. Today it constructs, as the finding measured.
 - **Consumer:** CLI users (finance, optimize); library constructors of `FinanceConfig`; S25; S26; ε.
-- **Prereqs:** α; S1-β (774).
+- **Prereqs:** α′; S1-β (774).
 
 **γ — One band vocabulary and one grid-services rate table** (leaf; priority medium; keys fk-0f24b7f66eb2, fk-aafe32daa988)
 
@@ -437,7 +514,7 @@ No leaf is high or critical, so none joins trigger-chain gate 772.
 - **Consumer:** scenario authors; library constructors; S29's release section; the platform re-pin, which needs no edit.
 - **Prereqs:** β; γ; S29 releases it.
 
-**DAG:** S1-α → α → β; S1-β → β; S1-β, 704 → γ; {β, γ} → ε (held). The intra-batch edges are β→α and ε→β, ε→γ. The out-of-batch edges are α→773, β→774, γ→774 and γ→704.
+**DAG:** S1-α → α → α′ → β; S1-β → α′, β; S1-β, 704 → γ; {β, γ} → ε (held). The intra-batch edges are α′→α, β→α′ and ε→β, ε→γ. The out-of-batch edges are α→773, α′→774, β→774, γ→774 and γ→704.
 
 **G7** is advisory, because this repo has no `docs/legibility/design-invariants.md`. Screened against dark-factory's trigger shapes:
 
@@ -451,7 +528,8 @@ No hit.
 ## 11. Out of scope
 
 - **Re-simulation counts.** fk-4ddab794283a measured four age-0 fleet simulations per `finance run --project --cost-recovery`: the CLI's bill run, `project_multi_year`'s age 0, the solve's inner projection, and the solve's outlay run. D13 makes the figure per-age, so no age-0 input is needed and S9 does not change the count. Reusing simulations across the CLI, projection and solve belongs with S8 (the projection module surfacing per-age results; `solve_cost_recovery_rate`'s "Cost note") or S16 (the runner) (lead question 4).
-- **The firmness definition and the rate calibration.** These are what make the board's event income £0 (§2.2), and are a modelling decision (lead question 2).
+- **The rate calibration.** The banded rates stay provisional (enhanced-grid-services PRD open-Q2). The firmness definition was lead question 2 and is now α′.
+- **The counterfactual event simulation** (successor PRD, authored by /prd after α′ lands; Leo, 2026-10-16: changes to this repo for a more correct simulation are permitted, the frozen-library posture is not absolute). On sampled event days it runs the fleet twice, baseline and with an event-day dispatch that discharges the available capacity to the grid during the window, measures delivery as DFS and NGED meter it against their baselines, and books net income with its incidence: the CBS's grid-services revenue, the householder's displaced import, round-trip loss and the recharge. α′'s observational figure is its first approximation and a standing cross-check. Inputs: §2.2's measurement, its scripts, and the market reading recorded in the investigation session's result file (`/home/leo/.claude/fleet/sessions/team-solar_challenge-3510552/result.md`).
 - **A band-valued sensitivity knob for the events model** (S26; lead question 3).
 - **Report sections per assumption mode, and where events income renders** (S25).
 - **`GridServicesAtEvents`' unenforced sum invariant** (fk-f4d53977c642, left open as weakened; not this stream's key).
@@ -463,7 +541,7 @@ No hit.
 **For the lead** (cross-stream; S9's design holds whichever way each goes):
 
 1. **ε held.** D29 classes ε's work as retirements: two fields, the `str` form of `grid_services_model`, and the legacy scenario keys. So ε waits for S29, and `finance.grid_services_model_of` carries the closed choice from α to ε. The platform constructs `FinanceConfig` with grid-services defaults only (measured), so landing ε in-leaf would cost it nothing. D29 still says retirements are held. **Default:** held.
-2. **The board scenario's event income is £0** (§2.2). Firm spare energy is the season's minimum of SOC above the floor, and the TOU fleet reaches the floor inside the window. So D13 moves no board figure today. **Recommendation:** file a finance-economics modelling follow-up on the firmness definition, for example a per-event or per-day minimum averaged over event days. It is not S9's, and the board should know its events model currently prices nothing.
+2. **The board scenario's event income is £0** (§2.2). **Resolved 2026-10-16** (Leo, /team investigation): firm capacity per event day, booked at the mean, with a named delivery baseline and the displaced self-use reported beside it, as leaf α′ of this PRD (§5.10, decisions 13–15); the counterfactual event simulation that books net income with its incidence is a successor PRD (§11). The board should hear both findings of §2.2: the events line is about £300 a year gross at age 0 and falls with battery health, and the consulting £30 per home is capped by battery energy at about £13 per home even with full reservation.
 3. **Grid-services sensitivity under the events model.** β drops the flat-rate axis from the default panel there, with a printed line, and refuses it when asked for. A meaningful events axis would sweep `GridServicesBand`: a band-valued knob S26's registry could host. **Recommendation:** a cross-reference line on S26, not an S9 leaf.
 4. **Owner for the four age-0 simulations** (§11): S8 (the projection surfaces per-age results to the solve and the CLI) or S16 (the runner).
 
@@ -481,7 +559,8 @@ No hit.
 - **S1:** "`cli.finance → gridservices` (γ's Transitional allow-list entry) is owned by S9 β. `finance → gridservices` is S9 α's. Each deletes its entry if 775 has landed."
 - **S8:** "The `project_multi_year` move leaf depends on S9 α and β. It carries `grid_services_model_of` until S9 ε deletes it, and the per-age `pricing.annual_income_gbp` call. finance.py:1606's import is already gone (S9 α)."
 - **S10:** "The grid-services term is annual by construction (S9 §5.3, C2). `SimulationWindow`'s scale multiplies energy and SEG, never it."
-- **S25:** "The `cli/finance.run` restructure depends on S9 β (the events breakdown comes from the pricing value; no silent `None`) and γ (`--flex-band` typed `gridservices.GridServicesBand`). Per-mode rendering of events income stays S25's."
+- **S25:** "The `cli/finance.run` restructure depends on S9 α′ (the breakdown carries the 50% and 90% reliability capacities and the displaced self-use), β (the events breakdown comes from the pricing value; no silent `None`) and γ (`--flex-band` typed `gridservices.GridServicesBand`). Per-mode rendering of events income stays S25's. Under the events model the flex block's consulting 'Grid services (firm flex) £30/home' row and the £280 headline must render the events figure the economics use, not the consulting parameter."
+- **Program doc:** "Lead question 2 of S9 is resolved (2026-10-16): firmness per event day as S9 α′; a successor PRD for the counterfactual event simulation, to be authored after α′ lands. S16 is unaffected: no option changed a simulation count."
 - **S26:** "The grid-services knob means a flat rate: refused under the events model (S9 β), building `FlatGridServices(v)` at S9 ε. A band-valued events knob is a new registry entry (S9 lead question 3)."
 - **S29:** "The release section includes S9 §5.8. S9 ε is a held leaf released in the bump window."
 
@@ -505,13 +584,15 @@ No hit.
   - `FROZEN_MEMBERS` has no `GridServicesEventsConfig` entry yet.
   - Task 704's `SENSITIVITY_BANDS` exists on `task/704`; γ depends on 704.
   - S1's `errors.ConfigurationError` comes from 773 upstream.
+  - For α′: `SimulationResults` carries 1-minute `battery_soc`, `battery_discharge`, `battery_charge` and `tariff_rate` series (`home.py`), so the per-day reduction, the displaced self-use and its value need no new simulator output; the §2.2 scripts computed every α′ figure from them at main `0a5ab70`.
 - **G4:** each seam has one owner (§8). S8, S25 and S26 dependencies and the S1 allow-list ownership are proposed to the lead (§13). There are no reciprocal claims: S1 §7 already names S9 for both deferred-import entries.
 - **G5:** B + H. The blast radius is at least 3 modules (gridservices, finance, flex, optimize, both CLIs, the grammar), the work touches a frozen-surface seam, and at least 2 streams consume it (S8, S25, S26).
 - **G6:**
   - C1's "age 24 < age 0" holds on the fixture. Income is proportional to SOH there: E_spare = capacity × SOH × (0.8 − 0.1), so for a 5 kWh battery E_spare / 3 h = 1.17 × SOH kW, below P_spare = 2.0 kW. SOH(0) = 1.0 and SOH(24) ≤ 0.52.
   - C1's equality is exact at every year, because the energy-constant fake makes the no-income revenue curve constant, and PCHIP of a constant is that constant.
   - C2's bisection premise holds. With seeds 0, 12, 24 and SOH reaching its floor before age 12, PCHIP at age 6 gives SOH ≈ 0.656 against an actual ≈ 0.716 (calendar 0.02/yr plus cycle fade ≈ 0.027/yr at 0.5 kW discharge). That is a 0.06 × age-0 event income error, above 1% of age-0 revenue whenever event income is more than about a sixth of it.
-  - The premise does **not** hold on the board scenario, where both figures are £0 (§2.2, measured). The signal is therefore bound to the fixture, and the board measurement is recorded rather than asserted.
+  - The premise does **not** hold on the board scenario before α′, where both figures are £0 (§2.2, measured). The signal is therefore bound to the fixture, and the board measurement is recorded rather than asserted. After α′ the board's income falls with SOH (£296 → £143 between SOH 1.0 and 0.8, §2.2), so the premise holds there too, measured rather than asserted.
+  - α′'s figures are measured on all 100 board homes over the full year (§2.2), with the library's season-minimum result reproduced bit for bit as the check, and the SOC balance between 19:00 and 00:29 closing to 3e-14.
   - P2's 9.972 is arithmetic on the defaults (§2.1).
   - The rejection mechanisms are new code in β and γ, each with a RED-today test (C5–C8, C10). The finding measured that `FinanceConfig(…, grid_services_model='capacity_at_events')` constructs today.
   - The solve's affine premise was re-derived (§5.3).

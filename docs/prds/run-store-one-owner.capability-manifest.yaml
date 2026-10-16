@@ -7,7 +7,7 @@ prd: docs/prds/run-store-one-owner.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 805
     title: "Database: one connection policy for every SQLite connection"
     capabilities:
       - name: "database-value-holds-connection-policy"
@@ -27,7 +27,7 @@ tasks:
           paths: ["src/solar_challenge/web/jobs.py"]
           expect: absent
   - label: "β"
-    task_id: null
+    task_id: 806
     title: "JobManager writes through the app's RunStorage; the jobs table is retired"
     capabilities:
       - name: "jobs-table-has-no-writer"
@@ -53,7 +53,7 @@ tasks:
           kind: manual
           reason: "observed through POST /api/simulate/home then GET /api/history/runs/<id> in the leaf's tests"
   - label: "η"
-    task_id: null
+    task_id: 807
     title: "Drop the 'sweep' run type and sweep_id; refuse more than 50 sweep steps on the server"
     capabilities:
       - name: "sweep-id-gone"
@@ -73,7 +73,7 @@ tasks:
           paths: ["src/solar_challenge/web/api.py"]
           expect: present
   - label: "ε"
-    task_id: null
+    task_id: 814
     title: "Run kinds on RunRecord and one /results/<run_id> route"
     capabilities:
       - name: "one-results-route"
@@ -99,7 +99,7 @@ tasks:
           kind: manual
           reason: "exhaustiveness is a test plus a mypy property, not a grep"
   - label: "γ"
-    task_id: null
+    task_id: 816
     title: "One run list, one typed summary, one headline"
     capabilities:
       - name: "run-headline-exists"
@@ -127,7 +127,7 @@ tasks:
           paths: ["src/solar_challenge/web"]
           expect: absent
   - label: "δ"
-    task_id: null
+    task_id: 811
     title: "Saved scenario presets owned by presets.py"
     capabilities:
       - name: "no-config-presets-sql-in-api"
@@ -145,7 +145,7 @@ tasks:
           kind: manual
           reason: "an endpoint behaviour, asserted by the leaf's HTTP test"
   - label: "ζ"
-    task_id: null
+    task_id: 817
     title: "A run's default name has one home"
     capabilities:
       - name: "write-path-default-literals-gone"
@@ -157,7 +157,7 @@ tasks:
           paths: ["src/solar_challenge/web/storage.py", "src/solar_challenge/web/jobs.py"]
           expect: absent
   - label: "θ"
-    task_id: null
+    task_id: 819
     title: "Deleting a run cancels its job; deletion wins"
     capabilities:
       - name: "job-manager-cancels-a-run"
@@ -175,7 +175,7 @@ tasks:
           kind: manual
           reason: "a concurrency property observed by the leaf's deterministic tests"
   - label: "λ"
-    task_id: null
+    task_id: 820
     title: "One process per store: the DATA_DIR lock before recovery"
     capabilities:
       - name: "store-lock-uses-flock"
@@ -193,7 +193,7 @@ tasks:
           kind: manual
           reason: "observed by a subprocess test that GETs / from a --debug server"
   - label: "ι"
-    task_id: null
+    task_id: 821
     title: "Schema version, ordered migrations, solar-challenge web migrate"
     capabilities:
       - name: "schema-version-written"
@@ -227,7 +227,7 @@ tasks:
           kind: manual
           reason: "the invariant test's file name is chosen by the implementer"
   - label: "κ"
-    task_id: null
+    task_id: 822
     title: "Stored-run format version, strict reader, StoredRunUnreadable"
     capabilities:
       - name: "stored-run-unreadable-error"
@@ -245,7 +245,7 @@ tasks:
           kind: manual
           reason: "fixture and test file names are chosen by the implementer"
   - label: "μ"
-    task_id: null
+    task_id: 824
     title: "Integration gate: invariant 4 and the end-to-end store scenario"
     capabilities:
       - name: "store-location-read-only-at-the-root"

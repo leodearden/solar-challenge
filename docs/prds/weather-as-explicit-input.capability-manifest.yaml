@@ -7,7 +7,7 @@ prd: docs/prds/weather-as-explicit-input.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 808
     title: "Weather providers, the root default, and the cache-directory variable"
     capabilities:
       - name: "provider-protocol-defined"
@@ -87,7 +87,7 @@ tasks:
           kind: manual
           reason: "B3 runs the CLI as a child with the variable set and the network refused"
   - label: "β"
-    task_id: null
+    task_id: 809
     title: "simulate_home takes its weather; every caller passes it"
     capabilities:
       - name: "simulate-home-requires-provider"
@@ -167,7 +167,7 @@ tasks:
           kind: manual
           reason: "behavioural: per-home results equal simulate_home's under each start method"
   - label: "γ"
-    task_id: null
+    task_id: 813
     title: "Tests and scripts construct their weather; the test window sets the variable"
     capabilities:
       - name: "conftest-installs-no-global"
@@ -225,7 +225,7 @@ tasks:
           kind: manual
           reason: "pytester self-tests in test_fast_tests_run_offline assert the outcomes"
   - label: "δ"
-    task_id: null
+    task_id: 815
     title: "One self-describing file per weather cache entry"
     capabilities:
       - name: "sidecar-gone"
