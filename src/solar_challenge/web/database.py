@@ -89,6 +89,7 @@ def init_db(db_path: str | Path) -> Database:
     """Initialize the SQLite database with the required schema, and return the Database for it.
 
     Creates tables for runs, chat_messages, and config_presets.
+    The schema is created in one transaction, all or nothing.
     Safe to call multiple times - uses CREATE TABLE IF NOT EXISTS.
 
     Args:
@@ -101,11 +102,15 @@ def init_db(db_path: str | Path) -> Database:
     database = Database(Path(db_path))
     database.path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = database.connect()
-    conn.execute("PRAGMA journal_mode=WAL")
+    with database.transaction() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("BEGIN")
+        _create_schema(conn.cursor())
+    return database
 
-    cursor = conn.cursor()
 
+def _create_schema(cursor: sqlite3.Cursor) -> None:
+    """Create through *cursor* each of the dashboard's tables and indexes that is missing."""
     # Runs table - stores metadata for home/fleet simulations
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS runs (
@@ -160,10 +165,6 @@ def init_db(db_path: str | Path) -> Database:
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
         ON chat_messages(session_id)
     """)
-
-    conn.commit()
-    conn.close()
-    return database
 
 
 def save_chat_message(
