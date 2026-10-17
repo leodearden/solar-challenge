@@ -6,7 +6,10 @@ server accepts what the form submits with each optional setting on: the
 battery and its dispatch strategies, the heat pump, the import tariff and
 SEG export pricing. Also checks that the form lists an annual consumption
 outside the fleet load component's fixed range as an error, sending
-nothing, and sends either end of that range.
+nothing, and sends either end of that range. It also checks that the form
+leaves a custom range's dates to the server: it sends a single-day range,
+which the server accepts, and shows the server's refusal of a range that
+ends before it starts.
 """
 
 import re
@@ -18,7 +21,13 @@ from playwright.sync_api import Locator, Page, Route, expect
 
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from tests.e2e._home_form import open_tab, submit_two_day_run
+from tests.e2e._home_form import (
+    FIRST_DAY,
+    SECOND_DAY,
+    open_tab,
+    submit_custom_range,
+    submit_two_day_run,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -293,3 +302,23 @@ def test_consumption_at_either_end_of_the_load_range_is_sent_and_accepted(
 
     assert response.request.post_data_json["consumption_kwh"] == value
     assert response.status == 201, response.text()
+
+
+# ── Custom ranges: the server rules on the dates ─────────────────────
+
+
+def test_single_day_custom_range_is_accepted(page: Page, live_server: str) -> None:
+    """Run a custom range that starts and ends on the same day: the form sends it, and /api/simulate/home accepts it (201)."""
+    page.goto(live_server + "/simulate/home")
+    response = submit_custom_range(page, FIRST_DAY, FIRST_DAY)
+
+    assert response.status == 201, response.text()
+
+
+def test_reversed_custom_range_shows_the_servers_refusal(page: Page, live_server: str) -> None:
+    """Run a custom range that ends the day before it starts: /api/simulate/home refuses it (400), and the page shows the server's error as an alert."""
+    page.goto(live_server + "/simulate/home")
+    response = submit_custom_range(page, SECOND_DAY, FIRST_DAY)
+
+    assert response.status == 400, response.text()
+    expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
