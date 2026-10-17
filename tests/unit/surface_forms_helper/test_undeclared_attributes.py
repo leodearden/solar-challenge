@@ -202,3 +202,14 @@ def test_a_reviewed_write_the_initialisers_do_not_make_raises_a_value_error_nami
         undeclared_attributes(Meter, reviewed={stale})
     with pytest.raises(ValueError, match=re.escape(stale)):
         unset_attributes(Meter, reviewed={stale})
+
+
+def test_reviewed_given_as_one_string_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self.site = "roof"
+
+    text = "setattr(self, name, 0.0)"
+    for scan in (undeclared_attributes, unset_attributes):
+        with pytest.raises(TypeError, match=re.escape(text)):
+            scan(Meter, reviewed=text)

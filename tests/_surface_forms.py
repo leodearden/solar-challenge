@@ -160,7 +160,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
     *cls* and the write's text, unless *reviewed* holds that text; a text in *reviewed*
-    that is no such write's raises ValueError.
+    that is no such write's raises ValueError. *reviewed* is a collection of such texts:
+    one string given in its place raises TypeError.
 
     A string annotation in any of those class bodies is read as named_classes reads one,
     so a name its module does not bind raises NameError.
@@ -173,9 +174,10 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
 
     As in undeclared_attributes, a write to self whose attribute name the scan cannot
-    read raises TypeError unless *reviewed* holds its text, and a text in *reviewed* that
-    is no such write's raises ValueError. A reviewed write sets none of the declared
-    attributes, since its names are unknown.
+    read raises TypeError unless *reviewed* holds its text, a text in *reviewed* that is
+    no such write's raises ValueError, and one string given as *reviewed* raises
+    TypeError. A reviewed write sets none of the declared attributes, since its names
+    are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError.
@@ -738,7 +740,11 @@ def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
 
 
 def _refuse_unreviewed(cls: type, unnamed: set[str], reviewed: Collection[str]) -> None:
-    """Raise TypeError naming each source in *unnamed*, *cls*'s writes to self that name no attribute, that *reviewed* lacks; then ValueError naming each text in *reviewed* that *unnamed* lacks."""
+    """Raise TypeError if *reviewed* is one string, not a collection of write texts; then TypeError naming each source in *unnamed*, *cls*'s writes to self that name no attribute, that *reviewed* lacks; then ValueError naming each text in *reviewed* that *unnamed* lacks."""
+    if isinstance(reviewed, str):
+        raise TypeError(
+            f"reviewed must be a collection of write texts, not one string: {reviewed!r}"
+        )
     unreviewed = unnamed - set(reviewed)
     if unreviewed:
         raise TypeError(
