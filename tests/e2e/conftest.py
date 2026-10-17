@@ -55,6 +55,7 @@ from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
+from tests._web_runs import store_home_run
 
 
 def _find_free_port() -> int:
@@ -194,7 +195,7 @@ def _save_seeded_home_run(
     The battery gives the run's results page its battery stat cards. Returns (run_id, run_name).
     """
     home = replace(make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), name=run_name)
-    storage.save_home_run(run_id, home, results, calculate_summary(results))
+    store_home_run(storage, run_id, home, results)
     return run_id, run_name
 
 
