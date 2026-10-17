@@ -1,6 +1,5 @@
 """Tests for the Flask web dashboard module."""
 
-import json
 import uuid
 from pathlib import Path
 
@@ -28,6 +27,7 @@ from tests._html_page import (
     texts,
     texts_after,
 )
+from tests._plotly_figure import annotations_by_text
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
@@ -421,10 +421,10 @@ class TestHomeResultsRoute:
 
         assert response.status_code == 200
         figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
-        annotations = json.loads(figure)["layout"]["annotations"]
-        assert {annotation["text"]: annotation["y"] for annotation in annotations} == pytest.approx(
-            {"Min SOC": 0.72, "Max SOC": 6.84}
-        )
+        assert {
+            text: annotation["y"]
+            for text, annotation in annotations_by_text(figure).items()
+        } == pytest.approx({"Min SOC": 0.72, "Max SOC": 6.84})
 
 
 # ---------------------------------------------------------------------------

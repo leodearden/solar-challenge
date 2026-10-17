@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the Plotly figure JSON a solar_challenge.web.charts builder returns:
-its traces, in drawing order or keyed by name, and the texts of its layout annotations; the
-nodes and links of a Sankey figure, keyed by node label; and the colours a figure writes, read
-as red, green and blue.
+its traces, in drawing order or keyed by name, and the texts of its layout annotations or the
+annotations keyed by text; the nodes and links of a Sankey figure, keyed by node label; and the
+colours a figure writes, read as red, green and blue.
 
 A colour is written #rrggbb, rgb() or rgba(), in any case and with any whitespace inside the
 parentheses; an alpha is never read.
@@ -11,6 +11,7 @@ Usage::
 
     from tests._plotly_figure import (
         annotation_texts,
+        annotations_by_text,
         colour_literals,
         opaque,
         sankey_link_colours,
@@ -25,6 +26,8 @@ Usage::
     assert annotation_texts(charts.financial_breakdown(unpriced_results)) == [
         "No tariff configured — cost and revenue tracking unavailable"
     ]
+    soc_chart = charts.battery_soc_chart(results, BatteryConfig(capacity_kwh=10.0))
+    assert annotations_by_text(soc_chart)["Min SOC"]["y"] == 1.0
 
     figure = charts.sankey_diagram(summary)
     assert sankey_link_values(figure)[("Grid", "Battery")] == 2.0
@@ -71,9 +74,21 @@ def traces_by_name(figure: str) -> dict[str, dict[str, Any]]:
 
 
 def annotation_texts(figure: str) -> list[str]:
-    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
-    annotations: list[dict[str, Any]] = json.loads(figure).get("layout", {}).get("annotations", [])
-    return [annotation["text"] for annotation in annotations]
+    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none.
+
+    Raises ValueError, rather than leave it out, when an annotation has no text.
+    """
+    return _texts(_annotations(figure))
+
+
+def annotations_by_text(figure: str) -> dict[str, dict[str, Any]]:
+    """Each of *figure*'s layout annotations, as written, keyed by its text; {} when it has none.
+
+    Raises ValueError where annotation_texts does; and, rather than keep one, when two
+    annotations share a text.
+    """
+    drawn = _annotations(figure)
+    return _keyed(_texts(drawn), drawn, expected="one annotation per text")
 
 
 def sankey_link_values(figure: str) -> dict[tuple[str, str], float]:
@@ -132,6 +147,18 @@ def _rgb(match: re.Match[str]) -> Rgb:
     else:
         red, green, blue = (int(match[channel]) for channel in ("red", "green", "blue"))
     return red, green, blue
+
+
+def _annotations(figure: str) -> list[dict[str, Any]]:
+    drawn: list[dict[str, Any]] = json.loads(figure).get("layout", {}).get("annotations", [])
+    return drawn
+
+
+def _texts(annotations: Sequence[dict[str, Any]]) -> list[str]:
+    untexted = [annotation for annotation in annotations if "text" not in annotation]
+    if untexted:
+        raise ValueError(f"Expected each annotation to have a text; got annotations with no text {untexted}")
+    return [annotation["text"] for annotation in annotations]
 
 
 def _sankey_trace(figure: str) -> dict[str, Any]:
