@@ -64,6 +64,15 @@ type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_chal
 # at the next orchestrator restart, not on hot reload.
 verify_use_cgroup_scope: true
 
+# 2026-10-17 (L2 docket item 169, escalation esc-main-sweep-1fa8f796e87b-2,
+# option B): the warm verify budget, which the main-tip sweep and every task
+# verify read. The package default of 1800 s timed out the main sweep at
+# 1fa8f79 under host load (CPU pressure 59%); sweeps take 1460-1590 s whenever
+# CPU pressure is 55% or more. 3600 s is about 2.3x the 1590 s worst observed
+# sweep. A hung task verify now takes up to 60 minutes to fail. Takes effect
+# at the next orchestrator restart.
+verify_command_timeout_secs: 3600
+
 git:
   main_branch: "main"
   branch_prefix: "task/"
