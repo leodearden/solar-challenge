@@ -11,12 +11,14 @@ its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
 
 import ast
 from collections.abc import Collection, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from pathlib import Path
 
 import pytest
 
 _PACKAGE = "solar_challenge"
+
+ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], "Permanent | Transitional"] = {}
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,54 @@ def _stale(
     """Return the sorted pairs of *allowed* that no *found* site imports."""
     imported = {(site.importer, site.imported) for site in found}
     return sorted(set(allowed) - imported)
+
+
+def test_every_function_local_package_import_is_allowed(project_root: Path) -> None:
+    """Every import of a module of the package inside a function is of a pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists."""
+    unlisted = _unlisted(
+        _function_local_package_imports(project_root / "src"), ALLOWED_FUNCTION_LOCAL_IMPORTS
+    )
+
+    sites = "\n".join(str(site) for site in unlisted)
+    assert not unlisted, (
+        "these imports of the package sit inside a function, and ALLOWED_FUNCTION_LOCAL_IMPORTS "
+        "in tests/unit/test_import_structure.py lists no entry for their (importing module, "
+        f"imported module) pair:\n{sites}\n"
+        "Import the module at the top of the importing module. If a documented contract "
+        "requires the laziness, add the pair as Permanent(<contract>); if a task or program "
+        "stream will remove the import, add it as Transitional(<owner>)"
+    )
+
+
+def test_every_allowed_pair_is_still_imported_inside_a_function(project_root: Path) -> None:
+    """Every pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists is still imported inside a function of the package."""
+    stale = _stale(
+        _function_local_package_imports(project_root / "src"), ALLOWED_FUNCTION_LOCAL_IMPORTS
+    )
+
+    entries = "\n".join(f"{pair}: {ALLOWED_FUNCTION_LOCAL_IMPORTS[pair]!r}" for pair in stale)
+    assert not stale, (
+        "no function in src/solar_challenge imports these (importing module, imported module) "
+        "pairs any more, so their entries go from ALLOWED_FUNCTION_LOCAL_IMPORTS in "
+        f"tests/unit/test_import_structure.py, in the change that removed the import:\n{entries}"
+    )
+
+
+def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
+    """Every allowed pair's reason is a Permanent with a contract or a Transitional with an owner, not blank text."""
+    reason_kinds = (Permanent, Transitional)
+    unreasoned = {
+        pair: reason
+        for pair, reason in ALLOWED_FUNCTION_LOCAL_IMPORTS.items()
+        if not isinstance(reason, reason_kinds) or not all(text.strip() for text in astuple(reason))
+    }
+
+    entries = "\n".join(f"{pair}: {reason!r}" for pair, reason in unreasoned.items())
+    assert not unreasoned, (
+        "these allowed pairs give no reason; each must be a Permanent(<the documented contract "
+        "that requires the laziness>) or a Transitional(<the task or program stream that "
+        f"removes the import>), with non-blank text:\n{entries}"
+    )
 
 
 def _write_package(src_dir: Path, modules: dict[str, str]) -> Path:
