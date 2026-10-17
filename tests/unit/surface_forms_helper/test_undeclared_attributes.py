@@ -65,6 +65,18 @@ def test_only_the_init_and_post_init_the_class_body_itself_defines_are_read() ->
     assert undeclared_attributes(Meter) == {"ok"}
 
 
+def test_an_assignment_to_the_receiver_in_a_closure_inside_an_initialiser_sets_it() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            def fill() -> None:
+                self.site = "roof"
+
+            fill()
+
+    assert vars(Meter()).keys() == {"site"}
+    assert undeclared_attributes(Meter) == {"site"}
+
+
 def test_the_receiver_is_the_first_parameter_whatever_its_name() -> None:
     class Meter:
         def __init__(this, self: object) -> None:
