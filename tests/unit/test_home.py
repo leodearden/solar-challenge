@@ -15,6 +15,8 @@ from solar_challenge.home import (
     SimulationResults,
     SummaryStatistics,
     calculate_summary,
+    grid_dependency_ratio,
+    self_consumption_ratio,
     simulate_home,
 )
 from solar_challenge.load import LoadConfig
@@ -24,6 +26,7 @@ from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, r
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import PrefetchedWeather
+from tests._finance_builders import make_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
@@ -703,6 +706,31 @@ class TestSimulateHomeTakesItsWeather:
             simulate_home(_edinburgh_home(), _MIDSUMMER, _MIDSUMMER)
 
 
+_NOT_POSITIVE_KWH = [pytest.param(0.0, id="zero"), pytest.param(-1.0, id="negative")]
+
+
+class TestSummaryRatios:
+    """The ratio rule: which total is a share of which, and 0.0 when that whole is not positive."""
+
+    def test_self_consumption_ratio_is_self_consumption_over_generation(self):
+        """6 kWh self-consumed of 8 kWh generated is a ratio of 0.75."""
+        assert self_consumption_ratio(self_consumption_kwh=6.0, generation_kwh=8.0) == 0.75
+
+    def test_grid_dependency_ratio_is_grid_import_over_demand(self):
+        """1 kWh imported of 4 kWh demanded is a ratio of 0.25."""
+        assert grid_dependency_ratio(grid_import_kwh=1.0, demand_kwh=4.0) == 0.25
+
+    @pytest.mark.parametrize("generation_kwh", _NOT_POSITIVE_KWH)
+    def test_self_consumption_ratio_is_zero_without_positive_generation(self, generation_kwh):
+        """Self-consumption over generation that is not positive is 0.0."""
+        assert self_consumption_ratio(self_consumption_kwh=6.0, generation_kwh=generation_kwh) == 0.0
+
+    @pytest.mark.parametrize("demand_kwh", _NOT_POSITIVE_KWH)
+    def test_grid_dependency_ratio_is_zero_without_positive_demand(self, demand_kwh):
+        """Grid import over demand that is not positive is 0.0."""
+        assert grid_dependency_ratio(grid_import_kwh=1.0, demand_kwh=demand_kwh) == 0.0
+
+
 class TestCalculateSummary:
     """Test HOME-005: Summary statistics calculation."""
 
@@ -773,6 +801,20 @@ class TestCalculateSummary:
         summary = calculate_summary(results)
         assert summary.self_consumption_ratio == 0.0
         assert summary.export_ratio == 0.0
+
+    def test_grid_dependency_is_the_runs_grid_import_over_its_demand(self):
+        """10 kWh imported of a 40 kWh demand is 0.25, though the run generated 60 kWh."""
+        summary = calculate_summary(make_sim_results(self_kwh=30.0, export_kwh=30.0, import_kwh=10.0, days=1))
+
+        assert (summary.total_generation_kwh, summary.total_demand_kwh) == pytest.approx((60.0, 40.0))
+        assert summary.grid_dependency_ratio == pytest.approx(0.25)
+
+    def test_a_run_with_no_demand_has_grid_dependency_zero(self):
+        """A run that only generated and exported has nothing to depend on the grid for."""
+        summary = calculate_summary(make_sim_results(self_kwh=0.0, export_kwh=5.0, import_kwh=0.0, days=1))
+
+        assert summary.total_demand_kwh == 0.0
+        assert summary.grid_dependency_ratio == 0.0
 
     def test_SEG_revenue_with_tariff(self, sample_results):
         """SEG revenue is computed when tariff is provided."""
