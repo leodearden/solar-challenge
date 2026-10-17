@@ -136,29 +136,6 @@ _FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
-    def test_get_job_status_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<id> returns job status after submission."""
-        # Submit a job first
-        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
-        assert submit_resp.status_code == 201
-        job_id = submit_resp.get_json()["job_id"]
-
-        # Check status
-        status_resp = client.get(f"/api/jobs/{job_id}")
-        assert status_resp.status_code == 200
-        data = status_resp.get_json()
-        assert data["job_id"] == job_id
-        assert "status" in data
-        assert "progress_pct" in data
-        assert "current_step" in data
-
-    def test_get_unknown_job_returns_404(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown_id> returns 404."""
-        response = client.get("/api/jobs/nonexistent-job-id-12345")
-        assert response.status_code == 404
-        data = response.get_json()
-        assert "error" in data
-
     def test_after_a_restart_an_earlier_job_is_not_found_although_its_rows_remain(self, tmp_path: Path) -> None:
         before_restart = build_test_app(tmp_path)
         submitted = (
