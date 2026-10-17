@@ -46,7 +46,7 @@ import textwrap
 import types
 import typing
 import weakref
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 
 
 def surface_form(obj: object) -> str:
@@ -154,18 +154,28 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
     return found
 
 
-def undeclared_attributes(cls: type) -> set[str]:
+def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
+
+    A write to self whose attribute name the scan cannot read, such as
+    setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
+    *cls* and the write's text, unless *reviewed* holds that text; a text in *reviewed*
+    that is no such write's raises ValueError.
 
     A string annotation in any of those class bodies is read as named_classes reads one,
     so a name its module does not bind raises NameError.
     """
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
-    return _attributes_set_on_self(cls) - declared
+    return _attributes_set_on_self(cls, reviewed) - declared
 
 
-def unset_attributes(cls: type) -> set[str]:
+def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+
+    As in undeclared_attributes, a write to self whose attribute name the scan cannot
+    read raises TypeError unless *reviewed* holds its text, and a text in *reviewed* that
+    is no such write's raises ValueError. A reviewed write sets none of the declared
+    attributes, since its names are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError.
@@ -174,7 +184,7 @@ def unset_attributes(cls: type) -> set[str]:
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
     """
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
-    return declared - _attributes_set_on_self(cls) - _defaulted_fields(cls)
+    return declared - _attributes_set_on_self(cls, reviewed) - _defaulted_fields(cls)
 
 
 class _Spelling(str):
@@ -702,20 +712,52 @@ def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
     return f"{kind}[{', '.join(qualifiers)}]" if qualifiers else kind
 
 
-def _attributes_set_on_self(cls: type) -> set[str]:
+def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
     """The public attributes that the __init__ and __post_init__ *cls*'s own body defines set on their receiver, each one's first parameter.
 
     Each is read whole, a closure in it included. An attribute is set by any assignment
     to it on the receiver, or by setattr(receiver, "name", value),
     <expr>.__setattr__(receiver, "name", value), receiver.__setattr__("name", value) or
     super().__setattr__("name", value), whose name is a string constant.
+
+    A write names no attribute the scan can read if it is one of those calls with any
+    other name, such as a variable, an f-string or a starred argument, or a reach into
+    the receiver's __dict__, as receiver.__dict__ in any context or as vars(receiver).
+    Such a write raises TypeError naming *cls* and the write's source, as ast.unparse
+    spells it, unless *reviewed* holds that source. Then a text in *reviewed* that is no
+    such write's source raises ValueError.
     """
-    names = {
-        write.name
+    writes = [
+        write
         for initialiser in _initialisers(cls)
         for write in _writes_to_receiver(initialiser)
-    }
+    ]
+    _refuse_unreviewed(cls, {write.source for write in writes if write.name is None}, reviewed)
+    names = {write.name for write in writes if write.name is not None}
     return {name for name in names if not name.startswith("_")}
+
+
+def _refuse_unreviewed(cls: type, unnamed: set[str], reviewed: Collection[str]) -> None:
+    """Raise TypeError naming each source in *unnamed*, *cls*'s writes to self that name no attribute, that *reviewed* lacks; then ValueError naming each text in *reviewed* that *unnamed* lacks."""
+    unreviewed = unnamed - set(reviewed)
+    if unreviewed:
+        raise TypeError(
+            f"{cls.__qualname__} sets attributes on self under names the scan cannot "
+            f"read:{_listed(unreviewed)}\nGive each name as a string constant, as in "
+            'object.__setattr__(self, "name", value); or, once a reviewer has checked that '
+            "every name such a write sets is declared, pass the write's text in reviewed."
+        )
+    stale = set(reviewed) - unnamed
+    if stale:
+        raise ValueError(
+            f"{cls.__qualname__} makes none of these reviewed writes to self:"
+            f"{_listed(stale)}\nDrop each from reviewed."
+        )
+
+
+def _listed(texts: set[str]) -> str:
+    """*texts* in sorted order, each on a line of its own, indented."""
+    return "".join(f"\n  {text}" for text in sorted(texts))
 
 
 _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
@@ -735,9 +777,9 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
 
 @dataclasses.dataclass(frozen=True)
 class _SelfWrite:
-    """A write an initialiser makes to its receiver: the attribute it sets, and its source as ast.unparse spells it."""
+    """A write an initialiser makes to its receiver: the attribute it sets, None if its source names none the scan can read, and its source as ast.unparse spells it."""
 
-    name: str
+    name: str | None
     source: str
 
 
@@ -754,23 +796,35 @@ def _writes_to_receiver(function: ast.FunctionDef) -> Iterator[_SelfWrite]:
 
 
 def _write_to(receiver: str, node: ast.AST) -> _SelfWrite | None:
-    """The write *node* makes to *receiver*, if it is one in a spelling _attributes_set_on_self counts."""
+    """The write *node* makes to *receiver*, if it is one in a spelling _attributes_set_on_self reads."""
     match node:
+        case ast.Attribute(value=ast.Name(id=owner), attr="__dict__") if owner == receiver:
+            return _SelfWrite(None, ast.unparse(node))
+        case ast.Call(func=ast.Name(id="vars"), args=[ast.Name(id=owner)]) if owner == receiver:
+            return _SelfWrite(None, ast.unparse(node))
         case ast.Attribute(value=ast.Name(id=owner), attr=name, ctx=ast.Store()) if owner == receiver:
             return _SelfWrite(name, ast.unparse(node))
         case ast.Call(
             func=ast.Name(id="setattr") | ast.Attribute(attr="__setattr__"),
-            args=[ast.Name(id=owner), ast.Constant(value=str() as name), *_],
+            args=[ast.Name(id=owner), named, *_],
         ) if owner == receiver:
-            return _SelfWrite(name, ast.unparse(node))
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
         case ast.Call(
             func=ast.Attribute(value=ast.Name(id=owner), attr="__setattr__"),
-            args=[ast.Constant(value=str() as name), *_],
+            args=[named, *_],
         ) if owner == receiver:
-            return _SelfWrite(name, ast.unparse(node))
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
         case ast.Call(
             func=ast.Attribute(value=ast.Call(func=ast.Name(id="super")), attr="__setattr__"),
-            args=[ast.Constant(value=str() as name), *_],
+            args=[named, *_],
         ):
-            return _SelfWrite(name, ast.unparse(node))
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
+    return None
+
+
+def _constant_name(named: ast.expr) -> str | None:
+    """The name *named* gives, if it is a string constant; None for any other expression, whose value the source does not show."""
+    match named:
+        case ast.Constant(value=str() as name):
+            return name
     return None
