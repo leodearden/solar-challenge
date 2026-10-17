@@ -24,8 +24,7 @@ pytest.importorskip("flask")
 from flask import Flask
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults
 from solar_challenge.web.storage import RunStorage
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import (
@@ -35,6 +34,7 @@ from tests._finance_builders import (
 )
 from tests._html_page import chart_figures, element_ids, script_texts, texts
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
 _PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
@@ -51,12 +51,7 @@ def _saved_home_run(
     """The id of a new run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
     run_id = str(uuid.uuid4())
     storage: RunStorage = app.extensions["storage"]
-    storage.save_home_run(
-        run_id,
-        make_home_config(battery_config=battery_config),
-        results,
-        calculate_summary(results),
-    )
+    store_home_run(storage, run_id, make_home_config(battery_config=battery_config), results)
     return run_id
 
 
@@ -118,14 +113,7 @@ def test_each_chart_on_the_fleet_results_page_is_drawn_from_the_figure_its_conta
     fleet = make_fleet_results(n_homes=2, days=1)
     run_id = str(uuid.uuid4())
     storage: RunStorage = app.extensions["storage"]
-    storage.save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet,
-        fleet_summary=calculate_fleet_summary(fleet),
-        per_home_summaries=[
-            calculate_summary(results) for results in fleet.per_home_results
-        ],
-    )
+    store_fleet_run(storage, run_id, fleet)
 
     response = app.test_client().get(f"/results/fleet/{run_id}")
 

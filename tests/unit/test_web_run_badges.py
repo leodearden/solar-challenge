@@ -16,14 +16,13 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
 from tests._server_drawn_badges import dashboard_macros_of, server_drawn_badge, server_drawn_classes
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
 
 _BADGE = {"inline-flex", "items-center", "px-2.5", "py-0.5", "rounded-full", "text-xs", "font-medium"}
 _NEUTRAL = {"bg-slate-100", "text-slate-800", "dark:bg-slate-700", "dark:text-slate-300"}
@@ -66,10 +65,7 @@ def _storage(app: Flask) -> RunStorage:
 
 def _save_home_run(app: Flask, run_id: str, status: RunStatus = "completed") -> None:
     """Save a 1-day home run under *run_id* to *app*'s store, with *status*."""
-    results = make_sim_results(days=1)
-    _storage(app).save_home_run(
-        run_id, make_home_config(), results, calculate_summary(results), status=status
-    )
+    store_home_run(_storage(app), run_id, make_home_config(), make_sim_results(days=1), status=status)
 
 
 @pytest.mark.parametrize(
@@ -147,13 +143,7 @@ def test_the_compare_page_draws_each_runs_type_with_run_type_badge(
     app: Flask, macros: Any
 ) -> None:
     _save_home_run(app, "cmp-home")
-    fleet = make_fleet_results(n_homes=2, days=1)
-    _storage(app).save_fleet_run(
-        "cmp-fleet",
-        fleet,
-        calculate_fleet_summary(fleet),
-        [calculate_summary(results) for results in fleet.per_home_results],
-    )
+    store_fleet_run(_storage(app), "cmp-fleet", make_fleet_results(n_homes=2, days=1))
 
     spans = _spans(app, "/history/compare?ids=cmp-home,cmp-fleet")
 

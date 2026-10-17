@@ -10,11 +10,11 @@ from flask import Flask, render_template
 from flask.testing import FlaskClient
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RunStatus, get_db
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
@@ -30,6 +30,7 @@ from tests._html_page import (
 )
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 @pytest.fixture
@@ -66,7 +67,7 @@ def _save_home_run(
     results: SimulationResults,
     *,
     created_at: str | None = None,
-    status: str = "completed",
+    status: RunStatus = "completed",
     battery_config: BatteryConfig | None = None,
 ) -> str:
     """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
@@ -76,11 +77,11 @@ def _save_home_run(
     *status* is the status the run is recorded with; it defaults to completed.
     """
     run_id = str(uuid.uuid4())
-    _run_storage(app).save_home_run(
-        run_id=run_id,
-        config=_home_config(name, battery_config=battery_config),
-        results=results,
-        summary=calculate_summary(results),
+    store_home_run(
+        _run_storage(app),
+        run_id,
+        _home_config(name, battery_config=battery_config),
+        results,
         name=name,
         status=status,
         created_at=created_at,
@@ -100,15 +101,13 @@ def _save_fleet_run(
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
-    fleet = FleetResults(
-        per_home_results=per_home_results,
-        home_configs=[_home_config(f"{name} home {number}") for number in range(1, len(per_home_results) + 1)],
-    )
-    _run_storage(app).save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet,
-        fleet_summary=calculate_fleet_summary(fleet),
-        per_home_summaries=[calculate_summary(results) for results in per_home_results],
+    store_fleet_run(
+        _run_storage(app),
+        run_id,
+        FleetResults(
+            per_home_results=per_home_results,
+            home_configs=[_home_config(f"{name} home {number}") for number in range(1, len(per_home_results) + 1)],
+        ),
         name=name,
         created_at=created_at,
     )
