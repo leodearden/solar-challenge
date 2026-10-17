@@ -19,6 +19,7 @@ from flask.testing import FlaskClient
 from solar_challenge.web.assistant import (
     MAX_TOOL_ITERATIONS,
     METRIC_TABLE,
+    TOOL_CALL_LIMIT_NOTICE,
     TOOLS,
     dispatch_tool,
     explain_metric,
@@ -31,12 +32,13 @@ from solar_challenge.web.assistant import (
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
-from tests._sse import parse_sse_events
+from tests._sse import SseFrame, parse_sse_events
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
     make_end_turn_stream,
     make_fake_stream,
+    make_stopped_stream,
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
@@ -171,6 +173,29 @@ class TestToolUseLoop:
             f"Expected tool frame with name='explain_metric', got: {tool_events[0].data}"
         )
 
+    def test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """The reply the model streams after a tool call reaches the client as it streams, one
+        delta frame per chunk, as a reply without a tool call does. A loop that only sees each
+        model call's whole message would send it as one frame."""
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_stream_001", "explain_metric", {"metric": "self_sufficiency"}),
+            make_end_turn_stream(["Self-sufficiency is", " the share of demand", " met on site."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-sufficiency?"})
+
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame(event="tool", data={"name": "explain_metric"}),
+            SseFrame(event="delta", data={"text": "Self-sufficiency is"}),
+            SseFrame(event="delta", data={"text": " the share of demand"}),
+            SseFrame(event="delta", data={"text": " met on site."}),
+            SseFrame(event="done", data={}),
+        ]
+
     def test_stream_called_twice_and_tool_result_has_canonical_band(
         self,
         client: FlaskClient,
@@ -267,8 +292,11 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A model that always returns tool_use is bounded by MAX_TOOL_ITERATIONS."""
-        # Build an infinite sequence of tool_use streams
+        """A model that calls a tool on every reply is called MAX_TOOL_ITERATIONS times.
+        The turn then streams TOOL_CALL_LIMIT_NOTICE as its whole reply, stores it as
+        the reply and ends with a done frame."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-sid"
         TOOL_ID_PREFIX = "toolu_inf_"
         infinite_streams = [
             make_tool_use_stream(
@@ -284,19 +312,46 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        # stream() should be called exactly MAX_TOOL_ITERATIONS times
         call_count = len(anthropic_api.calls)
         assert call_count == MAX_TOOL_ITERATIONS, (
             f"Expected exactly {MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
             f"got {call_count}"
         )
 
-        # Stream must still terminate cleanly (done or error frame, no hang)
         events = parse_sse_events(body)
-        event_types = [e.event for e in events]
-        assert "done" in event_types or "error" in event_types, (
-            f"Expected stream to terminate with done or error frame; got: {event_types}"
+        assert [e.data["text"] for e in events if e.event == "delta"] == [TOOL_CALL_LIMIT_NOTICE], (
+            f"Expected the notice to be the reply's only text; events: {events}"
         )
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "explain forever"),
+            ("assistant", TOOL_CALL_LIMIT_NOTICE),
+        ]
+
+    @pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens", "stop_sequence", "refusal", None])
+    def test_a_reply_that_stops_for_any_reason_but_tool_use_ends_the_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        stop_reason: str | None,
+    ) -> None:
+        """A reply that stops for any reason but tool_use is the turn's last model call, and
+        the turn ends with done. pause_turn is left out: only server tools, which TOOLS does
+        not offer, pause a turn."""
+        anthropic_api.set_streams([
+            make_stopped_stream(stop_reason, ["Partial", " answer"]),
+            make_end_turn_stream(["A call the turn must not make."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        assert len(anthropic_api.calls) == 1, (
+            f"Expected one model call; got {len(anthropic_api.calls)}"
+        )
+        assert "".join(e.data["text"] for e in events if e.event == "delta") == "Partial answer"
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
 
     def test_final_message_without_stop_reason_streams_reply(
         self,

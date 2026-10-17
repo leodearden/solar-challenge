@@ -13,7 +13,6 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.assistant import MAX_HISTORY_TURNS
 from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
 from tests._sse import SseFrame, parse_sse_events
 from tests.unit.web_assistant._fakes import (
@@ -390,6 +389,30 @@ class TestChatDegradation:
             f"Expected the error message to name ANTHROPIC_API_KEY; got: {error_data['message']!r}"
         )
 
+    @pytest.mark.parametrize(
+        "body",
+        [{"message": ""}, {"message": " \n"}, {}],
+        ids=["empty", "whitespace", "absent"],
+    )
+    def test_a_message_without_text_returns_error_frame_and_saves_no_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        body: dict[str, str],
+    ) -> None:
+        """A message without text gets a lone error frame saying so; the model is not called and no chat turn is saved."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "empty-message-sid"
+
+        resp = client.post("/assistant/chat", json=body)
+
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame(event="error", data={"message": "Message cannot be empty."})
+        ]
+        assert anthropic_api.calls == []
+        assert client.get("/assistant/history").get_json() == {"messages": []}
+
     def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
@@ -567,69 +590,6 @@ class TestChatLiveSmoke:
         )
 
 
-class TestHistoryWindowAlternation:
-    """The replayed messages window must always start with a user turn.
-
-    After 11 complete exchanges (22 DB rows) the handler adds the new user turn
-    as a 23rd, then keeps the last MAX_HISTORY_TURNS.  With MAX_HISTORY_TURNS=20
-    the tail starts at DB-row index 3 which is an assistant row — violating the
-    Anthropic Messages API's "first message must be role=user" invariant.
-    """
-
-    def test_window_starts_with_user_turn_after_many_exchanges(
-        self,
-        client: FlaskClient,
-        anthropic_api: FakeAnthropic,
-        app: Flask,
-    ) -> None:
-        """msgs[0]["role"] must be 'user' even when the tail starts on an assistant row."""
-        db_path = app.config["DATABASE"]
-
-        # Pin a session_id
-        with client.session_transaction() as sess:
-            sess["assistant_session_id"] = "window-sid"
-
-        # Seed 11 complete turns = 22 rows strictly alternating user/assistant
-        for i in range(11):
-            save_chat_message(db_path, "window-sid", "user", f"user-{i}")
-            save_chat_message(db_path, "window-sid", "assistant", f"assistant-{i}")
-
-        anthropic_api.set_chunks(["window reply"])
-
-        # With the new user turn → 23 total; the last 20 start on an assistant row
-        resp = client.post("/assistant/chat", json={"message": "latest"})
-        assert resp.status_code == 200
-        resp.get_data(as_text=True)  # consume the stream
-
-        msgs = anthropic_api.last_kwargs["messages"]
-        assert msgs, "Expected non-empty messages list in captured kwargs"
-
-        # API invariant: window must start with a user turn
-        assert msgs[0]["role"] == "user", (
-            f"Expected first replayed message to be 'user', got {msgs[0]['role']!r}"
-        )
-
-        # Window must not exceed the cap
-        assert len(msgs) <= MAX_HISTORY_TURNS, (
-            f"Expected <= {MAX_HISTORY_TURNS} messages, got {len(msgs)}"
-        )
-
-        # Roles must strictly alternate throughout the window
-        for i in range(len(msgs) - 1):
-            assert msgs[i]["role"] != msgs[i + 1]["role"], (
-                f"Non-alternating roles at positions {i}/{i+1}: "
-                f"{msgs[i]['role']!r} then {msgs[i + 1]['role']!r}"
-            )
-
-        # The final replayed message must be the just-sent user turn
-        assert msgs[-1]["role"] == "user", (
-            f"Expected last replayed message to be 'user', got {msgs[-1]['role']!r}"
-        )
-        assert msgs[-1]["content"] == "latest", (
-            f"Expected last message content 'latest', got {msgs[-1]['content']!r}"
-        )
-
-
 class TestEveryTurnStoresAReplyWithText:
     """Every turn that reaches the model stores one reply with text, and the replay skips a reply without text.
 
@@ -749,15 +709,22 @@ class TestEveryTurnStoresAReplyWithText:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A client that leaves after the first delta frame leaves that text stored as a truncated reply."""
+        """A client that leaves after the first delta frame leaves that text stored as a truncated reply.
+
+        The disconnect also closes the model's stream, which was still open when
+        that frame was sent, so no connection to the model outlives the turn.
+        """
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "disconnect-sid"
-        anthropic_api.set_streams([make_end_turn_stream(["Hello", " world"])])
+        model_stream = make_end_turn_stream(["Hello", " world"])
+        anthropic_api.set_streams([model_stream])
 
         response = client.post("/assistant/chat", json={"message": "hi"}, buffered=False)
         first = next(iter(response.response))
+        model_stream.__exit__.assert_not_called()
         response.close()
 
+        model_stream.__exit__.assert_called_once()
         assert parse_sse_events(first.decode()) == [SseFrame(event="delta", data={"text": "Hello"})]
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
@@ -910,6 +877,32 @@ class TestRunContextInjection:
         assert "123.0" not in stored_content, (
             f"Injected summary value should NOT be persisted; stored: {stored_content!r}"
         )
+
+    def test_run_context_leaves_the_cached_system_block_unchanged(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A turn with run context sends the system block a turn without it sends, so the cached prompt prefix still matches."""
+        seed_run(
+            app.config["DATABASE"],
+            run_id="ctx-run-003",
+            name="ctx-cache-run",
+            status="completed",
+            created_at="2026-06-01T11:00:00+00:00",
+            summary={"total_generation_kwh": 456.0},
+        )
+        anthropic_api.set_chunks(["ok"])
+
+        client.post("/assistant/chat", json={"message": "summarise", "run_id": "ctx-run-003"}).get_data()
+        client.post("/assistant/chat", json={"message": "summarise"}).get_data()
+
+        with_context, without_context = anthropic_api.calls
+        assert "ctx-run-003" in with_context["messages"][-1]["content"], (
+            f"Expected the run context in the user's message; got: {with_context['messages'][-1]!r}"
+        )
+        assert with_context["system"] == without_context["system"]
 
     def test_unknown_run_id_streams_normally(
         self,

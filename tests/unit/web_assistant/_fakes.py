@@ -154,26 +154,44 @@ def make_tool_use_stream_from_blocks(
     return _stream_manager(text_chunks, final_message)
 
 
-def make_end_turn_stream(
+def make_stopped_stream(
+    stop_reason: str | None,
     text_chunks: list[str],
     *,
     cache_creation_input_tokens: int | None = 0,
     cache_read_input_tokens: int | None = 80,
 ) -> MagicMock:
-    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'.
+    """Build a context-manager mock for a stream of *text_chunks* that ends with *stop_reason*.
 
-    The usage counts default to ints; pass ``None`` to mirror the real SDK's
+    Its final message's content is one text block of the joined text. The SDK
+    types stop_reason ``Optional``, so *stop_reason* may be None. The usage
+    counts default to ints; pass ``None`` to mirror the real SDK's
     ``Optional[int]`` cache-token fields when the API leaves them out.
     """
     final_message = SimpleNamespace(
-        stop_reason="end_turn",
-        content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+        stop_reason=stop_reason,
+        content=[text_block("".join(text_chunks))],
         usage=SimpleNamespace(
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
         ),
     )
     return _stream_manager(text_chunks, final_message)
+
+
+def make_end_turn_stream(
+    text_chunks: list[str],
+    *,
+    cache_creation_input_tokens: int | None = 0,
+    cache_read_input_tokens: int | None = 80,
+) -> MagicMock:
+    """Build a ``make_stopped_stream`` stream that ends with stop_reason='end_turn'."""
+    return make_stopped_stream(
+        "end_turn",
+        text_chunks,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+    )
 
 
 def make_failing_stream(error: Exception) -> MagicMock:
