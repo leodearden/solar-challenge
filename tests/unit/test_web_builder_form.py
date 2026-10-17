@@ -121,6 +121,41 @@ class TestScenarioFromBuilderForm:
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
+        ("changes", "message"),
+        [
+            pytest.param(
+                {"pv_distribution_type": "weighted_discrete", "pv_wd_values": "ab"},
+                "pv_wd_values must be a list, got str",
+                id="rows-that-are-not-a-list",
+            ),
+            pytest.param(
+                {"pv_distribution_type": "shuffled_pool", "pv_sp_entries": [3]},
+                "pv_sp_entries[0] must be a mapping, got int",
+                id="row-that-is-not-a-mapping",
+            ),
+            pytest.param(
+                {"load_distribution_type": "weighted_discrete", "load_wd_values": [{"value": 2900}]},
+                "load_wd_values[0] must be a mapping with 'value' and 'weight', "
+                "got {'value': 2900}",
+                id="row-without-its-weight",
+            ),
+            pytest.param(
+                {"battery_distribution_type": "fixed"},
+                "battery_distribution_type must be one of normal, uniform, weighted_discrete, "
+                "shuffled_pool, got 'fixed'",
+                id="type-the-editor-does-not-offer",
+            ),
+        ],
+    )
+    def test_a_malformed_distribution_is_refused_with_the_fleet_forms_refusal_naming_the_builders_field(
+        self, changes: dict[str, object], message: str
+    ) -> None:
+        """Each refusal is the fleet form's refusal of the same distribution, under the builder's field names: both forms' distributions are read by one reader."""
+        with pytest.raises(ValueError) as exc_info:
+            scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
         ("changes", "field"),
         [
             pytest.param({"n_homes": 2.5}, "n_homes", id="number-of-homes"),
