@@ -197,10 +197,10 @@ class BillBreakdown:
     for grid import and the standing charge.  No SEG credit flows to the
     householder.
 
-    Every figure covers the billed period, the ``period_days`` passed to
-    :func:`bill`, which computes every field; :func:`householder_bill` bills
-    the simulator's homes for a year.  The identities between the fields are
-    stated once, in :func:`bill`'s docstring.
+    Every figure covers the billed period.  :func:`bill` is the library's
+    producer of this type and takes that period as ``period_days``;
+    :func:`householder_bill` bills the simulator's homes for a year.  The
+    identities between the fields are stated once, in :func:`bill`'s docstring.
 
     Two overlapping views — never sum across them:
 
@@ -259,9 +259,9 @@ class BillBreakdown:
     """Value of the solar used on-site in the billed period, net of its own-use price (£, VAT-inclusive).
 
     Each self-consumed kWh is valued at the gap between the baseline's effective
-    import rate and the own-use rate; :func:`bill` derives that rate from
-    ``baseline_import_cost_gbp``.  This is the price-gap benefit, not the full
-    avoided-import value, and is zero when the two rates are equal.
+    import rate (``eff_rate`` in :func:`bill`'s identities) and the own-use
+    rate.  This is the price-gap benefit, not the full avoided-import value, and
+    is zero when the two rates are equal.
     """
 
     baseline_bill_gbp: float
