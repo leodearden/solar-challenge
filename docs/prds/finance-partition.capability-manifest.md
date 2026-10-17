@@ -60,7 +60,7 @@ The YAML twin, `finance-partition.capability-manifest.yaml`, carries the mechani
 | capability asserted | evidence | status |
 |---|---|---|
 | Lower→upper code references: 0 (the split is legitimate) | `probe:` AST name intersection at c06d12b | PASS |
-| The four allow-list entries exist under an S8 owner | `grep:tests/unit/test_import_structure.py::ALLOWED_FUNCTION_LOCAL_IMPORTS` on `task/775` (`_FINANCE_PARTITION`) | PASS (producer task-775) |
+| The four allow-list entries exist under an S8 owner | `grep:tests/unit/test_import_structure.py::ALLOWED_FUNCTION_LOCAL_IMPORTS` on `task/775` (`_FINANCE_PARTITION`); the sidecar's check that δ deleted them is manual, because a grep of a file main lacks passes vacuously | PASS (producer task-775) |
 | `import solar_challenge.finance` is pvlib-free and keeps it so | `grep:finance.py::` imports: `errors`, `seg`, `whole_numbers` at top; fleet/home only under `TYPE_CHECKING`; S16 I10 probe | PASS |
 | No upward import after the move except the wrapper | the moved symbols are exactly those that reference `ScenarioConfig`, `simulate` or each other (`probe:` AST) | PASS |
 | The platform imports none of the moved names | `probe:` grep of solar-challenge-platform `45ecca2`: only `from solar_challenge import` of frozen names | PASS |

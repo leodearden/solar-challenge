@@ -8,7 +8,7 @@ schema_version: 1
 signal_leaves: ["ε"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 911
     title: "Heat-pump types as one per-type record: COP_CURVES and HEAT_PUMP_TYPES"
     capabilities:
       - name: "cop-curves-record-defined"
@@ -58,7 +58,7 @@ tasks:
           kind: manual
           reason: "A1 is observed by α's parametrised test, not a grep"
   - label: "β"
-    task_id: null
+    task_id: 914
     title: "Component block tables shared by the home-block readers and scenario_writer"
     capabilities:
       - name: "system-losses-is-a-grammar-key"
@@ -132,7 +132,7 @@ tasks:
           kind: manual
           reason: "B2 is observed by β's round-trip test over every table key"
   - label: "γ"
-    task_id: null
+    task_id: 916
     title: "Sampler state per field path; every pool shuffled in either order; reproducibility pins"
     capabilities:
       - name: "pools-not-keyed-by-object-identity"
@@ -172,7 +172,7 @@ tasks:
           kind: manual
           reason: "C1 and C2 are observed by γ's tests"
   - label: "δ"
-    task_id: null
+    task_id: 919
     title: "The fleet grammar from the component tables: one ComponentDistribution, components built from drawn values"
     capabilities:
       - name: "five-distribution-classes-deleted"
@@ -230,7 +230,7 @@ tasks:
           kind: manual
           reason: "D6 is the pin test itself"
   - label: "ε"
-    task_id: null
+    task_id: 921
     title: "The fleet invariants at read time: FleetDistributionConfig refuses by path what it cannot draw"
     capabilities:
       - name: "refusals-at-read-time"

@@ -1,12 +1,12 @@
 # Machine-readable twin of web-request-boundary.capability-manifest.md
 # Code anchors verified against main 2ff5673 (2026-10-17); checks are pattern-anchored.
-# task_id stays null until commit_planning stamps it at decompose. θ is held for S16 δ (x_seam_wait).
+# task_id stays null until commit_planning stamps it at decompose. θ depends on S16 δ (task 889; lead ruling L34), not held.
 prd: docs/prds/web-request-boundary.md
 schema_version: 1
 signal_leaves: ["κ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 931
     title: "location.py owns the presets and one strict string grammar; the CLI reads it"
     capabilities:
       - name: "presets-table-in-location"
@@ -34,7 +34,7 @@ tasks:
           paths: ["src/solar_challenge/cli/"]
           expect: absent
       - name: "location-range-refusal-is-configuration-error"
-        binding: "producer: S4 β (converts Location; id pending), upstream of α once wired; probe on main: Location(95, 0) raises ValueError naming the latitude range"
+        binding: "producer: task 861 (S4 β, converts Location), upstream of α; probe on main: Location(95, 0) raises ValueError naming the latitude range"
         verdict: PASS
         delivered_check:
           kind: manual
@@ -46,7 +46,7 @@ tasks:
           kind: manual
           reason: "behaviour judged by α's CLI test against a seeded weather cache"
   - label: "β"
-    task_id: null
+    task_id: 932
     title: "The request readers move below the Flask services"
     capabilities:
       - name: "request-boundary-module-exists"
@@ -79,7 +79,7 @@ tasks:
           kind: manual
           reason: "a sys.modules property observed in a fresh interpreter by β's own test, not greppable"
   - label: "γ"
-    task_id: null
+    task_id: 933
     title: "The web reads a location with the one grammar"
     capabilities:
       - name: "web-location-parser-and-table-deleted"
@@ -121,7 +121,7 @@ tasks:
           kind: manual
           reason: "refusal naming location.longitude judged by γ's L7 test"
   - label: "δ"
-    task_id: null
+    task_id: 935
     title: "One refusal type and one translator at the web boundary"
     capabilities:
       - name: "refusal-tuple-deleted"
@@ -193,13 +193,13 @@ tasks:
           kind: manual
           reason: "one ERROR record per non-domain ValueError judged by δ's R2 caplog test"
       - name: "short-pool-answers-400"
-        binding: "producer: task 297 (pending; plan raises ConfigurationError in FleetDistributionConfig.__post_init__ and generate_homes_from_distribution), upstream once wired; probe on main: 500 text/html"
+        binding: "producer: task 297 (pending; plan raises ConfigurationError in FleetDistributionConfig.__post_init__ and generate_homes_from_distribution), upstream of δ; probe on main: 500 text/html"
         verdict: PASS
         delivered_check:
           kind: manual
           reason: "row R4 on three routes and the preset menu, judged by δ's tests"
   - label: "ε"
-    task_id: null
+    task_id: 937
     title: "One presence rule; defaults separated from nullability"
     capabilities:
       - name: "defaults-map-deleted"
@@ -241,7 +241,7 @@ tasks:
           kind: manual
           reason: "rows P1-P3 judged by ε's table-driven Flask tests"
   - label: "ζ"
-    task_id: null
+    task_id: 938
     title: "Names, labels and booleans are read as their JSON types"
     capabilities:
       - name: "string-reader-defined"
@@ -283,7 +283,7 @@ tasks:
           kind: manual
           reason: "row S1 judged by ζ's Flask tests asserting no submit and no row"
   - label: "η"
-    task_id: null
+    task_id: 940
     title: "The home body's heat-pump block is config's heat_pump block"
     capabilities:
       - name: "web-heat-pump-reader-deleted"
@@ -317,9 +317,9 @@ tasks:
           kind: manual
           reason: "row H1 judged by η's Flask tests"
   - label: "θ"
-    task_id: null
-    title: "The service accessors move beside the dashboard holder; shared.py goes (held for S16 δ)"
-    note: "Held leaf: x_seam_wait {stream: S16, contract: δ web/dashboard.py Dashboard + dashboard_of}; depends on β; excluded from this batch's commit_planning until S16's session releases it."
+    task_id: 942
+    title: "The service accessors move beside the dashboard holder; shared.py goes"
+    note: "Lead ruling L34 (Q4): not held; depends on β and on task 889 (S16 δ: web/dashboard.py Dashboard + dashboard_of), and is committed with this batch."
     capabilities:
       - name: "shared-module-deleted"
         binding: "path: src/solar_challenge/web/shared.py exists on main"
@@ -329,7 +329,7 @@ tasks:
           paths: ["src/solar_challenge/web/shared.py"]
           expect: absent
       - name: "accessors-beside-the-holder"
-        binding: "producer: S16 δ creates web/dashboard.py (not yet filed); held"
+        binding: "producer: task 889 (S16 δ) creates web/dashboard.py, upstream of θ"
         verdict: PASS
         delivered_check:
           kind: grep
@@ -337,7 +337,7 @@ tasks:
           paths: ["src/solar_challenge/web/dashboard.py"]
           expect: present
   - label: "κ"
-    task_id: null
+    task_id: 943
     title: "Integration gate: one grammar, one refusal and one presence rule across both boundaries"
     capabilities:
       - name: "gate-module-exists"

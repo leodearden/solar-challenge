@@ -40,7 +40,7 @@ tasks:
           kind: manual
           reason: "row counts, the round trip and the refusal message are asserted by B1's tests, not a grep"
   - label: "β"
-    task_id: null
+    task_id: 894
     title: "Household load on calendar days, a calendar year exact"
     note: "Held leaf: x_seam_wait {stream: S13, contract: the per-day simulator hand-off leaf of the RNG stream} (L26); excluded from this batch's commit_planning until S13 files its hand-off leaf, wires the edge and releases it. Depends on α and task 779. Supersedes task 711 (L26); D28 re-measure of fk-72af0b90338d recorded in the PRD and on the task."
     capabilities:

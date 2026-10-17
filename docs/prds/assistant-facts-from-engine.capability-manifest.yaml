@@ -7,7 +7,7 @@ schema_version: 1
 signal_leaves: ["α", "β"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 907
     title: "The assistant's facts are read from the engine"
     capabilities:
       - name: "contradicting-tdcv-literals-deleted"

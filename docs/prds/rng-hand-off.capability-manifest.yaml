@@ -7,7 +7,7 @@ schema_version: 1
 signal_leaves: ["α", "β"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 906
     title: "RNG hand-off and the injectable household model"
     note: "Priority high (fk-16df1a7ac416); dependency of trigger-chain gate 772. Also carries fk-c78416de5500 (its guarded-region half is S12 beta's decision 15). S12 beta is held on this leaf (L26). Supersedes 766 and 573's range rule (PRD section 13)."
     capabilities:
@@ -36,12 +36,12 @@ tasks:
           paths: ["src/solar_challenge/"]
           expect: absent
       - name: "private-day-function-gone"
-        binding: "grep: load._simulate_stochastic_day defined at c06d12b; its body moves into richardsonpy_household (decision 9)"
+        binding: "grep: load._simulate_stochastic_day defined at c06d12b; its body moves into richardsonpy_household (decision 9). Check narrowed at decompose to the src definition: a B8 test asserting the name is gone may spell it."
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "_simulate_stochastic_day"
-          paths: ["src/solar_challenge/", "tests/"]
+          pattern: "def _simulate_stochastic_day\\("
+          paths: ["src/solar_challenge/"]
           expect: absent
       - name: "fork-resets-the-lock"
         binding: "producer:α — os.register_at_fork in load.py (C5); absent at c06d12b"
@@ -94,7 +94,7 @@ tasks:
           paths: ["review/briefing.yaml"]
           expect: present
   - label: "β"
-    task_id: null
+    task_id: 908
     title: "Fleet constructors seed each home by one rule"
     note: "Priority low (fk-e0e34ef46058). Supersedes task 746. Out-of-batch upstream: 774 (S1 beta). Additive frozen members (D29): FROZEN_MEMBERS entries and an Unreleased-on-main line in-leaf."
     capabilities:

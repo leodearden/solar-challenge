@@ -8,7 +8,7 @@ schema_version: 1
 signal_leaves: ["β", "ζ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 913
     title: "One surface-contract module by behaviour; no count literal; the import-time check covers every runtime pair"
     capabilities:
       - name: "lazy-module-merged-and-deleted"
@@ -47,7 +47,7 @@ tasks:
           kind: manual
           reason: "B2/B3 are behavioural subprocess tests α writes (a stale alias and a duplicate each refuse import, naming the name); their verdict is the verify's"
   - label: "β"
-    task_id: null
+    task_id: 915
     title: "Constants by their value's structure; Enum aliases shown; nested public classes refused"
     capabilities:
       - name: "seg-presets-pinned-by-keys"
@@ -81,7 +81,7 @@ tasks:
           kind: manual
           reason: "a behavioural rule test β writes; its verdict is the verify's"
   - label: "γ"
-    task_id: null
+    task_id: 918
     title: "The helper models only the typing constructs the surface uses"
     capabilities:
       - name: "type-variable-and-new-type-rules-gone"
@@ -115,7 +115,7 @@ tasks:
           kind: manual
           reason: "behavioural; B5 is RED today for the raising direction because each construct is spelled"
   - label: "δ"
-    task_id: null
+    task_id: 920
     title: "A generated __init__ read from the documented rule"
     capabilities:
       - name: "co-qualname-artefact-gone"
@@ -139,7 +139,7 @@ tasks:
           kind: manual
           reason: "a behavioural rule test δ writes; its verdict is the verify's"
   - label: "ε"
-    task_id: null
+    task_id: 924
     title: "One reading per annotation: strings evaluated where they are parsed"
     capabilities:
       - name: "unevaluated-construct-gone"
@@ -165,7 +165,7 @@ tasks:
           kind: manual
           reason: "a behavioural rule test ε writes; its verdict is the verify's"
   - label: "ζ"
-    task_id: null
+    task_id: 926
     title: "The lock labels each drift additive or breaking and names the doc line"
     capabilities:
       - name: "classification-exists"
@@ -193,7 +193,7 @@ tasks:
   - label: "η"
     task_id: null
     title: "The released snapshot and the executable Unreleased-line obligation (held for S29)"
-    note: "Held: x_seam_wait = {stream: S29, contract: the release commit that bumps the version and writes the one release section}; excluded from the batch's commit_planning; released by S29's session. Open question 1 asks the lead whether to file it."
+    note: "Held: x_seam_wait = {stream: S29, contract: the release commit that bumps the version and writes the one release section}; excluded from the batch's commit_planning; released by S29's session. Filed held per lead ruling L32."
     capabilities:
       - name: "released-snapshot-test"
         binding: "producer: S29's release commit (held); ζ upstream in batch"

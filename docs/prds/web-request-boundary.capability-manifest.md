@@ -7,7 +7,7 @@ Mechanizes G3 (substrate exists) and G6 (premise valid) per leaf of `docs/prds/w
 **Batch verdict: PASS, conditional on wiring.**
 - No binding resolves to `declared-only`, `test-only`, `producer-downstream`, `producer-extent-short` or `rejection-absent`.
 - Five bindings name producers that are filed but not yet done: 774, 297, 394, and S4 β, γ, δ and η, whose ids are pending S4's decompose.
-- One binding names a producer not yet filed: S16 δ, for the held θ.
+- θ's producer, S16 δ, is filed as task 889 and wired upstream of θ (L34).
 - Each such binding is PASS once its edge is wired at decompose; until then it reads `producer-absent` for that leaf, and the leaf is not queued.
 
 ## α — location.py owns the presets and one strict string grammar; the CLI reads it (leaf)
@@ -86,11 +86,11 @@ Mechanizes G3 (substrate exists) and G6 (premise valid) per leaf of `docs/prds/w
 | The web drops the keys silently today (RED for H1) | probe: home `heat_pump: {heat_pump_type: GSHP, thermal_capacity: 12}` → 201, queued `HeatPumpConfig('ASHP', 8.0, 8000.0)` | PASS (RED observed) |
 | The home page posts `type` today | grep: `simulate/home.html` `buildPayload` `heat_pump = { type: f.heat_pump_type, … }` | PASS |
 
-## θ — The service accessors move beside the dashboard holder; shared.py goes (leaf; held)
+## θ — The service accessors move beside the dashboard holder; shared.py goes (leaf)
 
 | Capability | Evidence binding | Status |
 |---|---|---|
-| `web/dashboard.py` with `Dashboard` and `dashboard_of` | producer: S16 δ (not yet filed) | held (`x_seam_wait`); producer-absent until S16 files, so θ is excluded from `commit_planning` |
+| `web/dashboard.py` with `Dashboard` and `dashboard_of` | producer: task 889 (S16 δ) | upstream of θ (L34); committed with the batch |
 | The readers no longer import `shared` | producer: β, upstream | PASS |
 
 ## κ — Integration gate (leaf)

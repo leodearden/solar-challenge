@@ -6,7 +6,7 @@ schema_version: 1
 signal_leaves: ["ζ", "η", "θ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 917
     title: "finance.py's prose says what the code does; history and reviewer answers leave it"
     capabilities:
       - name: "codenames-gone-from-finance"
@@ -48,7 +48,7 @@ tasks:
           kind: manual
           reason: "the Provides list's completeness is checked by review against the module's public names"
   - label: "β"
-    task_id: null
+    task_id: 922
     title: "How a run was priced travels as data; finance stops inferring it"
     capabilities:
       - name: "run-pricing-type"
@@ -96,7 +96,7 @@ tasks:
           kind: manual
           reason: "figures are asserted by B2 and B3's tests"
   - label: "γ"
-    task_id: null
+    task_id: 925
     title: "One ledger per home, read by the bill and the projection; the lower interface is public"
     capabilities:
       - name: "home-ledger-type"
@@ -152,7 +152,7 @@ tasks:
           kind: manual
           reason: "the equality is asserted by B5's test"
   - label: "δ"
-    task_id: null
+    task_id: 928
     title: "projection.py: the projection, economics and solve move above finance"
     capabilities:
       - name: "projection-module-holds-the-projection"
@@ -199,10 +199,8 @@ tasks:
         binding: "producer:task-775 lists them under _FINANCE_PARTITION; δ deletes them"
         verdict: PASS
         delivered_check:
-          kind: grep
-          pattern: '\("solar_challenge\.finance", "solar_challenge\.(battery|fleet|home|pv)"\)'
-          paths: ["tests/unit/test_import_structure.py"]
-          expect: absent
+          kind: manual
+          reason: "the allow-list file exists only on unmerged task/775, so an absent grep passes vacuously on main; B7's test_import_structure run asserts the four entries gone"
       - name: "finance-stays-pvlib-free"
         binding: "S16 I10 probe; B7 asserts sys.modules after import solar_challenge.finance"
         verdict: PASS
@@ -210,7 +208,7 @@ tasks:
           kind: manual
           reason: "a fresh-interpreter probe in B7's test, not a grep"
   - label: "ε"
-    task_id: null
+    task_id: 929
     title: "The projection as a node function, one metric tuple and a pure assembler; revenue affine by construction"
     capabilities:
       - name: "fleet-projection-producer"
@@ -242,7 +240,7 @@ tasks:
           kind: manual
           reason: "convergence is asserted by B9's test"
   - label: "ζ"
-    task_id: null
+    task_id: 930
     title: "One projection per run serves the solve, the economics and the age-0 outlays"
     capabilities:
       - name: "cost-recovery-run-producer"
@@ -284,7 +282,7 @@ tasks:
           kind: manual
           reason: "call counts are asserted by B10's tests"
   - label: "η"
-    task_id: null
+    task_id: 934
     title: "CostRecoverySolution refuses copies that disagree with their source"
     capabilities:
       - name: "config-result-copies-become-properties"
@@ -302,7 +300,7 @@ tasks:
           kind: manual
           reason: "refusal messages are asserted by B13's tests"
   - label: "θ"
-    task_id: null
+    task_id: 936
     title: "Capex prices the PV DC the curve's generation came from"
     capabilities:
       - name: "curve-carries-its-pv-basis"

@@ -28,7 +28,7 @@ This manifest mechanizes G3 (the substrate exists) and G6 (the premise holds) fo
 
 | Capability asserted by the signal | Evidence binding | Status |
 |---|---|---|
-| One `FleetResults` assembly in `fleet.py` (plus `web/storage`'s rebuild) | producer: S16 α (`fleet-execution-policy.md` α, I1), upstream, with the id from the lead. Until it lands there are five `FleetResults(` sites in `src` | PASS (queued prerequisite) |
+| One `FleetResults` assembly in `fleet.py` (plus `web/storage`'s rebuild) | producer: 879 (S16 α), upstream. Until it lands there are five `FleetResults(` sites in `src`. Decompose re-check: 879 removes the `fleet` and `cli/fleet` assemblies, but `web/jobs`'s goes only with 889 (S16 δ), so the binding was producer-extent-short. Resolved by re-scoping: β's files gain `web/jobs.py`, and β passes that site tuples if 889 has not landed | PASS (queued prerequisite; re-scoped at decompose) |
 | Nothing assigns these classes' fields after construction except `simulate_community`'s billing | measured: grep over `src` and `tests` for field assignment and list mutation of `homes`, `home_configs`, `per_home_results` and the `CommunityResults` fields finds only `community.py`'s three billing lines | PASS |
 | Lists passed at construction keep working | built by β (conversion in `__post_init__`). Measured: about 50 test sites and the platform construct with lists, and none of them assigns a field | PASS |
 | Stored fleet runs reload with tuple fields | grep: `web/storage._deserialize_value` rebuilds `tuple[X, ...]` (`origin is tuple`), and `RunStorage.load_fleet_run` constructs `FleetResults` | PASS |

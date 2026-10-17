@@ -4,7 +4,7 @@
 - **Binding rulings:** D2 (ConfigurationError subclasses ValueError; the web translator logs a non-domain ValueError separately so a bug is not silently a 400), D17 (an unknown location is refused with a 400 naming the value; location.py owns the presets and one strict 'preset or lat,lon[,alt]' grammar shared by the CLI and the web; the silent Bristol fallback goes), D29 (additive frozen-table edits land in-leaf; only renames and retirements wait for S29), L1 (S4 converts every input-type refusal to ConfigurationError, so the translator sees one domain type; the web rewraps and `FLEET_FORM_REFUSALS` are S17's).
 - **Finding keys:** fk-6c98ee030531, fk-1d143fefefed, fk-29af8a4fe018, fk-66f886576b3f, fk-bd7f2abebeba, fk-0593b530a371, fk-acdc650baeb8, fk-da0e3a4df6e7, fk-a0866b1bd680, fk-ba29e186122f, fk-70edc755ede4 (statement, measurements and skeptic notes in `plans/review-all-solar_challenge-20261013.json`).
 - **Approach:** B + H. The seam is read by the CLI, every web reader, three templates and the assistant, and six other streams edit the same files, so it gets a contract (§5) and two-way boundary tests (§6).
-- **Status:** authored 2026-10-17; not committed (the lead commits); decomposition waits for the lead's filed ids.
+- **Status:** authored 2026-10-17; committed by the lead in `672ba0c`; decomposed 2026-10-17 under lead ruling L34 (α 931, β 932, γ 933, δ 935, ε 937, ζ 938, η 940, θ 942, κ 943).
 - **Code anchors** verified against main `2ff5673` (2026-10-17). Main moves fast — cite-by-symbol; re-locate lines at implementation time. Every web file named below has moved since the review's pin `7dfea36e`; each finding was re-measured at `2ff5673` (§2.2).
 
 ## 1. Goal
@@ -132,7 +132,7 @@ What a user sees when this lands:
     - The chat body's `message` and `run_id` are read the same way.
     - The sweep's `parameter` and `mode` are S26's.
 16. **One heat-pump grammar** (fk-70edc755ede4). The home body's `heat_pump` block is config's `heat_pump:` block. `home.html` posts `heat_pump_type`. `simulation_params` reads the block with config's reader, made public as `config.parse_heat_pump_block`. Unrecognised keys are refused naming them, `thermal_capacity_kw` is required, and the defaults live in one place. `_parse_heat_pump_block`, its `type` key and its 8.0 and 8000.0 defaults go.
-17. **The service accessors live beside the holder that owns the services.** `get_storage`, `get_job_manager`, S19's `get_database` and S20's policy accessor all read S16's `dashboard_of(current_app)`. They move into `web/dashboard.py`, and `shared.py` is deleted. That leaf waits on S16 δ (held).
+17. **The service accessors live beside the holder that owns the services.** `get_storage`, `get_job_manager`, S19's `get_database` and S20's policy accessor all read S16's `dashboard_of(current_app)`. They move into `web/dashboard.py`, and `shared.py` is deleted. That leaf depends on S16 δ (task 889; L34).
 
 ## 5. Contract
 
@@ -252,7 +252,7 @@ Run contract §8 step 1 before filing. A superseded task is cancelled with `meta
 | S4 finite quantities (`docs/prds/finite-quantities.md`) | consumes | `number_fields` at the package leaf (α); input types raise `ConfigurationError` (β, γ, δ); the web stops pre-reading numbers (η) | S4 | **declared:** S17 α on S4 β; S17 δ on S4 β, γ, δ and η. S17 η deletes the `heat_pump.<key>` pre-reads that S4 η keeps |
 | S5 scenario grammar | file overlap, moves | `parse_location_block` (strict, γ), `parse_heat_pump_block` (η) and `PV_CAPACITY_KW_WHEN_OMITTED` (ε) move to `scenario_blocks.py`; 509's one key rule | S5 moves; S17 defines | order-agnostic: whichever lands second repoints the imports |
 | S6 fleet-document overlays | consumes | `parse_location_block`'s strict block; `home run --location` through `location.parse_location` | S17 grammar; S6 moves the override code | cross-reference |
-| S16 fleet execution policy | produces for S17 θ | `web/dashboard.py`'s `Dashboard` and `dashboard_of` (S16 δ) | S16 holder; S17 accessor location | θ held: `x_seam_wait = {stream: S16, contract: δ web/dashboard.py}` |
+| S16 fleet execution policy | produces for S17 θ | `web/dashboard.py`'s `Dashboard` and `dashboard_of` (S16 δ) | S16 holder; S17 accessor location | θ depends on S16 δ (task 889; L34), not held |
 | S18 dashboard limits | file overlap | `fleet_config`'s refusals become `ConfigurationError` (δ); option lists render from `LOCATION_PRESETS` (γ) | — | S18's new refusals raise `ConfigurationError` |
 | S19 run store | file overlap | ζ (817) owns default run names and the PATCH null/blank-name refusal; κ owns `history_export_yaml`'s stored-run tuple; `get_database` moves with θ | S19 | order-agnostic textual overlap |
 | S20 job events | file overlap | the policy accessor moves with θ; the chat body's error frame uses `refusal_text` | S20 frames | note |
@@ -347,13 +347,13 @@ Every leaf carries `x_finding_key`, `x_finding_run = review-all-solar_challenge-
 - **Prereqs:** δ.
 - **Supersedes:** 245.
 
-**θ — The service accessors move beside the dashboard holder; shared.py goes** (leaf; priority low; **held**)
+**θ — The service accessors move beside the dashboard holder; shared.py goes** (leaf; priority low)
 - **Keys:** fk-bd7f2abebeba.
 - **Work:** decision 17. Every importer reads the accessors from `web.dashboard`.
 - **Files:** `src/solar_challenge/web/{shared,dashboard,api,assistant,history,routes}.py` and the tests that patch `shared`.
 - **Signal:** row G2, with the full web suite green.
 - **Prereqs:** β, S16 δ.
-- **Held:** `metadata.x_seam_wait = {stream: S16, contract: "δ web/dashboard.py Dashboard + dashboard_of"}`. It is excluded from this batch's `commit_planning`, and S16's session releases it.
+- **Not held (L34):** S16 δ is filed as task 889, so θ depends on it and is committed with the batch.
 
 **κ — Integration gate: one grammar, one refusal and one presence rule across both boundaries** (leaf; integration gate; priority medium)
 - **Keys:** fk-6c98ee030531, fk-1d143fefefed, fk-66f886576b3f.
@@ -363,7 +363,7 @@ Every leaf carries `x_finding_key`, `x_finding_run = review-all-solar_challenge-
 - **Signal:** rows L5, R1 and R3 across every `/api` POST route; the per-task verify runs it.
 - **Prereqs:** α, γ, δ, ε, ζ, η.
 
-**DAG:** S4 β → α; 394 → β; {α, β} → γ; {γ, 774, 297, S4 β, γ, δ, η} → δ; {δ, S4 η} → ε; δ → ζ; δ → η; {β, S16 δ} → θ (held); {α, γ, δ, ε, ζ, η} → κ.
+**DAG:** S4 β → α; 394 → β; {α, β} → γ; {γ, 774, 297, S4 β, γ, δ, η} → δ; {δ, S4 η} → ε; δ → ζ; δ → η; {β, S16 δ} → θ; {α, γ, δ, ε, ζ, η} → κ.
 
 **Signal leaf:** κ.
 
@@ -393,7 +393,7 @@ Every leaf carries `x_finding_key`, `x_finding_run = review-all-solar_challenge-
 1. **Task 517 and fk-5827f41eb082.** S4 decision 9 assigned 517's `stochastic`, `name` and `location` reads to "task 517, S17". Proposed: ζ supersedes 331, 517 and 560, and fk-5827f41eb082 moves onto ζ's `x_finding_key`.
 2. **fk-a0866b1bd680 (high).** The invariant is config's and belongs to task 297, whose plan already refuses the pool by name. Proposed: stamp the key on 297 and raise 297 to high. Both 297 and δ, which carries the route half (row R4), then become dependencies of gate 772.
 3. **The `location:` block tightening (decision 6)** is a config-grammar change in a module S5 moves and S6 consumes. Proposed: S17 γ makes it, so one mapping rule serves files and requests; S5 moves it.
-4. **θ held on S16 δ.** S19's `get_database` and S20's policy accessor move with θ if they have landed; otherwise they are added to `web/dashboard.py` directly (cross-reference lines).
+4. **θ on S16 δ** (ruled by L34: a dependency on task 889, not held). S19's `get_database` and S20's policy accessor move with θ if they have landed; otherwise they are added to `web/dashboard.py` directly (cross-reference lines).
 5. **D2's reading (§3.1).** A non-domain `ValueError` is answered 400 and logged at ERROR, not answered 500. This PRD follows the ruling's text; a 500 would be one line in `answer_refusal` if Leo meant that.
 
 ## Gate record
@@ -411,7 +411,7 @@ Every leaf carries `x_finding_key`, `x_finding_run = review-all-solar_challenge-
   - The Flask behaviour: a blueprint `ValueError` handler catches a subclass, and a blueprint 500 handler receives an unhandled `TypeError` with a JSON body (probed on Flask 3.1.3).
   - The offline guard and the `weather_cache` fixture (`tests/conftest.py`).
   - Produced upstream: `ConfigurationError ⊂ ValueError` (774), `number_fields` at the leaf (S4 α), the input types' `ConfigurationError` (S4 β, γ, δ), the pool refusal (297) and `refuse_unrecognised_keys` (394).
-  - Held: S16's `web/dashboard.py`.
+  - Upstream: S16's `web/dashboard.py` (task 889).
 - **G4, seam owners.** §8 assigns every overlap. S1 and S17 on the web deletions is resolved to S17 (S1 PRD decision 8, cross-reference line). The accessor location is S17's and the holder S16's.
 - **G5, B + H.** The blast radius is location, the CLI, config, eight web modules, three templates and the assistant, and six streams touch the same files. §5 is the contract, §6 the sketch, and κ the gate.
 - **G6, premises checked.**

@@ -6,7 +6,7 @@ schema_version: 1
 signal_leaves: ["α", "β"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 909
     title: "The community battery dispatches through the factory with the community tariff"
     capabilities:
       - name: "community-calls-the-factory"
@@ -68,7 +68,7 @@ tasks:
           kind: manual
           reason: "ordering is asserted by the CliRunner test (§9 row 6)"
   - label: "β"
-    task_id: null
+    task_id: 910
     title: "Fleet and community values are frozen and built once"
     capabilities:
       - name: "fleet-config-homes-tuple"
@@ -112,7 +112,7 @@ tasks:
           paths: ["tests/unit/test_public_api_surface.py", "tests/_surface_forms.py"]
           expect: present
       - name: "s16-alpha-one-assembly"
-        binding: "producer: S16 α (fleet-execution-policy.md α), upstream out-of-batch dependency; id from the lead"
+        binding: "producer: 879 (S16 α), upstream out-of-batch dependency, removes fleet.simulate_fleet, collect_multi_sweep_results and cli/fleet.run's assembly; web/jobs's assembly goes with 889 (S16 δ), and β passes it tuples if 889 has not landed"
         verdict: PASS
         delivered_check:
           kind: manual
@@ -120,7 +120,7 @@ tasks:
   - label: "γ"
     task_id: null
     title: "The sharing mode is derived from the community battery"
-    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; fk-083990041fdc is weakened, re-measured in PRD §2.3."
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; fk-083990041fdc is weakened, re-measured in PRD §2.3."
     capabilities:
       - name: "mode-field-retired"
         binding: "CommunityConfig.sharing_mode and CommunityResults.sharing_mode are typed Literal[...] inline at ac1fdf1; γ types the result field SharingMode and retires the config field"
