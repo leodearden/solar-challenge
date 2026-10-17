@@ -4,9 +4,10 @@
 They pin that the command runs verbatim and only collects, keeps its project's ini addopts in force,
 receives each extra pytest arg whole, and runs in the environment it is given, that environment's
 PYTHONPATH kept; that what it collected is read from the collection-report plugin's report, never from
-its output, and a run that wrote no report never reads as an empty collection; and that a failed run's
-description carries pytest's error report however long the listing, and the output of a command that
-failed before pytest started.
+its output, with each test's file and parametrize id and each module or directory skipped at
+collection with its skip reason, and a run that wrote no report never reads as an empty collection;
+and that a failed run's description carries pytest's error report however long the listing, and the
+output of a command that failed before pytest started.
 """
 
 import os
@@ -28,6 +29,10 @@ _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 _STARTUP_ERROR_MESSAGE = "the command failed before pytest started"
 
 _DOUBLE_COLON_LINE = "warning: a::b"
+
+_ABSENT_PACKAGE = "a_package_this_probe_never_installs"
+
+_SKIP_AT_IMPORT = f"import pytest\n\npytest.importorskip({_ABSENT_PACKAGE!r})\n\n\n"
 
 
 def _module_of_failing_tests(*names: str) -> str:
@@ -200,6 +205,39 @@ def test_each_collected_test_carries_its_file_and_its_parametrize_id(tmp_path: P
         CollectedTest("sub/test_ids.py::test_matrix[3.13]", module, "3.13"),
         CollectedTest("sub/test_ids.py::test_plain", module, None),
     ), collection.describe()
+
+
+def test_a_module_skipped_at_collection_is_reported_with_its_skip_reason(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "test_needs_absent.py").write_text(
+        _SKIP_AT_IMPORT + _module_of_failing_tests("test_case"), encoding="utf-8"
+    )
+    (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
+    skipped = collection.written_report().skipped_collectors
+    assert tuple(node_id for node_id, _ in skipped) == ("test_needs_absent.py",), skipped
+    assert f"could not import {_ABSENT_PACKAGE!r}" in skipped[0][1], skipped
+
+
+def test_a_directory_whose_conftest_skips_is_reported_with_its_skip_reason(tmp_path: Path) -> None:
+    """As tests/e2e/conftest.py's module-level pytest.importorskip("werkzeug") would skip tests/e2e."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "conftest.py").write_text(_SKIP_AT_IMPORT, encoding="utf-8")
+    (tmp_path / "sub" / "test_in_sub.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+    (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
+    skipped = collection.written_report().skipped_collectors
+    assert tuple(node_id for node_id, _ in skipped) == ("sub",), skipped
+    assert _ABSENT_PACKAGE in skipped[0][1], skipped
 
 
 def test_a_command_that_never_runs_pytest_has_no_report_and_reading_its_node_ids_fails_naming_it(
