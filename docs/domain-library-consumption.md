@@ -403,10 +403,19 @@ refuses that import ("does not explicitly export attribute"). Constructing a
 `FinanceConfig`, a `GridServicesEventsConfig` or an `EventWindow`, valid or
 refused, no longer imports the scenario grammar (`solar_challenge.config`) or
 pvlib; on the 0.5.0 tag, constructing a `FinanceConfig` or a
-`GridServicesEventsConfig`, or a refused `EventWindow`, imports both. The
-class's base, `Exception`, and every refusal message are unchanged. Consumers
-that import it from `solar_challenge.config` switch to `solar_challenge.errors`
-when they re-pin.
+`GridServicesEventsConfig`, or a refused `EventWindow`, imports both. Every
+refusal message is unchanged; task 774 (below) changes the class's base.
+Consumers that import it from `solar_challenge.config` switch to
+`solar_challenge.errors` when they re-pin.
+
+**Unreleased on main** (task 774): `ConfigurationError` subclasses `ValueError`;
+on the 0.5.0 tag it subclasses `Exception`. So `except ValueError` now catches
+every refusal that the scenario grammar and the input types raise. An
+`except ValueError` placed before an `except ConfigurationError` now takes a
+refusal, and the later clause never runs, so code that handles a refusal apart
+from other `ValueError`s names `ConfigurationError` first. Consumers that catch
+`ValueError` alone, or `ConfigurationError` first, need no change when they
+re-pin.
 
 **Unreleased on main** (task 777): `SimulationResults`, reached through
 `FleetResults.per_home_results`, gains a read-only property, `window`: the

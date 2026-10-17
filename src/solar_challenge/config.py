@@ -2070,9 +2070,20 @@ _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
     *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
 })
 
-_EVENT_WINDOW_KEYS: tuple[str, ...] = (
-    "months", "weekdays", "hours", "events_per_year", "event_hours",
-)
+
+def _int_tuple(values: Any) -> tuple[int, ...]:
+    """Coerce each of *values* to an int as int() does, keeping their order."""
+    return tuple(int(value) for value in values)
+
+
+# Rows follow EventWindow's field order, which decides the first bad value reported.
+_EVENT_WINDOW_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
+    "months": _int_tuple,
+    "weekdays": _int_tuple,
+    "hours": _int_tuple,
+    "events_per_year": int,
+    "event_hours": _number,
+})
 
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
@@ -2082,24 +2093,17 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
     parsed_windows: list[EventWindow] = []
     for i, ew_dict in enumerate(data):
         window_path = f"{block_path}[{i}]"
-        _refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
-        for req_key in _EVENT_WINDOW_KEYS:
+        _refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_COERCIONS)
+        for req_key in _EVENT_WINDOW_COERCIONS:
             if req_key not in ew_dict:
                 raise ConfigurationError(f"{window_path} requires '{req_key}' field")
         try:
-            parsed_windows.append(
-                EventWindow(
-                    months=tuple(int(m) for m in ew_dict["months"]),
-                    weekdays=tuple(int(d) for d in ew_dict["weekdays"]),
-                    hours=tuple(int(h) for h in ew_dict["hours"]),
-                    events_per_year=int(ew_dict["events_per_year"]),
-                    event_hours=_number(ew_dict["event_hours"]),
-                )
-            )
+            fields = {key: coerce(ew_dict[key]) for key, coerce in _EVENT_WINDOW_COERCIONS.items()}
         except (ValueError, TypeError, OverflowError) as exc:
             raise ConfigurationError(
                 f"{window_path} contains a non-numeric value: {exc}"
             ) from exc
+        parsed_windows.append(EventWindow(**fields))
     return tuple(parsed_windows)
 
 

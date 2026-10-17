@@ -499,7 +499,7 @@ class TestFinanceConfigParsing:
         assert isinstance(result.asset_life_years, int)
 
     def test_non_numeric_value_raises_configuration_error(self) -> None:
-        """A non-numeric string for a numeric field raises ConfigurationError (not ValueError)."""
+        """A non-numeric string for a numeric field raises ConfigurationError (not a plain ValueError)."""
         with pytest.raises(ConfigurationError, match="non-numeric"):
             parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
