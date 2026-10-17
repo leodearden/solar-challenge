@@ -196,6 +196,44 @@ def _build_grid_charge_context(
     )
 
 
+def _settle_timestep(
+    *,
+    generation_kwh: float,
+    demand_kwh: float,
+    pv_charge_stored_kwh: float,
+    grid_charge_stored_kwh: float,
+    battery_discharge_kwh: float,
+    battery_soc: float,
+) -> EnergyFlowResult:
+    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
+    excess_kwh = max(0.0, generation_kwh - demand_kwh)
+    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+
+    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+
+    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
+    direct_consumption_kwh = min(generation_kwh, demand_kwh)
+    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
+
+    # Split-source grid flows, which keep validate_energy_balance closed
+    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
+    # reduces export, and grid charge adds the energy it stored to import.
+    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
+
+    return EnergyFlowResult(
+        generation=generation_kwh,
+        demand=demand_kwh,
+        self_consumption=self_consumption_kwh,
+        battery_charge=battery_charge_kwh,
+        battery_discharge=battery_discharge_kwh,
+        grid_export=grid_export_kwh,
+        grid_import=grid_import_kwh,
+        battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
+    )
+
+
 def simulate_timestep(
     generation_kw: float,
     demand_kw: float,
@@ -237,10 +275,6 @@ def simulate_timestep(
     # Convert power to energy for this timestep
     generation_kwh = generation_kw * duration_hours
     demand_kwh = demand_kw * duration_hours
-
-    # Calculate excess and shortfall
-    excess_kwh = max(0.0, generation_kwh - demand_kwh)
-    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
     # Initialize battery-related values (split-source tracking)
     pv_charge_stored_kwh = 0.0
@@ -287,28 +321,13 @@ def simulate_timestep(
         )
         battery_soc = battery.soc_kwh
 
-    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
-
-    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    direct_consumption_kwh = min(generation_kwh, demand_kwh)
-    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
-
-    # Split-source grid flows, which keep validate_energy_balance closed
-    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
-    # reduces export, and grid charge adds the energy it stored to import.
-    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
-
-    return EnergyFlowResult(
-        generation=generation_kwh,
-        demand=demand_kwh,
-        self_consumption=self_consumption_kwh,
-        battery_charge=battery_charge_kwh,
-        battery_discharge=battery_discharge_kwh,
-        grid_export=grid_export_kwh,
-        grid_import=grid_import_kwh,
+    return _settle_timestep(
+        generation_kwh=generation_kwh,
+        demand_kwh=demand_kwh,
+        pv_charge_stored_kwh=pv_charge_stored_kwh,
+        grid_charge_stored_kwh=grid_charge_stored_kwh,
+        battery_discharge_kwh=battery_discharge_kwh,
         battery_soc=battery_soc,
-        grid_charge=grid_charge_stored_kwh,
     )
 
 
@@ -405,28 +424,13 @@ def simulate_timestep_tou(
 
         battery_soc = battery.soc_kwh
 
-    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
-
-    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    direct_consumption_kwh = min(generation_kwh, demand_kwh)
-    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
-
-    # Split-source grid flows, which keep validate_energy_balance closed
-    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
-    # reduces export, and grid charge adds the energy it stored to import.
-    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
-
-    return EnergyFlowResult(
-        generation=generation_kwh,
-        demand=demand_kwh,
-        self_consumption=self_consumption_kwh,
-        battery_charge=battery_charge_kwh,
-        battery_discharge=battery_discharge_kwh,
-        grid_export=grid_export_kwh,
-        grid_import=grid_import_kwh,
+    return _settle_timestep(
+        generation_kwh=generation_kwh,
+        demand_kwh=demand_kwh,
+        pv_charge_stored_kwh=pv_charge_stored_kwh,
+        grid_charge_stored_kwh=grid_charge_stored_kwh,
+        battery_discharge_kwh=battery_discharge_kwh,
         battery_soc=battery_soc,
-        grid_charge=grid_charge_stored_kwh,
     )
 
 
