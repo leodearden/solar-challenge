@@ -1,6 +1,6 @@
 # Results chart panels, theme tokens and chart facts
 
-**Status:** authored 2026-10-15 (program `review-all-solar_challenge-20261013`, stream S21, wave 1, no upstream streams). Not committed and not filed. Decomposition waits for the lead to hand over the ids of the out-of-batch tasks this batch depends on or supersedes (§Pre-conditions, §Open questions). Contract first (B + H).
+**Status:** authored 2026-10-15 (program `review-all-solar_challenge-20261013`, stream S21, wave 1, no upstream streams), committed in `0fcef8b`. Decomposed and filed 2026-10-16: α 829, β 830, γ 831, δ 832 (high; a dependency of trigger-chain gate 772), ε 833, ζ 834, η 835, θ 836, and fk-657669b23e71 accepted as cancelled task 840 (D40). Session rulings R1-R4 are D37-D40. The lead ruled Q1-Q6 in L17: the supersessions were applied, δ depends on 454 now that esc-454-3 is closed, and the 691/736 edges stay. Contract first (B + H).
 
 **Code anchors** verified against main `9625529` (2026-10-15). Main moves fast: cite by symbol and re-locate lines at implementation time. The findings record's anchors are at `7dfea36`, and tasks 637 and 674 have since moved every chart page onto `chart_panel` (§Background, re-measurement).
 

@@ -4,9 +4,10 @@
 # Code anchors verified against main 9625529565087fb3405efa390cc1c55049b26ce0 (2026-10-15); checks are pattern-anchored.
 prd: docs/prds/battery-efficiency-and-throughput.md
 schema_version: 1
+signal_leaves: ["α", "β"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 863
     title: "Round-trip efficiency is a constructor, and every reader builds through it"
     capabilities:
       - name: "with-round-trip-defined"
@@ -92,7 +93,7 @@ tasks:
           kind: manual
           reason: "delivered and checked by 774's own delivered check"
   - label: "β"
-    task_id: null
+    task_id: 865
     title: "compute_soh counts one equivalent full cycle per usable capacity discharged"
     capabilities:
       - name: "efc-not-halved"
