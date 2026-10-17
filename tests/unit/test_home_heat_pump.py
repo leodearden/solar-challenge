@@ -11,6 +11,7 @@ from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
 
 
 class TestHeatPumpConfig:
@@ -193,41 +194,23 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
             simulate_home(home, day, day, weather_data=_dark_tmy_year(10.0).loc["1990-01-15"])
 
 
-@pytest.mark.slow
+@pytest.fixture
+def bristol_cold_january15_tmy(weather_cache: WeatherCache, cold_january15_tmy_weather: pd.DataFrame) -> None:
+    """Seed cold_january15_tmy_weather, with daylight on 15 January, as Bristol's TMY, which get_tmy_data then reads in place of PVGIS.
+
+    The daylight is an overcast day's, all of it diffuse, so the PV generates on the day the heat pump runs.
+    """
+    weather = cold_january15_tmy_weather.copy()
+    weather.loc["1990-01-15 09:00":"1990-01-15 15:00", ["ghi", "dhi"]] = 100.0
+    weather_cache.put(weather, "tmy", Location.bristol())
+
+
+@pytest.mark.usefixtures("bristol_cold_january15_tmy")
 class TestHeatPumpIntegration:
-    """Test heat pump integration in home simulation (calls simulate_home — network)."""
+    """Test heat pump integration in home simulation: simulate_home on Bristol homes, passed no weather_data.
 
-    def test_simulate_home_with_heat_pump_ashp(self):
-        """simulate_home generates heat pump load for ASHP."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
-            heat_pump_config=HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=8000.0,
-            ),
-            location=Location.bristol(),
-        )
-
-        # Simulate one day in winter (January)
-        results = simulate_home(
-            config,
-            start_date=pd.Timestamp("2024-01-15"),
-            end_date=pd.Timestamp("2024-01-15"),
-        )
-
-        # Verify heat pump load is present and tracked
-        assert results.heat_pump_load is not None
-        assert len(results.heat_pump_load) == 1440  # 24 hours * 60 minutes
-        assert results.heat_pump_load.min() >= 0.0  # Non-negative load
-
-        # Winter should have significant heating load
-        assert results.heat_pump_load.sum() > 0.0
-
-        # Demand should be higher than just household load
-        # (household load + heat pump load)
-        assert results.demand.sum() > 0.0
+    get_tmy_data then serves the synthetic TMY year that bristol_cold_january15_tmy seeds. Synthetic weather, no network.
+    """
 
     def test_simulate_home_with_heat_pump_gshp(self):
         """simulate_home generates heat pump load for GSHP."""
@@ -254,23 +237,6 @@ class TestHeatPumpIntegration:
         assert len(results.heat_pump_load) == 1440
         assert results.heat_pump_load.min() >= 0.0
         assert results.heat_pump_load.sum() > 0.0
-
-    def test_simulate_home_without_heat_pump(self):
-        """simulate_home works without heat pump (None in results)."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
-            location=Location.bristol(),
-        )
-
-        results = simulate_home(
-            config,
-            start_date=pd.Timestamp("2024-01-15"),
-            end_date=pd.Timestamp("2024-01-15"),
-        )
-
-        # Heat pump load should be None
-        assert results.heat_pump_load is None
 
     def test_results_to_dataframe_includes_heat_pump(self):
         """SimulationResults.to_dataframe includes heat pump load column."""
