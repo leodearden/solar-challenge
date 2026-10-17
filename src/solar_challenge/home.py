@@ -64,11 +64,11 @@ class HomeConfig:
 
 
 _COLUMN = "column"
-_AMOUNT = "per_minute_amount"
+_AMOUNT = "step_amount"
 
 
 @dataclass(frozen=True)
-class _PerMinuteAmount:
+class _StepAmount:
     """How a series' samples become its rows' amounts, under column: a rate per hour (kW) gives the kWh its row delivers; any other sample (£) already is its row's amount."""
 
     column: str
@@ -81,12 +81,12 @@ class _PerMinuteAmount:
 
 def _power(column: str, energy_column: str) -> dict[str, object]:
     """Metadata of a kW series written under column; its amount is each row's kWh, under energy_column."""
-    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(energy_column, per_hour=True)}
+    return {_COLUMN: column, _AMOUNT: _StepAmount(energy_column, per_hour=True)}
 
 
 def _money(column: str) -> dict[str, object]:
     """Metadata of a £ series written under column; each sample already is its row's amount."""
-    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(column, per_hour=False)}
+    return {_COLUMN: column, _AMOUNT: _StepAmount(column, per_hour=False)}
 
 
 def _level(column: str) -> dict[str, object]:
@@ -174,7 +174,7 @@ class SimulationResults:
         for attribute in fields(self):
             amount = attribute.metadata.get(_AMOUNT)
             series = getattr(self, attribute.name)
-            if isinstance(amount, _PerMinuteAmount) and series is not None:
+            if isinstance(amount, _StepAmount) and series is not None:
                 yield amount.column, amount.row_amounts(series, window)
 
     def per_minute_amounts(self) -> pd.DataFrame:
