@@ -195,55 +195,6 @@ def generate_summary_report(
     return report
 
 
-def calculate_self_consumption_ratio(results: SimulationResults) -> float:
-    """Calculate self-consumption ratio.
-
-    Self-consumption ratio = self_consumed / total_generation
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no generation)
-    """
-    summary = calculate_summary(results)
-    return summary.self_consumption_ratio
-
-
-def calculate_grid_dependency_ratio(results: SimulationResults) -> float:
-    """Calculate grid dependency ratio.
-
-    Grid dependency = grid_import / total_consumption
-
-    Lower values indicate more self-sufficiency.
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no consumption)
-    """
-    summary = calculate_summary(results)
-    return summary.grid_dependency_ratio
-
-
-def calculate_export_ratio(results: SimulationResults) -> float:
-    """Calculate export ratio.
-
-    Export ratio = grid_export / total_generation
-
-    Higher values indicate more excess PV.
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no generation)
-    """
-    summary = calculate_summary(results)
-    return summary.export_ratio
-
-
 @dataclass(frozen=True, kw_only=True)
 class SeasonSummary:
     """One season of a run: its energy totals in kWh, and calculate_summary's two ratios of them.

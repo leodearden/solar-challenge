@@ -15,10 +15,7 @@ from solar_challenge.output import (
     SeasonSummary,
     aggregate_daily,
     aggregate_monthly,
-    calculate_export_ratio,
-    calculate_grid_dependency_ratio,
     calculate_seasonal_metrics,
-    calculate_self_consumption_ratio,
     compute_community_metrics,
     export_to_csv,
     generate_summary_report,
@@ -282,31 +279,6 @@ class TestCommunityMetrics:
         assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
         assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
         assert half_hour.sharing_mode == minute.sharing_mode
-
-
-class TestRatioCalculations:
-    """Test OUT-003, OUT-004, OUT-005: Ratio calculations."""
-
-    def test_self_consumption_ratio(self, sample_results):
-        """OUT-003: Self-consumption ratio calculation."""
-        ratio = calculate_self_consumption_ratio(sample_results)
-
-        # 2 kW self-consumption / 3 kW generation = 0.667
-        assert ratio == pytest.approx(0.667, rel=0.01)
-
-    def test_grid_dependency_ratio(self, sample_results):
-        """OUT-004: Grid dependency ratio calculation."""
-        ratio = calculate_grid_dependency_ratio(sample_results)
-
-        # 0 kW import / 2 kW demand = 0
-        assert ratio == 0.0
-
-    def test_export_ratio(self, sample_results):
-        """OUT-005: Export ratio calculation."""
-        ratio = calculate_export_ratio(sample_results)
-
-        # 0.5 kW export / 3 kW generation = 0.167
-        assert ratio == pytest.approx(0.167, rel=0.01)
 
 
 class TestAggregateDaily:
