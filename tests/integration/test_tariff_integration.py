@@ -267,14 +267,15 @@ class TestEconomy7TariffIntegration:
     def test_winter_period_costs(self, economy7_config):
         """Economy 7 costs in winter period (higher consumption).
 
-        The weather is the clear June day with its irradiance scaled by 0.11, Bristol's January GHI
-        as a share of that day's 7.43 kWh/m²: 25.8 kWh/m² over 31 days in the TMY get_tmy_data returns,
-        the month's 23.9 kWh/m² in docs/tmy-irradiation-scaling.md after Bristol's ×1.078 scaling.
+        The weather is a clear June day dimmed to Bristol's January irradiation (docs/tmy-irradiation-scaling.md §4).
         """
         days = 7
+        january_share_of_a_clear_june_day = 0.11
         start = pd.Timestamp("2024-01-15")
         end = start + pd.Timedelta(days=days - 1)
-        january_week = synthetic_june_weather(start, irradiance_scale_per_day=(0.11,) * days)
+        january_week = synthetic_june_weather(
+            start, irradiance_scale_per_day=(january_share_of_a_clear_june_day,) * days
+        )
 
         with pytest.warns(UserWarning, match="seg_tariff"):
             results = simulate_home(economy7_config, start, end, weather_data=january_week)
