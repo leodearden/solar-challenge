@@ -472,6 +472,12 @@ _EDITOR_TYPES: Mapping[str, _EditorType] = MappingProxyType({
     ),
 })
 
+
+def _editor_type(dist_type: object) -> _EditorType | None:
+    """The distribution editor's record of *dist_type*; None for a type the editor does not offer, or one that is not a string."""
+    return _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+
+
 #: The keys of a distribution as the distribution editor holds it.
 _DISTRIBUTION_KEYS = ("type", "mean", "std", "min", "max", "values", "entries")
 
@@ -496,7 +502,7 @@ def distribution_grammar_spec(
             :func:`_rows_spec` refuses; each error names its field.
     """
     dist_type = distribution.get("type")
-    editor_type = _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+    editor_type = _editor_type(dist_type)
     if editor_type is None:
         raise ValueError(
             f"{fields['type']} must be one of {', '.join(_EDITOR_TYPES)}, got {dist_type!r}"
@@ -565,7 +571,7 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
         return as_finite_float(spec, path)
     if _is_distribution(spec) and spec["type"] == "fixed":
         return as_finite_float(spec.get("value"), f"{path}.value")
-    if not _is_distribution(spec) or spec["type"] not in _EDITOR_TYPES:
+    if not _is_distribution(spec) or _editor_type(spec["type"]) is None:
         raise ValueError(
             f"{path} must be a fixed value or one of the fleet page's distributions "
             f"({', '.join(_EDITOR_TYPES)}), got {spec!r}"

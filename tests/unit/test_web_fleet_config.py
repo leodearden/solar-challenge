@@ -1507,6 +1507,27 @@ class TestFleetConfigHelpers:
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
     @pytest.mark.parametrize(
+        "dist_type",
+        [
+            pytest.param(["normal"], id="list"),
+            pytest.param({"normal": 1}, id="mapping"),
+            pytest.param(None, id="null"),
+            pytest.param(4, id="number"),
+        ],
+    )
+    def test_distribution_form_spec_refuses_a_type_that_is_not_a_string_as_one_the_editor_has_no_form_for(
+        self, dist_type: object
+    ) -> None:
+        """A type that is not a string, one that cannot be hashed included, is refused as a type the editor has no form for, naming its path and the spec sent, as distribution_grammar_spec refuses it."""
+        spec = {"type": dist_type, "mean": 5.0, "std": 2.0, "min": 0.0, "max": 8.0}
+        with pytest.raises(ValueError) as exc_info:
+            distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
+        assert str(exc_info.value) == (
+            "fleet_distribution.pv.capacity_kw must be a fixed value or one of the fleet page's "
+            f"distributions (normal, uniform, weighted_discrete, shuffled_pool), got {spec!r}"
+        )
+
+    @pytest.mark.parametrize(
         "spec",
         [
             pytest.param({"type": "fixed"}, id="no-value"),
