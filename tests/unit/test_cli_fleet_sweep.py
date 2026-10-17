@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner, Result
@@ -38,6 +39,16 @@ _SWEEP_PATHS = (
         id="param-sweep",
     ),
 )
+
+_SUMMARY_COLUMNS = [
+    "sweep_value",
+    "param",
+    "self_consumption_ratio",
+    "total_generation_kwh",
+    "total_consumption_kwh",
+    "grid_import_kwh",
+    "grid_export_kwh",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -113,3 +124,60 @@ def test_a_param_sweep_without_both_bounds_is_refused_before_it_simulates(
     assert result.exit_code == 1
     assert "CLI sweep requires --min and --max values" in " ".join(result.stderr.split())
     assert list(Path("out").glob("*.csv")) == []
+
+
+@pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
+def test_the_summary_csv_has_each_points_totals_in_ascending_order(
+    capacity_kwh: object, options: tuple[str, ...], param_name: str, values: tuple[float, ...]
+) -> None:
+    result = _sweep(capacity_kwh, *options)
+
+    assert result.exit_code == 0, result.output
+    summary = pd.read_csv(Path("out", "sweep_summary.csv"))
+    assert list(summary.columns) == _SUMMARY_COLUMNS
+    assert list(summary["sweep_value"]) == pytest.approx(values)
+    assert list(summary["param"]) == [param_name] * len(values)
+    for row in summary.itertuples():
+        point = pd.read_csv(Path("out", f"{param_name}_{row.sweep_value:.4f}.csv"), index_col=0)
+        energy_kwh = point.sum() / 60
+        assert (
+            row.self_consumption_ratio,
+            row.total_generation_kwh,
+            row.total_consumption_kwh,
+            row.grid_import_kwh,
+            row.grid_export_kwh,
+        ) == pytest.approx(
+            (
+                energy_kwh["self_consumption_kw"] / energy_kwh["generation_kw"],
+                energy_kwh["generation_kw"],
+                energy_kwh["demand_kw"],
+                energy_kwh["grid_import_kw"],
+                energy_kwh["grid_export_kw"],
+            ),
+            rel=1e-9,
+            abs=1e-9,
+        )
+
+
+@pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
+def test_the_summary_table_lists_every_point_in_ascending_order(
+    capacity_kwh: object, options: tuple[str, ...], param_name: str, values: tuple[float, ...]
+) -> None:
+    result = _sweep(capacity_kwh, *options)
+
+    body_rows = [line for line in result.stdout.splitlines() if line.startswith("│")]
+    assert result.exit_code == 0, result.output
+    assert [row.split("│")[1].strip() for row in body_rows] == [f"{value:.4f}" for value in values]
+
+
+@pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
+def test_the_progress_bar_counts_every_home_of_every_point(
+    capacity_kwh: object, options: tuple[str, ...], param_name: str, values: tuple[float, ...]
+) -> None:
+    """Two points of two homes each, so the bar ends at 4 of 4, the final frame Rich prints on stderr off a terminal."""
+    result = _sweep(capacity_kwh, *options)
+
+    assert result.exit_code == 0, result.output
+    status = " ".join(result.stderr.split())
+    assert "Simulating 2 sweeps (4 total homes)..." in status
+    assert "4/4" in status
