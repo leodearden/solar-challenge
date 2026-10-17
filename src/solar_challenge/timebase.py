@@ -5,6 +5,7 @@ import calendar
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 
 HOURS_PER_MINUTE = 1 / 60
@@ -52,6 +53,29 @@ class SimulationWindow:
                 f"got cadence={self.cadence!r}"
             )
 
+    @classmethod
+    def of_index(cls, index: pd.Index) -> "SimulationWindow":
+        """The window index describes: its first and last rows' dates on its own clock, the cadence its rows are spaced at, and its zone's name.
+
+        Raises:
+            ValueError: If index is not a DatetimeIndex, naming its type and dtype; if it is
+                empty; if it has one row and no fixed-duration freq; or if its rows are not
+                evenly spaced, naming the first position whose gap differs and both gaps.
+        """
+        if not isinstance(index, pd.DatetimeIndex):
+            raise ValueError(
+                "SimulationWindow.of_index reads a DatetimeIndex: "
+                f"got {type(index).__name__} of dtype {index.dtype}"
+            )
+        if len(index) == 0:
+            raise ValueError("SimulationWindow.of_index needs at least one row: got an empty index")
+        return cls(
+            first_day=index[0].date(),
+            last_day=index[-1].date(),
+            cadence=_cadence(index),
+            timezone=None if index.tz is None else str(index.tz),
+        )
+
     @property
     def days(self) -> int:
         """The calendar days the window covers."""
@@ -89,3 +113,35 @@ class SimulationWindow:
     def energy_kwh(self, power_kw: pd.Series) -> float:
         """The kWh a kW series on this window's rows delivers: each row's kW times the hours it lasts, summed."""
         return float((power_kw * self.step_hours).sum())
+
+
+def _cadence(index: pd.DatetimeIndex) -> timedelta:
+    """How long each row of index lasts: its freq when that is a fixed duration, else the one gap between its rows in absolute time."""
+    if isinstance(index.freq, pd.offsets.Tick):
+        return _as_timedelta(pd.Timedelta(index.freq))
+    if len(index) == 1:
+        raise ValueError(
+            "SimulationWindow.of_index cannot read a cadence from one row without a fixed-duration freq: "
+            f"got {index[0]} with freq {index.freq}"
+        )
+    gaps = np.diff(index.asi8)
+    uneven = np.flatnonzero(gaps != gaps[0])
+    if uneven.size:
+        first_uneven = int(uneven[0])
+        raise ValueError(
+            "SimulationWindow.of_index needs evenly spaced rows: "
+            f"the gap before position {first_uneven + 1} is {_duration(gaps[first_uneven], index.unit)}, "
+            f"where the first gap is {_duration(gaps[0], index.unit)}"
+        )
+    return _as_timedelta(_duration(gaps[0], index.unit))
+
+
+def _duration(count: int, unit: str) -> pd.Timedelta:
+    """count ticks of unit, the resolution an index's asi8 counts in, as a duration."""
+    return pd.Timedelta(int(count), unit=unit)
+
+
+def _as_timedelta(duration: pd.Timedelta) -> timedelta:
+    """duration as the standard library's timedelta, the only kind a window holds."""
+    converted: timedelta = duration.to_pytimedelta()
+    return converted
