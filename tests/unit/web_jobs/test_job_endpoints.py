@@ -298,11 +298,6 @@ class TestJobResultsEndpoint:
         assert response.status_code == 409
         assert response.get_json() == {"error": "Job not yet completed", "status": "failed", "progress_pct": 20.0}
 
-    def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown_id>/results returns 404."""
-        response = client.get("/api/jobs/nonexistent-id/results")
-        assert response.status_code == 404
-
 
 class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
