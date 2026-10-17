@@ -25,6 +25,25 @@ Mechanizes G3 (substrate exists) and G6 (premise valid) per leaf of `docs/prds/g
 | An unobserved window is silent today | grep: `compute_fleet_spare_capacity_kw` skips a home whose `mask.any()` is False with no warning | PASS |
 | `ConfigurationError` importable from the errors leaf | producer: S1-α (773), upstream | PASS |
 
+## α′ — Firm spare capacity per event day, with a named delivery baseline and the displaced self-use beside it (leaf, task 837)
+
+Added 2026-10-16 by a follow-up decompose pass (D41, L24); anchors re-verified at main `1fa8f79`, where every module α′ touches is unchanged since the measurement's base `0a5ab70`.
+
+| Capability asserted by signal | Evidence binding | Status |
+|---|---|---|
+| The per-day reduction and the displaced self-use need no new simulator output | grep: `SimulationResults` carries 1-minute `battery_soc`, `battery_discharge`, `battery_charge` and `tariff_rate` (`home.py`) | PASS |
+| P6 is RED today | grep: `compute_fleet_spare_capacity_kw` takes `(soc_w - min_soc_kwh).min()` and `dis_w.max()` over every in-window minute of the season | PASS |
+| The season minimum is a lower bound of every reliability figure (C9) | per home, a minimum over the season is at most each day's minimum and a maximum discharge over the season at least each day's, so the season figure is at most min over d of A(d) | PASS (derived) |
+| "On 90% of event days" is a true label | the task pins the quantile as the largest v with A(d) ≥ v on at least that share of days (p50 = 2.0, p90 = 1.0 on P6); a linearly interpolated 10th percentile gives 1.1 there, available on half the days | PASS (definition pinned on the task) |
+| P8's figure is producible on the P6 fixture | home A's day-1 availability is 0, so the fleet's daily displaced energies are (1.5, 3.0) kWh, mean 2.25; the PRD's "1.5 per home × 2 homes" holds only without A's floor minute | PASS (figure corrected on the task) |
+| `delivery_baseline: metered` is refused naming both values, not relabelled | grep: `config._parse_grid_services_events_config` constructs `GridServicesEventsConfig(**fields)` outside its coercion `try`; today the key is refused by `_refuse_unrecognised_keys` | PASS (rejection is new code in α′) |
+| The events breakdown can gain fields additively | grep: FROZEN_SURFACE pins `GridServicesAtEvents` (three fields) and `GridServicesEventsConfig` (last field `utilisation_gbp_per_mwh`); defaulted last fields keep positional construction | PASS |
+| `compute_fleet_spare_capacity_kw` can learn the baseline | its frozen form is `(fleet_results, windows) -> tuple[float, ...]`; a last defaulted parameter is additive (PRD §5.8 and §5.10, amended after this decompose) | PASS |
+| The report table exists to extend | grep: `output.generate_finance_report` renders "Grid services (capacity-at-events)" from `GridServicesAtEvents` only | PASS |
+| `ConfigurationError ⊂ ValueError` for the refusal | producer: S1-β (774), upstream | PASS |
+| The pricing value and the unobserved-window warning exist | producer: α (801), upstream | PASS |
+| The board figures are measured | 100 homes, full 2024: £296 / £919 at SOH 1.0, £143 at SOH 0.8, £242 displaced; the scripts sit outside the repo (`docs/analysis-and-context` is an untracked symlink), path named on the task | PASS (recorded, not asserted) |
+
 ## β — FinanceConfig refuses an inconsistent grid-services choice; no CLI ignores one (leaf)
 
 | Capability asserted by signal | Evidence binding | Status |

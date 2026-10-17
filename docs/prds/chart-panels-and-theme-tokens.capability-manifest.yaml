@@ -7,7 +7,7 @@ prd: docs/prds/chart-panels-and-theme-tokens.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 829
     title: "Theme token file; Tailwind and charts read it"
     capabilities:
       - name: "tailwind-config-reads-token-file"
@@ -55,7 +55,7 @@ tasks:
           kind: manual
           reason: "message content (role, hue, value) is asserted by B1's tests"
   - label: "β"
-    task_id: null
+    task_id: 830
     title: "Role palettes replace amber outside the accent"
     capabilities:
       - name: "no-amber-class-in-templates-or-scripts"
@@ -97,7 +97,7 @@ tasks:
           kind: manual
           reason: "needs npm; asserted in the leaf by a scratch build"
   - label: "γ"
-    task_id: null
+    task_id: 831
     title: "No colour outside the token file: chart chrome from computed style"
     note: "Supersedes tasks 735 and 737 (their measurements are B6's postconditions). Upstream out-of-batch: 691, 736 (serialisation of chart-renderer.js)."
     capabilities:
@@ -138,7 +138,7 @@ tasks:
           kind: manual
           reason: "e2e (B6), run locally; the per-task verify never runs e2e"
   - label: "δ"
-    task_id: null
+    task_id: 832
     title: "Chart panels: one typed description per chart, tabs as data, named absences"
     note: "Priority high (fk-42c0053b9a2b); dependency of trigger-chain gate 772. Supersedes 456 and 129; carries fk-8f26d000b68d with x_supersedes_task 674. Upstream out-of-batch: 780 (S10 gamma2), 714, 752, and 454 if esc-454-3 is closed."
     capabilities:
@@ -219,7 +219,7 @@ tasks:
           kind: manual
           reason: "message content asserted by B8's tests"
   - label: "ε"
-    task_id: null
+    task_id: 833
     title: "Chart facts from the run: flow properties and the pricing note"
     note: "Additive frozen members (D29): FROZEN_MEMBERS entries and an Unreleased-on-main line in-leaf. Supersedes 628. Upstream out-of-batch: 714."
     capabilities:
@@ -272,7 +272,7 @@ tasks:
           paths: ["src/solar_challenge/home.py"]
           expect: absent
   - label: "ζ"
-    task_id: null
+    task_id: 834
     title: "Typed comparison: runs, not decoded dicts"
     note: "Supersedes 565, 575, 492 and 629. Upstream out-of-batch: S19 gamma (RunRecord.summary(), RunHeadline, run_headline per D-S19-8)."
     capabilities:
@@ -307,7 +307,7 @@ tasks:
           kind: manual
           reason: "route-level assertion in B11's test"
   - label: "η"
-    task_id: null
+    task_id: 835
     title: "The sweep chart, drawn from the sweep's runs"
     note: "Supersedes 123 (stale branch not rebased) and 135. Upstream out-of-batch: S19 gamma (RunRecord.summary())."
     capabilities:
@@ -350,7 +350,7 @@ tasks:
           kind: manual
           reason: "response body asserted by B12's route test"
   - label: "θ"
-    task_id: null
+    task_id: 836
     title: "One card macro"
     capabilities:
       - name: "card-triple-only-in-macros"

@@ -1,11 +1,12 @@
 # Machine-readable twin of tariff-coverage-classifier-presets.capability-manifest.md
 # (review-all stream S11). task_id values stay null until commit_planning stamps them.
-# Every grep check fails on main 9d7b67e and passes once its leaf lands.
+# Every grep check fails on main 9d7b67e and passes once its leaf lands (re-checked on main
+# 1fa8f79 at decompose, 2026-10-16; γ amended for D34).
 prd: docs/prds/tariff-coverage-classifier-presets.md
 schema_version: 1
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 838
     title: "TariffConfig tiles the day and owns the cheap-period classifier"
     capabilities:
       - name: "classifier-on-the-tariff"
@@ -83,7 +84,7 @@ tasks:
           kind: manual
           reason: "a simulation equality, asserted by α's boundary test with synthetic weather"
   - label: "β"
-    task_id: null
+    task_id: 839
     title: "TOU dispatch on the tariff clock; peak_hours a checked override; no grid charging without a cheap period"
     capabilities:
       - name: "strategy-takes-the-tariff"
@@ -151,7 +152,7 @@ tasks:
           kind: manual
           reason: "a simulation equality, asserted by β's boundary test (row 6)"
   - label: "γ"
-    task_id: null
+    task_id: 841
     title: "Economy preset rates in one table, read by the dashboard"
     capabilities:
       - name: "preset-rates-table"
@@ -194,6 +195,28 @@ tasks:
           pattern: "^ *(off_)?peak_rate: 0\\."
           paths: ["scenarios/bristol-arbitrage.yaml", "scenarios/bristol-phase1-flex.yaml", "scenarios/example-economy7.yaml"]
           expect: absent
+      - name: "library-preset-default-literals-gone"
+        binding: "tariff.py's economy_7/economy_10 rate defaults are the literals 0.09/0.25 and 0.08/0.27 at 1fa8f79; after γ they read PRESET_RATES (D34: 0.13/0.35)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "rate: float = 0\\."
+          paths: ["src/solar_challenge/tariff.py"]
+          expect: absent
+      - name: "frozen-preset-signatures-at-d34-rates"
+        binding: "FROZEN_MEMBERS pins economy_7 at off_peak_rate 0.09 and economy_10 at 0.08 at 1fa8f79; γ re-pins both at 0.13/0.35 (D29 in-leaf)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "off_peak_rate: float = 0\\.0[89]"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "board-scenarios-re-price"
+        binding: "measured at 1fa8f79, full 2024: bristol-arbitrage.yaml import cost GBP 204.43 -> 292.48, example-economy7.yaml GBP 247.22 -> 344.07 with the restated rates set to 0.13/0.35"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a simulation figure that moves with every upstream model change; γ re-measures on its own base and records it on the task"
       - name: "rate-less-economy-import-fills"
         binding: "fleet_scenario._FORM_TARIFF_SETTINGS reads economy rates with _required at 9d7b67e ('must be set: the fleet page always sets it'); γ's test observes the preset pair filled"
         verdict: PASS
@@ -201,7 +224,7 @@ tasks:
           kind: manual
           reason: "form-state content is asserted by γ's test"
   - label: "δ"
-    task_id: null
+    task_id: 842
     title: "EV off-peak charging reads the home tariff's cheap minutes"
     capabilities:
       - name: "ev-reads-cheap-minutes"
@@ -251,7 +274,7 @@ tasks:
   - label: "ε"
     task_id: null
     title: "Retire TariffConfig.mean_period_rate at the bump"
-    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; depends on α."
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on α."
     capabilities:
       - name: "list-mean-retired"
         binding: "TariffConfig.mean_period_rate exists and is pinned in FROZEN_MEMBERS at 9d7b67e; its one src reader goes with α"

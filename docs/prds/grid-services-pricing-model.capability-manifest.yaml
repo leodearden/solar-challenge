@@ -134,6 +134,123 @@ tasks:
           pattern: "annual_income_gbp"
           paths: ["docs/domain-library-consumption.md"]
           expect: present
+  - label: "α′"
+    task_id: 837
+    title: "Firm spare capacity per event day, with a named delivery baseline and the displaced self-use beside it"
+    note: "Added 2026-10-16 by a follow-up decompose pass (ruling D41, lead ruling L24): depends on α and S1-β (774); β depends on it. Anchors re-verified at main 1fa8f79."
+    capabilities:
+      - name: "events-config-names-its-baseline"
+        binding: "delivered by α′; `delivery_baseline` absent from gridservices.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "grammar-reads-the-baseline"
+        binding: "grep: config._GRID_SERVICES_EVENTS_SCALAR_COERCIONS and the derived key set have no `delivery_baseline` on main, so the key is refused as unrecognised today; scenario_blocks.py is listed for S5's move"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "breakdown-carries-the-reliability-capacities"
+        binding: "delivered by α′; GridServicesAtEvents has three fields on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_avail_p90_kw"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "breakdown-carries-the-displaced-import-value"
+        binding: "delivered by α′; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_displaced_import_gbp_per_year"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "breakdown-form-pinned"
+        binding: "grep: FROZEN_SURFACE pins GridServicesAtEvents' three-field form on main; the surface test requires the edit"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_avail_p50_kw: tuple\\[float, \\.\\.\\.\\] = \\(\\)"
+          paths: ["tests/"]
+          expect: present
+      - name: "events-config-form-pinned"
+        binding: "grep: FROZEN_SURFACE pins GridServicesEventsConfig's form, last field utilisation_gbp_per_mwh, on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline: str = 'operational'"
+          paths: ["tests/"]
+          expect: present
+      - name: "report-renders-the-reliability-rows"
+        binding: "grep: output.generate_finance_report's capacity-at-events table has two rows (income, capacity) on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "90% of event days"
+          paths: ["src/solar_challenge/output.py"]
+          expect: present
+      - name: "report-renders-the-displaced-self-use"
+        binding: "delivered by α′; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Evening self-use displaced"
+          paths: ["src/solar_challenge/output.py"]
+          expect: present
+      - name: "model-doc-states-the-baselines"
+        binding: "grep: `delivery_baseline` absent from docs/cost-recovery-finance-model.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["docs/cost-recovery-finance-model.md"]
+          expect: present
+      - name: "consumer-guide-names-the-model-change"
+        binding: "grep: `delivery_baseline` absent from docs/domain-library-consumption.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "june-prd-points-here"
+        binding: "grep: docs/prds/enhanced-grid-services-capacity-at-events.md never names this PRD on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid-services-pricing-model"
+          paths: ["docs/prds/enhanced-grid-services-capacity-at-events.md"]
+          expect: present
+      - name: "firm-per-event-day"
+        binding: "grep: compute_fleet_spare_capacity_kw reduces over every in-window minute of the season on main (P6 RED: 1.0, not 1.5); SimulationResults carries 1-minute battery_soc and battery_discharge"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "per-day avails, the mean and the reliability ordering judged by α′'s own test (PRD §9 P6); the reliability quantile is pinned on the task (p50 = 2.0, p90 = 1.0 on P6)"
+      - name: "baseline-refusal-names-both-values"
+        binding: "rejection is new code in GridServicesEventsConfig.__post_init__, constructed outside config's coercion try, so not relabelled; today the key is refused as unrecognised"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "capacity-baseline figure and the `metered` refusal judged by α′'s own tests (PRD §9 P7)"
+      - name: "displaced-self-use-reported-not-netted"
+        binding: "SimulationResults carries 1-minute battery_charge, battery_discharge and tariff_rate (home.py); the §2.2 scripts computed it from them at 0a5ab70"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "displaced kWh, its value and annual_income_gbp unchanged by it judged by α′'s own test (PRD §9 P8; the task corrects P8's figure on the P6 fixture)"
+      - name: "board-measurement-recorded"
+        binding: "measured 2026-10-16 on all 100 board homes, full 2024: £296 operational and £919 capacity at SOH 1.0, £143 at SOH 0.8, £242 displaced; scripts live outside the repo (untracked symlink), path on the task"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a measurement recorded on the task, not an assertion"
   - label: "β"
     task_id: 802
     title: "FinanceConfig refuses an inconsistent grid-services choice; no CLI ignores one"
