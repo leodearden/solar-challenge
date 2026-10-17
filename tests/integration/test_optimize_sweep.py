@@ -131,6 +131,20 @@ def _make_fleet_results(
     )
 
 
+def test_each_home_result_the_sweeps_re_sum_is_a_year_of_hourly_steps() -> None:
+    """Every sweep evaluation re-sums each home's series, so the steps per home set this module's cost."""
+    steps_per_home = sorted(
+        {len(result.generation) for result in _make_fleet_results().per_home_results}
+    )
+    assert steps_per_home == [24 * 365], (
+        f"_make_fleet_results' homes have {steps_per_home} steps, not a year of hourly "
+        f"steps ({24 * 365}). Every sweep evaluation re-sums each home's series in "
+        "calculate_summary, and a minute-resolution year is 60 times the rows; "
+        "tests/_finance_builders.make_sim_results gives exact totals and simulation_days "
+        "from hourly steps."
+    )
+
+
 def _make_finance(
     pv_cost_per_kwp_gbp: float = 1200.0,
     grant_gbp: float = 5000.0,

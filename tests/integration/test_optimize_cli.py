@@ -874,6 +874,26 @@ def one_home_fleet_results() -> FleetResults:
     return _make_fleet_results(n_homes=1)
 
 
+def test_each_home_result_the_sweeps_re_sum_is_a_year_of_hourly_steps(
+    optimize_fleet_results: FleetResults,
+    one_home_fleet_results: FleetResults,
+) -> None:
+    """Every sweep evaluation re-sums each home's series, so the steps per home set this module's cost."""
+    steps_per_home = {
+        name: sorted({len(result.generation) for result in fleet.per_home_results})
+        for name, fleet in (
+            ("optimize_fleet_results", optimize_fleet_results),
+            ("one_home_fleet_results", one_home_fleet_results),
+        )
+    }
+    assert steps_per_home == {name: [24 * 365] for name in steps_per_home}, (
+        f"Steps per home: {steps_per_home}, not a year of hourly steps ({24 * 365}). "
+        "Every sweep evaluation re-sums each home's series in calculate_summary, and a "
+        "minute-resolution year is 60 times the rows; tests/_finance_builders.make_sim_results "
+        "gives exact totals and simulation_days from hourly steps."
+    )
+
+
 # Each --sensitivity alias the CLI documents → the knob whose axis section it adds to the report.
 _SENSITIVITY_ALIAS_KNOBS: dict[str, str] = {
     "retained_floor": "retained_cash_floor_per_home_per_year_gbp",

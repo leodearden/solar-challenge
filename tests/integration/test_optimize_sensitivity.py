@@ -19,7 +19,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -824,3 +824,29 @@ class TestConstSimulateCaching:
         assert len(result.per_home_results) == _N_HOMES, (
             f"Expected {_N_HOMES} homes in singleton, got {len(result.per_home_results)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The rows each sweep evaluation re-sums
+# ---------------------------------------------------------------------------
+
+
+def test_each_home_a_simulate_stand_in_answers_is_a_year_of_hourly_steps() -> None:
+    """Every sweep evaluation re-sums each home's series, so the steps per home set this module's cost."""
+    fleet_config = FleetConfig(
+        homes=_make_seg_priced_scenario(4.1, finance=_interior_finance()).homes
+    )
+    answers = {
+        "_const_simulate": _const_simulate(fleet_config, None, None),
+        "_SegPricingSimulate": _SegPricingSimulate()(fleet_config, None, None),
+    }
+    steps_per_home = {
+        name: sorted({len(result.generation) for result in fleet.per_home_results})
+        for name, fleet in answers.items()
+    }
+    assert steps_per_home == {name: [24 * 365] for name in answers}, (
+        f"Steps per home: {steps_per_home}, not a year of hourly steps ({24 * 365}). "
+        "Every sweep evaluation re-sums each home's series in calculate_summary, and a "
+        "minute-resolution year is 60 times the rows; tests/_finance_builders.make_sim_results "
+        "gives exact totals and simulation_days from hourly steps."
+    )
