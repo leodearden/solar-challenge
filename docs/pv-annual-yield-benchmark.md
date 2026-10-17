@@ -9,7 +9,8 @@
 
 `validate_pv_generation`'s `annual_yield_range` check divides a year's AC energy by the
 DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configured
-`capacity_kw`. The model wires whole 400.428 W modules, so the two differ:
+`capacity_kw`. The model wires whole modules of the default CEC module,
+`pv.DEFAULT_CEC_MODULE` (400.428 W at STC), so the two differ:
 
 | Configured | Modules | Wired | kWh per nameplate kWp | kWh per wired kWp |
 |---|---|---|---|---|

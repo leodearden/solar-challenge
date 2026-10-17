@@ -11,11 +11,13 @@ import pvlib
 import pytest
 from solar_challenge.location import Location
 from solar_challenge.pv import (
+    DEFAULT_CEC_MODULE,
     CecInverter,
     PVConfig,
     apply_degradation,
     calculate_degradation_factor,
     candidate_cec_inverters,
+    cec_module_params,
     create_model_chain,
     create_model_chain_picking_from,
     create_pv_system,
@@ -207,14 +209,6 @@ class TestCreatePVSystem:
         assert array.mount.surface_azimuth == 170.0
         assert array.mount.surface_tilt == 30.0
 
-    def test_uses_cec_module_params(self):
-        """PVSystem uses CEC module parameters."""
-        config = PVConfig(capacity_kw=4.0)
-        system = create_pv_system(config)
-        array = system.arrays[0]
-        # CEC modules have these parameters
-        assert "STC" in array.module_parameters or "a_ref" in array.module_parameters
-
     def test_uses_cec_inverter_params(self):
         """PVSystem uses CEC inverter parameters."""
         config = PVConfig(capacity_kw=4.0)
@@ -264,6 +258,49 @@ class TestCECLibraryReuse:
                 f"a system configured at {config.inverter_efficiency} runs its inverter "
                 f"at Paco/Pdco = {efficiency:.4f}"
             )
+
+
+class TestTheDefaultModuleIsANamedCecLibraryRow:
+    """A PVConfig without custom_module_params wires the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names; cec_module_params reads a row by name."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_module_library(cls) -> pd.DataFrame:
+        """pvlib's CEC module library, read once for this class's tests."""
+        return pvlib.pvsystem.retrieve_sam("CECMod")
+
+    def test_a_default_system_wires_the_row_default_cec_module_names(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        system = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        for array in system.arrays:
+            pd.testing.assert_series_equal(
+                pd.Series(array.module_parameters),
+                cec_module_library[DEFAULT_CEC_MODULE],
+                check_names=False,
+            )
+
+    def test_cec_module_params_is_the_named_row_of_pvlibs_cec_module_library(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        for name in (
+            DEFAULT_CEC_MODULE,
+            cec_module_library.columns[0],
+            cec_module_library.columns[-1],
+        ):
+            pd.testing.assert_series_equal(
+                pd.Series(cec_module_params(name)),
+                cec_module_library[name],
+                check_names=False,
+            )
+
+    def test_a_name_with_no_row_in_pvlibs_cec_module_library_is_refused(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape("pvlib's CECMod library has no row named 'Not a CEC module'"),
+        ):
+            cec_module_params("Not a CEC module")
 
 
 class TestCreateModelChain:
@@ -992,10 +1029,7 @@ class TestPickingFromGivenCandidates:
         """The system takes the picked inverter's parameters from that row."""
         with pytest.raises(
             ValueError,
-            match=re.escape(
-                "A CEC inverter must name a row in pvlib's CECInverter library, "
-                "got 'Not a CEC inverter'"
-            ),
+            match=re.escape("pvlib's CECInverter library has no row named 'Not a CEC inverter'"),
         ):
             dataclasses.replace(other, name="Not a CEC inverter")
 
