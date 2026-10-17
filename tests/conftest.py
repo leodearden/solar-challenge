@@ -16,7 +16,7 @@ from pathlib import Path
 
 from tests._heap_freeze import freeze_the_heap_once
 from tests._network_guard import refusing_network
-from tests._uv_env import isolated_uv_env
+from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
 if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache
@@ -57,15 +57,28 @@ def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
-    """Return an isolated_uv_env whose uv project environment is the probe's own, fresh under *tmp_path*.
+    """Return an isolated_uv_env whose uv project environment is the probe's own, fresh under *tmp_path* and never shared.
+
+    It is for a probe whose commands must never sync into an environment another
+    probe reads, as test_stale_uv_lock.py's stale project must not. Every other
+    probe takes its environment from shared_uv_probe_environments.
+    """
+    return isolated_uv_env(tmp_path / "venv")
+
+
+@pytest.fixture(scope="session")
+def shared_uv_probe_environments(tmp_path_factory: pytest.TempPathFactory) -> SharedUvEnvironments:
+    """Return the session's uv probe environments: the probes whose `uv run` options are the same share one, fresh and built once per session.
 
     No probe may touch an environment another run uses: inside the interpreter
     matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The offline lane
     and the per-task verify, too, run each command in a fresh one, as each
     starts from a clean worktree; and they take their environment from the
-    orchestrator, not from the shell running these tests.
+    orchestrator, not from the shell running these tests. Shared only by
+    commands that give `uv run` the same options, an environment holds exactly
+    what a fresh one would for each.
     """
-    return isolated_uv_env(tmp_path / "venv")
+    return SharedUvEnvironments(tmp_path_factory.mktemp("uv-probe-environments"))
 
 
 @pytest.fixture

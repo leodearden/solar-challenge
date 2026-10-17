@@ -18,6 +18,7 @@ import pytest
 from tests._collect_only import requires_uv
 from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 from tests._orchestrator_config import git_config, lane_command, offline_lane_jobs
+from tests._uv_env import SharedUvEnvironments
 
 
 class LaneContract(Enum):
@@ -138,16 +139,18 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=lambda job: job.name)
 def test_the_job_collects_its_suite_and_nothing_else(
-    job: LaneJob, project_root: Path, uv_probe_environment: dict[str, str]
+    job: LaneJob, project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
 ) -> None:
     """Run as the lane runs it, the job collects at least one test, every one in its suite.
 
     The repo's pytest addopts stay in force, as they do in the lane, so a job
     whose suite they --ignore, as they do tests/e2e, collects it only by naming
-    it explicitly. The job's uv environment is fresh, as the lane's is, so it
-    holds only the extras the job names.
+    it explicitly. The job's uv environment is fresh, as the lane's is, and
+    shared only with probes whose uv run options are the same, so it holds only
+    the extras the job names.
     """
-    collection = collect_lane_job(project_root, job.name, env=uv_probe_environment)
+    command = lane_command(project_root, job.name).command
+    collection = collect_lane_job(project_root, job.name, env=shared_uv_probe_environments.for_command(command))
 
     node_ids = collection.node_ids()
     assert node_ids, (

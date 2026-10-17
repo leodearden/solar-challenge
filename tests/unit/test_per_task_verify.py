@@ -11,6 +11,7 @@ import pytest
 
 from tests._collect_only import Collection, collect, requires_uv
 from tests._orchestrator_config import verify_command
+from tests._uv_env import SharedUvEnvironments
 
 pytestmark = requires_uv
 
@@ -18,19 +19,20 @@ _WEB_TEST_MODULE = "tests/unit/test_web_app.py"
 
 
 def _collect_with_test_command(
-    project_root: Path, uv_probe_environment: dict[str, str], *pytest_args: str
+    project_root: Path, environments: SharedUvEnvironments, *pytest_args: str
 ) -> Collection:
-    """Run test_command verbatim, collect-only, with *pytest_args*, in the probe's fresh uv environment.
+    """Run test_command verbatim, collect-only, with *pytest_args*, in a fresh uv environment holding exactly the extras it names.
 
-    The environment holds exactly the extras the command names. The shared
-    environment would prove nothing: `uv run` syncs inexactly, so it keeps any
-    extra an earlier `uv run` installed.
+    The two tests here run the same command, so they share one environment. An
+    environment shared with a command of other extras would prove nothing:
+    `uv run` syncs inexactly, so it keeps any extra an earlier `uv run` installed.
     """
-    return collect(verify_command(project_root, "test_command"), *pytest_args, env=uv_probe_environment)
+    command = verify_command(project_root, "test_command")
+    return collect(command, *pytest_args, env=environments.for_command(command.command))
 
 
 def test_verify_collects_the_web_tests_instead_of_skipping_them(
-    project_root: Path, uv_probe_environment: dict[str, str]
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
 ) -> None:
     """Run as the orchestrator runs it, test_command collects a web test module instead of skipping it.
 
@@ -43,7 +45,7 @@ def test_verify_collects_the_web_tests_instead_of_skipping_them(
         "pytest.importorskip('flask')"
     )
 
-    collection = _collect_with_test_command(project_root, uv_probe_environment, _WEB_TEST_MODULE)
+    collection = _collect_with_test_command(project_root, shared_uv_probe_environments, _WEB_TEST_MODULE)
 
     assert collection.returncode == pytest.ExitCode.OK, (
         f"test_command {collection.command!r} did not collect {_WEB_TEST_MODULE}; without "
@@ -54,7 +56,7 @@ def test_verify_collects_the_web_tests_instead_of_skipping_them(
 
 
 def test_verify_collects_every_test_module_instead_of_skipping_any(
-    project_root: Path, uv_probe_environment: dict[str, str]
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
 ) -> None:
     """Run as the orchestrator runs it, test_command collects the whole default suite without skipping a module.
 
@@ -63,7 +65,7 @@ def test_verify_collects_every_test_module_instead_of_skipping_any(
     does, yet the run still exits 0, so the verify would pass while silently
     dropping that coverage.
     """
-    collection = _collect_with_test_command(project_root, uv_probe_environment)
+    collection = _collect_with_test_command(project_root, shared_uv_probe_environments)
 
     assert collection.returncode == pytest.ExitCode.OK, (
         f"test_command {collection.command!r} failed to collect the default suite\n{collection.describe()}"
