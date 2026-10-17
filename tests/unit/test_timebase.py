@@ -131,3 +131,99 @@ def test_energy_kwh_sums_each_rows_kw_times_the_hours_it_lasts() -> None:
 
     assert half_hourly.energy_kwh(pd.Series(0.4, index=half_hours)) == pytest.approx(67.2, rel=1e-9)
     assert quarter_hourly.energy_kwh(pd.Series([1.0, 2.0, 3.0])) == pytest.approx(1.5)
+
+
+def _whole_london_days(first: str, last: str) -> pd.DatetimeIndex:
+    """One-minute rows over whole local days, as load.py indexes a period: first's midnight to last's 23:59."""
+    return pd.date_range(first, f"{last} 23:59", freq="1min", tz="Europe/London")
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "days", "timedelta_days"),
+    [
+        ("2024-10-01", "2024-11-30", 61, 62),
+        ("2024-03-31", "2024-04-01", 2, 2),
+        ("2024-07-01", "2024-12-31", 184, 185),
+    ],
+)
+def test_of_index_counts_the_calendar_days_an_index_covers(
+    first: str, last: str, days: int, timedelta_days: int
+) -> None:
+    index = _whole_london_days(first, last)
+    assert (index[-1] - index[0]).days + 1 == timedelta_days
+
+    assert SimulationWindow.of_index(index).days == days
+
+
+def test_of_index_reads_an_index_with_a_freq() -> None:
+    index = pd.date_range("2024-06-01", "2024-06-02 23:30", freq="30min", tz="Europe/London")
+
+    assert SimulationWindow.of_index(index) == SimulationWindow(
+        date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=30), "Europe/London"
+    )
+
+
+def test_of_index_reads_the_cadence_of_an_index_without_freq_from_its_even_spacing() -> None:
+    stored = pd.DatetimeIndex(_whole_london_days("2024-03-30", "2024-04-01"), freq=None)
+    assert stored.freq is None
+    assert len(stored) == 4_260
+
+    window = SimulationWindow.of_index(stored)
+
+    assert window.cadence == timedelta(minutes=1)
+    assert window.days == 3
+
+
+def test_of_index_reads_a_one_row_index_s_cadence_from_its_freq() -> None:
+    index = pd.date_range("2024-06-01 12:00", periods=1, freq="30min", tz="Europe/London")
+
+    window = SimulationWindow.of_index(index)
+
+    assert window.cadence == timedelta(minutes=30)
+    assert window.days == 1
+
+
+def test_of_index_reads_a_calendar_freq_through_the_index_s_spacing() -> None:
+    index = pd.date_range("2024-06-01", periods=3, freq="D", tz="Europe/London")
+
+    assert SimulationWindow.of_index(index).cadence == timedelta(days=1)
+
+
+def test_of_index_of_a_naive_index_has_no_timezone() -> None:
+    naive = pd.date_range("2024-06-01", periods=3, freq="min")
+    utc = pd.date_range("2024-06-01", periods=3, freq="min", tz="UTC")
+
+    assert SimulationWindow.of_index(naive).timezone is None
+    assert SimulationWindow.of_index(utc).timezone == "UTC"
+
+
+def test_of_index_refuses_uneven_spacing_naming_the_first_differing_position_and_both_gaps() -> None:
+    index = pd.date_range("2024-06-01", periods=1440, freq="1min", tz="Europe/London").delete(700)
+
+    with pytest.raises(ValueError) as refusal:
+        SimulationWindow.of_index(index)
+
+    assert "position 700" in str(refusal.value)
+    assert str(pd.Timedelta(minutes=2)) in str(refusal.value)
+    assert str(pd.Timedelta(minutes=1)) in str(refusal.value)
+
+
+def test_of_index_refuses_an_empty_index() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        SimulationWindow.of_index(pd.DatetimeIndex([], tz="Europe/London"))
+
+
+def test_of_index_refuses_one_row_without_a_freq() -> None:
+    index = pd.DatetimeIndex([pd.Timestamp("2024-06-01 12:00", tz="Europe/London")])
+
+    with pytest.raises(ValueError, match="one row"):
+        SimulationWindow.of_index(index)
+
+
+def test_of_index_refuses_an_index_that_is_not_a_datetimeindex_naming_its_type_and_dtype() -> None:
+    index = pd.Index(["2024-03-31 00:59:00+00:00", "2024-03-31 02:00:00+01:00"])
+
+    with pytest.raises(ValueError) as refusal:
+        SimulationWindow.of_index(index)
+
+    assert f"{type(index).__name__} of dtype {index.dtype}" in str(refusal.value)
