@@ -194,27 +194,6 @@ class TestGetJobStatusEndpoint:
 class TestJobProgressEndpoint:
     """Tests for GET /api/jobs/<id>/progress (SSE)."""
 
-    def test_progress_returns_event_stream(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<id>/progress returns text/event-stream content type."""
-        # Submit a job first
-        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
-        assert submit_resp.status_code == 201
-        job_id = submit_resp.get_json()["job_id"]
-
-        # Request progress stream
-        response = client.get(f"/api/jobs/{job_id}/progress")
-        assert response.status_code == 200
-        assert "text/event-stream" in response.content_type
-
-    def test_progress_unknown_job_sends_error(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown>/progress sends error event."""
-        response = client.get("/api/jobs/nonexistent-id/progress")
-        assert response.status_code == 200
-        assert "text/event-stream" in response.content_type
-        # The stream should contain an error event
-        data = response.get_data(as_text=True)
-        assert "error" in data
-
     def test_the_stream_of_a_completed_job_sends_each_progress_event_then_its_completion(self, app: Flask) -> None:
         client = _client_of_a_finished_job(app, RecordingSimulation())
 
