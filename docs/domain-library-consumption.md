@@ -413,9 +413,13 @@ on the 0.5.0 tag it subclasses `Exception`. So `except ValueError` now catches
 every refusal that the scenario grammar and the input types raise. An
 `except ValueError` placed before an `except ConfigurationError` now takes a
 refusal, and the later clause never runs, so code that handles a refusal apart
-from other `ValueError`s names `ConfigurationError` first. Consumers that catch
-`ValueError` alone, or `ConfigurationError` first, need no change when they
-re-pin.
+from other `ValueError`s names `ConfigurationError` first.
+`GridServicesRateBand` and `solar_challenge.flex.FlexibilityValueBand` refuse a
+value with `ConfigurationError`, where the 0.5.0 tag raises a plain
+`ValueError`, with the same messages. `resolve_grid_services_rate_band` and
+`solar_challenge.flex.resolve_flex_band` still raise a plain `ValueError` for a
+band they do not know. Consumers that catch `ValueError` alone, or
+`ConfigurationError` first, need no change when they re-pin.
 
 **Unreleased on main** (task 777): `SimulationResults`, reached through
 `FleetResults.per_home_results`, gains a read-only property, `window`: the

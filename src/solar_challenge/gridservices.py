@@ -70,20 +70,14 @@ class GridServicesRateBand:
     provenance: str = ""
 
     def __post_init__(self) -> None:
-        """Validate non-negativity.
-
-        .. note::
-            For now this class intentionally raises ``ValueError`` rather than
-            ``ConfigurationError``, as :class:`~solar_challenge.flex.FlexibilityValueBand`
-            does; docs/prds/errors-leaf.md (contract C4) plans the conversion of both.
-        """
+        """Validate non-negativity, raising ConfigurationError on violation."""
         if self.availability_gbp_per_kw_per_event < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 "availability_gbp_per_kw_per_event must be non-negative, "
                 f"got {self.availability_gbp_per_kw_per_event}"
             )
         if self.utilisation_gbp_per_mwh < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 f"utilisation_gbp_per_mwh must be non-negative, "
                 f"got {self.utilisation_gbp_per_mwh}"
             )
