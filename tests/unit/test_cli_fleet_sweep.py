@@ -9,9 +9,8 @@ import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
-from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
@@ -56,7 +55,7 @@ def _clear_june_in_tmp_path(
     weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Serve a clear _DAY as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config and the sweep its output."""
-    weather_cache.put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+    ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).seed_as_bristol_tmy(weather_cache)
     monkeypatch.chdir(tmp_path)
 
 
