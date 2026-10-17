@@ -20,6 +20,7 @@ from solar_challenge.web.fleet_config import (
     MAX_FLEET_SEED,
     apply_fleet_overlay,
     distribution_form_spec,
+    distribution_grammar_spec,
     form_to_fleet_distribution_config,
     sample_distribution,
 )
@@ -35,6 +36,28 @@ _SINGLE_NUMBER_FIELDS = [
     pytest.param("load", "annual_consumption_kwh", id="load-fixed"),
     pytest.param("pv", "tilt", id="pv-tilt"),
 ]
+
+#: The keys of a distribution as the distribution editor holds it, each sent in the field x.<key>.
+_FIELDS = {key: f"x.{key}" for key in ("type", "mean", "std", "min", "max", "values", "entries")}
+
+#: The keys of the editor's distribution, each mapped to the field the scenario builder sends a PV distribution's in.
+_BUILDER_PV_FIELDS = {
+    "type": "pv_distribution_type",
+    "mean": "pv_mean",
+    "std": "pv_std",
+    "min": "pv_min",
+    "max": "pv_max",
+    "values": "pv_wd_values",
+    "entries": "pv_sp_entries",
+}
+
+
+def _types(spec: dict[str, object]) -> dict[str, object]:
+    """The type of each value of *spec*, a list's as the types of its items."""
+    return {
+        key: [type(item) for item in value] if isinstance(value, list) else type(value)
+        for key, value in spec.items()
+    }
 
 
 def _make_test_homes() -> tuple:
@@ -160,10 +183,63 @@ class TestFleetConfigHelpers:
         assert len(samples) == 100
         assert all(s in (3.0, 5.0) for s in samples)
 
-    def test_sample_distribution_unknown_type_raises(self) -> None:
-        """Test that unknown distribution type raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown distribution type"):
+    def test_sample_distribution_refuses_a_type_the_editor_does_not_offer_naming_type(
+        self,
+    ) -> None:
+        """A preview of a type the distribution editor does not offer is refused naming type, the field that carries it, and the type sent."""
+        with pytest.raises(ValueError) as exc_info:
             sample_distribution("bogus", {})
+        assert str(exc_info.value) == (
+            "type must be one of normal, uniform, weighted_discrete, shuffled_pool, got 'bogus'"
+        )
+
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "message"),
+        [
+            pytest.param(
+                "normal",
+                {},
+                "params.mean must be given: the preview draws a normal distribution from its "
+                "mean and std",
+                id="normal-without-its-parameters",
+            ),
+            pytest.param(
+                "normal",
+                {"mean": 4},
+                "params.std must be given: the preview draws a normal distribution from its "
+                "mean and std",
+                id="normal-without-its-std",
+            ),
+            pytest.param(
+                "uniform",
+                {"max": 3},
+                "params.min must be given: the preview draws a uniform distribution from its "
+                "min and max",
+                id="uniform-without-its-min",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {},
+                "params.values must be given: the preview draws a weighted_discrete distribution "
+                "from its values",
+                id="weighted-discrete-without-its-rows",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"entries": None},
+                "params.entries must be given: the preview draws a shuffled_pool distribution "
+                "from its entries",
+                id="shuffled-pool-with-null-entries",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_params_without_what_its_type_is_drawn_from_naming_the_field(
+        self, dist_type: str, params: dict, message: str
+    ) -> None:
+        """A preview never runs config.py's grammar, so params without a parameter or the rows its type is drawn from, left out or null, are refused naming the field under params, not drawn with an invented default."""
+        with pytest.raises(ValueError) as exc_info:
+            sample_distribution(dist_type, params, 3)
+        assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
         ("dist_type", "params", "message"),
@@ -334,6 +410,12 @@ class TestFleetConfigHelpers:
                 {"values": "ab"},
                 "params.values must be a list, got str",
                 id="weighted-discrete-str-values",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {"values": [{"value": 3.0}]},
+                "params.values[0] must be a mapping with 'value' and 'weight', got {'value': 3.0}",
+                id="weighted-discrete-row-without-its-weight",
             ),
             pytest.param(
                 "shuffled_pool",
@@ -680,7 +762,7 @@ class TestFleetConfigHelpers:
             pytest.param(
                 {
                     "type": "weighted_discrete",
-                    "values": [{"value": 3.0, "weight": 2}, {"value": 5.0}],
+                    "values": [{"value": 3.0, "weight": 2}, {"value": 5.0, "weight": 1}],
                 },
                 {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [2.0, 1.0]},
                 id="weighted-discrete",
@@ -688,7 +770,7 @@ class TestFleetConfigHelpers:
             pytest.param(
                 {
                     "type": "shuffled_pool",
-                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0}],
+                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": 1}],
                 },
                 {"type": "shuffled_pool", "values": [3.0, 5.0], "counts": [2, 1]},
                 id="shuffled-pool",
@@ -698,7 +780,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_converts_distribution_rows(
         self, spec: dict, converted: dict
     ) -> None:
-        """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists, a missing weight or count reading as 1."""
+        """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists."""
         config = form_to_fleet_distribution_config(
             {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
@@ -737,11 +819,6 @@ class TestFleetConfigHelpers:
                 "values must be a list, got dict",
                 id="weighted-discrete-object-values",
             ),
-            pytest.param(
-                {"type": "shuffled_pool", "entries": None},
-                "entries must be a list, got NoneType",
-                id="shuffled-pool-null-entries",
-            ),
         ],
     )
     def test_form_to_fleet_distribution_config_refuses_malformed_distribution_rows(
@@ -752,6 +829,138 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config(
                 {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
             )
+
+    @pytest.mark.parametrize(
+        ("patch", "block", "key", "converted"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mean": 4.0}}},
+                "pv",
+                "capacity_kw",
+                {"type": "normal", "mean": 4.0},
+                id="pv-normal-without-its-std",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "uniform"}}},
+                "battery",
+                "capacity_kwh",
+                {"type": "uniform"},
+                id="battery-uniform-without-its-range",
+            ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": {"type": "weighted_discrete"}}},
+                "load",
+                "annual_consumption_kwh",
+                {"type": "weighted_discrete"},
+                id="load-weighted-discrete-without-its-rows",
+            ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": {"type": "shuffled_pool", "entries": None}}},
+                "load",
+                "annual_consumption_kwh",
+                {"type": "shuffled_pool"},
+                id="load-shuffled-pool-with-null-entries",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"type": "normal", "mean": 20, "std": None}}},
+                "pv",
+                "tilt",
+                {"type": "normal", "mean": 20.0},
+                id="pv-tilt-normal-with-a-null-std",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_leaves_a_distributions_absent_or_null_parameter_out_for_the_grammar_to_name(
+        self, patch: dict, block: str, key: str, converted: dict
+    ) -> None:
+        """A distribution's parameter or row list that the form leaves out, or sends as null, is left out of its conversion, not given a default, so config.py's grammar names what is missing."""
+        config = form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
+        assert config[block][key] == converted
+
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "weighted_discrete",
+                            "values": [{"value": 3.0, "weight": 2}, {"value": 5.0}],
+                        }
+                    }
+                },
+                "pv.capacity_kw.values[1] must be a mapping with 'value' and 'weight', "
+                "got {'value': 5.0}",
+                id="pv-weighted-discrete-row-without-its-weight",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "shuffled_pool", "entries": [{"value": 5.0}]}}},
+                "battery.capacity_kwh.entries[0] must be a mapping with 'value' and 'count', "
+                "got {'value': 5.0}",
+                id="battery-shuffled-pool-row-without-its-count",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": 4.0,
+                        "tilt": {"type": "weighted_discrete", "values": [{"weight": 1}]},
+                    }
+                },
+                "pv.tilt.values[0] must be a mapping with 'value' and 'weight', got {'weight': 1}",
+                id="pv-tilt-weighted-discrete-row-without-its-value",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_row_without_its_value_or_its_weight_or_count_naming_it(
+        self, patch: dict, message: str
+    ) -> None:
+        """A row's value, weight or count is one of the grammar's parallel lists, so a row cannot leave one out: a row without one is refused naming the row and the row sent, not given a default."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        ("patch", "type_field", "dist_type"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "fixed", "value": 4}}},
+                "pv.capacity_kw.type",
+                "fixed",
+                id="pv-capacity-fixed",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": 4.0,
+                        "tilt": {
+                            "type": "proportional_to",
+                            "source": "pv.capacity_kw",
+                            "multiplier": 2,
+                        },
+                    }
+                },
+                "pv.tilt.type",
+                "proportional_to",
+                id="pv-tilt-proportional-to",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "banana"}}},
+                "battery.capacity_kwh.type",
+                "banana",
+                id="battery-capacity-unknown-type",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_distribution_type_the_editor_does_not_offer_naming_its_type(
+        self, patch: dict, type_field: str, dist_type: str
+    ) -> None:
+        """A distribution, a block's own or another setting's, of a type the fleet page's editor does not offer is refused naming its type field and the type sent."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
+        assert str(exc_info.value) == (
+            f"{type_field} must be one of normal, uniform, weighted_discrete, shuffled_pool, "
+            f"got {dist_type!r}"
+        )
 
     @pytest.mark.parametrize(
         "count",
@@ -1153,7 +1362,7 @@ class TestFleetConfigHelpers:
                 "max_charge_kw",
                 {
                     "type": "weighted_discrete",
-                    "values": [{"value": 2.5, "weight": 3}, {"value": 3.6}],
+                    "values": [{"value": 2.5, "weight": 3}, {"value": 3.6, "weight": 1}],
                 },
                 {"type": "weighted_discrete", "values": [2.5, 3.6], "weights": [3.0, 1.0]},
                 id="battery-max-charge-weighted-discrete",
@@ -1161,7 +1370,10 @@ class TestFleetConfigHelpers:
             pytest.param(
                 "load",
                 "household_occupants",
-                {"type": "shuffled_pool", "entries": [{"value": 2, "count": 1}, {"value": 4}]},
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 2, "count": 1}, {"value": 4, "count": 1}],
+                },
                 {"type": "shuffled_pool", "values": [2.0, 4.0], "counts": [1, 1]},
                 id="load-household-occupants-shuffled-pool",
             ),
@@ -1347,3 +1559,189 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == (
             f"fleet_distribution.pv.capacity_kw.min must be a finite number, got {10**400!r}"
         )
+
+
+class TestDistributionGrammarSpec:
+    """distribution_grammar_spec, the one writer of an editor distribution in config.py's grammar, called with the field each of its keys is sent in."""
+
+    @pytest.mark.parametrize(
+        ("distribution", "spec"),
+        [
+            pytest.param(
+                {"type": "normal", "mean": 4, "std": 1, "min": 2, "max": 8},
+                {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 8.0},
+                id="normal",
+            ),
+            pytest.param(
+                {"type": "uniform", "mean": 5, "std": 1, "min": 2, "max": 8},
+                {"type": "uniform", "min": 2.0, "max": 8.0},
+                id="uniform-beside-the-normals-parameters",
+            ),
+            pytest.param(
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3, "weight": 2}, {"value": 5, "weight": 1}],
+                },
+                {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [2.0, 1.0]},
+                id="weighted-discrete",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3, "count": 2}, {"value": 5, "count": 1}],
+                },
+                {"type": "shuffled_pool", "values": [3.0, 5.0], "counts": [2, 1]},
+                id="shuffled-pool",
+            ),
+        ],
+    )
+    def test_each_editor_distribution_is_written_as_config_grammar_spells_it(
+        self, distribution: dict, spec: dict
+    ) -> None:
+        """Each of the editor's distributions is written as config.py's grammar spells it: its numbers as floats, a pool's counts as ints, and its rows as parallel lists; a key its type does not read is ignored, as the builder, which sends a normal's parameters beside a uniform's, needs."""
+        written = distribution_grammar_spec(distribution, _FIELDS)
+
+        assert written == spec
+        assert _types(written) == _types(spec)
+
+    @pytest.mark.parametrize(
+        ("distribution", "spec"),
+        [
+            pytest.param({"type": "normal"}, {"type": "normal"}, id="normal-without-its-parameters"),
+            pytest.param(
+                {"type": "normal", "mean": 4, "std": None},
+                {"type": "normal", "mean": 4.0},
+                id="normal-with-a-null-std",
+            ),
+            pytest.param(
+                {"type": "normal", "mean": 4, "std": 1, "min": None, "max": None},
+                {"type": "normal", "mean": 4.0, "std": 1.0},
+                id="normal-with-null-clamps",
+            ),
+            pytest.param(
+                {"type": "uniform", "min": 2},
+                {"type": "uniform", "min": 2.0},
+                id="uniform-without-its-max",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete"},
+                {"type": "weighted_discrete"},
+                id="weighted-discrete-without-its-rows",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": None},
+                {"type": "weighted_discrete"},
+                id="weighted-discrete-with-null-rows",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": None},
+                {"type": "shuffled_pool"},
+                id="shuffled-pool-with-null-entries",
+            ),
+        ],
+    )
+    def test_a_parameter_or_row_list_left_out_or_null_is_left_out_for_config_grammar_to_name(
+        self, distribution: dict, spec: dict
+    ) -> None:
+        """A parameter or row list the distribution leaves out, or sends as null, is left out of the spec, not given a default, so config.py's grammar names what is missing."""
+        assert distribution_grammar_spec(distribution, _FIELDS) == spec
+
+    @pytest.mark.parametrize(
+        ("distribution", "message"),
+        [
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 4, "weight": 1}, {"value": 5}]},
+                "x.values[1] must be a mapping with 'value' and 'weight', got {'value': 5}",
+                id="weighted-discrete-row-without-its-weight",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"weight": 2}]},
+                "x.values[0] must be a mapping with 'value' and 'weight', got {'weight': 2}",
+                id="weighted-discrete-row-without-its-value",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [{"value": 4}]},
+                "x.entries[0] must be a mapping with 'value' and 'count', got {'value': 4}",
+                id="shuffled-pool-row-without-its-count",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [{}]},
+                "x.entries[0] must be a mapping with 'value' and 'count', got {}",
+                id="shuffled-pool-empty-row",
+            ),
+        ],
+    )
+    def test_a_row_without_its_value_or_its_weight_or_count_is_refused_naming_the_row(
+        self, distribution: dict, message: str
+    ) -> None:
+        """A row's value and its weight or count each go in one of the grammar's parallel lists, so a row without one is refused naming the row and the row sent."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_grammar_spec(distribution, _FIELDS)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        "distribution",
+        [
+            pytest.param({"type": "banana"}, id="unknown"),
+            pytest.param({"type": "fixed", "value": 4}, id="fixed"),
+            pytest.param(
+                {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2},
+                id="proportional-to",
+            ),
+            pytest.param({"type": None}, id="null"),
+            pytest.param({"type": ["normal"]}, id="list"),
+            pytest.param({"mean": 4, "std": 1}, id="no-type"),
+        ],
+    )
+    def test_a_type_the_editor_does_not_offer_is_refused_naming_its_field(
+        self, distribution: dict
+    ) -> None:
+        """A type the distribution editor does not offer, config.py's grammar's other types included, or a type that is null, not a string or left out, is refused naming the type's field and the type sent."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_grammar_spec(distribution, _FIELDS)
+        assert str(exc_info.value) == (
+            "x.type must be one of normal, uniform, weighted_discrete, shuffled_pool, "
+            f"got {distribution.get('type')!r}"
+        )
+
+    @pytest.mark.parametrize(
+        ("distribution", "message"),
+        [
+            pytest.param(
+                {"type": "normal", "mean": float("inf"), "std": 1},
+                "pv_mean must be a finite number, got inf",
+                id="parameter",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": "ab"},
+                "pv_wd_values must be a list, got str",
+                id="row-list",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [3]},
+                "pv_sp_entries[0] must be a mapping, got int",
+                id="row",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 3, "weight": float("nan")}]},
+                "pv_wd_values[0].weight must be a finite number, got nan",
+                id="row-weight",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3, "count": MAX_FLEET_HOMES}, {"value": 5, "count": 1}],
+                },
+                f"pv_sp_entries counts must total at most {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}",
+                id="pool-total",
+            ),
+        ],
+    )
+    def test_each_refusal_names_the_field_the_form_sends_it_in(
+        self, distribution: dict, message: str
+    ) -> None:
+        """Each refusal names the field the form sends the refused key in, here the scenario builder's flat fields for a PV distribution, with a row's index and cell under its row list's field."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_grammar_spec(distribution, _BUILDER_PV_FIELDS)
+        assert str(exc_info.value) == message

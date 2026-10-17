@@ -10,8 +10,9 @@ pytest.importorskip("flask")
 
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, form_to_fleet_distribution_config
 from solar_challenge.web.shared import NotAJsonObject
+from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
 
@@ -322,3 +323,85 @@ class TestBuilderFormErrors:
             "premise: a pool of the fleet limit's values is accepted"
         )
         assert builder_form_errors(_form_with_pv_pool(rows)) == [reason]
+
+
+class TestBothFormsWriteADistributionAlike:
+    """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same config.py grammar spec."""
+
+    @pytest.mark.parametrize(
+        ("fleet_spec", "builder_fields"),
+        [
+            pytest.param(
+                {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 8.0},
+                {
+                    "pv_distribution_type": "normal",
+                    "pv_mean": 4.0,
+                    "pv_std": 1.0,
+                    "pv_min": 2.0,
+                    "pv_max": 8.0,
+                },
+                id="normal",
+            ),
+            pytest.param(
+                {"type": "normal", "mean": 4.0},
+                {"pv_distribution_type": "normal", "pv_mean": 4.0},
+                id="normal-with-only-a-mean",
+            ),
+            pytest.param(
+                {"type": "uniform", "min": 2.0, "max": 8.0},
+                {
+                    "pv_distribution_type": "uniform",
+                    "pv_mean": 5.0,
+                    "pv_std": 1.0,
+                    "pv_min": 2.0,
+                    "pv_max": 8.0,
+                },
+                id="uniform-beside-the-normals-parameters",
+            ),
+            pytest.param(
+                {"type": "uniform", "max": 8.0},
+                {"pv_distribution_type": "uniform", "pv_max": 8.0},
+                id="uniform-with-only-a-max",
+            ),
+            pytest.param(
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3.0, "weight": 2}, {"value": 5.0, "weight": 1}],
+                },
+                {
+                    "pv_distribution_type": "weighted_discrete",
+                    "pv_wd_values": [{"value": 3.0, "weight": 2}, {"value": 5.0, "weight": 1}],
+                },
+                id="weighted-discrete",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete"},
+                {"pv_distribution_type": "weighted_discrete"},
+                id="weighted-discrete-without-rows",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": 1}],
+                },
+                {
+                    "pv_distribution_type": "shuffled_pool",
+                    "pv_sp_entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": 1}],
+                },
+                id="shuffled-pool",
+            ),
+        ],
+    )
+    def test_the_builder_writes_each_editor_distribution_as_the_fleet_form_does(
+        self, fleet_spec: dict[str, object], builder_fields: dict[str, object]
+    ) -> None:
+        """Each editor distribution, complete or not, becomes the same grammar spec from the builder's pv_* fields as from the fleet form's pv.capacity_kw: neither form invents a parameter the other leaves out."""
+        builder_scenario = scenario_from_builder_form({**_ACCEPTED_FORM, **builder_fields})
+        fleet_config = form_to_fleet_distribution_config(
+            {**valid_distribution_form(), "pv": {"capacity_kw": fleet_spec}}
+        )
+
+        assert (
+            builder_scenario["fleet_distribution"]["pv"]["capacity_kw"]
+            == fleet_config["pv"]["capacity_kw"]
+        )
