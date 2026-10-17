@@ -111,6 +111,19 @@ def test_a_module_a_scenario_imports_is_written_beside_the_scenarios_but_not_col
     assert run.outcomes("test_imports_a_helper") == {"passed": 1}
 
 
+def test_the_session_collects_its_directory_whatever_testpaths_its_ini_names(
+    pytester_importing_test_helpers: pytest.Pytester,
+) -> None:
+    """The e2e scenarios' session reads a copy of pyproject.toml, which names testpaths = ["tests"]."""
+    pytester_importing_test_helpers.makeini("[pytest]\ntestpaths = elsewhere\n")
+    pytester_importing_test_helpers.mkdir("elsewhere")
+    session = ScenarioSession({"test_passes_beside_the_ini": "def test_passes():\n    pass\n"})
+
+    run = session.run_in(pytester_importing_test_helpers)
+
+    assert run.outcomes("test_passes_beside_the_ini") == {"passed": 1}
+
+
 def test_a_second_run_in_returns_the_first_run_without_running_the_scenarios_again(
     pytester_importing_test_helpers: pytest.Pytester, tmp_path: Path
 ) -> None:
