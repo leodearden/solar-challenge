@@ -2,12 +2,14 @@
 """Fleet simulation commands."""
 
 import dataclasses
-from collections.abc import Mapping
+import functools
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar
 
 import pandas as pd
 import typer
+from rich.progress import Progress, TaskID
 from rich.table import Table
 
 if TYPE_CHECKING:
@@ -389,27 +391,13 @@ def sweep(
 
     print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
+    export_point = (
+        None
+        if output_dir is None
+        else functools.partial(_export_sweep_point, output_dir, param_name)
+    )
+
     # Run multi-sweep simulation with cross-sweep parallelism
-    results_summary: list[dict[str, Any]] = []
-
-    def on_sweep_complete(sweep_idx: int, sweep_val: float, fleet_results: FleetResults) -> None:
-        """Handle completed sweep: save results and update summary."""
-        summary = calculate_fleet_summary(fleet_results)
-        results_summary.append({
-            "sweep_value": sweep_val,
-            "param": param_name,
-            "self_consumption_ratio": summary.fleet_self_consumption_ratio,
-            "total_generation_kwh": summary.total_generation_kwh,
-            "total_consumption_kwh": summary.total_demand_kwh,
-            "grid_import_kwh": summary.total_grid_import_kwh,
-            "grid_export_kwh": summary.total_grid_export_kwh,
-        })
-
-        # Save individual result if output_dir specified
-        if output_dir is not None:
-            output_file = output_dir / f"{param_name}_{sweep_val:.4f}.csv"
-            _export_fleet_results(fleet_results, output_file)
-
     with create_fleet_progress() as progress:
         task = progress.add_task(
             f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
@@ -421,20 +409,16 @@ def sweep(
             parallel=not sequential, max_workers=workers
         )
 
-        # Wrap iterator to update progress
-        def progress_iter() -> Any:
-            for item in result_iter:
-                progress.update(task, advance=1)
-                yield item
-
-        collect_multi_sweep_results(
+        sweep_results = collect_multi_sweep_results(
             sweep_configs,
-            progress_iter(),
-            on_sweep_complete=on_sweep_complete,
+            _advance_per_item(progress, task, result_iter),
+            on_sweep_complete=export_point,
         )
 
-    # Sort results by sweep value for consistent output
-    results_summary.sort(key=lambda x: x["sweep_value"])
+    results_summary = [
+        _sweep_summary_row(param_name, sweep_value, fleet_results)
+        for sweep_value, fleet_results in sweep_results.iter_results()
+    ]
 
     # Print summary table
     _print_sweep_summary(results_summary)
@@ -491,6 +475,43 @@ def _yaml_sweep(
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
     return param_name, parse_sweep_fleet_configs(raw_config)
+
+
+_T = TypeVar("_T")
+
+
+def _advance_per_item(progress: Progress, task: TaskID, items: Iterable[_T]) -> Iterator[_T]:
+    """Yield each of items after advancing progress's task by one."""
+    for item in items:
+        progress.update(task, advance=1)
+        yield item
+
+
+def _export_sweep_point(
+    output_dir: Path,
+    param_name: str,
+    _sweep_index: int,
+    sweep_value: float,
+    fleet_results: FleetResults,
+) -> None:
+    """Export a completed sweep point to its CSV under output_dir; the arguments after param_name are those collect_multi_sweep_results passes to on_sweep_complete."""
+    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{sweep_value:.4f}.csv")
+
+
+def _sweep_summary_row(
+    param_name: str, sweep_value: float, fleet_results: FleetResults
+) -> dict[str, Any]:
+    """The summary row of the sweep point at sweep_value: its fleet's self-consumption ratio and energy totals."""
+    summary = calculate_fleet_summary(fleet_results)
+    return {
+        "sweep_value": sweep_value,
+        "param": param_name,
+        "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+        "total_generation_kwh": summary.total_generation_kwh,
+        "total_consumption_kwh": summary.total_demand_kwh,
+        "grid_import_kwh": summary.total_grid_import_kwh,
+        "grid_export_kwh": summary.total_grid_export_kwh,
+    }
 
 
 def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
