@@ -2,6 +2,7 @@
 
 import multiprocessing
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -14,13 +15,15 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     MultiSweepResults,
+    aggregate_home_summaries,
     calculate_fleet_summary,
+    calculate_home_summaries,
     collect_multi_sweep_results,
     simulate_fleet,
     simulate_fleet_iter,
     simulate_multi_sweep_iter,
 )
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -256,6 +259,7 @@ class TestFleetResults:
             pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
             pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
             pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
+            pytest.param(calculate_home_summaries, id="calculate_home_summaries"),
         ],
     )
     def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
@@ -436,6 +440,42 @@ class TestFleetSummary:
         assert summary.total_net_cost_gbp is None
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
+
+    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
+    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(
+        self, sample_results, seg_tariff_pence_per_kwh
+    ):
+        """Each home's summary is the one calculate_summary derives from that home's results at the same SEG tariff, listed in per_home_results' order."""
+        assert calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh) == [
+            calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+            for results in sample_results.per_home_results
+        ]
+
+    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
+    def test_the_fleet_summary_is_the_aggregate_of_its_homes_summaries(self, sample_results, seg_tariff_pence_per_kwh):
+        """calculate_fleet_summary gives exactly the FleetSummary aggregated from the fleet's home summaries at the same SEG tariff."""
+        home_summaries = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+
+        assert aggregate_home_summaries(home_summaries) == calculate_fleet_summary(
+            sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh
+        )
+
+    def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
+        """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
+        first, second, third = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
+        assert [first.seg_revenue_gbp, second.seg_revenue_gbp, third.seg_revenue_gbp] == pytest.approx(
+            [3.60, 7.20, 10.80]
+        ), "premise: the homes export 24, 48 and 72 kWh, which earn 3.60, 7.20 and 10.80 GBP at 15p/kWh"
+
+        summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
+
+        assert summary.total_seg_revenue_gbp == pytest.approx(14.40)
+        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20)
+
+    def test_aggregating_no_home_summaries_is_refused(self):
+        """A fleet summary aggregates at least one home's summary."""
+        with pytest.raises(ValueError, match="at least one home"):
+            aggregate_home_summaries([])
 
 
 _JUNE_DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
