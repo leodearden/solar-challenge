@@ -295,11 +295,6 @@ def _open_with_the_overview_charts_drawn(page: Page, live_server: str, run_id: s
         expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
 
 
-def _show_tab(page: Page, tab_name: str) -> None:
-    """Click the chart tab named tab_name."""
-    page.get_by_role("tab", name=tab_name, exact=True).click()
-
-
 def test_each_overview_chart_is_as_wide_as_its_container_once_the_page_settles(
     page: Page,
     live_server: str,
@@ -320,13 +315,12 @@ def test_after_the_sidebar_collapses_each_chart_is_as_wide_as_its_container_whet
     """Collapsing the sidebar widens the main column: the Overview charts, shown then, and Power Flow's chart, drawn but hidden then, each end as wide as its container."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
-    _show_tab(page, "Power Flow")
-    expect(page.locator(f"#{_POWER_FLOW_CHART_ID}.js-plotly-plot")).to_be_visible()
-    _show_tab(page, "Overview")
+    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
+    open_chart_tab(page, "Overview")
 
     page.get_by_title("Collapse sidebar", exact=True).click()
     overview = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
 
     assert (overview, power_flow) == ([], [])
@@ -355,10 +349,9 @@ def test_each_overview_chart_hidden_as_the_page_settles_is_as_wide_as_its_contai
     """Showing Power Flow before the main column has settled hides the Overview charts before they are fitted to their containers' settled width; once Overview is shown again, each ends as wide as its container."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
-    _show_tab(page, "Power Flow")
-    expect(page.locator(f"#{_POWER_FLOW_CHART_ID}.js-plotly-plot")).to_be_visible()
+    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
 
-    _show_tab(page, "Overview")
+    open_chart_tab(page, "Overview")
 
     assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
 
