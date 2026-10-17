@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Import-structure contract test (INV-5).
 
-No module of solar_challenge imports another of its modules inside a function, except
-the (importing module, imported module) pairs ALLOWED_FUNCTION_LOCAL_IMPORTS lists.
-Each pair carries a Permanent reason, the documented contract that requires the
+No import statement inside a function of solar_challenge names another of its modules,
+except for the (importing module, imported module) pairs ALLOWED_FUNCTION_LOCAL_IMPORTS
+lists. Each pair carries a Permanent reason, the documented contract that requires the
 laziness, or a Transitional one, the task or program stream that removes the import.
 The check runs both ways, so the change that removes a pair's last such import deletes
-its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
+its entry. It reads import statements only: the lazy loader in solar_challenge/__init__.py
+(`__getattr__`, which calls importlib.import_module) is pinned by
+tests/unit/test_init_lazy_surface.py. docs/prds/errors-leaf.md §7 measured and classified
+the list.
 """
 
 import ast
