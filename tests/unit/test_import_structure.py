@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 _PACKAGE = "solar_challenge"
+_SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 
 @dataclass(frozen=True)
@@ -160,11 +161,17 @@ def _stale(
     return sorted(set(allowed) - imported)
 
 
-def test_every_function_local_package_import_is_allowed(project_root: Path) -> None:
+@pytest.fixture(scope="module")
+def real_tree_imports() -> tuple[_FunctionLocalImport, ...]:
+    """The function-local package imports of src/solar_challenge, scanned once for the module's two real-tree tests."""
+    return tuple(_function_local_package_imports(_SRC_DIR))
+
+
+def test_every_function_local_package_import_is_allowed(
+    real_tree_imports: tuple[_FunctionLocalImport, ...],
+) -> None:
     """Every import of a module of the package inside a function is of a pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists."""
-    unlisted = _unlisted(
-        _function_local_package_imports(project_root / "src"), ALLOWED_FUNCTION_LOCAL_IMPORTS
-    )
+    unlisted = _unlisted(real_tree_imports, ALLOWED_FUNCTION_LOCAL_IMPORTS)
 
     sites = "\n".join(str(site) for site in unlisted)
     assert not unlisted, (
@@ -177,11 +184,11 @@ def test_every_function_local_package_import_is_allowed(project_root: Path) -> N
     )
 
 
-def test_every_allowed_pair_is_still_imported_inside_a_function(project_root: Path) -> None:
+def test_every_allowed_pair_is_still_imported_inside_a_function(
+    real_tree_imports: tuple[_FunctionLocalImport, ...],
+) -> None:
     """Every pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists is still imported inside a function of the package."""
-    stale = _stale(
-        _function_local_package_imports(project_root / "src"), ALLOWED_FUNCTION_LOCAL_IMPORTS
-    )
+    stale = _stale(real_tree_imports, ALLOWED_FUNCTION_LOCAL_IMPORTS)
 
     entries = "\n".join(f"{pair}: {ALLOWED_FUNCTION_LOCAL_IMPORTS[pair]!r}" for pair in stale)
     assert not stale, (
