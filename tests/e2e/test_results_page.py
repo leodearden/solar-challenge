@@ -11,7 +11,8 @@ Each drawn chart ends as wide as its container whenever the
 container's width changes: as base.html's main column slides in
 on load, when the sidebar collapses or expands and when the
 window narrows, and, for a chart whose tab is hidden at the
-time, once its tab is shown again.
+time, once its tab is shown again. A chart that cannot be
+fitted to its container logs one error naming it.
 """
 
 import pytest
@@ -311,8 +312,9 @@ def test_after_the_sidebar_collapses_each_chart_is_as_wide_as_its_container_whet
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
+    page_errors: list[str],
 ) -> None:
-    """Collapsing the sidebar widens the main column: the Overview charts, shown then, and Power Flow's chart, drawn but hidden then, each end as wide as its container."""
+    """Collapsing the sidebar widens the main column: the Overview charts, shown then, and Power Flow's chart, drawn but hidden then, each end as wide as its container, and the page logs no error."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
     show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
@@ -323,7 +325,7 @@ def test_after_the_sidebar_collapses_each_chart_is_as_wide_as_its_container_whet
     open_chart_tab(page, "Power Flow")
     power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
 
-    assert (overview, power_flow) == ([], [])
+    assert (overview, power_flow, page_errors) == ([], [], [])
 
 
 def test_after_the_sidebar_expands_each_shown_chart_is_as_wide_as_its_container(
@@ -368,6 +370,52 @@ def test_after_the_window_narrows_each_shown_chart_is_as_wide_as_its_container(
     page.set_viewport_size({"width": 1100, "height": 720})
 
     assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+# -- A chart that cannot be fitted is reported -----------------------------
+
+_FAILED_FITTING = "the fitting failed after Plotly.Plots.resize returned"
+_FAILED_TO_FIT_THE_POWER_FLOW_CHART = f"failed to fit the chart of #{_POWER_FLOW_CHART_ID}"
+_REJECT_THE_FIRST_FITTING_OF = """([chartId, failure]) => {
+    const resize = Plotly.Plots.resize;
+    let rejected = false;
+    Plotly.Plots.resize = function (container) {
+        if (container.id === chartId && !rejected) {
+            rejected = true;
+            return Promise.reject(new Error(failure));
+        }
+        return resize.apply(this, arguments);
+    };
+}"""
+
+
+def test_a_chart_whose_fitting_fails_after_plotly_plots_resize_returns_logs_one_error_naming_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Plotly.Plots.resize returns a promise, which rejects when a fit fails; that failure is one error saying which chart failed to fit, not an uncaught rejection.
+
+    Only the chart's first fit fails, so the test need not know how often it is fitted:
+    its container can change size, and the chart be fitted again, while the page settles.
+    """
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    page.evaluate(_REJECT_THE_FIRST_FITTING_OF, [_POWER_FLOW_CHART_ID, _FAILED_FITTING])
+
+    with page.expect_console_message(lambda message: _POWER_FLOW_CHART_ID in message.text):
+        open_chart_tab(page, "Power Flow")
+
+    errors_naming_the_chart = _errors_naming(page_errors, _POWER_FLOW_CHART_ID)
+    failures_to_fit = [error for error in errors_naming_the_chart if _FAILED_TO_FIT_THE_POWER_FLOW_CHART in error]
+    uncaught_failures = [
+        error for error in page_errors if _FAILED_FITTING in error and _POWER_FLOW_CHART_ID not in error
+    ]
+    assert (len(errors_naming_the_chart), len(failures_to_fit), uncaught_failures) == (1, 1, []), (
+        f"expected one error naming {_POWER_FLOW_CHART_ID!r}, saying {_FAILED_TO_FIT_THE_POWER_FLOW_CHART!r}, "
+        f"and no other carrying {_FAILED_FITTING!r}, but the page logged: {page_errors}"
+    )
 
 
 # -- Download CSV returns 200 ----------------------------------------------
