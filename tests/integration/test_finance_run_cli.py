@@ -79,6 +79,18 @@ def _in_order_of_appearance(text: str, fragments: Sequence[str]) -> list[str]:
     return sorted((fragment for fragment in fragments if fragment in text), key=text.index)
 
 
+def _section(report: str, heading: str) -> str:
+    """The lines of *report* from its *heading* line up to the next ## heading."""
+    lines = report.splitlines()
+    assert heading in lines, report
+    first = lines.index(heading)
+    next_heading = next(
+        (number for number in range(first + 1, len(lines)) if lines[number].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[first:next_heading])
+
+
 class _RecordingSimulator:
     """A fleet simulator that records each simulation it is asked for, and answers with its results for the homes asked about."""
 
@@ -157,6 +169,28 @@ def test_each_economics_flag_adds_its_block_and_status_line(
     assert _in_order_of_appearance(
         " ".join(result.stderr.split()), [_PROJECT_STATUS, _COST_RECOVERY_STATUS]
     ) == status_lines
+
+
+def test_project_economics_are_the_same_with_and_without_cost_recovery(
+    tmp_path: Path, fleet_results: FleetResults
+) -> None:
+    """For a scenario that sets a SEG rate, --project's Project Economics block is the same whether or not --cost-recovery is also passed.
+
+    The fleet earns no export revenue, so SEG income could reach the block only
+    through the scenario's rate itself.
+    """
+    scenario = _write_scenario(tmp_path, seg_rate=5.5)
+
+    project_only = invoke_finance_run(["--project", str(scenario)], fleet_results)
+    with_cost_recovery = invoke_finance_run(
+        ["--project", "--cost-recovery", str(scenario)], fleet_results
+    )
+
+    assert project_only.exit_code == 0, project_only.output
+    assert with_cost_recovery.exit_code == 0, with_cost_recovery.output
+    assert _section(project_only.stdout, _PROJECT_HEADING) == _section(
+        with_cost_recovery.stdout, _PROJECT_HEADING
+    )
 
 
 def test_without_economics_flags_the_fleet_is_simulated_once(
