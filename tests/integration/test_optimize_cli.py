@@ -17,6 +17,7 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -1049,6 +1050,49 @@ class TestOptimizeCLIE2EFast:
             "Sensitivity panel skipped: no feasible baseline config found "
             "(sensitivity requires at least one feasible config)."
         )
+
+    def test_a_refusal_while_the_sensitivity_panel_runs_exits_one_as_a_configuration_error(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A ConfigurationError raised while the sensitivity panel runs ends the command with exit 1 and its configuration-error line on stderr; the panel is not skipped.
+
+        A run without the panel counts the simulations the sweep asks for; the
+        simulator answers that many and refuses the next, which the panel asks for.
+        """
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        sweep_only, sweep_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--sensitivity", ""],
+            n_homes=1,
+        )
+        assert sweep_only.exit_code == 0, sweep_only.output
+        asked: list[object] = []
+
+        def simulate(fleet_config, start, end):
+            asked.append(fleet_config)
+            if len(asked) > len(sweep_fleets):
+                raise ConfigurationError("a refusal raised while the sensitivity panel runs")
+            return one_home_fleet_results
+
+        result = invoke_cli(
+            [
+                "optimize", "configs", str(_write_optimize_scenario(tmp_path, n_homes=1)),
+                *options,
+                "--sensitivity", "grid_services",
+            ],
+            simulate,
+        )
+
+        assert len(asked) > len(sweep_fleets), "the panel asked for no simulation"
+        assert result.exit_code == 1, result.output
+        assert result.stdout == ""
+        stderr = " ".join(result.stderr.split())
+        assert "Computing sensitivity panel for axes" in stderr
+        assert stderr.endswith("Configuration error: a refusal raised while the sensitivity panel runs")
+        assert "Sensitivity panel skipped" not in result.output
 
 
 # ---------------------------------------------------------------------------
