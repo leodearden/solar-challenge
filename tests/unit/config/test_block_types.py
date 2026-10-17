@@ -10,12 +10,12 @@ from typing import Any, Optional
 import pytest
 
 from solar_challenge.config import (
-    ConfigurationError,
     DistributionSpec,
     ProportionalDistribution,
     parse_fleet_distribution_config,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 
 _FULL_PERIOD: dict[str, Any] = {"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.25}
 

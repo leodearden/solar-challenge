@@ -10,7 +10,7 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED

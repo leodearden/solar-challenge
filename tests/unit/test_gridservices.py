@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,

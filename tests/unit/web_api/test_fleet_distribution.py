@@ -10,11 +10,11 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.config import (
-    ConfigurationError,
     DispatchStrategyConfig,
     GridChargeConfig,
     parse_fleet_distribution_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import (
     MAX_FLEET_HOMES,

@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
 from solar_challenge.whole_numbers import whole_number
 
@@ -116,8 +117,6 @@ class FinanceConfig:
 
     def __post_init__(self) -> None:
         """Validate financial parameters, raising ConfigurationError on violation."""
-        from solar_challenge.config import ConfigurationError  # lazy: avoids import cycle; sys.modules cache makes repeat lookups O(1)
-
         for field_name in ("loan_term_years", "asset_life_years"):
             years = getattr(self, field_name)
             whole_years = whole_number(years)
@@ -1537,7 +1536,6 @@ def project_multi_year(
     # done (the inner guard in _simulate_age would only fire after the first
     # full fleet simulation, which wastes a full age-0 run for a 100-home fleet).
     if finance.grid_services_model == "capacity_at_events" and finance.grid_services_events is None:
-        from solar_challenge.config import ConfigurationError
         raise ConfigurationError(
             "grid_services_model='capacity_at_events' requires "
             "grid_services_events to be configured"

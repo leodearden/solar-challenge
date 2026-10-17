@@ -9,12 +9,12 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
-    ConfigurationError,
     ParameterSweepConfig,
     ScenarioConfig,
     SimulationPeriod,
     run_parameter_sweep,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location

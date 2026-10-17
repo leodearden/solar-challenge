@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from solar_challenge.config import (
-    ConfigurationError,
     FleetDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -16,6 +15,7 @@ from solar_challenge.config import (
     WeightedDiscreteDistribution,
     parse_fleet_distribution_config,
 )
+from solar_challenge.errors import ConfigurationError
 
 
 def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:

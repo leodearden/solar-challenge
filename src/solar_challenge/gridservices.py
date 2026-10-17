@@ -31,13 +31,6 @@ Key public symbols:
 * :func:`compute_grid_services_at_events` — applies the banded availability +
   utilisation pricing formula per event window, returning a
   :class:`GridServicesAtEvents` breakdown.
-
-**Import cycle note**: this module has NO top-level import of ``config.py``.
-``ConfigurationError`` is imported *lazily*, inside each validation-failure
-branch only, so that the module constants (``GRID_SERVICES_RATE_BANDS``,
-``DEFAULT_EVENT_WINDOWS``) can be built at load time without triggering
-``config.py``'s heavy import chain.  ``config.py`` is the side that imports
-``gridservices``; the lazy guard keeps both import orders valid.
 """
 
 from dataclasses import dataclass
@@ -46,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -79,17 +73,9 @@ class GridServicesRateBand:
         """Validate non-negativity.
 
         .. note::
-            This class intentionally raises ``ValueError`` rather than
-            ``ConfigurationError`` (unlike :class:`EventWindow` and
-            :class:`GridServicesEventsConfig`).  The module constant
-            :data:`GRID_SERVICES_RATE_BANDS` is constructed at *import time*
-            before ``config.py`` has necessarily been loaded, so importing
-            ``ConfigurationError`` inside ``__post_init__`` here would
-            re-introduce the import cycle this module was designed to avoid.
-            Callers that parse user-supplied rates through a config dict
-            receive errors wrapped as ``ConfigurationError`` by the
-            :func:`~solar_challenge.config.parse_finance_config` layer.
-            This mirrors the convention in :class:`~solar_challenge.flex.FlexibilityValueBand`.
+            For now this class intentionally raises ``ValueError`` rather than
+            ``ConfigurationError``, as :class:`~solar_challenge.flex.FlexibilityValueBand`
+            does; docs/prds/errors-leaf.md (contract C4) plans the conversion of both.
         """
         if self.availability_gbp_per_kw_per_event < 0:
             raise ValueError(
@@ -218,52 +204,30 @@ class EventWindow:
     event_hours: float
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation.
-
-        .. important::
-            ``ConfigurationError`` is imported *inside each failure branch* rather
-            than once at the top of this method.  :data:`DEFAULT_EVENT_WINDOWS` is
-            a module-level constant that constructs a valid :class:`EventWindow` at
-            *import time*, which calls this ``__post_init__``.  A top-level import
-            here would fire during ``gridservices`` module initialisation — before
-            ``config.py`` has finished loading — and re-introduce the circular
-            import this module was designed to avoid.  The per-branch approach is
-            safe because a valid construction never reaches any of the
-            ``if <invalid>:`` branches, so the import is never triggered at load
-            time.  (Compare :class:`GridServicesEventsConfig`, where no module-level
-            instances exist, so the consolidated form is safe there.)
-        """
+        """Validate domain constraints, raising ConfigurationError on violation."""
         if not self.months:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError("EventWindow.months must be a non-empty tuple")
         if not self.weekdays:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError("EventWindow.weekdays must be a non-empty tuple")
         if not self.hours:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError("EventWindow.hours must be a non-empty tuple")
         if any(m < 1 or m > 12 for m in self.months):
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"EventWindow.months values must be in 1..12, got {self.months}"
             )
         if any(d < 0 or d > 6 for d in self.weekdays):
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"EventWindow.weekdays values must be in 0..6, got {self.weekdays}"
             )
         if any(h < 0 or h > 23 for h in self.hours):
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"EventWindow.hours values must be in 0..23, got {self.hours}"
             )
         if self.events_per_year <= 0:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"EventWindow.events_per_year must be > 0, got {self.events_per_year}"
             )
         if self.event_hours <= 0.0:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"EventWindow.event_hours must be > 0, got {self.event_hours}"
             )
@@ -332,18 +296,7 @@ class GridServicesEventsConfig:
     utilisation_gbp_per_mwh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation.
-
-        The import is done once at the top of ``__post_init__`` rather than
-        inside every failure branch.  This is still *lazy* — ``__post_init__``
-        runs at construction time, not at module load, so it does NOT trigger
-        ``config.py`` when the module constants are built at import time.
-        """
-        # Single lazy import at the top of __post_init__ — avoids repetition
-        # while preserving the load-time cycle-break (this runs at construction,
-        # not at gridservices module load).
-        from solar_challenge.config import ConfigurationError
-
+        """Validate domain constraints, raising ConfigurationError on violation."""
         _VALID_BANDS = frozenset({"low", "central", "high"})
         if self.band not in _VALID_BANDS:
             raise ConfigurationError(

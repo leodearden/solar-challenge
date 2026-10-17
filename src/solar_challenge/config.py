@@ -19,6 +19,7 @@ import yaml
 
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
@@ -30,12 +31,6 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-
-
-class ConfigurationError(Exception):
-    """Raised when configuration file is invalid."""
-
-    pass
 
 
 #: Dispatch strategy names recognised by the simulation engine.

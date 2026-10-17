@@ -15,7 +15,6 @@ import pandas as pd
 import yaml
 
 from solar_challenge.config import (
-    ConfigurationError,
     generate_homes_from_distribution,
     parse_dispatch_strategy_config,
     parse_fleet_distribution_config,
@@ -23,6 +22,7 @@ from solar_challenge.config import (
     parse_seg_rate,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block

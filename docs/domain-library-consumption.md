@@ -394,6 +394,20 @@ the web app stored before the field existed loads with it at `0.0`. The 0.5.0
 tag has none of these. Consumers that read the frame by position rather than by
 name re-check it when they re-pin.
 
+**Unreleased on main** (task 773): `ConfigurationError` is defined in
+`solar_challenge.errors`, which imports no other module of the package; import
+it as `from solar_challenge.errors import ConfigurationError`.
+`solar_challenge.config` still binds the name at runtime, so code that imports
+it from there keeps running, but config no longer exports it, so `mypy --strict`
+refuses that import ("does not explicitly export attribute"). Constructing a
+`FinanceConfig`, a `GridServicesEventsConfig` or an `EventWindow`, valid or
+refused, no longer imports the scenario grammar (`solar_challenge.config`) or
+pvlib; on the 0.5.0 tag, constructing a `FinanceConfig` or a
+`GridServicesEventsConfig`, or a refused `EventWindow`, imports both. The
+class's base, `Exception`, and every refusal message are unchanged. Consumers
+that import it from `solar_challenge.config` switch to `solar_challenge.errors`
+when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

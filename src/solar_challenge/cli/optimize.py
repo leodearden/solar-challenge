@@ -11,7 +11,6 @@ import typer
 
 from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
 from solar_challenge.config import (
-    ConfigurationError,
     ScenarioConfig,
     SimulationPeriod,
     load_config,
@@ -19,6 +18,7 @@ from solar_challenge.config import (
     parse_finance_config,
     parse_seg_rate,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
     enumerate_configs,

@@ -18,7 +18,7 @@ import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form

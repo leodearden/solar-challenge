@@ -40,7 +40,8 @@ from rich.table import Table
 from rich.text import Text
 
 from solar_challenge.battery import has_battery
-from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.config import load_config
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherDataError
