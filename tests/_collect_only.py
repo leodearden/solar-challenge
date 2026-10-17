@@ -44,9 +44,15 @@ class CollectedTest:
 
 @dataclass(frozen=True)
 class CollectionReport:
-    """What the collection-report plugin reported: the tests the collection selected, in collection order."""
+    """What the collection-report plugin reported.
+
+    That is the tests the collection selected, in collection order, and the
+    (node id, skip reason) of each collector it skipped, a module or a
+    directory, in the order pytest reported them.
+    """
 
     tests: tuple[CollectedTest, ...]
+    skipped_collectors: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -111,7 +117,8 @@ def _read_report(path: Path) -> CollectionReport:
                 node_id=test["node_id"], path=PurePosixPath(test["path"]), parametrize_id=test["parametrize_id"]
             )
             for test in report["tests"]
-        )
+        ),
+        skipped_collectors=tuple((skipped["node_id"], skipped["reason"]) for skipped in report["skipped_collectors"]),
     )
 
 

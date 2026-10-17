@@ -5,11 +5,17 @@ Load it with `-p solar_challenge_collection_report`, with this directory on
 PYTHONPATH, and give it `--collection-report=PATH`. Without that option it
 registers nothing.
 
-The report is {"tests": [{"node_id": ..., "path": ..., "parametrize_id": ...}, ...]}:
+The report is {"tests": [...], "skipped_collectors": [...]}:
 
-- "tests" are session.items in order, after -m, -k and --deselect deselection;
-- "path" is the test's file relative to the rootdir, as node ids are, in posix form;
-- "parametrize_id" is item.callspec.id, or null for a test that is not parametrised.
+- "tests" are session.items in order, after -m, -k and --deselect deselection,
+  each {"node_id": ..., "path": ..., "parametrize_id": ...}. "path" is the
+  test's file relative to the rootdir, as node ids are, in posix form, and
+  "parametrize_id" is item.callspec.id, or null for a test that is not
+  parametrised.
+- "skipped_collectors" are the collectors pytest skipped at collection, in the
+  order it reported them, each {"node_id": ..., "reason": ...}: a module that
+  importorskips, or a directory whose conftest skips. "reason" is the skip's
+  message, e.g. "Skipped: could not import 'x': No module named 'x'".
 
 pytest writes the report even when collection stops on an error, so only the
 run's exit code says whether collection succeeded.
@@ -38,14 +44,26 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 class _CollectionReporter:
-    """Writes the report to its path when the session's collection finishes."""
+    """Records each collector pytest skips, and writes the report to its path when the session's collection finishes."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self._skipped_collectors: list[dict[str, str]] = []
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.skipped:
+            self._skipped_collectors.append({"node_id": report.nodeid, "reason": _skip_message(report)})
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
         tests = [_reported_test(item, session.config.rootpath) for item in session.items]
-        self._path.write_text(json.dumps({"tests": tests}), encoding="utf-8")
+        report = {"tests": tests, "skipped_collectors": self._skipped_collectors}
+        self._path.write_text(json.dumps(report), encoding="utf-8")
+
+
+def _skip_message(report: pytest.CollectReport) -> str:
+    """Return a skipped collect report's message, the last of the (path, lineno, message) pytest records for a skip."""
+    longrepr = report.longrepr
+    return longrepr[2] if isinstance(longrepr, tuple) else str(longrepr)
 
 
 def _reported_test(item: pytest.Item, rootpath: Path) -> dict[str, str | None]:
