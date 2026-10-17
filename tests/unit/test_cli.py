@@ -168,11 +168,18 @@ class TestValidateCLI:
         assert result.exit_code == 0
 
 
-def _valid_results_frame() -> pd.DataFrame:
-    """A valid 7-day, 1-minute results frame: a 3.5 kW daytime sinusoid and flat demand."""
-    index = pd.date_range(
-        "2024-06-01", periods=7 * 24 * 60, freq="1min", tz="Europe/London"
-    )
+def _valid_results_frame(
+    first_day: str = "2024-06-01",
+    last_day: str = "2024-06-07",
+    *,
+    freq: str = "1min",
+    tz: str | None = "Europe/London",
+) -> pd.DataFrame:
+    """A valid results frame from first_day's midnight through last_day, a row every freq on tz's clock: a 3.5 kW daytime sinusoid and a flat 0.4 kW demand.
+
+    tz None writes naive timestamps.
+    """
+    index = pd.date_range(first_day, f"{last_day} 23:59", freq=freq, tz=tz)
     hours = index.hour + index.minute / 60.0
     daylight = (hours >= 6) & (hours < 21)
     sine = np.sin(np.pi * (hours - 6) / 15)
@@ -237,6 +244,35 @@ class TestValidateResultsCommand:
 
         assert result.exit_code == 1
         assert f"CSV must contain a '{required}' column" in " ".join(
+            result.output.split()
+        )
+
+    @pytest.mark.parametrize(
+        "tz", [pytest.param("Europe/London", id="zoned"), pytest.param(None, id="naive")]
+    )
+    def test_a_half_hourly_export_is_judged_at_its_own_cadence(
+        self, tmp_path: Path, tz: str | None
+    ) -> None:
+        """0.4 kW over 336 half-hours of 2023 is 67.2 kWh in 7 days, which x 365/7 is 3,504 kWh.
+
+        A naive export is read as written.
+        """
+        frame = _valid_results_frame("2023-06-01", "2023-06-07", freq="30min", tz=tz)
+
+        result = self._validate_results(tmp_path, frame, "--consumption-kwh", "3504")
+
+        assert result.exit_code == 0, result.output
+        assert "3504.0000" in result.output
+        assert "All 7 checks passed" in " ".join(result.output.split())
+
+    def test_a_csv_whose_first_column_is_not_timestamps_is_refused(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "results.csv"
+        csv_file.write_text("t,generation_kw,demand_kw\n0,0.0,0.4\n1,0.0,0.4\n2,0.0,0.4\n")
+
+        result = runner.invoke(app, ["validate", "results", str(csv_file)])
+
+        assert result.exit_code == 1
+        assert "SimulationWindow.of_index reads a DatetimeIndex" in " ".join(
             result.output.split()
         )
 
