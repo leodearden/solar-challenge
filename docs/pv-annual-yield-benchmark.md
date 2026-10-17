@@ -1,6 +1,6 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203), #324, #282
+**Task:** #239 (follow-up from #203), #324, #282, #749
 **Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
 
 ---
@@ -25,6 +25,10 @@ were inside it.
 generation, so the wired DC is that of the config's own module, `custom_module_params`
 included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
 against a `PVConfig` of the default module at that capacity.
+
+A run of 365 days or more is judged on its AC energy scaled to a 365-day year by
+`validation._annual_equivalent_kwh`, as `validate_consumption` scales its annual total:
+a two-year run at 1000 kWh/kWp a year reads 1000, not 2000. A shorter run is not judged.
 
 ## 2. The Band Is Sourced from PVGIS and MCS
 
