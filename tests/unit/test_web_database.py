@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import tempfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -217,6 +218,24 @@ class TestDatabaseInitialization:
         init_db(nested_path)
         assert nested_path.exists()
         assert nested_path.parent.exists()
+
+    def test_init_db_creates_its_schema_in_one_transaction_so_a_statement_that_fails_leaves_no_table(self, db_path):
+        """A table named like one of init_db's indexes fails that CREATE INDEX, which comes after every table's."""
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("CREATE TABLE idx_chat_messages_session_id (x)")
+            conn.commit()
+
+        with pytest.raises(sqlite3.OperationalError, match="idx_chat_messages_session_id"):
+            init_db(db_path)
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            tables = {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {table for table in tables if not table.startswith("sqlite_")} == {"idx_chat_messages_session_id"}, (
+            f"init_db failed and left the tables {sorted(tables)}: it must create its schema in one transaction, "
+            "or a failed statement leaves a partly created schema behind; each CREATE committed alone is also a "
+            "durable commit of its own, 16 fdatasync per fresh database in WAL mode against 9 in one transaction "
+            "(measured), and the verify initialises ~1,100 databases"
+        )
 
     @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
     def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
