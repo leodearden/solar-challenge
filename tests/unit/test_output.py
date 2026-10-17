@@ -76,36 +76,37 @@ def _run_with_distinct_rising_series(
 
 
 def _seasonal_run() -> SimulationResults:
-    """Two January days, one April day and half a July day, each day steady at its own levels.
+    """Two February days, the spring, and half a June day, each day steady at its own levels, on one unbroken minute index.
 
-    January's battery stores the first day's PV surplus and meets part of the sunless second
+    The first February day's battery stores its PV surplus and meets part of the sunless second
     day's demand. Every minute balances as a simulated one does.
     """
-    spans = [
-        pd.date_range(start, periods=rows, freq="1min", tz="Europe/London")
-        for start, rows in [("2024-01-01", 1440), ("2024-01-02", 1440), ("2024-04-01", 1440), ("2024-07-01", 720)]
-    ]
-    index = spans[0].append(spans[1:])
+    index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq="1min", tz="Europe/London")
+    days = index.normalize()
+    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
+    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
+    spring = index.month <= 5
 
-    def steady(*, january_1: float, january_2: float, april: float, july: float) -> pd.Series:
+    def steady(*, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
         return pd.Series(
-            np.repeat([january_1, january_2, april, july], [len(span) for span in spans]), index=index
+            np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
+            index=index,
         )
 
     zeros = pd.Series(0.0, index=index)
     return SimulationResults(
-        generation=steady(january_1=8.0, january_2=0.0, april=9.0, july=4.0),
-        demand=steady(january_1=5.0, january_2=5.0, april=10.0, july=1.0),
-        self_consumption=steady(january_1=5.0, january_2=1.0, april=9.0, july=1.0),
-        battery_charge=steady(january_1=1.0, january_2=0.0, april=0.0, july=2.0),
-        battery_discharge=steady(january_1=0.0, january_2=1.0, april=0.0, july=0.0),
+        generation=steady(winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
+        demand=steady(winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
+        self_consumption=steady(winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
+        battery_charge=steady(winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
+        battery_discharge=steady(winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
         battery_soc=zeros,
-        grid_import=steady(january_1=0.0, january_2=4.0, april=1.0, july=0.0),
-        grid_export=steady(january_1=2.0, january_2=0.0, april=0.0, july=1.0),
+        grid_import=steady(winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
+        grid_export=steady(winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
         import_cost=zeros,
         export_revenue=zeros,
         tariff_rate=zeros,
-        heat_pump_load=steady(january_1=2.0, january_2=2.0, april=9.0, july=0.25),
+        heat_pump_load=steady(winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=0.25),
     )
 
 
@@ -197,7 +198,7 @@ class TestSeasonalBreakdowns:
 
         # Winter self-consumption: 5 kW × 24 h plus the battery's 1 kW × 24 h = 144 kWh, where
         # min(generation, demand) would give 120. Winter import: 4 kW × 24 h = 96 kWh of 240.
-        # April's rows count in neither season.
+        # Spring's rows count in neither season.
         assert asdict(seasons.winter) == pytest.approx(
             {
                 "generation_kwh": 192.0,

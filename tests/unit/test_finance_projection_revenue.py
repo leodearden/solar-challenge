@@ -185,13 +185,13 @@ def _make_grid_charging_sim_results(
     Defaults give per home: total_import_cost_gbp £258.00, of which
     total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.
 
-    Hourly index with kW = kWh / (n_steps / 60), so calculate_summary's 1/60
-    integration returns the kWh totals and simulation_days is 365.
+    Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
+    each row over the hour it lasts, returns the kWh totals and simulation_days is 365.
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
 
     def constant_kw(kwh: float) -> pd.Series:
-        return pd.Series(kwh / (n_steps / 60.0), index=idx)
+        return pd.Series(kwh / n_steps, index=idx)
 
     def constant_gbp(pence: float) -> pd.Series:
         return pd.Series(pence / 100.0 / n_steps, index=idx)

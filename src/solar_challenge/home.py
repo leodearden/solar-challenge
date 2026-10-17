@@ -23,7 +23,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import align_tmy_to_index, get_tmy_data
 
 
@@ -69,20 +69,24 @@ _AMOUNT = "per_minute_amount"
 
 @dataclass(frozen=True)
 class _PerMinuteAmount:
-    """How a series' sample becomes that minute's amount: the sample times factor, under column."""
+    """How a series' samples become its rows' amounts, under column: a rate per hour (kW) gives the kWh its row delivers; any other sample (£) already is its row's amount."""
 
     column: str
-    factor: float
+    per_hour: bool
+
+    def row_amounts(self, series: pd.Series, window: SimulationWindow) -> pd.Series:
+        """Each row's amount of series, whose rows window describes."""
+        return window.row_energy_kwh(series) if self.per_hour else series
 
 
 def _power(column: str, energy_column: str) -> dict[str, object]:
-    """Metadata of a kW series written under column; its amount is each minute's kWh, under energy_column."""
-    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(energy_column, HOURS_PER_MINUTE)}
+    """Metadata of a kW series written under column; its amount is each row's kWh, under energy_column."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(energy_column, per_hour=True)}
 
 
 def _money(column: str) -> dict[str, object]:
-    """Metadata of a £ series written under column; each sample already is its minute's amount."""
-    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(column, 1.0)}
+    """Metadata of a £ series written under column; each sample already is its row's amount."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(column, per_hour=False)}
 
 
 def _level(column: str) -> dict[str, object]:
@@ -97,10 +101,11 @@ def _level(column: str) -> dict[str, object]:
 class SimulationResults:
     """Comprehensive results from a home simulation.
 
-    All time series have 1-minute resolution and matching DatetimeIndex.
-    Each series field's column metadata names the column to_dataframe writes it
-    under and from_dataframe reads it from, and each series is named that column,
-    whatever it was named when built.
+    All series share one DatetimeIndex of evenly spaced rows; window says which
+    calendar days it covers and how long each row lasts (one minute for
+    simulate_home's results). Each series field's column metadata names the
+    column to_dataframe writes it under and from_dataframe reads it from, and
+    each series is named that column, whatever it was named when built.
 
     Attributes:
         generation: PV generation in kW
@@ -152,24 +157,43 @@ class SimulationResults:
             if _COLUMN in attribute.metadata:
                 yield attribute.name, attribute.metadata[_COLUMN]
 
+    @property
+    def window(self) -> SimulationWindow:
+        """The window the results' index describes: the calendar days it covers, how long each row lasts, and its zone.
+
+        Raises:
+            ValueError: If SimulationWindow.of_index refuses the index: it is not a
+                DatetimeIndex, it is empty, it has one row and no fixed-duration freq, or its
+                rows are not evenly spaced.
+        """
+        return SimulationWindow.of_index(self.generation.index)
+
     def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
-        """Each amount's column and its per-minute amounts, in declaration order, for every series that is set."""
+        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
+        window = self.window
         for attribute in fields(self):
             amount = attribute.metadata.get(_AMOUNT)
             series = getattr(self, attribute.name)
             if isinstance(amount, _PerMinuteAmount) and series is not None:
-                yield amount.column, series * amount.factor
+                yield amount.column, amount.row_amounts(series, window)
 
     def per_minute_amounts(self) -> pd.DataFrame:
-        """Each minute's energy in kWh and money in £, one column per amount, so a period's totals are its column sums.
+        """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
 
         The battery state of charge and the tariff rate have no column, as neither adds up over
         time, and nor has an optional series that is None.
+
+        Raises:
+            ValueError: As window does, for an index no window describes.
         """
         return pd.concat(dict(self._amount_series()), axis=1)
 
     def total_amounts(self) -> dict[str, float]:
-        """The run's total of each amount: per_minute_amounts' column sums, keyed by column."""
+        """The run's total of each amount: per_minute_amounts' column sums, keyed by column.
+
+        Raises:
+            ValueError: As window does, for an index no window describes.
+        """
         return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
     def to_dataframe(self) -> pd.DataFrame:
