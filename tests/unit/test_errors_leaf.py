@@ -5,7 +5,8 @@ ConfigurationError is a ValueError, so code that catches ValueError catches ever
 
 Importing solar_challenge.errors loads no other module of the package. Constructing
 the finance, grid-services and flexibility input types, valid or refused, loads
-neither the scenario grammar (solar_challenge.config) nor pvlib.
+neither the scenario grammar (solar_challenge.config) nor pvlib, and each refuses
+with a ConfigurationError.
 
 Each import case runs in a fresh ``python -I`` interpreter, so the modules that
 earlier tests imported cannot hide what the case loads.
@@ -103,44 +104,38 @@ def test_a_valid_construction_loads_neither_the_scenario_grammar_nor_pvlib(const
 
 
 @pytest.mark.parametrize(
-    ("construction", "refused_as"),
+    "construction",
     [
         pytest.param(
             "solar_challenge.FinanceConfig(standing_charge_pence_per_day=50.0, vat_rate=2.0)",
-            "solar_challenge.errors.ConfigurationError",
             id="FinanceConfig",
         ),
-        pytest.param(
-            "solar_challenge.GridServicesEventsConfig(band='extreme')",
-            "solar_challenge.errors.ConfigurationError",
-            id="GridServicesEventsConfig",
-        ),
+        pytest.param("solar_challenge.GridServicesEventsConfig(band='extreme')", id="GridServicesEventsConfig"),
         pytest.param(
             "solar_challenge.EventWindow(months=(), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), "
             "events_per_year=12, event_hours=3.0)",
-            "solar_challenge.errors.ConfigurationError",
             id="EventWindow",
         ),
         pytest.param(
             "solar_challenge.GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=0.0)",
-            "builtins.ValueError",
             id="GridServicesRateBand",
         ),
         pytest.param(
             "from solar_challenge.flex import FlexibilityValueBand; "
             "FlexibilityValueBand(name='central', time_shift_gbp=-1.0, grid_services_per_home_gbp=1.0, "
             "grid_services_per_kw_gbp=1.0, total_gbp=3.0, provenance='test')",
-            "builtins.ValueError",
             id="FlexibilityValueBand",
         ),
     ],
 )
-def test_a_refusal_raises_its_type_without_loading_the_scenario_grammar_or_pvlib(
-    construction: str, refused_as: str
+def test_a_refusal_is_a_configuration_error_and_loads_neither_the_scenario_grammar_nor_pvlib(
+    construction: str,
 ) -> None:
     loaded, refusal = _probe(construction)
 
-    assert refusal is not None and refused_as in refusal, f"{construction} raised {refusal}, not {refused_as}"
+    assert refusal is not None and "solar_challenge.errors.ConfigurationError" in refusal, (
+        f"{construction} raised {refusal}, not a ConfigurationError"
+    )
     assert _SCENARIO_GRAMMAR_AND_PVLIB.isdisjoint(loaded), (
         f"{construction} loaded {sorted(_SCENARIO_GRAMMAR_AND_PVLIB & loaded)}"
     )

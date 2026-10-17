@@ -7,6 +7,7 @@ docs/prds/flexibility-value-finance-integration.md §6 (all £/battery-home/yr u
 import dataclasses
 
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.flex import (
     FlexibilityValueBand,
     FLEX_VALUE_BANDS,
@@ -73,23 +74,23 @@ class TestFlexibilityValueBand:
     # --- validation: negative monetary fields ---
 
     def test_negative_time_shift_raises(self):
-        """Negative time_shift_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="time_shift_gbp"):
+        """Negative time_shift_gbp raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="time_shift_gbp"):
             self._make_band(time_shift_gbp=-1.0)
 
     def test_negative_grid_services_per_home_raises(self):
-        """Negative grid_services_per_home_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="grid_services_per_home_gbp"):
+        """Negative grid_services_per_home_gbp raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="grid_services_per_home_gbp"):
             self._make_band(grid_services_per_home_gbp=-0.01)
 
     def test_negative_grid_services_per_kw_raises(self):
-        """Negative grid_services_per_kw_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="grid_services_per_kw_gbp"):
+        """Negative grid_services_per_kw_gbp raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="grid_services_per_kw_gbp"):
             self._make_band(grid_services_per_kw_gbp=-5.0)
 
     def test_negative_total_gbp_raises(self):
-        """Negative total_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="total_gbp"):
+        """Negative total_gbp raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="total_gbp"):
             self._make_band(total_gbp=-1.0)
 
     def test_zero_monetary_fields_are_valid(self):
@@ -106,13 +107,13 @@ class TestFlexibilityValueBand:
     # --- validation: empty name/provenance ---
 
     def test_empty_name_raises(self):
-        """Empty name string raises ValueError."""
-        with pytest.raises(ValueError, match="name"):
+        """Empty name string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="name"):
             self._make_band(name="")
 
     def test_empty_provenance_raises(self):
-        """Empty provenance string raises ValueError."""
-        with pytest.raises(ValueError, match="provenance"):
+        """Empty provenance string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="provenance"):
             self._make_band(provenance="")
 
 
