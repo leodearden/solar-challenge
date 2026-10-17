@@ -13,7 +13,6 @@ import math
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner
@@ -21,7 +20,7 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.finance import CostRecoverySolution
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.optimize import (
@@ -36,6 +35,7 @@ from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.pv import PVConfig
 from tests._cli_fleet_simulator import invoke_cli
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
@@ -209,53 +209,20 @@ def _make_home_config() -> HomeConfig:
     )
 
 
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    n_minutes: int = 525600,
-) -> SimulationResults:
-    """Build a 365-day SimulationResults for constant-sim fixture use."""
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
 def _make_fleet_results(n_homes: int = 5) -> FleetResults:
     """Build a FleetResults yielding binding='floor', feasible=True when solved.
 
-    Uses full-year 525600-minute Series (365 × 24 × 60) so no annualisation
-    is triggered by the CLI's default full-year window.
+    Each of the *n_homes* homes has a year of constant power: 2,000 kWh
+    self-consumed, 800 kWh exported and 1,200 kWh imported.  The results are
+    tests/_finance_builders.make_sim_results', whose docstring says why hourly
+    steps give exact totals.
     """
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(
-            self_kwh=2000.0,
-            export_kwh=800.0,
-            import_kwh=1200.0,
-            n_minutes=525600,
-        )
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_make_home_config() for _ in range(n_homes)],
+        self_kwh=2000.0,
+        export_kwh=800.0,
+        import_kwh=1200.0,
+    )
 
 
 def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
@@ -860,11 +827,7 @@ class TestOptimizeCLIHelp:
 
 @pytest.fixture(scope="module")
 def optimize_fleet_results() -> FleetResults:
-    """Module-scoped fixture: build constant feasible FleetResults once per module.
-
-    Building once avoids reconstructing ~9 MB of per-minute Series for each
-    test case in TestOptimizeCLIE2EFast.
-    """
+    """Module-scoped fixture: constant feasible FleetResults for a five-home scenario, built once per module."""
     return _make_fleet_results(n_homes=5)
 
 

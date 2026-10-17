@@ -4,16 +4,15 @@
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected
 constant synthetic simulate stands in for the real fleet simulator.
-Per the repo's per-file convention there are NO cross-test-file imports;
-all builders are self-contained copies/adaptations of the helpers in
-tests/integration/test_optimize_sweep.py.
+The module imports no other test module: its home, scenario and finance
+builders are adaptations of tests/integration/test_optimize_sweep.py's, and
+its constant simulation results come from tests/_finance_builders.
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Optional
 
-import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
@@ -33,6 +32,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
+from tests._finance_builders import make_fleet_results, make_sim_results
 
 
 # ---------------------------------------------------------------------------
@@ -68,51 +68,23 @@ def _make_home_config(
     )
 
 
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-    n_minutes: int = 525600,  # 365 days
-) -> SimulationResults:
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
-    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
+_SELF_KWH = 2000.0
+_EXPORT_KWH = 800.0
+_IMPORT_KWH = 1200.0
 
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=export_revenue_series,
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
+
+def _make_fleet_results(n_homes: int = _N_HOMES) -> FleetResults:
+    """*n_homes* _make_home_config homes, each with a year of constant power at the module's kWh totals.
+
+    The results are tests/_finance_builders.make_sim_results', whose docstring
+    says why hourly steps give exact totals.
+    """
+    return make_fleet_results(
+        homes=[_make_home_config() for _ in range(n_homes)],
+        self_kwh=_SELF_KWH,
+        export_kwh=_EXPORT_KWH,
+        import_kwh=_IMPORT_KWH,
     )
-
-
-def _make_fleet_results(
-    n_homes: int = _N_HOMES,
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-) -> FleetResults:
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _make_finance(
@@ -172,14 +144,6 @@ def _interior_finance() -> FinanceConfig:
     )
 
 
-# Build the constant FleetResults ONCE at module scope so that _const_simulate
-# returns the same object on every call.  This eliminates repeated allocation
-# of ~5×525,600-row pandas Series across ~150 config evaluations in the suite,
-# driving the full file runtime from ~386s to well under 30s.
-# NOTE: keep the 365-day 1-minute index (525,600 rows) — calculate_summary
-# hardcodes minutes_to_hours=1/60 and derives sim_days from the index span,
-# so coarsening resolution would silently scale every kWh total by 60× and
-# break the tuned W-H4 coupling constants.
 _CONST_FLEET_RESULTS: FleetResults = _make_fleet_results(n_homes=_N_HOMES)
 
 
@@ -220,8 +184,6 @@ class _SegPricingSimulate:
     records the SEG rates carried by every fleet it is asked to simulate.
     """
 
-    _EXPORT_KWH = 800.0
-
     def __init__(self) -> None:
         self.rates_per_call: list[frozenset[Optional[float]]] = []
         self._results_by_rate: dict[Optional[float], SimulationResults] = {}
@@ -236,9 +198,11 @@ class _SegPricingSimulate:
 
     def _results_at(self, rate: Optional[float]) -> SimulationResults:
         if rate not in self._results_by_rate:
-            self._results_by_rate[rate] = _make_sim_results(
-                export_kwh=self._EXPORT_KWH,
-                export_revenue_gbp_per_year=self._EXPORT_KWH * (rate or 0.0) / 100.0,
+            self._results_by_rate[rate] = make_sim_results(
+                self_kwh=_SELF_KWH,
+                export_kwh=_EXPORT_KWH,
+                import_kwh=_IMPORT_KWH,
+                export_revenue_gbp=_EXPORT_KWH * (rate or 0.0) / 100.0,
             )
         return self._results_by_rate[rate]
 
@@ -791,12 +755,7 @@ class TestSensitivityPanelGuards:
 
 
 class TestConstSimulateCaching:
-    """_const_simulate must return the SAME FleetResults object on every call.
-
-    Caching at module scope eliminates repeated 525,600-row pandas allocation
-    across ~150 config evaluations, driving the full test file from ~386s to
-    well under 30s.
-    """
+    """_const_simulate must return the SAME FleetResults object, built once at import, on every call."""
 
     def test_same_instance_every_call(self) -> None:
         """Two calls with identical args return the exact same object (identity)."""
