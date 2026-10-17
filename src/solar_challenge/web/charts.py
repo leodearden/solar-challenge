@@ -622,58 +622,6 @@ def _comparison_run_colour(run_index: int) -> str:
     return COLOUR_PALETTE[_COMPARISON_RUN_ROLES[run_index % len(_COMPARISON_RUN_ROLES)]]
 
 
-def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str]) -> str:
-    """Overlaid line chart of power flows from multiple runs.
-
-    Each run gets a different colour from the comparison palette.
-    Shows generation and demand lines for each run, downsampled
-    for performance.
-
-    Args:
-        results_list: List of SimulationResults from different runs.
-        labels: Display labels for each run.
-
-    Returns:
-        Plotly figure JSON string.
-    """
-    traces: list[Any] = []
-    for i, (results, label) in enumerate(zip(results_list, labels)):
-        colour = _comparison_run_colour(i)
-
-        gen = _adaptive_downsample(results.generation)
-        dem = _adaptive_downsample(results.demand)
-
-        gen_dates = [d.isoformat() for d in gen.index]
-        dem_dates = [d.isoformat() for d in dem.index]
-
-        traces.append(go.Scatter(
-            name=f"{label} - {_EnergyFlow.GENERATION.label}",
-            x=gen_dates,
-            y=gen.round(4).tolist(),
-            mode="lines",
-            line=dict(color=colour, width=1.5),
-            legendgroup=label,
-        ))
-        traces.append(go.Scatter(
-            name=f"{label} - {_EnergyFlow.DEMAND.label}",
-            x=dem_dates,
-            y=dem.round(4).tolist(),
-            mode="lines",
-            line=dict(color=colour, width=1.5, dash="dash"),
-            legendgroup=label,
-        ))
-
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        **_SHARED_LAYOUT,
-        title="Overlaid Power Flows",
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Power (kW)"),
-        height=500,
-    )
-    return str(fig.to_json())
-
-
 def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> str:
     """Grouped bar chart comparing energy totals across runs.
 
