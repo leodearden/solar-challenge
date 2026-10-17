@@ -391,10 +391,13 @@ class TestResultsWindow:
             amounts["export_revenue_gbp"], results.export_revenue, check_names=False
         )
 
-    def test_the_windows_energy_of_a_kw_series_is_its_total_amount(self):
-        """The window's energy_kwh of a kW series is that series' total amount: one kW-to-kWh integration."""
+    def test_a_kw_series_amounts_are_the_windows_energy_of_it(self):
+        """A kW series' amounts equal the window's energy of it, row by row (row_energy_kwh) and in total (energy_kwh)."""
         twin = _steady_week("30min")
 
+        pd.testing.assert_series_equal(
+            twin.per_minute_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
+        )
         assert twin.window.energy_kwh(twin.demand) == pytest.approx(
             twin.total_amounts()["demand_kwh"], rel=1e-12
         )

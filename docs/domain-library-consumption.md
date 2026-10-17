@@ -413,11 +413,12 @@ when they re-pin.
 `SimulationWindow`, imported from `solar_challenge.timebase`, that its index
 describes: the first and last calendar dates it covers on the index's own
 clock, the cadence its rows are spaced at, and that clock's zone name.
-`per_minute_amounts()` and `total_amounts()` multiply each kW series by
-`window.step_hours`, the cadence in hours, where the 0.5.0 tag multiplies by
-1/60 whatever the spacing: a row of half-hourly results, such as
-`from_dataframe` builds from a half-hourly frame, now counts as half an hour's
-kWh, where the tag counts it as one minute's. Both now raise `ValueError` for
+`per_minute_amounts()` and `total_amounts()` take each kW row's kWh from
+`window.row_energy_kwh`, which multiplies it by `window.step_hours`, the
+cadence in hours; the 0.5.0 tag multiplies by 1/60 whatever the spacing. A row
+of half-hourly results, such as `from_dataframe` builds from a half-hourly
+frame, now counts as half an hour's kWh, where the tag counts it as one
+minute's. Both now raise `ValueError` for
 results whose index no window describes: an empty index, one row without a
 fixed-duration `freq` (a daily `freq` is never one, on any pandas release: a
 zoned day lasts 23 or 25 hours across a clock change), unevenly spaced rows

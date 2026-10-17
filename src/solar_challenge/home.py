@@ -69,14 +69,14 @@ _AMOUNT = "per_minute_amount"
 
 @dataclass(frozen=True)
 class _PerMinuteAmount:
-    """How a series' sample becomes its row's amount, under column: a rate per hour (kW) times the hours its row lasts, else the sample itself (£)."""
+    """How a series' samples become its rows' amounts, under column: a rate per hour (kW) gives the kWh its row delivers; any other sample (£) already is its row's amount."""
 
     column: str
     per_hour: bool
 
-    def factor(self, window: SimulationWindow) -> float:
-        """What a sample is multiplied by to give its row's amount on a series spanning window."""
-        return window.step_hours if self.per_hour else 1.0
+    def row_amounts(self, series: pd.Series, window: SimulationWindow) -> pd.Series:
+        """Each row's amount of series, whose rows window describes."""
+        return window.row_energy_kwh(series) if self.per_hour else series
 
 
 def _power(column: str, energy_column: str) -> dict[str, object]:
@@ -175,10 +175,10 @@ class SimulationResults:
             amount = attribute.metadata.get(_AMOUNT)
             series = getattr(self, attribute.name)
             if isinstance(amount, _PerMinuteAmount) and series is not None:
-                yield amount.column, series * amount.factor(window)
+                yield amount.column, amount.row_amounts(series, window)
 
     def per_minute_amounts(self) -> pd.DataFrame:
-        """Each row's energy in kWh, its kW times window.step_hours, and money in £, one column per amount, so a period's totals are its column sums.
+        """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
 
         The battery state of charge and the tariff rate have no column, as neither adds up over
         time, and nor has an optional series that is None.

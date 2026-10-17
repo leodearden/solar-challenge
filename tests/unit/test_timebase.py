@@ -124,6 +124,17 @@ def test_a_one_minute_cadence_lasts_exactly_hours_per_minute() -> None:
     assert window.step_hours == HOURS_PER_MINUTE
 
 
+def test_row_energy_kwh_is_each_rows_kw_times_the_hours_it_lasts_and_energy_kwh_their_sum() -> None:
+    half_hours = pd.date_range("2023-06-01", periods=3, freq="30min", tz="Europe/London")
+    half_hourly = SimulationWindow(date(2023, 6, 1), date(2023, 6, 1), timedelta(minutes=30))
+    power_kw = pd.Series([1.0, 2.0, 3.0], index=half_hours)
+
+    row_energy = half_hourly.row_energy_kwh(power_kw)
+
+    pd.testing.assert_series_equal(row_energy, pd.Series([0.5, 1.0, 1.5], index=half_hours))
+    assert half_hourly.energy_kwh(power_kw) == row_energy.sum()
+
+
 def test_energy_kwh_sums_each_rows_kw_times_the_hours_it_lasts() -> None:
     half_hours = pd.date_range("2023-06-01", "2023-06-07 23:30", freq="30min", tz="Europe/London")
     half_hourly = SimulationWindow(date(2023, 6, 1), date(2023, 6, 7), timedelta(minutes=30))

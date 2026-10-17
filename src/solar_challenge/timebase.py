@@ -110,9 +110,13 @@ class SimulationWindow:
         """How long each row lasts, in minutes."""
         return self.cadence / timedelta(minutes=1)
 
+    def row_energy_kwh(self, power_kw: pd.Series) -> pd.Series:
+        """Each row's kWh of a kW series on this window's rows: its kW times the hours the row lasts."""
+        return power_kw * self.step_hours
+
     def energy_kwh(self, power_kw: pd.Series) -> float:
-        """The kWh a kW series on this window's rows delivers: each row's kW times the hours it lasts, summed."""
-        return float((power_kw * self.step_hours).sum())
+        """The kWh a kW series on this window's rows delivers: its rows' kWh summed."""
+        return float(self.row_energy_kwh(power_kw).sum())
 
 
 def _cadence(index: pd.DatetimeIndex) -> timedelta:
