@@ -4,8 +4,8 @@ These tests enforce that:
 1. The ``integration`` marker is registered in pyproject.toml.
 2. All network-touching integration test classes are deselected under
    ``-m 'not slow'``.
-3. Specific network-touching unit-test classes are also deselected under
-   ``-m 'not slow'``, while pure-logic unit-test classes remain selected.
+3. The verify's mark expression selects every class in PURE_UNIT_CLASSES, the
+   home and fleet unit-test classes that run offline.
 4. The verify's mark expression selects every test in OFFLINE_INTEGRATION_FILES,
    the integration modules that run offline from a seeded weather cache, and at
    least one in each.
@@ -168,34 +168,23 @@ class TestOfflineIntegrationFilesSelectedByTheVerify:
         )
 
 
-class TestNetworkedUnitClassesExcludedButPureKept:
-    """Verify selective ``slow`` marking in the home and fleet unit tests.
+class TestPureUnitClassesSelectedByTheVerify:
+    """Verify that the verify's mark expression selects every class in PURE_UNIT_CLASSES, the home and fleet unit-test classes that run offline."""
 
-    NOTE — hand-maintained allowlists: UNIT_TEST_FILES, NETWORKED_UNIT_CLASSES and
-    PURE_UNIT_CLASSES are enumerated here rather than derived dynamically because
-    test_home_heat_pump.py mixes slow and fast classes in the same file, so a
-    whole-file "count must be zero" assertion is not possible.  The
-    trade-off is that a newly added network-touching class that lacks
-    ``@pytest.mark.slow`` will NOT be detected unless someone also adds it to
-    NETWORKED_UNIT_CLASSES.  Reviewers adding new simulation-driven test classes to
-    these files should update the list below to keep the guard effective.
-    """
-
-    # The modules that define every class named in the two lists below.
+    # The modules that define every class named in PURE_UNIT_CLASSES below.
     UNIT_TEST_FILES = [
         "tests/unit/test_home.py",
         "tests/unit/test_home_heat_pump.py",
         "tests/unit/test_fleet.py",
     ]
 
-    # Network-touching classes in the unit suite — must be deselected.
-    NETWORKED_UNIT_CLASSES = ["TestHeatPumpIntegration"]
-
     # Classes that run offline, as pure logic or from a seeded weather cache — must remain
     # selected (guard against over-marking).
     PURE_UNIT_CLASSES = [
         "TestCalculateSummary",  # test_home.py
         "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
+        # test_home_heat_pump.py — this simulates from a synthetic Bristol TMY year it seeds, no network
+        "TestHeatPumpIntegration",
         "TestFleetSummary",      # test_fleet.py
         # test_fleet.py — these simulate from the Bristol TMY that bristol_june_tmy seeds, no network
         "TestSimulateFleetIter",
@@ -233,31 +222,21 @@ class TestNetworkedUnitClassesExcludedButPureKept:
         )
         return set(re.findall(r"<Class (\w+)>", result.stdout))
 
-    def test_networked_unit_classes_excluded_but_pure_kept(self):
-        """Networked unit classes deselected; offline classes still collected."""
+    def test_the_verify_selects_each_class(self):
         # Positive control: collect WITHOUT the filter, so a listed class that moved out
         # of UNIT_TEST_FILES or was renamed fails here instead of passing vacuously below.
         collected = self._collected_classes()
-        for class_name in [*self.NETWORKED_UNIT_CLASSES, *self.PURE_UNIT_CLASSES]:
+        for class_name in self.PURE_UNIT_CLASSES:
             assert class_name in collected, (
                 f"Listed class {class_name!r} is not collected from {self.UNIT_TEST_FILES} "
-                "even without a marker filter, so its slow-marker check would be vacuous. "
+                "even without a marker filter, so its selection check would be vacuous. "
                 "If it moved, add its module to UNIT_TEST_FILES; if it was renamed or "
-                "deleted, update NETWORKED_UNIT_CLASSES or PURE_UNIT_CLASSES."
+                "deleted, update PURE_UNIT_CLASSES."
             )
 
-        not_slow = self._collected_classes("-m", "not slow")
-
-        # Network-touching classes must be DESELECTED.
-        for class_name in self.NETWORKED_UNIT_CLASSES:
-            assert class_name not in not_slow, (
-                f"Networked unit class {class_name!r} was still collected under "
-                "``-m 'not slow'`` — add ``@pytest.mark.slow`` to that class."
-            )
-
-        # Offline classes must still be COLLECTED.
+        selected = self._collected_classes("-m", VERIFY_MARK_EXPRESSION)
         for class_name in self.PURE_UNIT_CLASSES:
-            assert class_name in not_slow, (
+            assert class_name in selected, (
                 f"Offline unit class {class_name!r} was NOT collected under "
-                "``-m 'not slow'`` — do NOT mark it slow."
+                f"``-m {VERIFY_MARK_EXPRESSION!r}`` — do NOT mark it slow or e2e."
             )
