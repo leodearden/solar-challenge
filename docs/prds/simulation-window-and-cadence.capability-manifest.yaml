@@ -107,7 +107,7 @@ tasks:
           paths: ["src/solar_challenge/community.py"]
           expect: absent
       - name: "load-integration-reads-window"
-        binding: "grep:load.py::calculate_annual_consumption profile.sum() * HOURS_PER_MINUTE today"
+        binding: "grep:load.py::energy_kwh profile.sum() * HOURS_PER_MINUTE today"
         verdict: PASS
         delivered_check:
           kind: grep
