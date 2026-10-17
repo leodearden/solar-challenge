@@ -265,6 +265,29 @@ class TestValidateResultsCommand:
         assert "3504.0000" in result.output
         assert "All 7 checks passed" in " ".join(result.output.split())
 
+    @pytest.mark.parametrize(
+        ("first_day", "last_day", "annual_kwh"),
+        [
+            pytest.param("2024-03-30", "2024-04-01", "3464.8", id="spring-forward"),
+            pytest.param("2024-10-26", "2024-10-28", "3562.4", id="fall-back"),
+        ],
+    )
+    def test_an_export_across_a_clock_change_is_validated_on_the_uk_clock(
+        self, tmp_path: Path, first_day: str, last_day: str, annual_kwh: str
+    ) -> None:
+        """read_csv leaves these rows' two UTC offsets as text.
+
+        On the UK clock each window is 3 calendar days of 2024: 0.4 kW for 71 or 73 hours,
+        x 366/3. Read in UTC, the fall-back window would start a day earlier and cover 4 days.
+        """
+        frame = _valid_results_frame(first_day, last_day)
+
+        result = self._validate_results(tmp_path, frame, "--consumption-kwh", annual_kwh)
+
+        assert result.exit_code == 0, result.output
+        assert f"{float(annual_kwh):.4f}" in result.output
+        assert "All 7 checks passed" in " ".join(result.output.split())
+
     def test_a_csv_whose_first_column_is_not_timestamps_is_refused(self, tmp_path: Path) -> None:
         csv_file = tmp_path / "results.csv"
         csv_file.write_text("t,generation_kw,demand_kw\n0,0.0,0.4\n1,0.0,0.4\n2,0.0,0.4\n")
