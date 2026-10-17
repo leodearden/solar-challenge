@@ -45,7 +45,8 @@ import sys
 import textwrap
 import types
 import typing
-from collections.abc import Iterable
+import weakref
+from collections.abc import Callable, Iterable
 
 
 def surface_form(obj: object) -> str:
@@ -503,16 +504,34 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 def _evaluated(annotation: str, module: str) -> object:
     """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them."""
-    namespace = dict(vars(sys.modules[module]))
-    exec(_type_checking_imports(module), namespace)
+    spelling_module = sys.modules[module]
+    namespace = dict(vars(spelling_module))
+    exec(_type_checking_imports(spelling_module), namespace)
     return eval(annotation, namespace)
 
 
-@functools.cache
-def _type_checking_imports(module: str) -> types.CodeType:
+_Argument = typing.TypeVar("_Argument")
+_Result = typing.TypeVar("_Result")
+
+
+def _cached_while_alive(function: Callable[[_Argument], _Result]) -> Callable[[_Argument], _Result]:
+    """*function*, its result for each argument computed once and kept only while that argument lives, so the cache keeps no argument alive."""
+    results: weakref.WeakKeyDictionary[_Argument, _Result] = weakref.WeakKeyDictionary()
+
+    @functools.wraps(function)
+    def cached(argument: _Argument) -> _Result:
+        if argument not in results:
+            results[argument] = function(argument)
+        return results[argument]
+
+    return cached
+
+
+@_cached_while_alive
+def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
     """The Import and ImportFrom statements of *module*'s top-level `if TYPE_CHECKING:` blocks, compiled, so running them binds each name as Python binds it."""
     imports: list[ast.stmt] = []
-    for node in ast.parse(inspect.getsource(sys.modules[module])).body:
+    for node in ast.parse(inspect.getsource(module)).body:
         match node:
             case ast.If(
                 test=ast.Name(id="TYPE_CHECKING") | ast.Attribute(attr="TYPE_CHECKING"),
@@ -523,7 +542,7 @@ def _type_checking_imports(module: str) -> types.CodeType:
                     for statement in body
                     if isinstance(statement, (ast.Import, ast.ImportFrom))
                 ]
-    return compile(ast.Module(body=imports, type_ignores=[]), module, "exec")
+    return compile(ast.Module(body=imports, type_ignores=[]), module.__name__, "exec")
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
