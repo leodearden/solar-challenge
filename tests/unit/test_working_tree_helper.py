@@ -41,7 +41,7 @@ def test_copies_tracked_and_untracked_files_but_not_ignored_or_deleted_ones(chec
 
 
 def test_leaves_out_a_listed_path_that_is_not_a_regular_file(checkout: Path, tmp_path: Path) -> None:
-    """git lists a symlink to a directory, such as a worktree's .claude, as one path; the copy leaves it out."""
+    """git lists a symlink to a directory as one path; the copy leaves it out."""
     (checkout / "linked").symlink_to("nested", target_is_directory=True)
     subprocess.run(["git", "add", "linked"], cwd=checkout, check=True)
 
