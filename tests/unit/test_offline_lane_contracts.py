@@ -148,9 +148,10 @@ def test_the_job_collects_its_suite_and_nothing_else(
     """
     collection = collect_lane_job(project_root, job.name, env=uv_probe_environment)
 
-    assert collection.node_ids, (
+    node_ids = collection.node_ids()
+    assert node_ids, (
         f"the {job.name!r} lane job {collection.command!r} collected no tests, so the lane stays green while "
-        f"{job.if_unrun}\n{collection.outcome}"
+        f"{job.if_unrun}\n{collection.describe()}"
     )
     outside = collection.node_ids_outside(job.suite)
     assert not outside, (
