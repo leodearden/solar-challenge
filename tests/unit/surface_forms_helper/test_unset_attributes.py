@@ -81,3 +81,13 @@ def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_ini
         assert member_forms(cls) == {"history": "attribute list[float]"}
         assert not hasattr(cls("data"), "history")
         assert unset_attributes(cls) == set()
+
+
+def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
+    class Meter:
+        reading: float
+
+        def __init__(self, name: str) -> None:
+            setattr(self, name, 0.0)
+
+    assert unset_attributes(Meter, reviewed={"setattr(self, name, 0.0)"}) == {"reading"}
