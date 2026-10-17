@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from playwright.sync_api import Page
 
-_EXPECT_TIMEOUT_MS = 5000
+_SETTLE_DEADLINE_MS = 5000
 _POLL_INTERVAL_MS = 25
 
 _CHARTS_NOT_AS_WIDE_AS_THEIR_CONTAINERS = """async ({chartIds, deadlineMs, pollIntervalMs}) => {
@@ -39,11 +39,11 @@ def charts_not_as_wide_as_their_containers(page: Page, chart_ids: Sequence[str])
     """The charts among chart_ids, the ids of page's chart containers, that Plotly has not drawn as wide as their containers, within 1 px.
 
     It waits until no CSS transition runs, so the page's layout has settled, and then until each chart is
-    that wide, for at most Playwright's expect timeout, 5 s, in all. Each entry names a chart that still is not:
+    that wide, for at most 5 s in all. Each entry names a chart that still is not:
     {'chart': its container's id, 'drawn': the width of its first .main-svg, or None while Plotly has drawn none,
     'container': its container's clientWidth}. It raises playwright's Error if no element carries one of chart_ids.
     """
     return page.evaluate(
         _CHARTS_NOT_AS_WIDE_AS_THEIR_CONTAINERS,
-        {"chartIds": list(chart_ids), "deadlineMs": _EXPECT_TIMEOUT_MS, "pollIntervalMs": _POLL_INTERVAL_MS},
+        {"chartIds": list(chart_ids), "deadlineMs": _SETTLE_DEADLINE_MS, "pollIntervalMs": _POLL_INTERVAL_MS},
     )
