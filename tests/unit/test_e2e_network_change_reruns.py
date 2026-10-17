@@ -1,19 +1,25 @@
 """Pins that tests/e2e/conftest.py runs a failed e2e test once more if, and only if, its browser lost a request to net::ERR_NETWORK_CHANGED during that attempt.
 
 docs/e2e-network-change-reruns.md says why. A real browser cannot lose a request
-to a network change on demand, so each scenario runs in a pytest session of its
-own, under copies of this project's pyproject.toml and the e2e conftest, with
-stand-ins for pytest-playwright's context and page fixtures.
+to a network change on demand, so the scenarios share one pytest session of
+their own (tests/_scenario_session.py), under copies of this project's
+pyproject.toml and the e2e conftest, with stand-ins for pytest-playwright's
+context and page fixtures.
 """
 
 from pathlib import Path
 
 import pytest
+
+from tests._scenario_session import ScenarioSession
+
 pytest.importorskip("flask")
 
 E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
 
 ALPINE_CORE = "http://127.0.0.1:5000/static/vendor/alpinejs/alpinejs-3.14.8.min.js"
+
+ALPINE_COLLAPSE = "http://127.0.0.1:5000/static/vendor/alpinejs/collapse-3.14.8.min.js"
 
 PRESETS_API = "http://127.0.0.1:5000/api/presets"
 
@@ -82,100 +88,106 @@ def e2e_suite(pytester_importing_test_helpers: pytest.Pytester, project_root: Pa
     return pytester_importing_test_helpers
 
 
+NETWORK_CHANGE_THEN_PASS = f"""
+    from collections import Counter
+
+    import pytest
+
+    ALPINE_CORE = {ALPINE_CORE!r}
+
+    attempts = Counter()
+
+
+    def lose_alpine_to_a_network_change_on_the_first_attempt(context, test):
+        attempts[test] += 1
+        if attempts[test] == 1:
+            context.fail_request(ALPINE_CORE, "net::ERR_NETWORK_CHANGED")
+            pytest.fail("Alpine never started")
+
+
+    def test_taking_page_loses_alpine_to_a_network_change_on_its_first_attempt(page):
+        lose_alpine_to_a_network_change_on_the_first_attempt(page.context, "page")
+
+
+    def test_taking_context_loses_alpine_to_a_network_change_on_its_first_attempt(context):
+        lose_alpine_to_a_network_change_on_the_first_attempt(context, "context")
+    """
+
+
 def test_an_e2e_test_that_fails_after_its_browser_lost_a_request_to_a_network_change_runs_once_more(
-    e2e_suite: pytest.Pytester,
+    e2e_suite: pytest.Pytester, e2e_scenarios: ScenarioSession
 ) -> None:
-    scenario = e2e_suite.makepyfile(
-        f"""
-        from collections import Counter
+    run = e2e_scenarios.run_in(e2e_suite)
 
-        import pytest
-
-        ALPINE_CORE = {ALPINE_CORE!r}
-
-        attempts = Counter()
-
-
-        def lose_alpine_to_a_network_change_on_the_first_attempt(context, test):
-            attempts[test] += 1
-            if attempts[test] == 1:
-                context.fail_request(ALPINE_CORE, "net::ERR_NETWORK_CHANGED")
-                pytest.fail("Alpine never started")
-
-
-        def test_taking_page_loses_alpine_to_a_network_change_on_its_first_attempt(page):
-            lose_alpine_to_a_network_change_on_the_first_attempt(page.context, "page")
-
-
-        def test_taking_context_loses_alpine_to_a_network_change_on_its_first_attempt(context):
-            lose_alpine_to_a_network_change_on_the_first_attempt(context, "context")
-        """
-    )
-
-    result = e2e_suite.runpytest_subprocess(scenario, "-v", "-p", "no:cacheprovider")
-
-    outcomes = result.parseoutcomes()
-    assert (outcomes.get("passed", 0), outcomes.get("rerun", 0), outcomes.get("failed", 0)) == (2, 2, 0), outcomes
+    assert run.outcomes("test_network_change_then_pass") == {"rerun": 2, "passed": 2}
     for fixture in ("page", "context"):
         name = f"test_taking_{fixture}_loses_alpine_to_a_network_change_on_its_first_attempt"
-        result.stdout.fnmatch_lines([f"*{name} RERUN*", f"*{name} PASSED*"])
+        run.result.stdout.fnmatch_lines([f"*{name} RERUN*", f"*{name} PASSED*"])
+
+
+FAILS_WITHOUT_NETWORK_CHANGE = f"""
+    import pytest
+
+    ALPINE_CORE = {ALPINE_CORE!r}
+
+
+    def test_fails_having_lost_no_request(context):
+        pytest.fail("Alpine never started")
+
+
+    def test_fails_having_lost_a_request_to_another_error(context):
+        context.fail_request(ALPINE_CORE, "net::ERR_CONNECTION_REFUSED")
+        pytest.fail("Alpine never started")
+
+
+    def test_fails_without_a_browser():
+        pytest.fail("the live server answered 500")
+    """
 
 
 def test_an_e2e_failure_without_a_request_lost_to_a_network_change_does_not_run_again(
-    e2e_suite: pytest.Pytester,
+    e2e_suite: pytest.Pytester, e2e_scenarios: ScenarioSession
 ) -> None:
-    scenarios = e2e_suite.makepyfile(
-        f"""
-        import pytest
+    run = e2e_scenarios.run_in(e2e_suite)
 
-        ALPINE_CORE = {ALPINE_CORE!r}
+    assert run.outcomes("test_fails_without_network_change") == {"failed": 3}
 
 
-        def test_fails_having_lost_no_request(context):
-            pytest.fail("Alpine never started")
+RERUN_LISTS_LAST_ATTEMPT = f"""
+    from collections import Counter
+
+    import pytest
+
+    LOST_ON_ATTEMPT = {{1: {ALPINE_COLLAPSE!r}, 2: {PRESETS_API!r}}}
+
+    attempts = Counter()
 
 
-        def test_fails_having_lost_a_request_to_another_error(context):
-            context.fail_request(ALPINE_CORE, "net::ERR_CONNECTION_REFUSED")
-            pytest.fail("Alpine never started")
-
-
-        def test_fails_without_a_browser():
-            pytest.fail("the live server answered 500")
-        """
-    )
-
-    result = e2e_suite.runpytest_subprocess(scenarios, "-v", "-p", "no:cacheprovider")
-
-    outcomes = result.parseoutcomes()
-    assert (outcomes.get("failed", 0), outcomes.get("passed", 0), outcomes.get("rerun", 0)) == (3, 0, 0), outcomes
-    result.stdout.no_fnmatch_line("* RERUN*")
+    def test_loses_a_different_request_to_a_network_change_on_each_attempt(context):
+        attempts["lossy"] += 1
+        context.fail_request(LOST_ON_ATTEMPT[attempts["lossy"]], "net::ERR_NETWORK_CHANGED")
+        pytest.fail("the page never became ready")
+    """
 
 
 def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_its_last_attempt_lost_to_network_changes(
-    e2e_suite: pytest.Pytester,
+    e2e_suite: pytest.Pytester, e2e_scenarios: ScenarioSession
 ) -> None:
-    scenario = e2e_suite.makepyfile(
-        f"""
-        from collections import Counter
+    run = e2e_scenarios.run_in(e2e_suite)
 
-        import pytest
-
-        LOST_ON_ATTEMPT = {{1: {ALPINE_CORE!r}, 2: {PRESETS_API!r}}}
-
-        attempts = Counter()
+    assert run.outcomes("test_rerun_lists_last_attempt") == {"rerun": 1, "failed": 1}
+    run.result.stdout.fnmatch_lines([f"GET {PRESETS_API}"])
+    run.result.stdout.no_fnmatch_line(f"GET {ALPINE_COLLAPSE}")
 
 
-        def test_loses_a_different_request_to_a_network_change_on_each_attempt(context):
-            attempts["lossy"] += 1
-            context.fail_request(LOST_ON_ATTEMPT[attempts["lossy"]], "net::ERR_NETWORK_CHANGED")
-            pytest.fail("the page never became ready")
-        """
-    )
+SCENARIOS = {
+    "test_network_change_then_pass": NETWORK_CHANGE_THEN_PASS,
+    "test_fails_without_network_change": FAILS_WITHOUT_NETWORK_CHANGE,
+    "test_rerun_lists_last_attempt": RERUN_LISTS_LAST_ATTEMPT,
+}
 
-    result = e2e_suite.runpytest_subprocess(scenario, "-v", "-p", "no:cacheprovider")
 
-    outcomes = result.parseoutcomes()
-    assert (outcomes.get("failed", 0), outcomes.get("rerun", 0), outcomes.get("passed", 0)) == (1, 1, 0), outcomes
-    result.stdout.fnmatch_lines([f"GET {PRESETS_API}"])
-    result.stdout.no_fnmatch_line(f"GET {ALPINE_CORE}")
+@pytest.fixture(scope="module")
+def e2e_scenarios() -> ScenarioSession:
+    """The one session all the scenarios above run in, under the e2e_suite of whichever test here asks for its run first."""
+    return ScenarioSession(SCENARIOS, "-v", "-p", "no:cacheprovider")
