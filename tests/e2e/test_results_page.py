@@ -7,11 +7,17 @@ chart agrees with the stat cards, how a chart whose figure
 cannot be drawn is reported, that a hidden tab's chart is drawn
 only once its tab is shown, and that showing every tab logs no
 errors.
+Each drawn chart ends as wide as its container whenever the
+container's width changes: as base.html's main column slides in
+on load, when the sidebar collapses or expands and when the
+window narrows, and, for a chart whose tab is hidden at the
+time, once its tab is shown again.
 """
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
 from tests.e2e._results_page import open_chart_tab, show_chart_tab
 
 pytestmark = pytest.mark.e2e
@@ -275,6 +281,100 @@ def test_a_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown(
     open_chart_tab(page, "Power Flow")
 
     expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
+
+
+# -- Each chart is drawn as wide as its container --------------------------
+
+_OVERVIEW_CHART_IDS = ("chart-sankey", "chart-daily-balance")
+
+
+def _open_with_the_overview_charts_drawn(page: Page, live_server: str, run_id: str) -> None:
+    """Open run_id's results page and wait until Plotly has drawn each chart of Overview, the tab shown on load, visible."""
+    page.goto(live_server + f"/results/home/{run_id}")
+    for chart_id in _OVERVIEW_CHART_IDS:
+        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
+
+
+def _show_tab(page: Page, tab_name: str) -> None:
+    """Click the chart tab named tab_name."""
+    page.get_by_role("tab", name=tab_name, exact=True).click()
+
+
+def test_each_overview_chart_is_as_wide_as_its_container_once_the_page_settles(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """The Overview charts are drawn while base.html's main column slides in on load, and each ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+def test_after_the_sidebar_collapses_each_chart_is_as_wide_as_its_container_whether_its_tab_was_shown_or_hidden(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Collapsing the sidebar widens the main column: the Overview charts, shown then, and Power Flow's chart, drawn but hidden then, each end as wide as its container."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    _show_tab(page, "Power Flow")
+    expect(page.locator(f"#{_POWER_FLOW_CHART_ID}.js-plotly-plot")).to_be_visible()
+    _show_tab(page, "Overview")
+
+    page.get_by_title("Collapse sidebar", exact=True).click()
+    overview = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+    _show_tab(page, "Power Flow")
+    power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
+
+    assert (overview, power_flow) == ([], [])
+
+
+def test_after_the_sidebar_expands_each_shown_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Expanding a sidebar collapsed on load narrows the main column, which clips a chart that keeps its width: each Overview chart ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+def test_each_overview_chart_hidden_as_the_page_settles_is_as_wide_as_its_container_once_its_tab_is_shown_again(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Showing Power Flow before the main column has settled hides the Overview charts while their containers' width still changes; once Overview is shown again, each ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    _show_tab(page, "Power Flow")
+    expect(page.locator(f"#{_POWER_FLOW_CHART_ID}.js-plotly-plot")).to_be_visible()
+
+    _show_tab(page, "Overview")
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+def test_after_the_window_narrows_each_shown_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """At 1100 px the window is still Tailwind's lg, so the sidebar stays and the main column narrows: each Overview chart ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    page.set_viewport_size({"width": 1100, "height": 720})
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
 
 
 # -- Download CSV returns 200 ----------------------------------------------
