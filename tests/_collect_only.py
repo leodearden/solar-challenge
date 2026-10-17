@@ -1,13 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run a pytest command verbatim in collect-only mode, for the orchestrator contract tests.
 
+collect() reads what the command collected from the collection-report plugin in
+tests/_pytest_plugins, whose module docstring defines the report, never from the
+command's output. run_collect_only, which collect() runs through, returns only
+the finished process, for a probe that reads just a command's exit code and
+output; describe_outcome describes that process.
+
 Usage::
 
-    from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
+    from tests._collect_only import collect, requires_uv
 
-    result = run_collect_only(command, project_root)
-    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
-    node_ids = collected_node_ids(result.stdout)
+    collection = collect(command, project_root, env=environment)
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    node_ids = collection.node_ids()
+    outside = collection.node_ids_outside("tests/e2e")
+    skipped = collection.written_report().skipped_collectors
 """
 
 import json
@@ -129,12 +137,10 @@ def run_collect_only(
 
     The pytest the command invokes only collects, with *pytest_args* added to its
     arguments. The mode travels in PYTEST_ADDOPTS, so the command's own args and
-    the project's ini addopts stay in force. It is --verbosity=-1 rather than -q
-    because an ini -v cancels -q (tests/unit/test_collect_only.py pins this), so
-    stdout lists one node id per line.
+    the project's ini addopts stay in force.
     """
     collect_env = dict(os.environ if env is None else env)
-    collect_env["PYTEST_ADDOPTS"] = shlex.join(["--collect-only", "--verbosity=-1", *pytest_args])
+    collect_env["PYTEST_ADDOPTS"] = shlex.join(["--collect-only", *pytest_args])
     return subprocess.run(
         command,
         shell=True,
@@ -144,11 +150,6 @@ def run_collect_only(
         text=True,
         timeout=300,
     )
-
-
-def collected_node_ids(listing: str) -> list[str]:
-    """Return the node ids, in order, in a run_collect_only stdout *listing*."""
-    return [line for line in listing.splitlines() if "::" in line]
 
 
 def _described(returncode: int, output: str) -> str:
