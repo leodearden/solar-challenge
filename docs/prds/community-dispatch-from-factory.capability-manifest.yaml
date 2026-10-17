@@ -1,0 +1,162 @@
+# Machine-readable twin of community-dispatch-from-factory.capability-manifest.md
+# (review-all stream S27). task_id values stay null until commit_planning stamps them.
+# Every grep check fails on main ac1fdf1 and passes once its leaf lands.
+prd: docs/prds/community-dispatch-from-factory.md
+schema_version: 1
+signal_leaves: ["α", "β"]
+tasks:
+  - label: "α"
+    task_id: null
+    title: "The community battery dispatches through the factory with the community tariff"
+    capabilities:
+      - name: "community-calls-the-factory"
+        binding: "producer: 786 (S2 α) defines dispatch.build_dispatch_strategy; absent on main ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "build_dispatch_strategy"
+          paths: ["src/solar_challenge/community.py"]
+          expect: present
+      - name: "hardcoded-self-consumption-deleted"
+        binding: "community.simulate_community builds SelfConsumptionStrategy() at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "SelfConsumptionStrategy\\(\\)"
+          paths: ["src/solar_challenge/community.py"]
+          expect: absent
+      - name: "half-billing-warning"
+        binding: "community.py emits no warning at ac1fdf1; α adds one UserWarning naming the missing billing input"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "warnings\\.warn"
+          paths: ["src/solar_challenge/community.py"]
+          expect: present
+      - name: "cli-slice-label-deleted"
+        binding: "cli/fleet.py::_print_community_section carries '(task ε / #34)' at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "#34\\)"
+          paths: ["src/solar_challenge/cli/fleet.py"]
+          expect: absent
+      - name: "briefing-hardcode-note-replaced"
+        binding: "review/briefing.yaml's community key_decision says the battery hardcodes SelfConsumptionStrategy at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "hardcodes SelfConsumptionStrategy"
+          paths: ["review/briefing.yaml"]
+          expect: absent
+      - name: "s2-beta-refusals"
+        binding: "producer: 787 (S2 β), upstream out-of-batch dependency; its two refusals name grid_charging and the strategy"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge, and the refusal text is asserted by α's tests"
+      - name: "named-strategy-runs-with-tariff"
+        binding: "measured at ac1fdf1: factory-equivalent loop gives SOC 17.485 kWh at 07:29 (today 2.000) and community import 58.824 kWh (today 55.933)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "SOC and import bounds are a test property (§9 row 3)"
+      - name: "refused-before-simulating"
+        binding: "cli/fleet.py::run reads load_community_config after simulate_fleet_iter at ac1fdf1; α moves it above the 'Simulating fleet' line"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering is asserted by the CliRunner test (§9 row 6)"
+  - label: "β"
+    task_id: null
+    title: "Fleet and community values are frozen and built once"
+    capabilities:
+      - name: "fleet-config-homes-tuple"
+        binding: "FleetConfig.homes: list[HomeConfig] at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "homes: tuple\\[HomeConfig, \\.\\.\\.\\]"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "fleet-results-home-configs-tuple"
+        binding: "FleetResults.home_configs: list[HomeConfig] at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "home_configs: tuple\\[HomeConfig, \\.\\.\\.\\]"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "private-pairing-call-from-outside-deleted"
+        binding: "calculate_fleet_summary calls results._require_paired_homes() at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "results\\._require_paired_homes\\(\\)"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: absent
+      - name: "community-results-built-once"
+        binding: "simulate_community assigns result.baseline_net_cost_gbp, community_net_cost_gbp, community_savings_gbp after construction at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "result\\.(baseline_net_cost_gbp|community_net_cost_gbp|community_savings_gbp) ="
+          paths: ["src/solar_challenge/community.py"]
+          expect: absent
+      - name: "community-results-frozen-form"
+        binding: "FROZEN_SURFACE pins CommunityResults as dataclass[eq] at ac1fdf1 (S23 may move the table to tests/_surface_forms.py)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"CommunityResults\": \"dataclass\\[eq, frozen\\]"
+          paths: ["tests/unit/test_public_api_surface.py", "tests/_surface_forms.py"]
+          expect: present
+      - name: "s16-alpha-one-assembly"
+        binding: "producer: S16 α (fleet-execution-policy.md α), upstream out-of-batch dependency; id from the lead"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
+  - label: "γ"
+    task_id: null
+    title: "The sharing mode is derived from the community battery"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; fk-083990041fdc is weakened, re-measured in PRD §2.3."
+    capabilities:
+      - name: "mode-field-retired"
+        binding: "CommunityConfig.sharing_mode and CommunityResults.sharing_mode are typed Literal[...] inline at ac1fdf1; γ types the result field SharingMode and retires the config field"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "sharing_mode: Literal"
+          paths: ["src/solar_challenge/community.py"]
+          expect: absent
+      - name: "mode-property"
+        binding: "no sharing_mode property at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def sharing_mode"
+          paths: ["src/solar_challenge/community.py"]
+          expect: present
+      - name: "report-mode-typed"
+        binding: "output.CommunityMetrics.sharing_mode: str at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "sharing_mode: str"
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+      - name: "scenario-migrated"
+        binding: "scenarios/bristol-community.yaml carries '  sharing_mode: community_battery' at ac1fdf1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^  sharing_mode:"
+          paths: ["scenarios/bristol-community.yaml"]
+          expect: absent
+      - name: "retired-key-refused-by-name"
+        binding: "rejection-mechanism built by γ through _refuse_unrecognised_keys / a named message; γ's test observes it"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content is asserted by γ's grammar test"
