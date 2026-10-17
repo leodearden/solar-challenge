@@ -26,6 +26,17 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
     assert unset_attributes(Reading) == set()
 
 
+def test_a_declared_attribute_only_a_method_other_than_init_or_post_init_sets_is_unset() -> None:
+    class Meter:
+        reading: float
+
+        def reset(self) -> None:
+            self.reading = 0.0
+
+    assert not hasattr(Meter(), "reading")
+    assert unset_attributes(Meter) == {"reading"}
+
+
 def test_a_name_the_class_body_only_annotates_as_a_class_variable_in_a_string_is_never_unset() -> None:
     class Meter:
         UNITS: "ClassVar[str]"
