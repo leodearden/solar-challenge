@@ -343,6 +343,22 @@ class TestParetoBaseline:
         front = pareto_baseline([a, b])
         assert len(front) == 2
 
+    def test_identical_pair_dominated_by_a_third_both_excluded(self) -> None:
+        """A third record dominating both members of an identical pair excludes them both."""
+        a = _make_config_result(
+            pv_kwp=4.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0
+        )
+        b = _make_config_result(
+            pv_kwp=5.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0
+        )
+        c = _make_config_result(
+            pv_kwp=6.0, baseline_outlay_gbp=250.0, baseline_surplus_per_home_gbp=250.0
+        )
+        front = pareto_baseline([a, b, c])
+        assert c.config in front
+        assert a.config not in front
+        assert b.config not in front
+
     def test_infeasible_record_included_when_non_dominated(self) -> None:
         """An infeasible-binding record on the Pareto front is NOT excluded."""
         infeas = _make_config_result(

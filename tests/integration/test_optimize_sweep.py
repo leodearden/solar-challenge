@@ -32,10 +32,8 @@ from solar_challenge.optimize import (
     ConfigPoint,
     ConfigResult,
     RankedSweep,
-    _pareto_baseline,
-    _rank_feasible,
-    _split_infeasible,
     enumerate_configs,
+    pareto_baseline,
     run_sweep,
 )
 from solar_challenge.pv import PVConfig
@@ -665,178 +663,9 @@ class TestRunSweepMultiConfig:
         assert len(ranked.infeasible) >= 1
 
 
-# ---------------------------------------------------------------------------
-# step-09/10 — _rank_feasible: deterministic tie-break
-# ---------------------------------------------------------------------------
-
-
-class TestRankFeasible:
-    """Pure _rank_feasible: sort key (outlay asc, surplus desc, pv asc, batt asc, inv asc)."""
-
-    def test_primary_sort_by_outlay_ascending(self) -> None:
-        """Primary sort is by representative_outlay_gbp ascending."""
-        low = _make_config_result(representative_outlay_gbp=300.0, pv_kwp=4.0)
-        high = _make_config_result(representative_outlay_gbp=500.0, pv_kwp=5.0)
-        result = _rank_feasible([high, low])
-        assert result[0].representative_outlay_gbp == pytest.approx(300.0)
-        assert result[1].representative_outlay_gbp == pytest.approx(500.0)
-
-    def test_tie_break_surplus_descending(self) -> None:
-        """On equal outlay, higher surplus comes first (descending)."""
-        a = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=200.0,
-            pv_kwp=4.0,
-        )
-        b = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=4.0,
-        )
-        result = _rank_feasible([b, a])
-        assert result[0].surplus_at_solved_gbp == pytest.approx(200.0)
-        assert result[1].surplus_at_solved_gbp == pytest.approx(100.0)
-
-    def test_tie_break_pv_ascending(self) -> None:
-        """On equal outlay and surplus, smaller pv_kwp comes first (ascending)."""
-        small = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=3.0,
-        )
-        large = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=5.0,
-        )
-        result = _rank_feasible([large, small])
-        assert result[0].config.pv_kwp == pytest.approx(3.0)
-        assert result[1].config.pv_kwp == pytest.approx(5.0)
-
-    def test_tie_break_battery_ascending(self) -> None:
-        """On equal outlay/surplus/pv, smaller battery_kwh comes first."""
-        small = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=4.0,
-            battery_kwh=4.0,
-        )
-        large = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=4.0,
-            battery_kwh=10.0,
-        )
-        result = _rank_feasible([large, small])
-        assert result[0].config.battery_kwh == pytest.approx(4.0)
-        assert result[1].config.battery_kwh == pytest.approx(10.0)
-
-    def test_tie_break_inverter_ascending(self) -> None:
-        """On equal outlay/surplus/pv/battery, smaller inverter_kw comes first."""
-        small = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=4.0,
-            battery_kwh=6.0,
-            inverter_kw=3.0,
-        )
-        large = _make_config_result(
-            representative_outlay_gbp=400.0,
-            surplus_at_solved_gbp=100.0,
-            pv_kwp=4.0,
-            battery_kwh=6.0,
-            inverter_kw=5.0,
-        )
-        result = _rank_feasible([large, small])
-        assert result[0].config.inverter_kw == pytest.approx(3.0)
-        assert result[1].config.inverter_kw == pytest.approx(5.0)
-
-    def test_stable_reproducible_across_repeated_calls(self) -> None:
-        """Same input always produces same output ordering."""
-        items = [
-            _make_config_result(representative_outlay_gbp=400.0, surplus_at_solved_gbp=150.0, pv_kwp=5.0),
-            _make_config_result(representative_outlay_gbp=300.0, surplus_at_solved_gbp=100.0, pv_kwp=4.0),
-            _make_config_result(representative_outlay_gbp=400.0, surplus_at_solved_gbp=200.0, pv_kwp=4.0),
-        ]
-        result1 = _rank_feasible(items)
-        result2 = _rank_feasible(items)
-        assert [r.config for r in result1] == [r.config for r in result2]
-
-
-# ---------------------------------------------------------------------------
-# step-11/12 — _pareto_baseline: non-dominated set
-# ---------------------------------------------------------------------------
-
-
-class TestParetoBaseline:
-    """Pure _pareto_baseline: non-dominated on (baseline_outlay down, baseline_surplus up)."""
-
-    def test_dominated_point_excluded(self) -> None:
-        """A strictly dominated point is not in the Pareto set."""
-        # A dominates B: A has lower outlay AND higher surplus
-        a = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=4.0)
-        b = _make_config_result(baseline_outlay_gbp=400.0, baseline_surplus_per_home_gbp=100.0, pv_kwp=5.0)
-        # c is incomparable to a: lower outlay AND lower surplus
-        c = _make_config_result(baseline_outlay_gbp=250.0, baseline_surplus_per_home_gbp=150.0, pv_kwp=6.0)
-
-        pareto = _pareto_baseline([a, b, c])
-        pareto_configs = [p for p in pareto]
-
-        # B is dominated by A (A has 300<=400 and 200>=100 with at least one strict)
-        assert a.config in pareto_configs
-        assert b.config not in pareto_configs
-        # c is on the front (lower outlay but lower surplus than a → incomparable)
-        assert c.config in pareto_configs
-
-    def test_non_dominated_all_included(self) -> None:
-        """All non-dominated points are included."""
-        # Three points forming a Pareto front: outlay↓, surplus↑
-        a = _make_config_result(baseline_outlay_gbp=100.0, baseline_surplus_per_home_gbp=400.0, pv_kwp=4.0)
-        b = _make_config_result(baseline_outlay_gbp=200.0, baseline_surplus_per_home_gbp=600.0, pv_kwp=5.0)
-        c = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=800.0, pv_kwp=6.0)
-
-        pareto = _pareto_baseline([a, b, c])
-        assert len(pareto) == 3
-
-    def test_ordered_by_baseline_outlay_ascending(self) -> None:
-        """Returned tuple is sorted by baseline_outlay ascending (deterministic)."""
-        a = _make_config_result(baseline_outlay_gbp=400.0, baseline_surplus_per_home_gbp=100.0, pv_kwp=4.0)
-        b = _make_config_result(baseline_outlay_gbp=200.0, baseline_surplus_per_home_gbp=300.0, pv_kwp=5.0)
-        c = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=6.0)
-
-        pareto = _pareto_baseline([a, b, c])
-        # All three are non-dominated; should be sorted ascending by outlay
-        outlays = [cr.baseline_outlay_gbp for cr in [
-            next(cr_full for cr_full in [a, b, c] if cr_full.config == p)
-            for p in pareto
-        ]]
-        assert outlays == sorted(outlays)
-
-    def test_includes_infeasible_configs_when_non_dominated(self) -> None:
-        """Infeasible configs (binding='infeasible_above_retail') appear in pareto when
-        their (baseline_outlay, baseline_surplus) pair is non-dominated."""
-        feasible = _make_config_result(
-            baseline_outlay_gbp=400.0,
-            baseline_surplus_per_home_gbp=100.0,
-            feasible=True,
-            binding="floor",
-            pv_kwp=4.0,
-        )
-        infeasible = _make_config_result(
-            baseline_outlay_gbp=300.0,
-            baseline_surplus_per_home_gbp=50.0,
-            feasible=False,
-            binding="infeasible_above_retail",
-            pv_kwp=5.0,
-        )
-        pareto = _pareto_baseline([feasible, infeasible])
-        pareto_configs = list(pareto)
-        # infeasible has lower outlay but lower surplus → incomparable → on front
-        assert infeasible.config in pareto_configs
-
-    def test_integration_ranked_pareto_consistent(self) -> None:
-        """run_sweep populates pareto_baseline consistently with _pareto_baseline
-        over all evaluated configs (results + infeasible)."""
+    def test_reported_pareto_front_matches_pareto_baseline_of_results(self) -> None:
+        """ranked.pareto_baseline equals pareto_baseline() over all evaluated configs
+        (results + infeasible)."""
         n_homes = 3
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
@@ -848,8 +677,8 @@ class TestParetoBaseline:
         )
         ranked = run_sweep(configs, simulate=simulate)
 
-        # _pareto_baseline over all results (all feasible here) should match
-        expected_pareto = _pareto_baseline(list(ranked.results))
+        # pareto_baseline over all results (all feasible here) should match
+        expected_pareto = pareto_baseline(list(ranked.results))
         assert set(ranked.pareto_baseline) == set(expected_pareto)
 
 
@@ -964,57 +793,34 @@ class TestRunSweepGuards:
 # ---------------------------------------------------------------------------
 
 
-class TestSplitInfeasibleRateClamped:
-    """_split_infeasible places rate_clamped_zero (feasible=True) into results."""
+class TestRunSweepRateClampedZero:
+    """run_sweep ranks a config whose cost-recovery rate clamps at zero as feasible."""
 
-    def test_rate_clamped_zero_goes_to_feasible(self) -> None:
-        """A ConfigResult with binding='rate_clamped_zero' and feasible=True is
-        placed in the feasible list, not infeasible."""
-        clamped = _make_config_result(
-            feasible=True,
-            binding="rate_clamped_zero",
-            representative_outlay_gbp=350.0,
-        )
-        feasible, infeasible = _split_infeasible([clamped])
-        assert len(feasible) == 1
-        assert len(infeasible) == 0
-        assert feasible[0].binding == "rate_clamped_zero"
+    def test_rate_clamped_zero_config_lands_in_results(self) -> None:
+        """A config whose cost-recovery solve clamps the rate at 0 is feasible, so
+        run_sweep ranks it in results and reports nothing infeasible.
 
-    def test_infeasible_above_retail_goes_to_infeasible(self) -> None:
-        """A ConfigResult with binding='infeasible_above_retail' and feasible=False
-        is placed in infeasible (sanity check for the bool-based split)."""
-        inf = _make_config_result(
-            feasible=False,
-            binding="infeasible_above_retail",
-            representative_outlay_gbp=999.0,
-        )
-        feasible, infeasible = _split_infeasible([inf])
-        assert len(feasible) == 0
-        assert len(infeasible) == 1
-
-    def test_run_sweep_rate_clamped_config_in_results(self) -> None:
-        """run_sweep places a rate_clamped_zero result in ranked.results (not infeasible).
-
-        We inject the result via the synthetic _make_config_result path rather than
-        wiring up a full run_sweep call — the _split_infeasible unit test above covers
-        the route; this integration test verifies the boolean predicate propagates
-        through run_sweep correctly by using a config that naturally produces a
-        feasible (floor or rate_clamped_zero) solve.
+        The grant covers the capex and each home's SEG income beats its share of
+        opex plus the retained-cash floor, so the surplus clears the floor at 0 p/kWh.
         """
-        n_homes = 3
-        # Use interior_finance which produces a feasible (floor-binding) solve —
-        # the test_all_results_feasible test already covers this path; what matters
-        # here is that none end up in infeasible.
-        finance = _interior_finance(n_homes)
-        scenario = _make_scenario(n_homes=n_homes, finance=finance)
-        fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
-        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
-        ranked = run_sweep(configs, simulate=simulate)
-        # The feasible result (floor or rate_clamped_zero) must be in results
-        assert len(ranked.results) == 1
-        assert len(ranked.infeasible) == 0
-        assert ranked.results[0].feasible is True
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=200.0,
+            grant_gbp=50000.0,
+            retained_cash_floor=10.0,
+            retail_baseline_rate=30.0,
+        )
+        scenario = _make_scenario(n_homes=5, finance=finance)
+        fr = _make_fleet_results(n_homes=5, export_revenue_gbp_per_year=200.0)
+        configs = enumerate_configs(
+            scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
+        )
+
+        ranked = run_sweep(configs, simulate=lambda fc, s, e: fr)
+
+        assert [r.binding for r in ranked.results] == ["rate_clamped_zero"]
+        assert ranked.results[0].solved_own_use_rate_pence_per_kwh == pytest.approx(0.0)
+        assert ranked.infeasible == ()
+        assert ranked.cheapest_feasible is ranked.results[0].config
 
 
 class TestHeterogeneousFloorEcho:
@@ -1055,40 +861,3 @@ class TestHeterogeneousFloorEcho:
 
         # Documented behaviour: echoes the first config's floor when no global override
         assert ranked.retained_cash_floor_gbp == pytest.approx(floor_a)
-
-
-class TestParetoBaselineIdenticalPairs:
-    """_pareto_baseline handles identical (outlay, surplus) pairs correctly."""
-
-    def test_identical_pairs_both_retained(self) -> None:
-        """Two configs with exactly equal (baseline_outlay, baseline_surplus) are
-        both non-dominated — neither satisfies the 'at least one strict' criterion
-        against the other, so both survive."""
-        a = _make_config_result(
-            baseline_outlay_gbp=300.0,
-            baseline_surplus_per_home_gbp=200.0,
-            pv_kwp=4.0,
-        )
-        b = _make_config_result(
-            baseline_outlay_gbp=300.0,
-            baseline_surplus_per_home_gbp=200.0,
-            pv_kwp=5.0,  # different config point, same (outlay, surplus)
-        )
-        pareto = _pareto_baseline([a, b])
-        pareto_configs = list(pareto)
-        assert a.config in pareto_configs
-        assert b.config in pareto_configs
-        assert len(pareto_configs) == 2
-
-    def test_identical_pair_dominated_by_third(self) -> None:
-        """If a third config dominates both identical-pair configs, both are excluded."""
-        a = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=4.0)
-        b = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=5.0)
-        # c dominates a and b: lower outlay AND higher surplus
-        c = _make_config_result(baseline_outlay_gbp=250.0, baseline_surplus_per_home_gbp=250.0, pv_kwp=6.0)
-
-        pareto = _pareto_baseline([a, b, c])
-        pareto_configs = list(pareto)
-        assert c.config in pareto_configs
-        assert a.config not in pareto_configs
-        assert b.config not in pareto_configs
