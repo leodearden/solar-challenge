@@ -419,9 +419,11 @@ clock, the cadence its rows are spaced at, and that clock's zone name.
 `from_dataframe` builds from a half-hourly frame, now counts as half an hour's
 kWh, where the tag counts it as one minute's. Both now raise `ValueError` for
 results whose index no window describes: an empty index, one row without a
-fixed-duration `freq`, unevenly spaced rows (naming the first position whose
-gap differs and both gaps), or an index that is not a `DatetimeIndex` (naming
-its type and dtype); the tag returns amounts for each. The frozen contract now
+fixed-duration `freq` (a daily `freq` is never one, on any pandas release: a
+zoned day lasts 23 or 25 hours across a clock change), unevenly spaced rows
+(naming the first position whose gap differs and both gaps), or an index that
+is not a `DatetimeIndex` (naming its type and dtype); the tag returns amounts
+for each. The frozen contract now
 also covers `SimulationWindow`, a frozen dataclass that sets `eq`: its
 constructor and public members. Every `simulate_home` run, and every run the
 web app stores, is spaced one minute apart, so its amounts are unchanged;

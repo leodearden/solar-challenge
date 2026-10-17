@@ -117,7 +117,7 @@ class SimulationWindow:
 
 def _cadence(index: pd.DatetimeIndex) -> timedelta:
     """How long each row of index lasts: its freq when that is a fixed duration, else the one gap between its rows in absolute time."""
-    if isinstance(index.freq, pd.offsets.Tick):
+    if _is_fixed_duration(index.freq):
         return _as_timedelta(pd.Timedelta(index.freq))
     if len(index) == 1:
         raise ValueError(
@@ -134,6 +134,11 @@ def _cadence(index: pd.DatetimeIndex) -> timedelta:
             f"where the first gap is {_duration(gaps[0], index.unit)}"
         )
     return _as_timedelta(_duration(gaps[0], index.unit))
+
+
+def _is_fixed_duration(freq: object) -> bool:
+    """Whether freq lasts the same absolute time wherever it falls: a Tick, but never a Day, which pandas 2 counts as a Tick though a zoned index's days run 23 or 25 hours across a clock change."""
+    return isinstance(freq, pd.offsets.Tick) and not isinstance(freq, pd.offsets.Day)
 
 
 def _duration(count: int, unit: str) -> pd.Timedelta:

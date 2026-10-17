@@ -189,6 +189,24 @@ def test_of_index_reads_a_calendar_freq_through_the_index_s_spacing() -> None:
     assert SimulationWindow.of_index(index).cadence == timedelta(days=1)
 
 
+def test_of_index_refuses_a_daily_index_across_a_clock_change_naming_the_short_day() -> None:
+    index = pd.date_range("2024-03-29", periods=4, freq="D", tz="Europe/London")
+
+    with pytest.raises(ValueError) as refusal:
+        SimulationWindow.of_index(index)
+
+    assert "position 3" in str(refusal.value)
+    assert str(pd.Timedelta(hours=23)) in str(refusal.value)
+    assert str(pd.Timedelta(days=1)) in str(refusal.value)
+
+
+def test_of_index_refuses_one_row_whose_freq_is_a_day() -> None:
+    index = pd.date_range("2024-06-01", periods=1, freq="D", tz="Europe/London")
+
+    with pytest.raises(ValueError, match="one row"):
+        SimulationWindow.of_index(index)
+
+
 def test_of_index_of_a_naive_index_has_no_timezone() -> None:
     naive = pd.date_range("2024-06-01", periods=3, freq="min")
     utc = pd.date_range("2024-06-01", periods=3, freq="min", tz="UTC")
