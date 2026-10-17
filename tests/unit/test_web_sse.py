@@ -15,11 +15,13 @@ from solar_challenge.web.sse import (
     CHAT_DONE,
     CHAT_FAILED,
     CHAT_TOOL,
+    HEARTBEAT,
     ChatDelta,
     ChatDone,
     ChatFailed,
     ChatToolCall,
     SseEvent,
+    event_stream,
     sse_frame,
 )
 from tests._sse import SseFrame, parse_sse_events
@@ -95,3 +97,23 @@ def test_a_negative_retry_is_refused() -> None:
 def test_an_event_name_that_is_empty_or_holds_a_cr_lf_or_colon_is_refused(name: str) -> None:
     with pytest.raises(ValueError, match=re.escape(repr(name))):
         SseEvent(name, ChatDone)
+
+
+def test_event_stream_serves_its_frames_as_an_uncached_unbuffered_200_event_stream() -> None:
+    frames = [sse_frame(CHAT_DELTA, ChatDelta("Hel")), HEARTBEAT, sse_frame(CHAT_DONE, ChatDone())]
+
+    response = event_stream(iter(frames))
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/event-stream"
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert response.headers["X-Accel-Buffering"] == "no"
+    assert parse_sse_events(response.get_data(as_text=True)) == [
+        SseFrame("delta", {"text": "Hel"}),
+        SseFrame("done", {}),
+    ]
+
+
+def test_the_heartbeat_is_an_sse_comment() -> None:
+    assert HEARTBEAT.startswith(":")
+    assert parse_sse_events(HEARTBEAT) == []

@@ -453,6 +453,33 @@ class TestChatDegradation:
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
 
+class TestChatResponsePolicy:
+    """POST /assistant/chat answers a chat it streams and one it refuses as the same uncached, unbuffered event stream."""
+
+    @pytest.mark.parametrize(
+        ("body", "model_called"),
+        [({"message": "hi"}, True), ([1], False)],
+        ids=["answered", "refused"],
+    )
+    def test_a_chat_is_served_with_the_event_stream_response_policy(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        body: object,
+        model_called: bool,
+    ) -> None:
+        anthropic_api.set_chunks(["ok"])
+
+        resp = client.post("/assistant/chat", json=body)
+        resp.get_data()
+
+        assert bool(anthropic_api.calls) is model_called
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        assert resp.headers["Cache-Control"] == "no-cache"
+        assert resp.headers["X-Accel-Buffering"] == "no"
+
+
 class TestChatPageWiring:
     """Tests for chat.html JS include, data-* attributes, and configure-notice."""
 
