@@ -78,23 +78,24 @@ def _make_sim_results_cr6(
     self_kwh: float,
     export_kwh: float,
     import_kwh: float,
-    n_steps: int = 8760,  # hourly resolution; energy = sum*(1/60) still correct
+    n_steps: int = 8760,  # hourly rows; each kW row counts for the hour it lasts
 ) -> SimulationResults:
     """Build a synthetic SimulationResults.
 
     Hourly resolution (n_steps=8760 ≈ 1 yr) keeps memory ~60× lower than the
     former 1-minute default while preserving energy totals exactly:
-      home.py computes total_kwh = series.sum() * (1/60)
-      sc_kw = self_kwh / (n_steps/60)  →  sum*1/60 = self_kwh  ✓
+      home.py totals each kW series as (series * window.step_hours).sum(),
+      and step_hours is 1 on this hourly index:
+      sc_kw = self_kwh / n_steps  →  sum = self_kwh  ✓
 
     No battery grid-charging: grid_import is all load import.
     Untariffed: import_cost is zero and grid_charge_cost is None.
     export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)   # kW s.t. sum*(1/60) = self_kwh
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_kw = import_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps   # kW s.t. its hourly rows total self_kwh
+    exp_kw = export_kwh / n_steps
+    imp_kw = import_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
@@ -915,10 +916,10 @@ def _make_grid_charge_sim_results_cr6(
     is None.
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_to_load_kw = import_to_load_kwh / (n_steps / 60.0)
-    grid_charge_kw = grid_charge_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps
+    exp_kw = export_kwh / n_steps
+    imp_to_load_kw = import_to_load_kwh / n_steps
+    grid_charge_kw = grid_charge_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_to_load_kw          # demand = sc + import_to_load
     total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
@@ -1231,10 +1232,10 @@ class TestCbsOwnUseKwhHelper:
         n_steps = 8760
         idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
         zeros = pd.Series(0.0, index=idx)
-        # demand_kw such that sum*(1/60) = 500 kWh
-        demand_kw = 500.0 / (n_steps / 60.0)
-        # import_kw such that sum*(1/60) = 900 kWh
-        import_kw = 900.0 / (n_steps / 60.0)
+        # demand_kw such that its hourly rows total 500 kWh
+        demand_kw = 500.0 / n_steps
+        # import_kw such that its hourly rows total 900 kWh
+        import_kw = 900.0 / n_steps
         # gen_kw = 0 (no generation)
         sr = SimulationResults(
             generation=zeros.copy(),

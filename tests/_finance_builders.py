@@ -124,17 +124,16 @@ def make_sim_results(
     revenue, the physics SEG income.  Generation is self + export, demand is
     self + import - discharge, and ``simulation_days`` is *days*.
 
-    Hourly steps suffice because ``calculate_summary`` integrates every step as
-    one minute and takes ``simulation_days`` from the index span: each total is
-    spread over the 24 * *days* steps as kW = kWh / (n_steps / 60).  Only the
-    totals are meaningful; the peak kW is an artefact of that scaling.
+    Hourly steps suffice because ``calculate_summary`` integrates each row over
+    the hour it lasts and takes ``simulation_days`` from the index span: each
+    total is spread over the 24 * *days* steps as kW = kWh / (24 * *days*).
     """
     n_steps = 24 * days
     idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_kw = import_kwh / (n_steps / 60.0)
-    dis_kw = discharge_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps
+    exp_kw = export_kwh / n_steps
+    imp_kw = import_kwh / n_steps
+    dis_kw = discharge_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw - dis_kw
 

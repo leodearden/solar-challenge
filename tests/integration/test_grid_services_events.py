@@ -67,12 +67,12 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> SimulationResults:
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
     # NOTE: gen/demand/self-consumption magnitudes are arbitrary.  They cancel
     # in the flat-rate-0 delta isolation and do not feed the grid-services
-    # computation (which only reads battery_soc and battery_discharge).  The
-    # /60.0 divisor is a leftover scaling that makes the kW values larger than
-    # physically meaningful for hourly data; a future refactor can drop it.
-    sc_kw = 2000.0 / (n_steps / 60.0)
-    exp_kw = 800.0 / (n_steps / 60.0)
-    imp_kw = 1400.0 / (n_steps / 60.0)
+    # computation (which only reads battery_soc and battery_discharge).  Each
+    # kW row lasts an hour, so the year totals 2,000 kWh of self-consumption,
+    # 800 kWh of export and 1,400 kWh of import.
+    sc_kw = 2000.0 / n_steps
+    exp_kw = 800.0 / n_steps
+    imp_kw = 1400.0 / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)

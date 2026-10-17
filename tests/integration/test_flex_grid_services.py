@@ -75,13 +75,15 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
 def _make_synthetic_sim_results(n_steps: int = 8760) -> SimulationResults:
     """Build a single deterministic, age-independent SimulationResults.
 
-    Uses hourly resolution (n_steps=8760) — energy = sum*(1/60) still correct.
+    Uses hourly resolution (n_steps=8760): each kW row counts for the hour it
+    lasts, so the year totals 2,000 kWh of self-consumption, 800 kWh of export
+    and 1,400 kWh of import.
     All arrays are constant scalars; no PVGIS, no stochastic load.
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = 2000.0 / (n_steps / 60.0)
-    exp_kw = 800.0 / (n_steps / 60.0)
-    imp_kw = 1400.0 / (n_steps / 60.0)
+    sc_kw = 2000.0 / n_steps
+    exp_kw = 800.0 / n_steps
+    imp_kw = 1400.0 / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
