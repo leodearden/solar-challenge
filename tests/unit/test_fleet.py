@@ -28,6 +28,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -337,6 +338,45 @@ class TestFleetSummary:
 
         # Grid dependency = 0 (no imports)
         assert summary.fleet_grid_dependency_ratio == 0.0
+
+    def test_fleet_ratios_are_ratios_of_the_fleets_totals(self):
+        """The fleet's ratios divide its summed totals; the mean of its homes' ratios would be 0.25 and 0.5."""
+        fleet = make_fleet_results_of(
+            [
+                make_sim_results(self_kwh=0.0, export_kwh=0.0, import_kwh=10.0, days=1),
+                make_sim_results(self_kwh=30.0, export_kwh=30.0, import_kwh=0.0, days=1),
+            ]
+        )
+
+        summary = calculate_fleet_summary(fleet)
+
+        totals = (
+            summary.total_generation_kwh,
+            summary.total_demand_kwh,
+            summary.total_self_consumption_kwh,
+            summary.total_grid_import_kwh,
+        )
+        assert totals == pytest.approx((60.0, 40.0, 30.0, 10.0))
+        assert summary.fleet_self_consumption_ratio == pytest.approx(0.5)
+        assert summary.fleet_grid_dependency_ratio == pytest.approx(0.25)
+
+    @pytest.mark.parametrize(
+        ("export_kwh", "import_kwh", "self_consumption_ratio", "grid_dependency_ratio"),
+        [
+            pytest.param(0.0, 5.0, 0.0, 1.0, id="no-generation"),
+            pytest.param(5.0, 0.0, 0.0, 0.0, id="no-demand"),
+        ],
+    )
+    def test_a_fleet_with_a_zero_denominator_reports_0_for_that_ratio(
+        self, export_kwh, import_kwh, self_consumption_ratio, grid_dependency_ratio
+    ):
+        """A fleet that generated nothing, or demanded nothing, has 0.0 for the ratio over that total."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=0.0, export_kwh=export_kwh, import_kwh=import_kwh, days=1)
+
+        summary = calculate_fleet_summary(fleet)
+
+        assert summary.fleet_self_consumption_ratio == pytest.approx(self_consumption_ratio)
+        assert summary.fleet_grid_dependency_ratio == pytest.approx(grid_dependency_ratio)
 
     def test_SEG_aggregates_with_tariff(self, sample_results):
         """SEG revenue totals and mean are computed when tariff is provided."""
