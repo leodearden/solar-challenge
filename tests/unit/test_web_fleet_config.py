@@ -1582,6 +1582,48 @@ class TestFleetConfigHelpers:
             f"fleet_distribution.pv.capacity_kw.min must be a finite number, got {10**400!r}"
         )
 
+    @pytest.mark.parametrize("count", [MAX_FLEET_HOMES + 1, -1])
+    def test_distribution_form_spec_refuses_a_pool_count_out_of_range_naming_it(
+        self, count: int
+    ) -> None:
+        """A shuffled_pool count above MAX_FLEET_HOMES or below 0 is refused naming its counts[i] path and the value sent."""
+        spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": [1, count]}
+        with pytest.raises(ValueError) as exc_info:
+            distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
+        assert str(exc_info.value) == (
+            "fleet_distribution.pv.capacity_kw.counts[1] "
+            f"must be between 0 and {MAX_FLEET_HOMES}, got {count}"
+        )
+
+    def test_distribution_form_spec_refuses_pool_counts_totalling_more_than_the_fleet_limit(
+        self,
+    ) -> None:
+        """Counts that each fit but total MAX_FLEET_HOMES + 1 are refused naming the counts field and the total."""
+        spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": [MAX_FLEET_HOMES, 1]}
+        with pytest.raises(ValueError) as exc_info:
+            distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
+        assert str(exc_info.value) == (
+            "fleet_distribution.pv.capacity_kw.counts "
+            f"counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+        )
+
+    @pytest.mark.parametrize(
+        "counts",
+        [
+            pytest.param([0, 3], id="a-zero-count"),
+            pytest.param([MAX_FLEET_HOMES - 1, 1], id="totalling-the-fleet-limit"),
+        ],
+    )
+    def test_distribution_form_spec_reads_pool_counts_within_the_fleet_limit_as_given(
+        self, counts: list[int]
+    ) -> None:
+        """A count of 0 and counts totalling exactly MAX_FLEET_HOMES are read as given."""
+        spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": counts}
+        assert distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw") == {
+            "type": "shuffled_pool",
+            "entries": [{"value": 4.0, "count": counts[0]}, {"value": 5.0, "count": counts[1]}],
+        }
+
 
 class TestDistributionGrammarSpec:
     """distribution_grammar_spec, the one writer of an editor distribution in config.py's grammar, called with the field each of its keys is sent in."""

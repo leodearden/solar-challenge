@@ -613,6 +613,34 @@ class TestFleetFormFromScenario:
                 id="fractional-count-in-a-battery-pool",
             ),
             pytest.param(
+                _with_fleet_distribution(
+                    pv={
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "values": [4.0],
+                            "counts": [MAX_FLEET_HOMES + 1],
+                        }
+                    }
+                ),
+                "fleet_distribution.pv.capacity_kw.counts[0] "
+                f"must be between 0 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="a-pool-count-above-the-fleet-limit",
+            ),
+            pytest.param(
+                _with_fleet_distribution(
+                    pv={
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "values": [4.0, 5.0],
+                            "counts": [MAX_FLEET_HOMES, 1],
+                        }
+                    }
+                ),
+                "fleet_distribution.pv.capacity_kw.counts counts must total at most "
+                f"{MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="pool-counts-totalling-more-than-the-fleet-limit",
+            ),
+            pytest.param(
                 {
                     **_FLEET_SCENARIO,
                     "tariff": {
