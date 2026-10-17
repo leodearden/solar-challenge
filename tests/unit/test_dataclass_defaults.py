@@ -55,7 +55,8 @@ def test_every_dataclass_field_default_in_the_package_is_hashable() -> None:
     unhashable = _unhashable_field_defaults()
 
     assert unhashable == {}, (
-        f"these dataclass fields have unhashable defaults: {unhashable}. dataclasses refuses an unhashable "
-        "default, and Python 3.11 refuses these when it defines the class, so their modules do not import "
-        "there. Give each field a default_factory instead: dataclasses.field(default_factory=...)."
+        f"these dataclass fields have unhashable defaults: {unhashable}. dataclasses does not allow an "
+        "unhashable default: it refuses one whose class it judges unhashable when it defines the class, as "
+        "Python 3.11 judges MappingProxyType's, so a module with such a default does not import there. Give "
+        "each field a default_factory instead: dataclasses.field(default_factory=...)."
     )
