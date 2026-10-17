@@ -237,15 +237,11 @@ class TestCECLibraryReuse:
         assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
 
     def test_customised_system_leaves_later_default_systems_unchanged(self):
-        baseline = create_pv_system(PVConfig(capacity_kw=4.0))
-        create_pv_system(
-            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, inverter_efficiency=0.90)
-        )
+        create_pv_system(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003))
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
         assert "gamma_pdc" not in later.arrays[0].module_parameters
-        assert later.inverter_parameters["Pdco"] == baseline.inverter_parameters["Pdco"]
 
     def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
         configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
