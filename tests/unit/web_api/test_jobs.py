@@ -75,7 +75,7 @@ class TestGetJobStatus:
         mock_job_manager.job_state.return_value = None
         resp = client.get("/api/jobs/nonexistent-id")
         assert resp.status_code == 404
-        assert "error" in resp.get_json()
+        assert resp.get_json() == {"error": "Job not found"}
 
     def test_completed_job_status(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
