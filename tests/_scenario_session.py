@@ -62,10 +62,11 @@ class ScenarioRun:
 class ScenarioSession:
     """Scenario modules, by module name, run in one pytester session the first time a test asks; a test module holds one in a module-scoped fixture.
 
-    The session collects its directory, so it collects only the test_*.py
-    modules, in file-name order, and a scenario may import any other module
-    written beside them. It runs on past a module that fails to collect.
-    *pytest_args* are added to the session's arguments.
+    The session collects its directory, whatever testpaths an ini there names,
+    so it collects only the test_*.py modules, in file-name order, and a
+    scenario may import any other module written beside them. It runs on past a
+    module that fails to collect. *pytest_args* are added to the session's
+    arguments.
     """
 
     def __init__(self, modules: Mapping[str, str], *pytest_args: str) -> None:
@@ -85,7 +86,12 @@ def _run_scenarios(pytester: pytest.Pytester, modules: Mapping[str, str], pytest
     with tempfile.TemporaryDirectory(prefix="scenario-outcomes-") as log_dir:
         log = Path(log_dir) / "outcomes.jsonl"
         result = pytester.runpytest_subprocess(
-            "-p", __name__, f"{_OUTCOMES_LOG_OPTION}={log}", "--continue-on-collection-errors", *pytest_args
+            "-p",
+            __name__,
+            f"{_OUTCOMES_LOG_OPTION}={log}",
+            "--continue-on-collection-errors",
+            *pytest_args,
+            pytester.path,
         )
         report_categories = _read_outcomes_log(log)
     return ScenarioRun(result, pytester.path, report_categories)
