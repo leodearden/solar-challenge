@@ -42,6 +42,7 @@ OFFLINE_INTEGRATION_FILES = [
     "tests/integration/test_fleet_simulation.py",
     "tests/integration/test_ev_fleet.py",
     "tests/integration/test_home_simulation.py",
+    "tests/integration/test_dispatch_strategies.py",
 ]
 
 # The mark expression of the verify's test_command in dark-factory-orchestrator.yaml.
