@@ -262,6 +262,7 @@ FROZEN_CLOSURE: dict[str, str] = {
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
     "home.SimulationResults": "dataclass[eq, frozen] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None) -> None",
+    "timebase.SimulationWindow": "dataclass[eq, frozen] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
 }
 
 _SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
@@ -428,10 +429,21 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "default_gshp": "classmethod (cls) -> HeatPumpConfig",
     },
     "home.SimulationResults": {
+        "window": "property (self) -> SimulationWindow",
         "per_minute_amounts": "(self) -> DataFrame",
         "total_amounts": "(self) -> dict[str, float]",
         "to_dataframe": "(self) -> DataFrame",
         "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str) -> SimulationResults",
+    },
+    "timebase.SimulationWindow": {
+        "of_index": "classmethod (cls, index: Index) -> SimulationWindow",
+        "days": "property (self) -> int",
+        "year_days": "property (self) -> float",
+        "annualisation_scale": "property (self) -> float",
+        "extrapolated": "property (self) -> bool",
+        "step_hours": "property (self) -> float",
+        "step_minutes": "property (self) -> float",
+        "energy_kwh": "(self, power_kw: Series) -> float",
     },
 }
 

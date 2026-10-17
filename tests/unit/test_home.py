@@ -3,6 +3,7 @@
 import dataclasses
 import typing
 import warnings
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -333,6 +334,81 @@ class TestPerMinuteAmounts:
         results = dataclasses.replace(_results_with_every_series_set(), **unset)
 
         assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+
+
+def _steady_week(freq: str) -> SimulationResults:
+    """A steady June week of results whose rows are freq apart: 1 kW of generation meets 0.4 kW of demand and exports 0.6 kW at 5p/kWh."""
+    index = pd.date_range("2023-06-01", "2023-06-07 23:59", freq=freq, tz="Europe/London")
+    row_hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
+    frame = pd.DataFrame(
+        {
+            "generation_kw": 1.0,
+            "demand_kw": 0.4,
+            "self_consumption_kw": 0.4,
+            "battery_charge_kw": 0.0,
+            "battery_discharge_kw": 0.0,
+            "battery_soc_kwh": 0.0,
+            "grid_import_kw": 0.0,
+            "grid_export_kw": 0.6,
+            "import_cost_gbp": 0.0,
+            "export_revenue_gbp": 0.6 * row_hours * 0.05,
+            "tariff_rate_per_kwh": 0.0,
+        },
+        index=index,
+    )
+    return SimulationResults.from_dataframe(frame, strategy_name="self_consumption")
+
+
+class TestResultsWindow:
+    """Test SimulationResults.window, the window its index describes, and the amounts that read its cadence."""
+
+    def test_window_is_the_window_of_the_results_index(self):
+        """window holds the calendar days, cadence and zone of the results' index."""
+        assert _results_with_every_series_set().window == SimulationWindow(
+            date(2024, 6, 21), date(2024, 6, 21), timedelta(minutes=1), "Europe/London"
+        )
+
+    def test_a_half_hourly_twin_of_a_minute_run_has_its_total_amounts(self):
+        """A half-hourly twin of a steady minute run, built with from_dataframe, totals the same kWh and £."""
+        minute = _steady_week("1min")
+        twin = _steady_week("30min")
+
+        assert minute.window.cadence == timedelta(minutes=1)
+        assert twin.window.cadence == timedelta(minutes=30)
+        assert twin.total_amounts() == pytest.approx(minute.total_amounts(), rel=1e-9)
+        assert minute.total_amounts()["demand_kwh"] == pytest.approx(67.2, rel=1e-9)
+
+    @pytest.mark.parametrize("freq", ["1min", "30min", "1h"])
+    def test_each_kw_row_counts_for_the_hours_its_row_lasts(self, freq):
+        """Each kW row's amount is its kW times the hours its row lasts; each £ row is already its amount."""
+        results = _steady_week(freq)
+        hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
+
+        amounts = results.per_minute_amounts()
+
+        pd.testing.assert_series_equal(amounts["demand_kwh"], results.demand * hours, check_names=False)
+        pd.testing.assert_series_equal(
+            amounts["export_revenue_gbp"], results.export_revenue, check_names=False
+        )
+
+    def test_the_windows_energy_of_a_kw_series_is_its_total_amount(self):
+        """The window's energy_kwh of a kW series is that series' total amount: one kW-to-kWh integration."""
+        twin = _steady_week("30min")
+
+        assert twin.window.energy_kwh(twin.demand) == pytest.approx(
+            twin.total_amounts()["demand_kwh"], rel=1e-12
+        )
+
+    def test_amounts_of_results_on_an_unevenly_spaced_index_are_refused_naming_where(self):
+        """Results whose rows are not evenly spaced have no amounts: a ValueError names where the spacing changes."""
+        index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London").delete(30)
+        results = SimulationResults(
+            strategy_name="self_consumption",
+            **{name: pd.Series(1.0, index=index) for name in _series_field_names()},
+        )
+
+        with pytest.raises(ValueError, match="position 30"):
+            results.total_amounts()
 
 
 class TestSimulateHomeImportPricing:

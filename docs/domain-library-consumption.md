@@ -408,6 +408,26 @@ class's base, `Exception`, and every refusal message are unchanged. Consumers
 that import it from `solar_challenge.config` switch to `solar_challenge.errors`
 when they re-pin.
 
+**Unreleased on main** (task 777): `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains a read-only property, `window`: the
+`SimulationWindow`, imported from `solar_challenge.timebase`, that its index
+describes: the first and last calendar dates it covers on the index's own
+clock, the cadence its rows are spaced at, and that clock's zone name.
+`per_minute_amounts()` and `total_amounts()` multiply each kW series by
+`window.step_hours`, the cadence in hours, where the 0.5.0 tag multiplies by
+1/60 whatever the spacing: a row of half-hourly results, such as
+`from_dataframe` builds from a half-hourly frame, now counts as half an hour's
+kWh, where the tag counts it as one minute's. Both now raise `ValueError` for
+results whose index no window describes: an empty index, one row without a
+fixed-duration `freq`, unevenly spaced rows (naming the first position whose
+gap differs and both gaps), or an index that is not a `DatetimeIndex` (naming
+its type and dtype); the tag returns amounts for each. The frozen contract now
+also covers `SimulationWindow`, a frozen dataclass that sets `eq`: its
+constructor and public members. Every `simulate_home` run, and every run the
+web app stores, is spaced one minute apart, so its amounts are unchanged;
+consumers that build results at another spacing re-check their totals when they
+re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
