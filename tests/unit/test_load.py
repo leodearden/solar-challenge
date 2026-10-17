@@ -1,5 +1,7 @@
 """Tests for load profile generation."""
 
+import dataclasses
+import logging
 import math
 import re
 
@@ -7,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import richardsonpy.classes.appliance as _app_mod
+from richardsonpy.classes.stochastic_el_load_wrapper import ElectricityProfile
 import solar_challenge.load as load_module
 from solar_challenge.load import (
     LoadConfig,
@@ -494,6 +497,22 @@ class TestWindowedStochasticGeneration:
             f"from Elexon ({elexon_kwh:.2f} kWh)"
         )
 
+    def test_a_richardsonpy_window_is_scaled_to_the_energy_of_the_elexon_profile_for_the_same_days(
+        self,
+    ):
+        """The stochastic shape is scaled to the Elexon path's seasonal energy, each day at its own month's factor."""
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-29")
+        end = pd.Timestamp("2024-07-02")  # June and July days; no clock change
+
+        stochastic = generate_load_profile(config, start, end)
+        elexon = generate_load_profile(
+            dataclasses.replace(config, use_stochastic=False), start, end
+        )
+
+        assert not stochastic.equals(elexon)
+        assert energy_kwh(stochastic) == pytest.approx(energy_kwh(elexon), rel=1e-9)
+
     def test_window_crossing_spring_dst_counts_calendar_days(self, monkeypatch):
         """3-calendar-day window spanning the spring DST change calls run_application_simulation 3 times.
 
@@ -556,3 +575,31 @@ class TestWindowedStochasticGeneration:
         assert len(profile) == 1440, "Fallback must return a full 1-day profile"
         assert (profile >= 0).all(), "Fallback profile must have no negative values"
         assert profile.index.tz is not None, "Fallback profile index must be tz-aware"
+
+    def test_a_richardsonpy_window_with_no_energy_falls_back_to_the_elexon_profile_with_a_warning(
+        self, monkeypatch, caplog
+    ):
+        """A window richardsonpy fills with zeros cannot be scaled to its seasonal energy, so the Elexon profile replaces it and a warning names the cause."""
+
+        def _no_power(_wrapper, irradiation, weekend, day, occupancy):
+            zeros = np.zeros(1440)
+            return zeros, zeros, zeros
+
+        monkeypatch.setattr(ElectricityProfile, "power_sim", _no_power)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = end = pd.Timestamp("2024-06-21")
+
+        with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
+            profile = generate_load_profile(config, start, end)
+
+        elexon = generate_load_profile(
+            dataclasses.replace(config, use_stochastic=False), start, end
+        )
+        pd.testing.assert_series_equal(profile, elexon)
+        assert [
+            record.levelno
+            for record in caplog.records
+            if record.name == "solar_challenge.load"
+            and "zero consumption" in record.getMessage()
+        ] == [logging.WARNING]

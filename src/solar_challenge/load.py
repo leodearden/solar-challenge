@@ -238,12 +238,14 @@ def _try_richardsonpy_profile(
     power_sim directly.  Exactly one day is simulated per requested window day:
     a 1-day request runs 1 simulation cycle, a 7-day request runs 7 — not 365.
 
-    Normalization is performed by scaling the raw stochastic shape to the same
-    seasonal daily energy target used by the Elexon path:
+    Normalization is performed by scaling the raw stochastic shape, with
+    scale_profile_to_energy, to the same seasonal daily energy target used by
+    the Elexon path:
     target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[month]).
 
-    The Elexon path is a defensive fallback in case richardsonpy raises a
-    runtime error (any exception → return None → Elexon fallback).
+    The Elexon path is a defensive fallback: any exception returns None,
+    including a richardsonpy runtime error and a window with no energy, which
+    scale_profile_to_energy refuses to scale.
 
     Args:
         config: Load configuration
@@ -372,15 +374,9 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
-        raw_kwh = energy_kwh(profile)
-        if raw_kwh > 0.0:
-            profile = profile * (target_window_kwh / raw_kwh)
-
-        profile.name = "demand_kw"
-        return profile
+        return scale_profile_to_energy(profile, target_window_kwh)
 
     except Exception as exc:  # noqa: BLE001
-        # Defensive fallback: any richardsonpy runtime error → Elexon profile.
         # Log a warning so the fallback is observable; a silent fallback would
         # hide API-mismatch regressions in production (only unit tests, via the
         # call-count assertions, would catch the silent degradation).
@@ -405,8 +401,9 @@ def generate_load_profile(
     Uses the windowed richardsonpy stochastic model when config.use_stochastic
     is True (the default).  richardsonpy is a hard dependency so this path is
     always available.  Falls back to the deterministic Elexon Profile Class 1
-    shape only when use_stochastic=False, or defensively if richardsonpy raises
-    a runtime error.
+    shape only when use_stochastic=False, or defensively if the stochastic
+    profile cannot be built: richardsonpy raises a runtime error, or its window
+    has no energy to scale.
 
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption using seasonal factors.
@@ -539,6 +536,10 @@ def scale_profile_to_energy(
 
     Returns:
         Scaled power series in kW
+
+    Raises:
+        ValueError: If the profile's energy is zero, since no factor scales it
+            to target_kwh.
     """
     current_kwh = energy_kwh(profile)
     if current_kwh == 0:
