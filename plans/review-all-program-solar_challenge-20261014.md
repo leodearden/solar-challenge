@@ -698,6 +698,46 @@ Consequence that decided it: the events model prices what a product would pay fo
 
 Keys: fk-758b2f309cab fk-4ddab794283a
 
+### D42. settlement charge basis (S3 Q1, Q5) — ruled_by: human
+
+Battery.charge reports the energy drawn and every flow is a bus energy, so no loss term is carried anywhere; the storage identity test pins the loss; battery_charge and grid_charge figures rise by 1/η (2.56% at the default) and the board figures move (bristol-arbitrage 2024-01-15 import 7.904 -> 7.959 kWh, export 0.0037 -> 0), disclosed through the cost-recovery header line and an Unreleased line; no human gate before γ merges.
+
+Options considered: bus energy; stored battery_charge plus a charge_loss field; bus energy behind a human acknowledgement.
+
+Consequence that decided it: one energy identity; four readers unchanged.
+
+Keys: fk-7440003fdd59 fk-2a53ae89932e
+
+### D43. task 564 (S20 Q1) — ruled_by: human
+
+Task 564, whose reviewed branch removes the 600-second SSE limit and adds a briefing line forbidding one against D21, is cancelled as superseded by S20 δ; its key fk-0097b5aaa45c moves to δ.
+
+Options considered: cancel; let it land and rebase.
+
+Consequence that decided it: D21's named timeout event stands.
+
+Keys: fk-0097b5aaa45c
+
+### D44. Economy 10 reference rates (S11 decompose) — ruled_by: human
+
+Both presets carry 0.13 off-peak / 0.35 peak under D34; Economy 10 differs only in its hours. Board scenarios re-price (bristol-arbitrage 2024 import cost £204 -> £292, example-economy7 £247 -> £344).
+
+Options considered: both 0.13/0.35; Economy 10 keeps its own pair.
+
+Consequence that decided it: one reference pair.
+
+Keys: fk-463e82417506
+
+### D45. agent-mode pass timing — ruled_by: human
+
+The agent-mode authoring pass (S5, S7, S13, S22, S23, S27; S29 last) starts now that every wave-1 spawn stream has filed, since S5 and S13 block S6, S12 β, S18, S25 and S26.
+
+Options considered: start now; wait for S3, S12, S16, S20 to file.
+
+Consequence that decided it: the blocked streams can author.
+
+Keys: (cross-cutting)
+
 ## Lead rulings on PRD open questions
 
 - L1 (S1; non-numeric input refusals (S1 lead Q1)): S4 converts the non-numeric ValueError refusals of the input types in the same edits as the numeric ones; invariant 1's test asserts the type; S17 depends on S4.
@@ -724,9 +764,20 @@ Keys: fk-758b2f309cab fk-4ddab794283a
 - L22 (S14 decompose; task 756; tasks 389 and 504; key on 284): Task 756 stays in progress and delivers α (γ 812 and ζ 825 depend on it), accepted. fk-998f0cb69410 is stamped on task 284. Tasks 389 and 504 depended on the cancelled 195: their dependency is removed and each is re-read against D14 at its next dispatch; neither is cancelled by the lead.
 - L23 (S15 decompose; task 366): Task 366 depends on 813 and seeds the e2e server through SOLAR_CHALLENGE_WEATHER_CACHE_DIR instead of set_weather_cache.
 - L24 (S9 α′; filing the firmness leaf): A follow-up decompose pass files α′ from the amended S9 PRD §5.10 between 801 and 802 (802 gains a dependency on it), carrying the keys of its parent finding (fk-758b2f309cab) and the x_finding_run; the successor counterfactual-event PRD is authored after α′ lands.
+- L25 (S3; decision bounds (Q2); edge direction with 790 (Q3); task 183 (Q4); self-consumption of grid-charged discharge (Q6)): Context-free bounds in DispatchDecision.__post_init__ and step bounds in StepLimits.require_admissible applied by simulate_timestep, raising rather than clamping; 790 (S2 ε) depends on S3 ε and S3 ε depends on 839 (S11 β), as S11's decompose wired, so L15's 'routing leaf add_dependency on 790' is corrected to that direction; task 183 stays deferred with no edge and a note that a revival re-plans the oracle ceiling as an input of TOUOptimizedStrategy on the one engine; self-consumption of grid-charged discharge is a candidate finding for the next run (triage note), not S3 work. Q1 (charge basis) and Q5 (a human gate before γ merges) are Leo's.
+- L26 (S12; pre-existing tasks (Q1); S19 frame transform (Q2); order against S13 (Q3)): Keep 708 (γ depends on it); cancel 711, 745, 725 and 726 with x_superseded_by at decompose after the step-1 lookup; S19's PRD row drops the frame-transform clause (ζ's step is summary-only); β is filed as a held leaf with x_seam_wait on S13's hand-off leaf and follows S13's shape of the injectable per-day simulator.
+- L27 (S16; callable vs runner on finance and optimize (Q1); ζ at the bump (Q2); root-level --workers/--sequential (Q3); supersessions (Q4)): Defaults accepted: finance and optimize keep the frozen simulate callable form, made required on the non-frozen functions, roots passing runner.simulate; ζ (retire solve_cost_recovery_rate's simulate=None and export FleetRunner with its protocols) is a held leaf for S29; --workers and --sequential move to the root command (fleet run --workers N becomes solar-challenge --workers N fleet run); 740, 742, 747 and deferred 121 are superseded at decompose; fk-e58042aef503 is closed by task 709.
+- L28 (S20; task 680 (Q2); task 646 (Q3); reading of D21 (Q4)): 680 is cancelled with x_superseded_by γ at decompose (snapshots replace the drained queue); 646 lands and β subsumes it, no edge; the D21 reading is confirmed: each terminal status names its own event (completed, failed, cancelled), the chat's failure event is also failed, id and retry travel on the job stream only, complete becomes completed. 564 is cancelled by the lead (D43).
 
 ## Cross-reference lines applied by the lead
 
+- S2 (from S3): 790 (ε) depends on S3 ε (which deletes _runs_tariff_tou, _tariff_tou_timestep and the tariff-TOU branch of _dispatch_path); S3 ε does not depend on 790; S3 α depends on 786 and 788, S3 β on 788, S3 ε on 787 and 839; L15 corrected.
+- S4 (from S3): S3 δ bounds go through Interval.admits and NON_NEGATIVE (S4 α) and raise ValueError (computed values).
+- S19 (from S12): the S19 PRD §8 row for S12 drops the frame-transform clause; S12 ζ is summary-only.
+- S13 (from S12): S12 β is held on the S13 hand-off leaf and follows its shape of the injectable per-day simulator.
+- S21 (from S12): the per-named-load panel leaf depends on 832 (ChartPanel); S25: SummaryStatistics flow properties land in 833; S20 shares parameter-sweep.js with 835 (file overlap only).
+- S9 (from S16): fleet.reusing in cli/finance.run cuts the age-0 simulations from four to one on unaged scenarios; aged scenarios and optimize keep theirs (S8).
+- S20 (from S19, S16): β -> 806, 819, 822; δ -> 814; α -> 713; the policy injection form follows S16 if it has landed.
 - S8 (from S9 decompose): the project_multi_year move leaf depends on 801 (S9 α) and 802 (S9 β).
 - S25 (from S9 decompose, D41): the cli/finance.run restructure leaf depends on 802 and 803; the events income renders with its delivery baseline, the 50%/90% availability and the displaced evening self-use beside it.
 - S26 (from S9 decompose): the grid-services knob builds FlatGridServices(v) at 804 (S9 ε); 804 edits the registry entry if S26 has landed.
@@ -788,6 +839,7 @@ Keys: fk-758b2f309cab fk-4ddab794283a
 - Tasks 681, 270, 581, 485, 674, 297, 675, 237, 284, 376, 564 and 245 pre-date this run and already cover 13 mechanical findings; do not duplicate them.
 - The `/review` instrument keyed cli/, tariff.py and seg.py under other areas (D1): until `/review-briefing` writes the member lists, a key lookup that misses may be a re-keyed twin; search by anchor as well.
 - `richardsonpy` load generation seeds process-global RNGs (S13); until S13 lands, parallel fleet tests that compare profiles are order-sensitive.
+- Candidate finding for the next run (S3 Q6): self-consumption accounting of grid-charged discharge. Task 183 stays deferred: a revival re-plans its oracle grid-charge ceiling as an input of TOUOptimizedStrategy on the one engine (L25). Housekeeping: worktrees .worktrees/123 and .worktrees/492 belong to cancelled tasks (S21 decompose).
 - Follow-up candidates (not filed): a PVConfig mounting field for NOCT-SAM (S14 Q5, after 823); the finance capex basis, nameplate vs wired DC (S8, fk-8b8f9d686b86); the counterfactual event-simulation PRD after S9 α′ (D41); the D3 mid-term design follow-up (grid charging in every dispatcher) after S3 and S11 land (L8).
 - Instrument debt: none (both siblings ran whole in Phase 2); the dark-factory snapshot instrument needs task 6921 before the next run can measure this repo without the shim.
 

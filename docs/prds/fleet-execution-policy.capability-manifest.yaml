@@ -1,0 +1,333 @@
+# Machine-readable twin of fleet-execution-policy.capability-manifest.md (stream S16).
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it at decompose. ζ is held for S29 (x_seam_wait).
+# Every mechanical delivered_check was polarity-checked on main 1fa8f79 (2026-10-16):
+# each 'present' pattern is absent today and each 'absent' pattern is present today.
+prd: docs/prds/fleet-execution-policy.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "FleetRunner: one execution value with one fan-out loop"
+    capabilities:
+      - name: "runner-defined"
+        binding: "producer:α — FleetRunner, new in fleet.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class FleetRunner\\b"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "simulator-protocol-defined"
+        binding: "producer:α — FleetSimulator, the protocol the CLI context and JobManager hold"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class FleetSimulator\\(Protocol\\)"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "root-default-runner"
+        binding: "producer:α — default_runner(), the one place naming the production weather and home simulator"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def default_runner\\("
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "iterator-functions-gone"
+        binding: "grep:fleet.py defines simulate_fleet, simulate_fleet_iter, simulate_multi_sweep_iter, collect_multi_sweep_results and MultiSweepResults today; none is in __all__"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def (simulate_fleet|simulate_fleet_iter|simulate_multi_sweep_iter|collect_multi_sweep_results)\\(|^class MultiSweepResults"
+          paths: ["src"]
+          expect: absent
+      - name: "one-worker-function"
+        binding: "grep:fleet.py::_simulate_home_worker_tagged, the second copy of the worker"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_simulate_home_worker_tagged"
+          paths: ["src"]
+          expect: absent
+      - name: "cli-assembly-copy-gone"
+        binding: "grep:cli/fleet.py::run builds FleetResults(per_home_results=...) itself today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_home_results="
+          paths: ["src/solar_challenge/cli"]
+          expect: absent
+      - name: "failed-home-named"
+        binding: "identity: BaseException.add_note (3.11+, requires-python >=3.11); producer:α adds the note in the fan-out"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "add_note\\("
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "pending-homes-cancelled"
+        binding: "probe: ProcessPoolExecutor.shutdown takes cancel_futures; EXTRA_QUEUED_CALLS == 1 on 3.12.3"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "cancel_futures=True"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "cli-prints-notes"
+        binding: "grep:cli/utils.py::_print_error_verbatim prints str(error) only today; α prints each note"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "__notes__"
+          paths: ["src/solar_challenge/cli/utils.py"]
+          expect: present
+      - name: "fleet-tests-drive-the-runner"
+        binding: "producer:α — test_fleet.py's seeded parallel test (task 709) ported onto FleetRunner"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "FleetRunner\\("
+          paths: ["tests/unit/test_fleet.py"]
+          expect: present
+      - name: "prefetch-through-provider"
+        binding: "producer:809 (S15 β) — PrefetchedWeather.fetch and WeatherProvider; α calls it with the runner's own provider"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B2's counting provider pins the count and the per-job narrowing; the call site's spelling is the leaf's"
+      - name: "cli-names-failed-home"
+        binding: "grep:home.py::_hourly_weather raises ValueError for a heat-pump home whose weather is not one year; grep:config.py::parse_fleet_config reads a homes list through parse_home_block, which reads heat_pump"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B4 is a CliRunner run over a seeded day; the message text belongs to S15/S12"
+  - label: "β"
+    task_id: null
+    title: "One CLI invocation: the runner and --quiet on Click's context"
+    capabilities:
+      - name: "invocation-defined"
+        binding: "producer:β — CliInvocation replaces CliFleetSimulator in cli/utils.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class CliInvocation\\b"
+          paths: ["src/solar_challenge/cli/utils.py"]
+          expect: present
+      - name: "cli-fleet-simulator-gone"
+        binding: "grep:cli/utils.py::CliFleetSimulator; tests/_cli_fleet_simulator.py imports it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "CliFleetSimulator"
+          paths: ["src", "tests"]
+          expect: absent
+      - name: "no-global-quiet-mutation"
+        binding: "grep:cli/utils.py::set_status_quiet assigns status_console.quiet"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "status_console\\.quiet *=|def set_status_quiet"
+          paths: ["src"]
+          expect: absent
+      - name: "no-status-console-patches"
+        binding: "grep:tests/unit/test_cli.py monkeypatch.setattr(status_console, ...) at 2 sites"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "setattr\\(status_console"
+          paths: ["tests"]
+          expect: absent
+      - name: "no-cli-home-patch"
+        binding: "grep:tests/unit/test_cli.py imports solar_challenge.cli.home as _cli_home_module and patches its simulate_home"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_cli_home_module"
+          paths: ["tests"]
+          expect: absent
+      - name: "worker-options-leave-fleet"
+        binding: "grep:cli/fleet.py declares --workers on run and sweep"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"--workers\""
+          paths: ["src/solar_challenge/cli/fleet.py"]
+          expect: absent
+      - name: "worker-options-at-root"
+        binding: "producer:β — cli/main.py's callback gains --workers and --sequential beside --quiet"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"--workers\""
+          paths: ["src/solar_challenge/cli/main.py"]
+          expect: present
+      - name: "no-direct-home-simulation-in-cli"
+        binding: "grep:cli/home.py::run and quick call simulate_home(...) directly today; the runner's .simulate_home( method call does not match"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "(^|[^._[:alnum:]])simulate_home\\("
+          paths: ["src/solar_challenge/cli"]
+          expect: absent
+      - name: "fleet-commands-read-the-invocation"
+        binding: "grep:cli/fleet.py takes no typer.Context today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "invocation\\(ctx\\)"
+          paths: ["src/solar_challenge/cli/fleet.py"]
+          expect: present
+  - label: "γ"
+    task_id: null
+    title: "Finance and optimize require their simulator"
+    capabilities:
+      - name: "optimize-default-gone"
+        binding: "grep:optimize.py::run_sweep has 'if simulate is None' today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if simulate is None"
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "projection-default-gone"
+        binding: "grep:finance.py::project_multi_year has 'if simulate is None' with a function-local fleet import; solve_cost_recovery_rate keeps its frozen default until ζ, so a grep over finance.py cannot tell them apart"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B10: project_multi_year(scenario, finance) raises TypeError naming simulate"
+      - name: "finance-stays-pvlib-free"
+        binding: "probe: import solar_challenge.finance leaves pvlib unloaded on 1fa8f79; FleetSimulate imported under TYPE_CHECKING"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B10's fresh-interpreter probe"
+  - label: "δ"
+    task_id: null
+    title: "The dashboard: injected job manager, one shutdown, fleet jobs through the runner"
+    capabilities:
+      - name: "registry-gone"
+        binding: "grep:web/jobs.py::_active_managers, live_managers, shutdown_all_managers; cli/web.py and tests/conftest.py use them"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_active_managers|live_managers|shutdown_all_managers"
+          paths: ["src", "tests"]
+          expect: absent
+      - name: "atexit-hook-gone"
+        binding: "grep:web/app.py::create_app registers atexit.register(job_manager.shutdown)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "atexit"
+          paths: ["src/solar_challenge/web/app.py"]
+          expect: absent
+      - name: "no-extension-writes-in-tests"
+        binding: "grep: 10 writes of app.extensions['job_manager'] in tests on 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "extensions\\[[\"']job_manager[\"']\\] *="
+          paths: ["tests"]
+          expect: absent
+      - name: "jobs-factory-parameter"
+        binding: "producer:δ — create_app(test_config, *, jobs: JobManagerFactory)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "jobs: JobManagerFactory"
+          paths: ["src/solar_challenge/web/app.py"]
+          expect: present
+      - name: "typed-holder"
+        binding: "producer:δ — Dashboard and dashboard_of in web/dashboard.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def dashboard_of\\("
+          paths: ["src/solar_challenge/web"]
+          expect: present
+      - name: "accessors-typed"
+        binding: "grep:web/shared.py::get_storage and get_job_manager carry type: ignore[no-any-return]"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "type: ignore\\[no-any-return\\]"
+          paths: ["src/solar_challenge/web/shared.py"]
+          expect: absent
+      - name: "web-assembly-copy-gone"
+        binding: "grep:web/jobs.py::_run_fleet_simulation builds FleetResults(per_home_results=...) after its own loop"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_home_results="
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+      - name: "jobs-simulate-through-runner"
+        binding: "grep:web/jobs.py calls self._simulate_home(...) in both runners today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_simulate_home\\("
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+      - name: "web-start-test-injects-through-cli"
+        binding: "grep:tests/unit/test_cli_web.py swaps the manager on Flask's request_started signal"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "request_started"
+          paths: ["tests/unit/test_cli_web.py"]
+          expect: absent
+      - name: "s19-constructor-lock-cancel"
+        binding: "producer:806 (JobManager(storage, ...)), producer:820 (StoreLock.release), producer:819 (cancel flag at progress checkpoints); all upstream of δ"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B12 and B13 exercise the S19 seams; their spellings are S19's"
+  - label: "ε"
+    task_id: null
+    title: "The age-0 fleet simulated once per finance run (L10)"
+    capabilities:
+      - name: "reuse-defined"
+        binding: "producer:ε — fleet.reusing"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def reusing\\("
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "finance-run-reuses"
+        binding: "grep:cli/finance.py::run simulates the bill run, then passes the bare simulate to project_multi_year and solve_cost_recovery_rate"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "reusing\\("
+          paths: ["src/solar_challenge/cli/finance.py"]
+          expect: present
+      - name: "match-rule-premise"
+        binding: "probe: on bristol-phase1.yaml and bristol-with-evs.yaml, _aged_homes(homes, 0) equals the configured homes once each battery is replaced at Battery(config).soh; bristol-phase1-aged.yaml stays unequal; SimulationPeriod timestamps equal the CLI's"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B16 and B17 pin the count and the refusals"
+  - label: "ζ"
+    task_id: null
+    title: "Retire the solve's implicit simulator and export the runner (held for S29)"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on γ; excluded from this batch's commit_planning. Conditional on lead Q2."
+    capabilities:
+      - name: "runner-exported"
+        binding: "producer:ζ — FleetRunner, FleetSimulator, HomeSimulator, FleetSimulate, HomesDone join __all__; home_simulator has no default, so the frozen form carries no memory address (probe on 1fa8f79)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"FleetRunner\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "solve-default-retired"
+        binding: "grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE pins solve_cost_recovery_rate's simulate as Optional[...] = None"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"solve_cost_recovery_rate\": .*simulate: Optional"
+          paths: ["tests"]
+          expect: absent
