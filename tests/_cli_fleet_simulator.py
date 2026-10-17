@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Run the CLI in-process with the test's own fleet simulator, so its simulating commands never reach PVGIS.
+"""Run the CLI in-process with the test's own fleet simulator, so `finance run` and `optimize configs` never reach PVGIS.
 
-The simulator travels as Click's context object, the CliFleetSimulator each
-simulating command reads its simulator from.
+The simulator travels as Click's context object, the CliFleetSimulator those
+two commands read their simulator from. `fleet run` and `fleet sweep` read
+none.
 
 Usage::
 
