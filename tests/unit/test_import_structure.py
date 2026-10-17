@@ -18,7 +18,67 @@ import pytest
 
 _PACKAGE = "solar_challenge"
 
-ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], "Permanent | Transitional"] = {}
+
+@dataclass(frozen=True)
+class Permanent:
+    """The documented contract that requires an import to stay inside a function."""
+
+    contract: str
+
+
+@dataclass(frozen=True)
+class Transitional:
+    """The task or program stream that moves an import to module top or deletes it."""
+
+    owner: str
+
+
+_CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
+    "the optional web extra: the CLI runs without it (README.md, Installation), and any module "
+    "of the web subpackage may import the extra at module top "
+    "(tests/unit/test_dependency_declarations.py), so the CLI reaches the web subpackage only "
+    "inside `web start`"
+)
+_FINANCE_PARTITION = Transitional(
+    "program stream S8, the finance partition "
+    "(plans/review-all-program-solar_challenge-20261014.md)"
+)
+_TASK_454 = Transitional(
+    "task 454, which hoists them as docs/prds/chart-panels-and-theme-tokens.md decision 12 rules"
+)
+
+ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] = {
+    ("solar_challenge", "solar_challenge.cli"): Permanent(
+        "the cheap top-level import: `import solar_challenge` loads no submodule until a public "
+        "name is accessed, and the CLI loads pvlib, Typer and Rich "
+        "(docs/domain-library-consumption.md, Cheap top-level import; "
+        "tests/unit/test_init_lazy_surface.py::test_import_is_pvlib_free)"
+    ),
+    ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.jobs"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.web", "solar_challenge.web.app"): Permanent(
+        "the optional web extra: importing any web submodule runs web/__init__.py, and the web "
+        "submodules that need no Flask import without the extra "
+        "(tests/unit/test_conftests_need_no_web_extra.py) only while create_app defers web.app, "
+        "which imports Flask"
+    ),
+
+    ("solar_challenge.cli.finance", "solar_challenge.gridservices"): Transitional(
+        "task 802 (S9 β)"
+    ),
+    ("solar_challenge.finance", "solar_challenge.battery"): _FINANCE_PARTITION,
+    ("solar_challenge.finance", "solar_challenge.fleet"): _FINANCE_PARTITION,
+    ("solar_challenge.finance", "solar_challenge.gridservices"): Transitional("task 801 (S9 α)"),
+    ("solar_challenge.finance", "solar_challenge.home"): _FINANCE_PARTITION,
+    ("solar_challenge.finance", "solar_challenge.pv"): _FINANCE_PARTITION,
+    ("solar_challenge.load", "solar_challenge.ev"): Transitional(
+        "program stream S12, load composition"
+    ),
+    ("solar_challenge.web.api", "solar_challenge.web.fleet_config"): Transitional("task 153"),
+    ("solar_challenge.web.history", "solar_challenge.web.charts"): _TASK_454,
+    ("solar_challenge.web.routes", "solar_challenge.web.charts"): _TASK_454,
+    ("solar_challenge.web.routes", "solar_challenge.web.database"): _TASK_454,
+}
 
 
 @dataclass(frozen=True)
