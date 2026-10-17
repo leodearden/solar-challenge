@@ -101,7 +101,7 @@ def _grid_services_at_events(
 def _bill_finances(
     assumptions: AssumptionMode, finance: FinanceConfig
 ) -> tuple[FinanceConfig, Optional[FinanceConfig]]:
-    """The FinanceConfig of the report's first bill column, and under --assumptions both of its spreadsheet column, else None."""
+    """The FinanceConfigs of the report's first and second bill columns: for --assumptions physics or spreadsheet that mode's config and None, for both the physics config then the spreadsheet config."""
     physics = dataclasses.replace(finance, self_consumption_override=None)
     spreadsheet = dataclasses.replace(
         finance,
@@ -119,28 +119,21 @@ def _bill_finances(
     return pairs[assumptions]
 
 
-def _economics_and_cost_recovery(
-    scenario_config: ScenarioConfig,
-    finance: FinanceConfig,
-    simulator: CliFleetSimulator,
-    *,
-    project: bool,
-    cost_recovery: bool,
-) -> tuple[Optional[ProjectEconomics], Optional[CostRecoverySolution]]:
-    """The project economics --project asks for and the cost-recovery solution --cost-recovery asks for, each None without its flag."""
-    economics_result: Optional[ProjectEconomics] = None
-    if project:
-        print_info("Computing project-level economics (DSCR/IRR/payback)…")
-        curve = project_multi_year(scenario_config, finance, simulate=simulator.simulate)
-        economics_result = project_economics(curve, scenario_config, finance)
+def _project_level_economics(
+    scenario_config: ScenarioConfig, finance: FinanceConfig, simulator: CliFleetSimulator
+) -> ProjectEconomics:
+    """The project-level economics (DSCR/IRR/payback) of *scenario_config*'s fleet under *finance*, its simulations run by *simulator*."""
+    print_info("Computing project-level economics (DSCR/IRR/payback)…")
+    curve = project_multi_year(scenario_config, finance, simulate=simulator.simulate)
+    return project_economics(curve, scenario_config, finance)
 
-    cost_recovery_result: Optional[CostRecoverySolution] = None
-    if cost_recovery:
-        print_info("Solving cost-recovery own-use rate…")
-        cost_recovery_result = solve_cost_recovery_rate(
-            scenario_config, finance, simulate=simulator.simulate
-        )
-    return economics_result, cost_recovery_result
+
+def _cost_recovery_solution(
+    scenario_config: ScenarioConfig, finance: FinanceConfig, simulator: CliFleetSimulator
+) -> CostRecoverySolution:
+    """The own-use rate at which *scenario_config*'s fleet recovers its cost under *finance*, its simulations run by *simulator*."""
+    print_info("Solving cost-recovery own-use rate…")
+    return solve_cost_recovery_rate(scenario_config, finance, simulate=simulator.simulate)
 
 
 @app.command()
@@ -257,10 +250,14 @@ def run(
         homes=list(fleet_config.homes),
         location=loc,
         finance=finance,
+        # Only --cost-recovery passes the rate on: test_project_economics_are_the_same_with_and_without_cost_recovery
         seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
     )
-    economics_result, cost_recovery_result = _economics_and_cost_recovery(
-        scenario_config, finance, simulator, project=project, cost_recovery=cost_recovery
+    economics_result = (
+        _project_level_economics(scenario_config, finance, simulator) if project else None
+    )
+    cost_recovery_result = (
+        _cost_recovery_solution(scenario_config, finance, simulator) if cost_recovery else None
     )
 
     report = generate_finance_report(
