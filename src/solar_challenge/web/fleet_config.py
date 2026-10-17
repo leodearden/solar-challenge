@@ -191,8 +191,8 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
     """Draw *n_samples* values from *spec*, a distribution :func:`distribution_grammar_spec` wrote, with a fixed seed.
 
     Raises:
-        ValueError: If the type of *spec* is unknown, or its parameters are ones it cannot
-            draw from, such as a negative std or a min above max.
+        ValueError: If its parameters are ones it cannot draw from, such as a negative std
+            or a min above max.
     """
     rng = random.Random(42)
     dist_type = spec["type"]
@@ -232,7 +232,10 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
         samples = [pool[i % len(pool)] for i in range(n_samples)]
         return samples
 
-    raise ValueError(f"Unknown distribution type: {dist_type}")
+    raise AssertionError(
+        "_draw_samples draws each type distribution_grammar_spec writes, "
+        f"but has no draw for {dist_type!r}"
+    )
 
 
 def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
