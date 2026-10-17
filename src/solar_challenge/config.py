@@ -1660,9 +1660,13 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
+        ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
+            naming the pool; if a sampled PV capacity is not positive; or if a sampled
+            heat pump type is not 'ASHP' or 'GSHP'.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh; a null or 0 sample is no battery.
     """
+    _refuse_pools_not_sized_to_the_fleet(config)
     rng = random.Random(config.seed)
     sampler = _DistributionSampler(rng)
     homes: list[HomeConfig] = []
