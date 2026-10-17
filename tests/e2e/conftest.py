@@ -45,8 +45,7 @@ from flask import Flask
 from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
@@ -55,7 +54,7 @@ from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
-from tests._web_runs import store_home_run
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 def _find_free_port() -> int:
@@ -257,13 +256,7 @@ def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     """
     run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
     fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
-    _e2e_storage.save_fleet_run(
-        run_id,
-        fleet,
-        calculate_fleet_summary(fleet),
-        [calculate_summary(home_results) for home_results in fleet.per_home_results],
-        name=run_name,
-    )
+    store_fleet_run(_e2e_storage, run_id, fleet, name=run_name)
     return run_id, run_name
 
 
