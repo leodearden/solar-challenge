@@ -4,9 +4,10 @@
 # task_id stays null until commit_planning stamps it. Every `absent` check's idiom was grepped present on main first.
 prd: docs/prds/finite-quantities.md
 schema_version: 1
+signal_leaves: ["ι"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 860
     title: "number_fields moves to the package leaf with intervals and ConfigurationError"
     capabilities:
       - name: "leaf-module-exists"
@@ -62,7 +63,7 @@ tasks:
           kind: manual
           reason: "a sys.modules property observed in a subprocess by α's own test"
   - label: "β"
-    task_id: null
+    task_id: 861
     title: "Component and fleet inputs read their numbers through the leaf"
     capabilities:
       - name: "location-altitude-idiom-replaced"
@@ -128,7 +129,7 @@ tasks:
           kind: manual
           reason: "CLI exit code and ERROR row judged by β's own CliRunner tests (C2, D1-D3)"
   - label: "γ"
-    task_id: null
+    task_id: 862
     title: "Tariff, SEG, finance, grid-services, flexibility, community and install-point inputs read their numbers through the leaf"
     capabilities:
       - name: "seg-idiom-replaced"
@@ -186,7 +187,7 @@ tasks:
           kind: manual
           reason: "CLI exit code and ERROR row judged by γ's own test (C3)"
   - label: "δ"
-    task_id: null
+    task_id: 864
     title: "Dispatch inputs read their numbers through the leaf"
     capabilities:
       - name: "import-limit-idiom-replaced"
@@ -262,7 +263,7 @@ tasks:
           kind: manual
           reason: "ERROR-row text naming the block path judged by ε's CliRunner tests (C1-C3)"
   - label: "ζ"
-    task_id: null
+    task_id: 868
     title: "The fleet grammar reads its numbers at construction and rounds sampled counts"
     capabilities:
       - name: "n-homes-truncation-deleted"
@@ -312,7 +313,7 @@ tasks:
           kind: manual
           reason: "fleet means judged by ζ's own test over the shipped scenario (C5)"
   - label: "η"
-    task_id: null
+    task_id: 870
     title: "The web stops pre-reading numbers ahead of config"
     capabilities:
       - name: "invented-defaults-deleted"
@@ -354,7 +355,7 @@ tasks:
           kind: manual
           reason: "HTTP status and error text judged by η's Flask test-client tests (C6, C7)"
   - label: "θ"
-    task_id: null
+    task_id: 871
     title: "Summary and step results are frozen values; a step result refuses a non-finite flow"
     capabilities:
       - name: "results-frozen"
@@ -376,7 +377,7 @@ tasks:
           kind: manual
           reason: "the new Unreleased line wraps across lines; the reviewer reads it"
   - label: "ι"
-    task_id: null
+    task_id: 872
     title: "Invariant 1 guard: every input type refuses a non-finite, bool or non-number value by name"
     capabilities:
       - name: "guard-test-exists"

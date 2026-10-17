@@ -1,6 +1,6 @@
 # Load composition: additional loads one mechanism, calendar-aligned days
 
-**Status:** authored 2026-10-16 (program `review-all-solar_challenge-20261013`, stream S12, wave 2, upstream streams S10 and S19). Not decomposed: decomposition waits for the lead to hand back the filed ids of S11 δ, S13's hand-off leaf and S21 δ/α (§Pre-conditions). Contract-first (B + H).
+**Status:** authored 2026-10-16 (program `review-all-solar_challenge-20261013`, stream S12, wave 2, upstream streams S10 and S19). Decomposed 2026-10-17 under L26: α 893, β 894 (held for S13), γ 895, δ 897, ε 899, ζ 901 (held for S29). S11 δ is 842, S21 δ is 832 and S21 α is 829. S13's hand-off leaf was not yet filed, so β waits on it. Tasks 711, 745, 725 and 726 were cancelled as superseded. Contract-first (B + H).
 
 **Code anchors** verified against main `1fa8f79` (2026-10-16). Main moves fast: cite-by-symbol; re-locate lines at implementation time. Task 708's code is read from its branch `task/708` at `44eecaa` (not merged).
 

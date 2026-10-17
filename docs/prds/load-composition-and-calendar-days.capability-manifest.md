@@ -12,13 +12,19 @@ The YAML twin `load-composition-and-calendar-days.capability-manifest.yaml` carr
 
 **Code anchors** verified against main `1fa8f79` (2026-10-16), with task 708's code read from `task/708` at `44eecaa`. Probes ran with `uv run --locked --extra dev python -I` in the main checkout. Anchors cite symbols; re-locate lines at implementation time.
 
-**Batch verdict: OPEN (blocks decompose, as the brief requires).** Three bindings name producers that are not yet filed:
+**Batch verdict: PASS for the committed batch (α, γ, δ, ε), at decompose on 2026-10-17 against main `c06d12b`.** The lead handed back the upstream ids (L26):
 
-- S11 δ (γ);
-- S13's hand-off leaf (β);
-- S21 δ and α (ε).
+- S11 δ is task 842 (γ);
+- S21 δ is task 832 and S21 α is task 829 (ε).
 
-Each turns PASS when the lead hands back the filed id and the edge is wired. No binding resolves to `declared-only`, `test-only`, `producer-downstream`, `producer-extent-short` or `rejection-absent`. ζ is held for S29.
+One binding stays OPEN: S13's hand-off leaf (β). S13 had not filed, so β is a held leaf with `x_seam_wait = {stream: S13, contract: the per-day simulator hand-off leaf of the RNG stream}`, outside the batch's `commit_planning` until S13 releases it. ζ is held for S29. No binding resolves to `declared-only`, `test-only`, `producer-downstream`, `producer-extent-short` or `rejection-absent`.
+
+Two sidecar checks were re-authored at decompose, when the polarity of every grep check was checked against main:
+
+- γ's `solar-window-literal-gone` read `_PREFERRED_WINDOWS`, which exists only on the unmerged `task/708`, so it already passed on main. It now reads `_PREFERRED_WINDOWS|10:00-16:00`, live on main and on `task/708`.
+- ζ's `heat-pump-summary-fields-retired` read the three key names anywhere under `src/`, which ζ's own stored-run step must spell. It now reads their field declarations in `home.py`.
+
+γ's `ev-built-on-local-days` also admits `LocalDay`, since PRD Q5 leaves γ the choice of a private `LocalDay` constructor.
 
 ---
 
@@ -46,9 +52,9 @@ Each turns PASS when the lead hands back the filed id and the edge is wired. No 
 | `home run` prints Total Demand from the summary | `grep:cli/utils.py::create_summary_table` "Total Demand"; `grep:cli/home.py::run` calls it; `--start`/`--end`/`--output` options exist | PASS |
 | The CSV holds `demand_kw` per row | `grep:output.py::export_to_csv` writes `results.to_dataframe()`; `grep:home.py::SimulationResults` `demand` column `demand_kw` | PASS |
 | `load.energy_kwh` integrates through the window; `simulate_home` derives the run's window | `task:779` (S10 γ1, pending); β replaces its `of_index` derivation of the run index with the constructed window | PASS (upstream, wired β → 779) |
-| The injectable per-day simulator B3 drives | S13's hand-off leaf (S13 unauthored; program remedy: "The per-day simulator is an injectable parameter of generate_load_profile") | **OPEN**: id from the lead; wire β → it |
+| The injectable per-day simulator B3 drives | S13's hand-off leaf (unfiled at decompose; program remedy: "The per-day simulator is an injectable parameter of generate_load_profile") | **OPEN**: β is held on S13 (`x_seam_wait`, L26); S13 wires β → its leaf and releases β |
 | Rejection: an error in the scaling step propagates (no fallback) | `producer:β` moves scaling outside the `try`; B3 raises inside it and observes the error, not an Elexon profile | PASS |
-| fk-89777ec9faad is not double-filed | task 711 (pending, no commits on `task/711`) superseded by β at decompose (PRD Q1); if the lead keeps 711, β depends on it and drops the key | PASS (either ruling) |
+| fk-89777ec9faad is not double-filed | task 711 (pending, no commits on `task/711`) cancelled with `x_superseded_by` β at decompose (L26) | PASS |
 
 ## γ: EV on calendar days, out of the household model, following the tariff and PV (leaf)
 
@@ -56,7 +62,7 @@ Each turns PASS when the lead hands back the filed id and the edge is wired. No 
 |---|---|---|
 | The one-session scheduler (`_daily_session`, `_earliest_best_start`) that γ generalises from minute flags to row weights | `task:708` (pending; implemented on `task/708` at `44eecaa`, not merged) | PASS (upstream, wired γ → 708) |
 | `_earliest_best_start`'s cumulative-sum selection works for float weights | `grep:task/708 ev.py::_earliest_best_start` uses `np.cumsum(preferred)` and `argmax`; the arithmetic is the same for floats, earliest on a tie (`argmax` returns the first maximum) | PASS |
-| `off_peak` weights: the tariff's cheap minutes of day; `require_tariff_for_smart_charging` | S11 δ (`tariff-coverage-classifier-presets.md` §5.6; not filed: the sidecar's `task_id` is null) | **OPEN**: id from the lead; wire γ → it |
+| `off_peak` weights: the tariff's cheap minutes of day; `require_tariff_for_smart_charging` | `task:842` (S11 δ, pending; `tariff-coverage-classifier-presets.md` §5.6) | PASS (upstream, wired γ → 842) |
 | `solar` weights: PV generation on any rows | `grep:weather.py::align_tmy_to_index` maps any index by UTC time of year; `grep:home.py::simulate_home` holds the TMY-year `minute_generation` before alignment | PASS |
 | Today the session starts 19:00 BST after the spring change; the one-day overnight off-peak run charges 0.0 kWh; 30 kWh at 3.6 kW charges 501 minutes | finding fk-1d920c89e872 (re-observed); task 725's observation (`EVConfig('7kW', 18, 8, 35, 'off_peak')`, one day: 0.0 kWh); task 726's observation (501 minutes, 30.06 kWh) | PASS |
 | 35.0, 245.0, 175.0 and 30.0 kWh after | `identity:` 35/7 = 5 h = 300 whole rows; carry-in (00:30–05:29 of the window's first morning) + 6 in-window evenings → 7 sessions; `none` sessions end 23:00 the same day → 5 sessions; 30/3.6 h = 500 rows with a zero-fraction remainder under the 1e-9 tolerance | PASS |
@@ -91,8 +97,8 @@ Each turns PASS when the lead hands back the filed id and the edge is wired. No 
 | The heat-pump report section and seasonal block exist to replace | `grep:output.py::generate_summary_report` `if summary.total_heat_pump_load_kwh is not None`, `if results.heat_pump_load is not None` | PASS |
 | `aggregate_annual`'s three branches are deleted upstream | `task:780` (S10 γ2, pending; L9) | PASS (upstream, wired ε → 780) |
 | `home run --report` prints the report | `grep:cli/home.py::run` `print_report(generate_summary_report(…))` | PASS |
-| `ChartPanel`, the tab assembler, the emptiness rule | S21 δ (`chart-panels-and-theme-tokens.md`; not filed) | **OPEN**: id from the lead; wire ε → it |
-| Chart roles in `theme-tokens.json` | S21 α (not filed) | **OPEN**: id from the lead; wire ε → it |
+| `ChartPanel`, the tab assembler, the emptiness rule | `task:832` (S21 δ, pending; `chart-panels-and-theme-tokens.md`) | PASS (upstream, wired ε → 832) |
+| Chart roles in `theme-tokens.json` | `task:829` (S21 α, pending) | PASS (upstream, wired ε → 829) |
 | The results page draws the heat pump's charts from the results today | `grep:web/routes.py` `"heat_pump": heat_pump_analysis(sim_results)`; `grep:web/charts.py::heat_pump_analysis`; `grep:results/home.html` `{% if charts.heat_pump %}` | PASS |
 | Named loads on results and summaries | `producer:δ` (upstream) | PASS |
 

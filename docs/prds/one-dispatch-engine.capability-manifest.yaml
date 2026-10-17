@@ -4,13 +4,14 @@
 # every `absent` pattern was grepped present on main first.
 prd: docs/prds/one-dispatch-engine.md
 schema_version: 1
+signal_leaves: ["β", "γ", "δ", "ε"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 896
     title: "One settle function both engines return through"
     capabilities:
       - name: "one-settle-function"
-        binding: "built by α; the 23-line tail is byte-identical in simulate_timestep and simulate_timestep_tou at 1fa8f79"
+        binding: "built by α; the 23-line tail is byte-identical in simulate_timestep and simulate_timestep_tou at 1fa8f79; task 270 (done, 57ce3c2) extracted it as _settle_timestep with six keyword inputs, which α reshapes into §5.1's _settle(step, exchange, battery_soc_kwh)"
         verdict: PASS
         delivered_check:
           kind: grep
@@ -26,7 +27,7 @@ tasks:
           paths: ["src/solar_challenge/flow.py"]
           expect: present
       - name: "single-energyflowresult-construction"
-        binding: "flow.py constructs EnergyFlowResult twice at 1fa8f79; α leaves one, in _settle (a count, not grep-expressible)"
+        binding: "flow.py constructs EnergyFlowResult twice at 1fa8f79 and once since task 270 (in _settle_timestep); α keeps one, in _settle (a count, not grep-expressible)"
         verdict: PASS
         delivered_check:
           kind: manual
@@ -38,7 +39,7 @@ tasks:
           kind: manual
           reason: "cross-stream producer; gated by the add_dependency edges"
   - label: "β"
-    task_id: null
+    task_id: 898
     title: "One grid-charge gate sized from the SOC after the step's PV charge"
     capabilities:
       - name: "one-gate-helper"
@@ -78,7 +79,7 @@ tasks:
           kind: manual
           reason: "cross-stream producer; gated by the add_dependency edge"
   - label: "γ"
-    task_id: null
+    task_id: 900
     title: "Settle on the energy the battery drew: charge losses leave export and enter import"
     capabilities:
       - name: "settlement-speaks-drawn-energy"
@@ -127,7 +128,7 @@ tasks:
           kind: manual
           reason: "CLI run needs the Bristol TMY; the leaf's tests use synthetic fixtures"
   - label: "δ"
-    task_id: null
+    task_id: 902
     title: "Bounded decisions and engine checks through Interval.admits"
     capabilities:
       - name: "step-limits-value"
@@ -184,7 +185,7 @@ tasks:
           kind: manual
           reason: "cross-stream producer; gated by the add_dependency edge"
   - label: "ε"
-    task_id: null
+    task_id: 904
     title: "Route the home-level tou_optimized through the factory; simulate_timestep_tou delegates"
     capabilities:
       - name: "home-no-longer-reaches-the-inline-path"

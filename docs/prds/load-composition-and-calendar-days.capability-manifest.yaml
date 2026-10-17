@@ -1,11 +1,12 @@
 # Machine-readable twin of load-composition-and-calendar-days.capability-manifest.md
 # Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
-# task_id stays null until commit_planning stamps it. ζ is held for S29 (x_seam_wait).
+# task_id stays null until commit_planning stamps it. β is held for S13 and ζ for S29 (x_seam_wait).
 prd: docs/prds/load-composition-and-calendar-days.md
 schema_version: 1
+signal_leaves: ["ε"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 893
     title: "Calendar-day iterator in timebase"
     capabilities:
       - name: "local-day-type-defined"
@@ -41,7 +42,7 @@ tasks:
   - label: "β"
     task_id: null
     title: "Household load on calendar days, a calendar year exact"
-    note: "Depends on S13's hand-off leaf (injectable per-day simulator; id from the lead) and on task 779. Supersedes task 711 if the lead rules PRD Q1 by default; D28 re-measure of fk-72af0b90338d recorded in the PRD."
+    note: "Held leaf: x_seam_wait {stream: S13, contract: the per-day simulator hand-off leaf of the RNG stream} (L26); excluded from this batch's commit_planning until S13 files its hand-off leaf, wires the edge and releases it. Depends on α and task 779. Supersedes task 711 (L26); D28 re-measure of fk-72af0b90338d recorded in the PRD and on the task."
     capabilities:
       - name: "no-absolute-24h-window-end"
         binding: "grep:load.py::_try_richardsonpy_profile and _generate_elexon_profile end the index at end + 1 day - 1 minute today"
@@ -76,11 +77,11 @@ tasks:
           paths: ["src/solar_challenge/load.py"]
           expect: present
       - name: "per-day-simulator-injectable"
-        binding: "S13 hand-off leaf (unfiled): the injectable per-day simulator B3 drives"
+        binding: "S13 hand-off leaf (unfiled at S12's decompose, 2026-10-17): the injectable per-day simulator B3 drives; β follows S13's shape of it (L26)"
         verdict: OPEN
         delivered_check:
           kind: manual
-          reason: "upstream producer not yet filed; turns PASS when the lead hands back its id and the edge is wired"
+          reason: "β is held on S13 (x_seam_wait); turns PASS when S13 files its hand-off leaf, wires β -> it and releases β"
       - name: "window-independent-day-and-exact-year"
         binding: "identity: per-calendar-year weights sum to 1; B2 observes equal 2024-04-04 profiles, the 17:30+01:00 peak and 3400 kWh years"
         verdict: PASS
@@ -88,9 +89,9 @@ tasks:
           kind: manual
           reason: "behaviour asserted by B2/B3's tests and the CLI signal"
   - label: "γ"
-    task_id: null
+    task_id: 895
     title: "EV charging on calendar days, out of the household model, following the home's tariff and PV"
-    note: "Depends on tasks 708, 775, 809 and on S11 δ (id from the lead). Supersedes 725, 726 and 745 if the lead rules PRD Q1 by default."
+    note: "Depends on α, β and tasks 708, 775, 809 and 842 (S11 δ). Supersedes 725, 726 and 745 (L26)."
     capabilities:
       - name: "no-positional-1440-days"
         binding: "grep:ev.py::generate_ev_charging_profile n_days * 1440 and four more 1440 literals today"
@@ -125,27 +126,27 @@ tasks:
           paths: ["src/solar_challenge/load.py"]
           expect: absent
       - name: "ev-built-on-local-days"
-        binding: "producer:α (upstream) — stays are built from LocalDay.instant on a widened window"
+        binding: "producer:α (upstream) — stays are built from LocalDay.instant, on a widened window or a private LocalDay constructor (PRD Q5)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\\.local_days\\("
+          pattern: "\\.local_days\\(|LocalDay\\b"
           paths: ["src/solar_challenge/ev.py"]
           expect: present
       - name: "solar-window-literal-gone"
-        binding: "grep:task/708 ev.py::_PREFERRED_WINDOWS holds SOLAR (10:00-16:00) and OFF_PEAK minute windows; S11 δ replaces OFF_PEAK by the tariff, γ replaces SOLAR by PV generation"
+        binding: "grep:ev.py::generate_ev_charging_profile spells the solar window 10:00-16:00 on main; task/708 ev.py::_PREFERRED_WINDOWS holds it, and task 842 (S11 δ) leaves its SOLAR row; γ replaces SOLAR by PV generation. The pattern is live on main and on task/708, so the check fails until γ lands."
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "_PREFERRED_WINDOWS"
+          pattern: "_PREFERRED_WINDOWS|10:00-16:00"
           paths: ["src/solar_challenge/ev.py"]
           expect: absent
       - name: "off-peak-weights-from-tariff"
-        binding: "S11 δ (unfiled): TariffConfig.cheap_minutes_of_day and ev.require_tariff_for_smart_charging"
-        verdict: OPEN
+        binding: "task:842 (S11 δ, pending): TariffConfig.cheap_minutes_of_day (S11 α) and ev.require_tariff_for_smart_charging; wired γ -> 842"
+        verdict: PASS
         delivered_check:
           kind: manual
-          reason: "upstream producer not yet filed; turns PASS when the lead hands back S11 δ's id and the edge is wired"
+          reason: "the producer is task 842; B4's E7/E10 rows and the off_peak refusal assert its use"
       - name: "load-ev-allow-list-entry-deleted"
         binding: "task:775 creates the Transitional entry; γ deletes it with the import"
         verdict: PASS
@@ -159,7 +160,7 @@ tasks:
           kind: manual
           reason: "behaviour asserted by B4/B5's tests and the CLI signal"
   - label: "δ"
-    task_id: null
+    task_id: 897
     title: "Named load series on results and summaries"
     capabilities:
       - name: "load-vocabulary-defined"
@@ -217,9 +218,9 @@ tasks:
           kind: manual
           reason: "refusal messages are asserted by B6/B7's tests"
   - label: "ε"
-    task_id: null
+    task_id: 899
     title: "Reports and panels iterate the named loads (integration gate)"
-    note: "Depends on δ, task 780 and S21 δ and α (ids from the lead)."
+    note: "Depends on δ and tasks 780 (S10 γ2), 832 (S21 δ) and 829 (S21 α)."
     capabilities:
       - name: "report-reads-no-heat-pump-field"
         binding: "grep:output.py::generate_summary_report branches on total_heat_pump_load_kwh and heat_pump_load today"
@@ -246,11 +247,11 @@ tasks:
           paths: ["src/solar_challenge/web/charts.py"]
           expect: present
       - name: "chart-panel-type-upstream"
-        binding: "S21 δ (unfiled): ChartPanel and home_results_tabs; S21 α (unfiled): theme-tokens.json chart roles"
-        verdict: OPEN
+        binding: "task:832 (S21 δ, pending): ChartPanel, home_results_tabs, the emptiness rule; task:829 (S21 α, pending): theme-tokens.json chart roles; wired ε -> 832 and ε -> 829"
+        verdict: PASS
         delivered_check:
           kind: manual
-          reason: "upstream producers not yet filed; turn PASS when the lead hands back their ids and the edges are wired"
+          reason: "the producers are tasks 832 and 829; B8's results-page assertions exercise them"
       - name: "end-to-end-consumers"
         binding: "B8 — CLI report and CSV, Flask results pages for a heat-pump run and a plain run"
         verdict: PASS
@@ -263,12 +264,12 @@ tasks:
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning until S29 releases it. Depends on task 822 (S19 κ) for RunDocumentStep."
     capabilities:
       - name: "heat-pump-summary-fields-retired"
-        binding: "grep:home.py::SummaryStatistics the three Optional heat-pump fields today (D4)"
+        binding: "grep:home.py::SummaryStatistics the three Optional heat-pump fields today (D4). The check reads their declarations only: ζ's stored-run step in web/stored_runs.py must spell the old keys to drop them."
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "total_heat_pump_load_kwh|peak_heat_pump_load_kw|heat_pump_load_ratio"
-          paths: ["src/solar_challenge/"]
+          pattern: "^    (total_heat_pump_load_kwh|peak_heat_pump_load_kw|heat_pump_load_ratio): "
+          paths: ["src/solar_challenge/home.py"]
           expect: absent
       - name: "heat-pump-results-field-retired"
         binding: "grep:home.py::SimulationResults heat_pump_load: Optional[pd.Series] today"

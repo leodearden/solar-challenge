@@ -1,7 +1,7 @@
 # PRD — One dispatch engine: shared settle tail and bounded decisions (review-all stream S3)
 
 - **Program:** `plans/review-all-program-solar_challenge-20261014.md`, stream **S3** (wave 2, size M, risk medium, upstream S2). Findings record `plans/review-all-solar_challenge-20261013.json`, run `review-all-solar_challenge-20261013`.
-- **Status:** authored 2026-10-16 (author only, uncommitted), awaiting the lead's rulings on §12 before commit and decompose.
+- **Status:** authored 2026-10-16; §12's lead-level questions ruled with their defaults (D42 for Q1 and Q5, L25 for Q2-Q4 and Q6); decomposed 2026-10-17 at main `ac1fdf1` (ids in the stamped sidecar). Decompose drift: task 270 landed the tail extraction as `flow._settle_timestep` (57ce3c2) before decompose, so α reshapes it into §5.1 and files with `x_supersedes_task` 270 instead of cancelling it; task 183 is cancelled, so §12 Q4 needs no annotation.
 - **Binding rulings:** D6 (`simulate_timestep_tou` is retired into a TOU strategy object run through `simulate_timestep`, with one settle function and one grid-charge gate; the byte-identical tail goes; rides the bump), D3 (mid-term, every dispatcher supports grid charging), D29 (additive and behaviour edits land in-leaf with their `FROZEN_*` entry and an "Unreleased on main" line; renames and retirements are held leaves released by S29), D4 (one coordinated bump, no shim survives the program). Lead rulings L6 (S3 owns routing the home-level key and deleting the tariff-TOU route), L8 (the D3 follow-up is filed after S3 and S11), L15 and L16 (anchors drifted after task 710; the engine checks go through S4's `Interval.admits` and depend on S4 α). Cross-reference lines: "S3 (from S2 decompose)", "S3 (from S4)", "S3" (deletes `use_tariff_tou`/`_runs_tariff_tou`, builds on S2 γ).
 - **Approach:** **B + H**. The change is in the core engine (flow, dispatch, battery, home), touches the frozen surface, moves board-facing figures, and feeds S2 ε, S21, S27 and S29. §5 is the contract, §9 the two-way boundary tests.
 - **Code anchors** verified against main `1fa8f796e87b608e6ee0ca9e8c62f377370203a7` (2026-10-16), cited by symbol. Main moves fast; re-locate lines at implementation time.
@@ -239,8 +239,8 @@ G3: every symbol §5 names as existing was read at `1fa8f79` (capability manifes
 Labels are this PRD's; ids are assigned at decompose. Every leaf carries `x_finding_key`, `x_finding_run = review-all-solar_challenge-20261013`, `source = review-all`, `metadata.files`; priority is the highest severity among its keys. Leaves α-ε add their §5.7 "Unreleased on main" line in-leaf (D29); only ζ edits the frozen tables.
 
 **α — One settle function both engines return through** (intermediate; unlocks γ, δ, ε; priority medium)
-- Keys: fk-491014934d1e. Supersedes task 270.
-- Work: §5.1 shape (`_StepEnergies`, `_BatteryExchange`, `_execute`, `_settle`); both functions call them; one copy of the split-source comment; `validate_energy_balance`'s derivation comment replaced by a pointer to `_settle`. Behaviour-preserving.
+- Keys: fk-491014934d1e. Supersedes task 270 (done at decompose: it extracted the tail as `_settle_timestep`; the preamble copy remains).
+- Work: §5.1 shape (`_StepEnergies`, `_BatteryExchange`, `_execute`, `_settle`, the last reshaping 270's `_settle_timestep`); both functions call them; one copy of the split-source comment; `validate_energy_balance`'s derivation comment replaced by a pointer to `_settle`. Behaviour-preserving.
 - Files: `src/solar_challenge/flow.py`, `tests/unit/test_flow.py` (additions only).
 - Signal: unlocks γ (one function to change basis in) and ε (one tail); §9 row 1.
 - Prereqs: 786, 788.

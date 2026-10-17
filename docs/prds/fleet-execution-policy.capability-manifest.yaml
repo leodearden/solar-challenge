@@ -5,9 +5,10 @@
 # each 'present' pattern is absent today and each 'absent' pattern is present today.
 prd: docs/prds/fleet-execution-policy.md
 schema_version: 1
+signal_leaves: ["α", "β", "δ", "ε"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 879
     title: "FleetRunner: one execution value with one fan-out loop"
     capabilities:
       - name: "runner-defined"
@@ -103,7 +104,7 @@ tasks:
           kind: manual
           reason: "B4 is a CliRunner run over a seeded day; the message text belongs to S15/S12"
   - label: "β"
-    task_id: null
+    task_id: 882
     title: "One CLI invocation: the runner and --quiet on Click's context"
     capabilities:
       - name: "invocation-defined"
@@ -179,7 +180,7 @@ tasks:
           paths: ["src/solar_challenge/cli/fleet.py"]
           expect: present
   - label: "γ"
-    task_id: null
+    task_id: 885
     title: "Finance and optimize require their simulator"
     capabilities:
       - name: "optimize-default-gone"
@@ -203,7 +204,7 @@ tasks:
           kind: manual
           reason: "B10's fresh-interpreter probe"
   - label: "δ"
-    task_id: null
+    task_id: 889
     title: "The dashboard: injected job manager, one shutdown, fleet jobs through the runner"
     capabilities:
       - name: "registry-gone"
@@ -285,7 +286,7 @@ tasks:
           kind: manual
           reason: "B12 and B13 exercise the S19 seams; their spellings are S19's"
   - label: "ε"
-    task_id: null
+    task_id: 890
     title: "The age-0 fleet simulated once per finance run (L10)"
     capabilities:
       - name: "reuse-defined"

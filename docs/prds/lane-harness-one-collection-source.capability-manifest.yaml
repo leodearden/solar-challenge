@@ -2,11 +2,15 @@
 # Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
 # Code anchors verified against main 962552956508 (2026-10-15); checks are pattern-anchored.
 # task_id stays null until commit_planning stamps it. θ depends on task 366 (out of batch).
+# Decompose session, 2026-10-17: every mechanical check re-run against main 2ff5673.
+# Five checks re-scoped so that each fails today and can pass once its leaf lands,
+# and stays green after later leaves; each says why in its binding or reason.
 prd: docs/prds/lane-harness-one-collection-source.md
 schema_version: 1
+signal_leaves: ["δ", "ζ", "η", "θ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 873
     title: "Collection report: one typed collection from an in-repo pytest plugin"
     capabilities:
       - name: "plugin-writes-the-collection-report"
@@ -64,7 +68,7 @@ tasks:
           kind: manual
           reason: "a behavioural test α writes; its verdict is the verify's"
   - label: "β"
-    task_id: null
+    task_id: 874
     title: "One orchestrator command value and one process runner"
     capabilities:
       - name: "command-value-constructors"
@@ -84,20 +88,20 @@ tasks:
           paths: ["tests/"]
           expect: absent
       - name: "test-command-indexing-gone"
-        binding: "grep: [\"test_command\"] in test_per_task_verify and _verify_suite on main"
+        binding: "grep: [\"test_command\"] in test_per_task_verify and _verify_suite on main; scoped to the call-site files because the signal allows it inside tests/_orchestrator_config.py, whose docstring holds it"
         verdict: PASS
         delivered_check:
           kind: grep
           pattern: "\\[\"test_command\"\\]"
-          paths: ["tests/"]
+          paths: ["tests/_verify_suite.py", "tests/_collect_only.py", "tests/_lane_collection.py", "tests/unit/", "tests/interpreter_matrix/", "tests/newest_releases/"]
           expect: absent
       - name: "slot-indexing-gone"
-        binding: "grep: config[key] in test_stale_uv_lock.test_the_verify_refuses_a_stale_lock_naming_uv_lock on main"
+        binding: "grep: config[key] in test_stale_uv_lock.test_the_verify_refuses_a_stale_lock_naming_uv_lock on main; scoped to that file because tests/unit/test_web_fleet_config.py has an unrelated config[key] that β never touches"
         verdict: PASS
         delivered_check:
           kind: grep
           pattern: "config\\[key\\]"
-          paths: ["tests/"]
+          paths: ["tests/unit/test_stale_uv_lock.py"]
           expect: absent
       - name: "collect-runner-is-not-subprocess-run"
         binding: "grep: run_collect_only uses subprocess.run(shell=True, timeout=300) on main, which kills only the shell"
@@ -122,7 +126,7 @@ tasks:
           kind: manual
           reason: "a process-group property observed by β's own test"
   - label: "γ"
-    task_id: null
+    task_id: 875
     title: "Lane-only stated once: e2e joins collect_ignore; the e2e mark comes from its directory"
     capabilities:
       - name: "e2e-in-collect-ignore"
@@ -145,10 +149,8 @@ tasks:
         binding: "probe: a hook-added mark is seen by -m and get_closest_marker; no pytest.mark.e2e in tests/e2e/conftest.py on main"
         verdict: PASS
         delivered_check:
-          kind: grep
-          pattern: "pytest\\.mark\\.e2e"
-          paths: ["tests/e2e/conftest.py"]
-          expect: present
+          kind: manual
+          reason: "θ deletes the mark from the hook, so a present-check would turn red after θ and hold up γ's dependent η; B9's pytester test in the verify carries it"
       - name: "addopts-restatement-deleted"
         binding: "grep: pyproject addopts carries --ignore=tests/e2e on main"
         verdict: PASS
@@ -169,12 +171,10 @@ tasks:
         binding: "decision 4: config/tree skew; present on main and must stay"
         verdict: PASS
         delivered_check:
-          kind: grep
-          pattern: "--ignore=tests/e2e"
-          paths: ["dark-factory-orchestrator.yaml"]
-          expect: present
+          kind: manual
+          reason: "already true on main, so a present-check is vacuous and the polarity gate refuses it; review checks that γ leaves test_command byte-identical"
   - label: "δ"
-    task_id: null
+    task_id: 881
     title: "Mark vocabulary: retire integration, refuse unregistered marks, delete the hand-kept network lists"
     capabilities:
       - name: "marker-registration-file-deleted"
@@ -209,7 +209,7 @@ tasks:
           paths: ["pyproject.toml"]
           expect: present
   - label: "ε"
-    task_id: null
+    task_id: 877
     title: "D23: every dependency floor is the locked release; the capability-claim tests go"
     capabilities:
       - name: "floor-rule-test-exists"
@@ -236,11 +236,11 @@ tasks:
           paths: ["tests/unit/test_e2e_extra.py", "tests/unit/test_build_system.py", "tests/unit/test_dev_extra.py"]
           expect: absent
       - name: "newest-releases-deselects-the-floor-test"
-        binding: "probe: --deselect of a function node id deselects every parametrisation; newest-releases runs the verify on an upgraded lock (grep)"
+        binding: "probe: --deselect of a function node id deselects every parametrisation; newest-releases runs the verify on an upgraded lock (grep); the check matches the test's name, which decision 7 fixes, not the argv spelling"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "--deselect=tests/unit/test_dependency_floors\\.py"
+          pattern: "test_every_declared_floor_is_the_locked_release"
           paths: ["tests/newest_releases/"]
           expect: present
       - name: "claude-md-states-the-floor-rule"
@@ -256,7 +256,7 @@ tasks:
           kind: manual
           reason: "a git-diff property of uv.lock observed in the leaf's own commit"
   - label: "ζ"
-    task_id: null
+    task_id: 884
     title: "The lint and the helper type check cover tests/"
     capabilities:
       - name: "name-defined-ignores-deleted"
@@ -282,7 +282,7 @@ tasks:
           kind: manual
           reason: "gate scope is asserted by ζ's own tests in the verify; successor names are tactical"
   - label: "η"
-    task_id: null
+    task_id: 887
     title: "The orchestrator config's rationale moves to docs; measured durations go"
     capabilities:
       - name: "yaml-points-at-its-doc"
@@ -308,7 +308,7 @@ tasks:
           kind: manual
           reason: "a line count; delivered_check grep has no count threshold"
   - label: "θ"
-    task_id: null
+    task_id: 891
     title: "Retire the e2e mark once task 366 takes e2e off the offline exemption"
     capabilities:
       - name: "e2e-mark-gone-from-tests"

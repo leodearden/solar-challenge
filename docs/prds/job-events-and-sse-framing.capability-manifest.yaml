@@ -5,9 +5,10 @@
 # each 'present' pattern is absent today and each 'absent' pattern is present today.
 prd: docs/prds/job-events-and-sse-framing.md
 schema_version: 1
+signal_leaves: ["δ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 880
     title: "One SSE module frames both streams; the chat's failure event is failed"
     capabilities:
       - name: "one-encoder"
@@ -43,7 +44,7 @@ tasks:
           paths: ["src/solar_challenge/web/static/js/assistant.js"]
           expect: present
   - label: "β"
-    task_id: null
+    task_id: 883
     title: "One job state table and writer; every job ends; run status follows the job"
     capabilities:
       - name: "job-transition-table"
@@ -93,7 +94,7 @@ tasks:
           kind: manual
           reason: "a lifecycle property observed by B4 and B5 through JobManager's public methods and the HTTP API"
   - label: "γ"
-    task_id: null
+    task_id: 886
     title: "Versioned job snapshots replace the drained queue; every stream sees every state"
     capabilities:
       - name: "snapshot-read"
@@ -137,7 +138,7 @@ tasks:
           paths: ["src/solar_challenge/web/api.py"]
           expect: absent
   - label: "δ"
-    task_id: null
+    task_id: 888
     title: "The job stream's vocabulary, the limit as timeout, and one browser reader"
     note: "Integration gate: every row of PRD §10 green on main together."
     capabilities:

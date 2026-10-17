@@ -17,7 +17,7 @@ Mechanizes G3 (substrate exists) and G6 (premise valid) per leaf of `docs/prds/o
 | Moving the tail changes no float | identity: `_settle` evaluates the same expressions in the same order on the same inputs; `_execute` makes the same Battery calls in the same order | PASS |
 | `tests/unit/test_flow.py` pins today's flows on both paths | grep: 21 `simulate_timestep_tou` call sites and the `simulate_timestep` classes in `tests/unit/test_flow.py` | PASS |
 | S2's flow edits land first (file order) | producer: 786, 788 (pending), upstream | PASS (queued) |
-| Task 270 is the same work | read: task 270 pending, files `flow.py`, `tests/unit/test_flow.py`, blocked on deferred 183 | PASS (superseded) |
+| Task 270 is the same work | read at authoring: task 270 pending, blocked on deferred 183; at decompose (2026-10-17) 270 is done (57ce3c2, `_settle_timestep`) and the preamble copy remains, so α files with `x_supersedes_task` 270 | PASS (supersedes done task) |
 
 ## β — One grid-charge gate sized from the SOC after the step's PV charge (intermediate)
 
