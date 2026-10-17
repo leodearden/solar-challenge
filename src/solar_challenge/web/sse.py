@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Server-Sent Events framing: the encoder ``sse_frame`` and the events it frames.
+"""Server-Sent Events: the encoder ``sse_frame``, the events it frames, and the response that sends them.
 
 Each ``SseEvent`` binds an event name to its one payload type, a dataclass whose
 fields are the frame's JSON data. The chat stream's events are its catalogue:
-``CHAT_DELTA``, ``CHAT_TOOL``, ``CHAT_DONE`` and ``CHAT_FAILED``.
-docs/prds/job-events-and-sse-framing.md §4 states the contract.
+``CHAT_DELTA``, ``CHAT_TOOL``, ``CHAT_DONE`` and ``CHAT_FAILED``. ``HEARTBEAT`` is
+the comment a stream sends between events, and ``event_stream`` the response that
+sends a stream's frames. docs/prds/job-events-and-sse-framing.md §4 states the
+contract.
 """
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Generic, TypeVar
+
+from flask import Response
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -56,6 +61,18 @@ def sse_frame(
     id_line = "" if event_id is None else f"id: {event_id}\n"
     retry_line = "" if retry_ms is None else f"retry: {retry_ms}\n"
     return f"event: {event.name}\n{id_line}{retry_line}data: {json.dumps(asdict(payload))}\n\n"
+
+
+HEARTBEAT: Final = ":heartbeat\n\n"
+
+
+def event_stream(frames: Iterable[str]) -> Response:
+    """Return the 200 ``text/event-stream`` response sending *frames*, neither cached nor buffered by a proxy."""
+    return Response(
+        frames,
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @dataclass(frozen=True)

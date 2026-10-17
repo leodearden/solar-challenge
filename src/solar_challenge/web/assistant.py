@@ -16,7 +16,7 @@ gives the reason.
 
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from functools import partial
@@ -41,6 +41,7 @@ from solar_challenge.web.simulation_params import (
     parse_home_config,
     with_default_days,
 )
+from solar_challenge.web.sse import event_stream
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
@@ -819,18 +820,6 @@ def _error_frame(message: str) -> str:
     return _sse_frame("error", {"message": message})
 
 
-def _event_stream(frames: Iterable[str]) -> Response:
-    """Return the 200 ``text/event-stream`` response sending *frames*, uncached and unbuffered by proxies."""
-    return Response(
-        frames,
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 def _has_text(content: str) -> bool:
     """Whether *content* holds text a Messages API message may carry: something besides whitespace."""
     return bool(content.strip())
@@ -1162,14 +1151,14 @@ def chat() -> Response:
     try:
         data = request_json_object()
     except NotAJsonObject as refusal:
-        return _event_stream([_error_frame(str(refusal))])
+        return event_stream([_error_frame(str(refusal))])
     user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:
-        return _event_stream([_error_frame(refusal_reason)])
+        return event_stream([_error_frame(refusal_reason)])
     try:
         client = _create_client()
     except Exception as exc:
-        return _event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
+        return event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
     run_id: str = str(data.get("run_id", "")).strip()
-    return _event_stream(_answer_frames(client, user_message, run_id))
+    return event_stream(_answer_frames(client, user_message, run_id))
