@@ -43,9 +43,6 @@ _FINANCE_PARTITION = Transitional(
     "program stream S8, the finance partition "
     "(plans/review-all-program-solar_challenge-20261014.md)"
 )
-_TASK_454 = Transitional(
-    "task 454, which hoists them as docs/prds/chart-panels-and-theme-tokens.md decision 12 rules"
-)
 
 ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] = {
     ("solar_challenge", "solar_challenge.cli"): Permanent(
@@ -74,10 +71,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
     ("solar_challenge.load", "solar_challenge.ev"): Transitional(
         "program stream S12, load composition"
     ),
-    ("solar_challenge.web.api", "solar_challenge.web.fleet_config"): Transitional("task 153"),
-    ("solar_challenge.web.history", "solar_challenge.web.charts"): _TASK_454,
-    ("solar_challenge.web.routes", "solar_challenge.web.charts"): _TASK_454,
-    ("solar_challenge.web.routes", "solar_challenge.web.database"): _TASK_454,
 }
 
 
