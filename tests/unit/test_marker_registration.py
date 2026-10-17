@@ -6,6 +6,9 @@ These tests enforce that:
    ``-m 'not slow'``.
 3. Specific network-touching unit-test classes are also deselected under
    ``-m 'not slow'``, while pure-logic unit-test classes remain selected.
+4. The verify's mark expression selects every test in OFFLINE_INTEGRATION_FILES,
+   the integration modules that run offline from a seeded weather cache, and at
+   least one in each.
 
 All assertions run pytest in a subprocess so they reflect the *effective*
 pytest configuration, not just TOML parsing.  These tests must NOT be marked
@@ -19,19 +22,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests._lane_collection import suite_node_ids_matching
+
 # Repo root is three levels up from tests/unit/this_file.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 INTEGRATION_FILES = [
     "tests/integration/test_pvgis.py",
     "tests/integration/test_home_simulation.py",
-    "tests/integration/test_fleet_simulation.py",
     "tests/integration/test_dispatch_strategies.py",
     "tests/integration/test_tou_dispatch.py",
     "tests/integration/test_tariff_integration.py",
-    "tests/integration/test_ev_fleet.py",
     "tests/integration/test_pv_performance_ratio.py",
 ]
+
+# Integration modules that run offline from a seeded weather cache, so the verify must run every test in them.
+OFFLINE_INTEGRATION_FILES = [
+    "tests/integration/test_fleet_simulation.py",
+    "tests/integration/test_ev_fleet.py",
+]
+
+# The mark expression of the verify's test_command in dark-factory-orchestrator.yaml.
+VERIFY_MARK_EXPRESSION = "not slow and not e2e"
 
 
 class TestMarkerRegistration:
@@ -71,10 +85,10 @@ class TestMarkerRegistration:
 
 
 class TestIntegrationSuiteExcludedUnderNotSlow:
-    """Verify that all integration test classes are deselected by ``-m 'not slow'``."""
+    """Verify that every test in INTEGRATION_FILES is deselected by ``-m 'not slow'``."""
 
     def test_integration_suite_excluded_under_not_slow(self):
-        """No integration test should be collected under ``-m 'not slow'``.
+        """No test in INTEGRATION_FILES should be collected under ``-m 'not slow'``.
 
         This check is intentionally dynamic — it does not enumerate class names.
         Instead it verifies that the unfiltered collection finds *something*
@@ -134,6 +148,23 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
             f"but got {filtered.returncode}. One or more integration test "
             "classes is missing the ``@pytest.mark.slow`` decorator.\n"
             f"stdout:\n{filtered.stdout}\nstderr:\n{filtered.stderr}"
+        )
+
+
+class TestOfflineIntegrationFilesSelectedByTheVerify:
+    """Verify that the verify's mark expression selects every test of the integration modules that run offline."""
+
+    @pytest.mark.parametrize("path", OFFLINE_INTEGRATION_FILES)
+    def test_the_verify_selects_every_test(self, path: str) -> None:
+        dropped = suite_node_ids_matching(REPO_ROOT, path, f"not ({VERIFY_MARK_EXPRESSION})")
+        assert not dropped, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` drops {len(dropped)} of the tests in {path}, "
+            f"though they run offline from a seeded weather cache: {list(dropped)}"
+        )
+        selected = suite_node_ids_matching(REPO_ROOT, path, VERIFY_MARK_EXPRESSION)
+        assert selected, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` selects no test in {path}, "
+            "so the check that it drops none holds vacuously"
         )
 
 
