@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary, grid_dependency_ratio, self_consumption_ratio
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
@@ -244,17 +244,12 @@ def calculate_export_ratio(results: SimulationResults) -> float:
     return summary.export_ratio
 
 
-def _share(part: float, whole: float) -> float:
-    """part / whole, or 0.0 when whole is not positive, the rule of calculate_summary's ratios."""
-    return float(part / whole) if whole > 0 else 0.0
-
-
 @dataclass(frozen=True, kw_only=True)
 class SeasonSummary:
     """One season of a run: its energy totals in kWh, and calculate_summary's two ratios of them.
 
-    self_consumption_ratio is self-consumption / generation and grid_dependency_ratio is grid
-    import / demand, each 0.0 when its denominator is not positive.
+    self_consumption_ratio and grid_dependency_ratio are home.self_consumption_ratio and
+    home.grid_dependency_ratio of the season's totals.
     """
 
     generation_kwh: float
@@ -279,8 +274,12 @@ def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSum
         generation_kwh=float(totals["generation_kwh"]),
         demand_kwh=float(totals["demand_kwh"]),
         self_consumption_kwh=float(totals["self_consumption_kwh"]),
-        self_consumption_ratio=_share(totals["self_consumption_kwh"], totals["generation_kwh"]),
-        grid_dependency_ratio=_share(totals["grid_import_kwh"], totals["demand_kwh"]),
+        self_consumption_ratio=self_consumption_ratio(
+            self_consumption_kwh=totals["self_consumption_kwh"], generation_kwh=totals["generation_kwh"]
+        ),
+        grid_dependency_ratio=grid_dependency_ratio(
+            grid_import_kwh=totals["grid_import_kwh"], demand_kwh=totals["demand_kwh"]
+        ),
     )
 
 

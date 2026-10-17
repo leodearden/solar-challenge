@@ -14,6 +14,8 @@ from solar_challenge.home import (
     SimulationResults,
     SummaryStatistics,
     calculate_summary,
+    grid_dependency_ratio,
+    self_consumption_ratio,
     simulate_home,
 )
 from solar_challenge.load import LoadConfig
@@ -478,10 +480,6 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
     total_import = sum(s.total_grid_import_kwh for s in home_summaries)
     total_export = sum(s.total_grid_export_kwh for s in home_summaries)
 
-    # Fleet ratios
-    fleet_self_ratio = total_self / total_gen if total_gen > 0 else 0.0
-    fleet_grid_dep = total_import / total_demand if total_demand > 0 else 0.0
-
     # Per-home generation distribution
     gen_values = [s.total_generation_kwh for s in home_summaries]
     gen_series = pd.Series(gen_values)
@@ -512,8 +510,8 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
         total_self_consumption_kwh=total_self,
         total_grid_import_kwh=total_import,
         total_grid_export_kwh=total_export,
-        fleet_self_consumption_ratio=fleet_self_ratio,
-        fleet_grid_dependency_ratio=fleet_grid_dep,
+        fleet_self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
+        fleet_grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
         per_home_generation_min_kwh=float(gen_series.min()),
         per_home_generation_max_kwh=float(gen_series.max()),
         per_home_generation_mean_kwh=float(gen_series.mean()),
