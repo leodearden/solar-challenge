@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import tempfile
@@ -24,6 +25,12 @@ pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
 collect_ignore = ["interpreter_matrix", "css_build", "newest_releases"]
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Freeze the heap collection built, so the full collections during the run scan only what the tests create."""
+    gc.collect()
+    gc.freeze()
 
 
 @pytest.fixture
