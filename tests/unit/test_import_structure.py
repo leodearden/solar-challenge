@@ -19,6 +19,85 @@ import pytest
 _PACKAGE = "solar_challenge"
 
 
+@dataclass(frozen=True)
+class _FunctionLocalImport:
+    """One import of a module of the package inside a function: the importing and imported modules, and the import's file and line."""
+
+    importer: str
+    imported: str
+    path: Path
+    line: int
+
+    def __str__(self) -> str:
+        return f"{self.path.as_posix()}:{self.line} imports {self.imported} inside a function"
+
+
+def _module_name(source: Path, src_dir: Path) -> str:
+    """Return the dotted name of the module *source* under *src_dir*; an __init__.py names its package."""
+    parts = source.relative_to(src_dir).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imported_modules(
+    node: ast.Import | ast.ImportFrom, importer: str, is_package: bool
+) -> list[str]:
+    """Return the dotted names of the modules *node* imports, resolving a relative import against *importer*'s package."""
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    names = [node.module] if node.module else [alias.name for alias in node.names]
+    if node.level == 0:
+        return names
+    package = importer if is_package else importer.rpartition(".")[0]
+    base = package.rsplit(".", node.level - 1)[0]
+    return [f"{base}.{name}" for name in names]
+
+
+def _imports_nested_in_functions(
+    node: ast.AST, in_function: bool = False
+) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield, once each, the imports under *node* that sit inside a function or method."""
+    for child in ast.iter_child_nodes(node):
+        if in_function and isinstance(child, (ast.Import, ast.ImportFrom)):
+            yield child
+        yield from _imports_nested_in_functions(
+            child, in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+
+
+def _function_local_package_imports(src_dir: Path) -> list[_FunctionLocalImport]:
+    """Return every import of the package's modules inside a function of the package under *src_dir*, in path then line order."""
+    found: list[_FunctionLocalImport] = []
+    for source in sorted((src_dir / _PACKAGE).rglob("*.py")):
+        importer = _module_name(source, src_dir)
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in _imports_nested_in_functions(tree):
+            for imported in _imported_modules(node, importer, source.name == "__init__.py"):
+                if imported == _PACKAGE or imported.startswith(f"{_PACKAGE}."):
+                    found.append(
+                        _FunctionLocalImport(
+                            importer, imported, source.relative_to(src_dir.parent), node.lineno
+                        )
+                    )
+    return found
+
+
+def _unlisted(
+    found: Iterable[_FunctionLocalImport], allowed: Collection[tuple[str, str]]
+) -> list[_FunctionLocalImport]:
+    """Return the *found* sites whose (importing module, imported module) pair is not in *allowed*."""
+    return [site for site in found if (site.importer, site.imported) not in allowed]
+
+
+def _stale(
+    found: Iterable[_FunctionLocalImport], allowed: Collection[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Return the sorted pairs of *allowed* that no *found* site imports."""
+    imported = {(site.importer, site.imported) for site in found}
+    return sorted(set(allowed) - imported)
+
+
 def _write_package(src_dir: Path, modules: dict[str, str]) -> Path:
     """Write each of *modules*, keyed by its path in the package, under src_dir/solar_challenge, and return *src_dir*."""
     for relative_path, source in modules.items():
