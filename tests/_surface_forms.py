@@ -7,7 +7,7 @@ the forms of the public members a class's own body defines or declares. named_cl
 gives the classes those forms name, and signature_closure the classes of a package that
 some names' forms name, directly or through another such class. member_forms reads class
 bodies, so undeclared_attributes and unset_attributes check the attributes a class
-declares against those its own source sets on self.
+declares against those its own __init__ and __post_init__ set on self.
 
 tests/unit/surface_forms_helper/test_<function>.py pins each function's rules, one rule
 per test.
@@ -46,7 +46,7 @@ import textwrap
 import types
 import typing
 import weakref
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 
 def surface_form(obj: object) -> str:
@@ -155,7 +155,7 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
 
 def undeclared_attributes(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares.
+    """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
     A string annotation in any of those class bodies is read as named_classes reads one,
     so a name its module does not bind raises NameError.
@@ -165,7 +165,7 @@ def undeclared_attributes(cls: type) -> set[str]:
 
 
 def unset_attributes(cls: type) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError.
@@ -703,19 +703,74 @@ def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
 
 
 def _attributes_set_on_self(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self.
+    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines set on their receiver, each one's first parameter.
 
-    A frozen dataclass can set one only by object.__setattr__(self, "name", value), so
-    that call counts as setting it too.
+    Each is read whole, a closure in it included. An attribute is set by any assignment
+    to it on the receiver, or by setattr(receiver, "name", value),
+    <expr>.__setattr__(receiver, "name", value), receiver.__setattr__("name", value) or
+    super().__setattr__("name", value), whose name is a string constant.
     """
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(cls)))):
-        match node:
-            case ast.Attribute(value=ast.Name(id="self"), attr=name, ctx=ast.Store()):
-                names.add(name)
-            case ast.Call(
-                func=ast.Attribute(value=ast.Name(id="object"), attr="__setattr__"),
-                args=[ast.Name(id="self"), ast.Constant(value=str() as name), *_],
-            ):
-                names.add(name)
+    names = {
+        write.name
+        for initialiser in _initialisers(cls)
+        for write in _writes_to_receiver(initialiser)
+    }
     return {name for name in names if not name.startswith("_")}
+
+
+_INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
+
+
+def _initialisers(cls: type) -> list[ast.FunctionDef]:
+    """The __init__ and __post_init__ statements of *cls*'s own body, never another method nor anything a class nested in it defines."""
+    match ast.parse(textwrap.dedent(inspect.getsource(cls))).body:
+        case [ast.ClassDef(body=body)]:
+            return [
+                statement
+                for statement in body
+                if isinstance(statement, ast.FunctionDef) and statement.name in _INITIALISERS
+            ]
+    raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
+
+
+@dataclasses.dataclass(frozen=True)
+class _SelfWrite:
+    """A write an initialiser makes to its receiver: the attribute it sets, and its source as ast.unparse spells it."""
+
+    name: str
+    source: str
+
+
+def _writes_to_receiver(function: ast.FunctionDef) -> Iterator[_SelfWrite]:
+    """Each write *function* makes to its receiver, its first positional parameter, anywhere in it; none if it takes no positional parameter."""
+    positional = [*function.args.posonlyargs, *function.args.args]
+    if not positional:
+        return
+    receiver = positional[0].arg
+    for node in ast.walk(function):
+        write = _write_to(receiver, node)
+        if write is not None:
+            yield write
+
+
+def _write_to(receiver: str, node: ast.AST) -> _SelfWrite | None:
+    """The write *node* makes to *receiver*, if it is one in a spelling _attributes_set_on_self counts."""
+    match node:
+        case ast.Attribute(value=ast.Name(id=owner), attr=name, ctx=ast.Store()) if owner == receiver:
+            return _SelfWrite(name, ast.unparse(node))
+        case ast.Call(
+            func=ast.Name(id="setattr") | ast.Attribute(attr="__setattr__"),
+            args=[ast.Name(id=owner), ast.Constant(value=str() as name), *_],
+        ) if owner == receiver:
+            return _SelfWrite(name, ast.unparse(node))
+        case ast.Call(
+            func=ast.Attribute(value=ast.Name(id=owner), attr="__setattr__"),
+            args=[ast.Constant(value=str() as name), *_],
+        ) if owner == receiver:
+            return _SelfWrite(name, ast.unparse(node))
+        case ast.Call(
+            func=ast.Attribute(value=ast.Call(func=ast.Name(id="super")), attr="__setattr__"),
+            args=[ast.Constant(value=str() as name), *_],
+        ):
+            return _SelfWrite(name, ast.unparse(node))
+    return None
