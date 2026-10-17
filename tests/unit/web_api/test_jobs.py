@@ -137,8 +137,7 @@ class TestGetJobProgress:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
-        assert "event: error" in body
-        assert "Job not found" in body
+        assert parse_sse_events(body) == [SseFrame("error", {"error": "Job not found"})]
 
     @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
     def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
