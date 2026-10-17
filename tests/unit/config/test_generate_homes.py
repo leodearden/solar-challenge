@@ -22,6 +22,7 @@ from solar_challenge.config import (
     generate_homes_from_distribution,
     load_fleet_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.tariff import TariffConfig
 
@@ -274,6 +275,38 @@ class TestGenerateHomesFromDistribution:
             "Home 4",
             "Home 5",
         ]
+
+
+class TestGenerationRefusesAPoolNotSizedToTheFleet:
+    """generate_homes_from_distribution refuses a fleet whose shuffled pool does not hold one value per home."""
+
+    @pytest.mark.parametrize(
+        "resized_n_homes",
+        [pytest.param(4, id="grown past its pool"), pytest.param(2, id="shrunk below its pool")],
+    )
+    def test_a_fleet_resized_after_construction_is_refused_as_construction_refuses_it(
+        self, resized_n_homes: int
+    ) -> None:
+        """A fleet built with 3 pool values for 3 homes, then given another n_homes, is refused in the words construction uses for that size."""
+
+        def fleet_of(n_homes: int) -> FleetDistributionConfig:
+            return FleetDistributionConfig(
+                n_homes=n_homes,
+                pv=PVDistributionConfig(
+                    capacity_kw=ShuffledPoolDistribution(values=(4.0,), counts=(3,))
+                ),
+                load=LoadDistributionConfig(),
+            )
+
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            fleet_of(resized_n_homes)
+        config = fleet_of(3)
+        config.n_homes = resized_n_homes
+
+        with pytest.raises(ConfigurationError) as use_refusal:
+            generate_homes_from_distribution(config, Location.bristol())
+
+        assert str(use_refusal.value) == str(construction_refusal.value)
 
 
 class TestHeatPumpDistribution:
