@@ -281,6 +281,21 @@ class SummaryStatistics:
             )
 
 
+def self_consumption_ratio(*, self_consumption_kwh: float, generation_kwh: float) -> float:
+    """The share of the generation that was self-consumed, or 0.0 when the generation is not positive."""
+    return _share(self_consumption_kwh, generation_kwh)
+
+
+def grid_dependency_ratio(*, grid_import_kwh: float, demand_kwh: float) -> float:
+    """The share of the demand that was imported from the grid, or 0.0 when the demand is not positive."""
+    return _share(grid_import_kwh, demand_kwh)
+
+
+def _share(part: float, whole: float) -> float:
+    """part / whole, or 0.0 when whole is not positive."""
+    return float(part / whole) if whole > 0 else 0.0
+
+
 def _hourly_weather(config: HomeConfig, weather: WeatherProvider) -> pd.DataFrame:
     """The hourly weather a run uses: weather's for config.location, asked once.
 
@@ -664,11 +679,6 @@ def calculate_summary(
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
-    # Calculate ratios with zero-division protection
-    self_consumption_ratio = total_self / total_gen if total_gen > 0 else 0.0
-    grid_dependency_ratio = total_import / total_demand if total_demand > 0 else 0.0
-    export_ratio = total_export / total_gen if total_gen > 0 else 0.0
-
     # Calculate simulation duration
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
 
@@ -693,7 +703,7 @@ def calculate_summary(
     if results.heat_pump_load is not None:
         total_heat_pump_kwh = totals["heat_pump_load_kwh"]
         peak_heat_pump_kw = float(results.heat_pump_load.max())
-        heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
+        heat_pump_ratio = _share(total_heat_pump_kwh, total_demand)
 
     return SummaryStatistics(
         total_generation_kwh=total_gen,
@@ -705,9 +715,9 @@ def calculate_summary(
         total_battery_discharge_kwh=total_discharge,
         peak_generation_kw=peak_gen,
         peak_demand_kw=peak_demand,
-        self_consumption_ratio=self_consumption_ratio,
-        grid_dependency_ratio=grid_dependency_ratio,
-        export_ratio=export_ratio,
+        self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
+        grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
+        export_ratio=_share(total_export, total_gen),
         simulation_days=sim_days,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
