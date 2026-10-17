@@ -295,7 +295,43 @@ class TestChartTotals:
         assert by_name["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
         assert by_name["Daily Cost"]["y"] == [2.88, 2.88]
         assert by_name["Daily Revenue"]["y"] == [1.44, 1.44]
-        assert by_name["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
+
+
+class TestFinancialBreakdownNetCostLine:
+    """financial_breakdown's line is the run's net cost to date: its import cost less its export revenue, summed day by day."""
+
+    def test_is_the_running_total_of_each_days_import_cost_less_its_export_revenue(self) -> None:
+        line = traces_by_name(
+            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
+        )["Cumulative Net Cost"]
+
+        # £2.88 of import cost less £1.44 of export revenue each day.
+        assert line["y"] == [1.44, 2.88]
+
+    def test_ends_at_the_runs_net_cost_to_the_penny(self) -> None:
+        """An ordinary priced home: its import cost exceeds its export revenue, so its line ends above zero, at the run's net cost.
+
+        Its day totals are not whole pennies, so summing them rounded day by day would leave the line pennies off.
+        """
+        results = make_sinusoidal_sim_results(
+            days=3, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
+        )
+        net_cost = calculate_summary(results).net_cost_gbp
+        assert net_cost > 0
+
+        line = traces_by_name(financial_breakdown(results))["Cumulative Net Cost"]
+
+        assert line["y"][-1] == pytest.approx(net_cost, abs=0.005)
+
+    def test_is_drawn_against_the_secondary_axis_titled_for_it(self) -> None:
+        figure = financial_breakdown(
+            make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05)
+        )
+
+        line = traces_by_name(figure)["Cumulative Net Cost"]
+
+        assert line["yaxis"] == "y2"
+        assert json.loads(figure)["layout"]["yaxis2"]["title"]["text"] == "Cumulative Net Cost (GBP)"
 
     def test_seasonal_bars_are_each_seasons_kwh_of_the_runs_own_flows(self) -> None:
         figure = seasonal_comparison(make_sim_results(self_kwh=876.0, export_kwh=1752.0, import_kwh=438.0, days=365))
