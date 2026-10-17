@@ -8,7 +8,9 @@ and scenarios API endpoints under the /api/ prefix.
 
 import json
 import logging
+import math
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
 from types import MappingProxyType
@@ -24,6 +26,7 @@ from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scena
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.database import JobStatus, PresetType, get_db
+from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
@@ -371,8 +374,6 @@ def preview_distribution() -> tuple[Response, int]:
     params = data.get("params", {})
     n_samples = data.get("n_samples", 100)
 
-    from solar_challenge.web.fleet_config import sample_distribution  # noqa: PLC0415
-
     try:
         samples = sample_distribution(dist_type, params, n_samples)
     except (ValueError, TypeError) as exc:
@@ -528,8 +529,6 @@ def simulate_sweep() -> tuple[Response, int]:
         a window parse_home_config refuses included.
         Every 400 comes before any job is submitted.
     """
-    import uuid as _uuid  # noqa: PLC0415
-
     data = request_json_object()
     parameter = str(data.get("parameter", "pv_capacity_kw"))
     home_config_key = _SWEEP_PARAMETER_HOME_KEYS.get(parameter)
@@ -553,8 +552,6 @@ def simulate_sweep() -> tuple[Response, int]:
 
     # Generate sweep points
     if mode == "geometric":
-        import math  # noqa: PLC0415
-
         if min_val <= 0:
             return jsonify({"error": "Min must be positive for geometric sweep"}), 400
         log_min = math.log(min_val)
@@ -577,7 +574,7 @@ def simulate_sweep() -> tuple[Response, int]:
         point_homes.append((val, home_config, start_date, end_date))
 
     # Submit one home job per sweep point
-    sweep_id = str(_uuid.uuid4())
+    sweep_id = str(uuid.uuid4())
     job_manager = get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
