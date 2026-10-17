@@ -555,6 +555,10 @@ def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
     once its class body declares it, e.g. `cache_dir: Path`; and a declaration that no
     __init__ or __post_init__ sets would pin a name that instances lack.
+
+    A known gap: undeclared_attributes reads only __init__ and __post_init__, so an
+    undeclared public attribute that only another method sets on self, such as a cache
+    filled on first use, passes this guard though FROZEN_MEMBERS cannot pin it.
     """
     classes = _pinned_classes()
     undeclared = [
