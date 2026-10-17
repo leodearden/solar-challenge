@@ -12,7 +12,13 @@ import yaml
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
+from solar_challenge.config import (
+    DispatchStrategyConfig,
+    load_fleet_config,
+    parse_fleet_distribution_config,
+    parse_seg_rate,
+)
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
@@ -286,6 +292,31 @@ class TestImportFleetYAML:
 
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+
+    @pytest.mark.parametrize(
+        "counts",
+        [pytest.param([2, 1], id="short of n_homes"), pytest.param([2, 3], id="beyond n_homes")],
+    )
+    def test_a_shuffled_pool_not_sized_to_the_fleet_is_refused_with_the_loaders_refusal(
+        self, client: FlaskClient, counts: list[int]
+    ) -> None:
+        """A scenario file whose shuffled pool does not hold one value for each of its 4 homes gets a 400 carrying the loaders' refusal, which the fleet page shows."""
+        fleet = {
+            "n_homes": 4,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": counts}},
+            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+        }
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
 
     @pytest.mark.parametrize(
         ("text", "reason"),

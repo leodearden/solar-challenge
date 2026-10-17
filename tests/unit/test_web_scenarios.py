@@ -164,8 +164,10 @@ class TestOldScenarioApiPaths:
         assert client.open(path, method=method).status_code == 404
 
 
-def _validation_with_pv_pool(client: FlaskClient, entries: list[dict[str, float]]) -> Any:
-    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity."""
+def _validation_with_pv_pool(
+    client: FlaskClient, entries: list[dict[str, float]], **form_changes: Any
+) -> Any:
+    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity, and with *form_changes* over it."""
     form = {
         key: value
         for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
@@ -173,7 +175,12 @@ def _validation_with_pv_pool(client: FlaskClient, entries: list[dict[str, float]
     }
     response = client.post(
         "/api/scenarios/validate",
-        json={**form, "pv_distribution_type": "shuffled_pool", "pv_sp_entries": entries},
+        json={
+            **form,
+            "pv_distribution_type": "shuffled_pool",
+            "pv_sp_entries": entries,
+            **form_changes,
+        },
     )
     assert response.status_code == 200
     return response.get_json()
@@ -282,8 +289,8 @@ class TestScenarioAPI:
     ) -> None:
         """A PV pool of 90 values for 100 homes is the one fault in a form that validates with a pool of 100.
 
-        The builder's default PV pool used to hold those 90 values.  The fault's message is
-        not asserted: load_fleet_config raises a bare IndexError for it today.
+        The builder's default PV pool used to hold those 90 values.  The fault is reported in
+        the loader's words, naming the pool, n_homes and the pool's size.
         """
 
         def validation_with_pv_pool_counts(counts: tuple[int, int, int]) -> Any:
@@ -294,9 +301,13 @@ class TestScenarioAPI:
             return _validation_with_pv_pool(client, entries)
 
         assert validation_with_pv_pool_counts((20, 40, 40)) == {"valid": True, "errors": []}
-        short_pool = validation_with_pv_pool_counts((20, 40, 30))
-        assert short_pool["valid"] is False
-        assert len(short_pool["errors"]) == 1, short_pool["errors"]
+        assert validation_with_pv_pool_counts((20, 40, 30)) == {
+            "valid": False,
+            "errors": [
+                "FleetDistributionConfig: shuffled_pool counts for 'pv.capacity_kw' must total "
+                "n_homes (100), got 90"
+            ],
+        }
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
@@ -343,15 +354,19 @@ class TestScenarioAPI:
     ) -> None:
         """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, naming the count.
 
-        The pool sent is at most one value over the limit, never a count such as finding
+        The form's fleet has that many homes, since a pool holds one value per home.  The pool
+        sent is at most one value over the limit, never a count such as finding
         fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
         of the pool.
         """
         at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
         above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
 
-        assert _validation_with_pv_pool(client, at_limit) == {"valid": True, "errors": []}
-        assert _validation_with_pv_pool(client, above_limit) == {
+        assert _validation_with_pv_pool(client, at_limit, n_homes=MAX_FLEET_HOMES) == {
+            "valid": True,
+            "errors": [],
+        }
+        assert _validation_with_pv_pool(client, above_limit, n_homes=MAX_FLEET_HOMES) == {
             "valid": False,
             "errors": [
                 f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
