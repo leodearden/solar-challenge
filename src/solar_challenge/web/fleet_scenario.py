@@ -181,8 +181,8 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
-    own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
-    either way.  A setting the form needs but cannot hold exactly is refused, naming it,
+    own default for it.  A null battery capacity reads as 0 kWh.  A setting the form
+    needs but cannot hold exactly is refused, naming it,
     since loading it anyway would run a different fleet.  A period the page cannot run,
     ending before it starts or longer than MAX_WINDOW_DAYS days, is refused naming
     period.start_date and period.end_date.  A fleet size that is not a whole number from 1
@@ -424,7 +424,7 @@ def _read_component(
 def _read_battery(battery: Any, path: str) -> _BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the *path* battery block's, none when it is absent or null.
 
-    A null capacity reads as 0 kWh: a home with no battery either way.
+    A null capacity reads as 0 kWh.
 
     Raises:
         ValueError: From distribution_form_spec, for a capacity the editor cannot hold, or
@@ -442,8 +442,8 @@ def _read_battery(battery: Any, path: str) -> _BlockRead:
 
 
 def _null_capacity_as_zero(spec: Any) -> Any:
-    """The battery capacity *spec* with each null capacity in it read as 0 kWh: the spec itself, a fixed distribution's value, or one of a distribution's values."""
-    if isinstance(spec, Mapping) and spec.get("type") == "fixed":
+    """The battery capacity *spec* with each null capacity in it read as 0 kWh."""
+    if isinstance(spec, Mapping) and spec.get("type") == "fixed" and "value" in spec:
         return {**spec, "value": _zero_if_null(spec["value"])}
     if isinstance(spec, Mapping) and isinstance(spec.get("values"), list):
         return {**spec, "values": [_zero_if_null(value) for value in spec["values"]]}
