@@ -41,7 +41,18 @@ from solar_challenge.web.simulation_params import (
     parse_home_config,
     with_default_days,
 )
-from solar_challenge.web.sse import event_stream
+from solar_challenge.web.sse import (
+    CHAT_DELTA,
+    CHAT_DONE,
+    CHAT_FAILED,
+    CHAT_TOOL,
+    ChatDelta,
+    ChatDone,
+    ChatFailed,
+    ChatToolCall,
+    event_stream,
+    sse_frame,
+)
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
@@ -810,16 +821,6 @@ def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
     }
 
 
-def _sse_frame(event: str, payload: Mapping[str, Any]) -> str:
-    """Return the SSE frame that sends *event* with *payload* as its JSON data."""
-    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
-
-
-def _error_frame(message: str) -> str:
-    """Return the SSE ``error`` frame carrying *message*."""
-    return _sse_frame("error", {"message": message})
-
-
 def _has_text(content: str) -> bool:
     """Whether *content* holds text a Messages API message may carry: something besides whitespace."""
     return bool(content.strip())
@@ -996,7 +997,6 @@ class _ReplyRecord:
         assert_never(event)
 
 
-_DONE_FRAME = _sse_frame("done", {})
 _NO_REPLY_TEXT = "[No reply text was received.]"
 
 
@@ -1014,7 +1014,7 @@ class _TurnEnding:
     metadata: Mapping[str, Any]
 
 
-_FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
+_FINISHED = _TurnEnding(sse_frame(CHAT_DONE, ChatDone()), _NO_REPLY_TEXT, MappingProxyType({}))
 _CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
 
 
@@ -1025,7 +1025,9 @@ def _failed(error: Exception) -> _TurnEnding:
     """
     notice = f"Streaming error: {error}"
     return _TurnEnding(
-        _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
+        sse_frame(CHAT_FAILED, ChatFailed(notice)),
+        notice,
+        MappingProxyType({"error": str(error), "truncated": True}),
     )
 
 
@@ -1062,9 +1064,9 @@ class _TurnRecorder:
 def _sse_frames(event: _ReplyEvent) -> tuple[str, ...]:
     """Return the SSE frames that show *event* to the client: ``delta`` for reply text, ``tool`` for a tool call, none for the rest."""
     if isinstance(event, _ReplyText):
-        return (_sse_frame("delta", {"text": event.text}),)
+        return (sse_frame(CHAT_DELTA, ChatDelta(event.text)),)
     if isinstance(event, _ToolCalled):
-        return (_sse_frame("tool", {"name": event.name}),)
+        return (sse_frame(CHAT_TOOL, ChatToolCall(event.name)),)
     if isinstance(event, (_ToolRan, _ModelCallEnded)):
         return ()
     assert_never(event)
@@ -1103,6 +1105,11 @@ def _refusal(user_message: str) -> str | None:
     return None
 
 
+def _refused_turn(reason: str) -> Response:
+    """The response that refuses a chat turn: one ``failed`` frame carrying *reason*."""
+    return event_stream([sse_frame(CHAT_FAILED, ChatFailed(reason))])
+
+
 def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
     """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
 
@@ -1137,28 +1144,25 @@ def chat() -> Response:
     A ``run_id`` puts that run's summary in front of the message as context.
     A body that is not a JSON object, an unset ANTHROPIC_API_KEY, a message
     without text and a client that cannot be built are each answered with a
-    lone ``error`` frame, and no turn is stored.
+    lone ``failed`` frame, and no turn is stored.
 
-    SSE frame contract:
-    - ``event: delta`` / ``data: {"text": "<token>"}``  — streamed token
-    - ``event: tool``  / ``data: {"name": "<tool>"}``   — the model called a tool
-    - ``event: done``  / ``data: {}``                   — stream complete
-    - ``event: error`` / ``data: {"message": "<msg>"}`` — error (no 500)
+    The frames are web/sse.py's chat catalogue: ``delta`` and ``tool`` while the
+    reply streams, then ``done``, or ``failed`` carrying the notice to show.
 
     Returns:
-        ``text/event-stream`` 200 response (even on error).
+        ``text/event-stream`` 200 response, even when the turn fails.
     """
     try:
         data = request_json_object()
     except NotAJsonObject as refusal:
-        return event_stream([_error_frame(str(refusal))])
+        return _refused_turn(str(refusal))
     user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:
-        return event_stream([_error_frame(refusal_reason)])
+        return _refused_turn(refusal_reason)
     try:
         client = _create_client()
     except Exception as exc:
-        return event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
+        return _refused_turn(f"Could not initialise Anthropic client: {exc}")
     run_id: str = str(data.get("run_id", "")).strip()
     return event_stream(_answer_frames(client, user_message, run_id))
