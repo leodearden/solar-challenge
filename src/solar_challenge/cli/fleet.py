@@ -2,6 +2,7 @@
 """Fleet simulation commands."""
 
 import dataclasses
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
@@ -375,45 +376,12 @@ def sweep(
     if "fleet_distribution" not in raw_config:
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
-    # Build sweep configs upfront
-    sweep_configs: list[tuple[float, FleetConfig]] = []
-    param_name: str = "multiplier"  # Default for YAML sweep
-
-    if param is not None:
-        # CLI-driven sweep
-        if min_val is None or max_val is None:
-            raise ConfigurationError(
-                "CLI sweep requires --min and --max values"
-            )
-        sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
-        sweep_values = sweep_spec.get_values()
-        param_name = param
-        print_info(
-            f"CLI sweep: {param} from {min_val} to {max_val} "
-            f"({steps} steps, {mode})"
-        )
-
-        for val in sweep_values:
-            substituted = substitute_config_variables(raw_config, {param: val})
-            fleet_config = dataclasses.replace(
-                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
-            )
-            sweep_configs.append((val, fleet_config))
-
+    if param is None:
+        param_name, sweep_configs = _yaml_sweep(raw_config)
     else:
-        # YAML-defined sweep
-        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
-        if sweep_spec is None:
-            raise ConfigurationError(
-                "No sweep spec found in config. "
-                "Use --param for CLI sweep or add type: sweep to multiplier."
-            )
-
-        print_info(
-            f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
-            f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+        param_name, sweep_configs = _param_sweep(
+            raw_config, param, min_val, max_val, steps, mode
         )
-        sweep_configs = parse_sweep_fleet_configs(raw_config)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)
@@ -439,10 +407,7 @@ def sweep(
 
         # Save individual result if output_dir specified
         if output_dir is not None:
-            if param is not None:
-                output_file = output_dir / f"{param}_{sweep_val:.4f}.csv"
-            else:
-                output_file = output_dir / f"multiplier_{sweep_val:.4f}.csv"
+            output_file = output_dir / f"{param_name}_{sweep_val:.4f}.csv"
             _export_fleet_results(fleet_results, output_file)
 
     with create_fleet_progress() as progress:
@@ -480,6 +445,52 @@ def sweep(
         summary_file = output_dir / "sweep_summary.csv"
         summary_df.to_csv(summary_file, index=False)
         print_success(f"Sweep summary saved to {summary_file}")
+
+
+def _param_sweep(
+    raw_config: dict[str, Any],
+    param: str,
+    min_val: Optional[float],
+    max_val: Optional[float],
+    steps: int,
+    mode: str,
+) -> tuple[str, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, param, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
+    if min_val is None or max_val is None:
+        raise ConfigurationError("CLI sweep requires --min and --max values")
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
+    print_info(
+        f"CLI sweep: {param} from {min_val} to {max_val} "
+        f"({steps} steps, {mode})"
+    )
+    return param, [
+        (
+            value,
+            dataclasses.replace(
+                parse_fleet_config(substitute_config_variables(raw_config, {param: value})),
+                name=f"{param}={value:.4f}",
+            ),
+        )
+        for value in sweep_spec.get_values()
+    ]
+
+
+def _yaml_sweep(
+    raw_config: Mapping[str, Any],
+) -> tuple[str, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, multiplier, and each sweep value with the fleet raw_config's YAML-defined sweep builds for it."""
+    param_name = "multiplier"
+    sweep_spec = detect_fleet_sweep_spec(raw_config)
+    if sweep_spec is None:
+        raise ConfigurationError(
+            "No sweep spec found in config. "
+            "Use --param for CLI sweep or add type: sweep to multiplier."
+        )
+    print_info(
+        f"YAML sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
+        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+    )
+    return param_name, parse_sweep_fleet_configs(raw_config)
 
 
 def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
