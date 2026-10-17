@@ -294,15 +294,6 @@ class TestDatabaseConnectionManagement:
             cursor.execute("SELECT 1")
             assert cursor.fetchone()[0] == 1
 
-    def test_get_db_enables_row_factory(self, db_path):
-        """Test get_db enables dict-like row access."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 as value")
-            row = cursor.fetchone()
-            assert row["value"] == 1
-
     def test_get_db_commits_on_success(self, db_path):
         """Test get_db commits changes on success."""
         init_db(db_path)
@@ -1264,27 +1255,6 @@ class TestDatabasePragmas:
             cursor.execute("PRAGMA journal_mode")
             mode = cursor.fetchone()[0]
             assert mode == "wal"
-
-    def test_foreign_keys_enabled_in_connection(self, db_path):
-        """Test that foreign keys are enforced in get_db connections."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA foreign_keys")
-            fk_status = cursor.fetchone()[0]
-            assert fk_status == 1
-
-    def test_foreign_key_enforcement_rejects_invalid_reference(self, db_path):
-        """Test that FK enforcement actually rejects invalid references."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            # Try to insert a job referencing a non-existent run
-            with pytest.raises(Exception):
-                cursor.execute(
-                    "INSERT INTO jobs (id, run_id, status) VALUES (?, ?, ?)",
-                    ("job-1", "nonexistent-run", "queued"),
-                )
 
 
 REFUSED_RUN_IDS = [

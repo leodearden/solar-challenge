@@ -29,7 +29,7 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
-from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, get_db
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, connect, get_db
 from solar_challenge.web.storage import RunStorage
 
 logger = logging.getLogger(__name__)
@@ -595,9 +595,7 @@ class JobManager:
         success_message: str = "Simulation completed successfully",
     ) -> None:
         """Common job lifecycle wrapper for DB, status, progress, SSE, and errors."""
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn = connect(db_path)
         try:
             self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
             conn.execute(
