@@ -189,23 +189,17 @@ class FinanceConfig:
 
 @dataclass(frozen=True)
 class BillBreakdown:
-    """Per-householder annual cost-recovery outlay broken into component line items (CR3).
+    """One householder's cost-recovery outlay for the billed period, in line items (CR3).
 
     The CBS owns the PV/battery assets and the export MPAN.  The householder
-    pays the CBS an own-use rate for self-consumed solar, pays retail for grid
-    import, and pays the standing charge.  No SEG credit flows to the householder.
+    pays the CBS an own-use rate for self-consumed solar, and pays the retailer
+    for grid import and the standing charge.  No SEG credit flows to the
+    householder.
 
-    Definitional invariants (§3.1):
-      own_use_payment_gbp      = own_use_rate_pence_per_kwh × self_consumed_kwh / 100
-      vat_gbp                  = vat_rate × (import_cost_gbp + standing_charge_gbp
-                                             + own_use_payment_gbp)
-      total_outlay_gbp         = (import_cost_gbp + standing_charge_gbp
-                                  + own_use_payment_gbp) × (1 + vat_rate)
-      own_use_vat_gbp          = vat_rate × own_use_payment_gbp
-      cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
-      self_consumption_saving_gbp = self_consumed_kwh × (retail − own_use_rate)
-                                    × (1 + vat_rate) / 100
-      saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
+    Every figure covers the billed period.  :func:`bill` is the library's
+    producer of this type and takes that period as ``period_days``;
+    :func:`householder_bill` bills the simulator's homes for a year.  The
+    identities between the fields are stated once, in :func:`bill`'s docstring.
 
     Two overlapping views — never sum across them:
 
@@ -223,39 +217,36 @@ class BillBreakdown:
     invoice means summing exactly {own_use_payment_gbp, own_use_vat_gbp}
     against cbs_amount_due_gbp and reading no other field.
 
-    All monetary values are in GBP (£).  The H3 board identity holds when
-    import is retail-priced and import_kwh == demand − sc:
-      saving_vs_baseline == self_consumed × (retail − own_use) × (1+vat) / 100
+    All monetary values are in GBP (£).
     """
 
     standing_charge_gbp: float
-    """Annual grid standing charge (£)."""
+    """Grid standing charge for the billed period (£, ex-VAT)."""
 
     import_cost_gbp: float
-    """Cost of electricity imported from the grid (£, ex-VAT)."""
+    """Cost of the billed period's grid import, as the caller priced it (£, ex-VAT)."""
 
     own_use_payment_gbp: float
-    """CBS own-use transfer payment for self-consumed solar (£, ex-VAT).
+    """CBS own-use transfer payment for the solar self-consumed in the billed period (£, ex-VAT).
 
-    Computed as own_use_rate_pence_per_kwh × self_consumed_kwh / 100.
     This is the community-benefit-society transfer price for CBS-owned solar
     consumed on-site; it is NOT SEG and does not involve the export MPAN.
     """
 
     vat_gbp: float
-    """VAT on (import + standing + own_use_payment) at the scenario VAT rate (£)."""
+    """VAT on the billed period's import, standing charge and own-use payment (£)."""
 
     total_outlay_gbp: float
-    """Total annual householder outlay (headline): (import + standing + own_use) × (1+vat) (£).
+    """Total householder outlay for the billed period, VAT included (£): the headline figure.
 
-    Replaces net_annual_bill_gbp from the old W2 model.  No SEG deduction.
+    No SEG deduction: the export income belongs to the CBS.
     """
 
     own_use_vat_gbp: float
-    """VAT on the CBS own-use payment: vat_rate × own_use_payment_gbp (£)."""
+    """VAT on the own-use payment (£): the part of vat_gbp the CBS invoices."""
 
     cbs_amount_due_gbp: float
-    """What the household pays the CBS: own_use_payment_gbp + own_use_vat_gbp (£).
+    """What the household pays the CBS for the billed period: own_use_payment_gbp + own_use_vat_gbp (£).
 
     Import and standing charge are paid to the retailer and are NOT part of
     this figure.  Defined as the float SUM of the two fields above (never
@@ -264,27 +255,29 @@ class BillBreakdown:
     """
 
     self_consumption_saving_gbp: float
-    """Value of solar used on-site relative to full retail purchase (£, VAT-inclusive).
+    """Value of the solar used on-site in the billed period, net of its own-use price (£, VAT-inclusive).
 
-    = self_consumed × (retail_rate − own_use_rate) × (1 + vat_rate) / 100.
-    Represents the retail↔own-use price gap benefit, not the full avoided-retail value.
-    Zero when own_use_rate == retail_rate.
+    Each self-consumed kWh is valued at the gap between the baseline's effective
+    import rate (``eff_rate`` in :func:`bill`'s identities) and the own-use
+    rate.  This is the price-gap benefit, not the full avoided-import value, and
+    is zero when the two rates are equal.
     """
 
     baseline_bill_gbp: float
-    """Hypothetical annual bill without any solar / battery system (£, VAT-inclusive).
+    """Hypothetical bill for the billed period without any solar / battery system (£, VAT-inclusive).
 
-    All demand priced at the retail baseline rate; standing charge added.
+    The caller's cost of importing all demand (:func:`bill`'s
+    ``baseline_import_cost_gbp``) plus the standing charge.
     """
 
     saving_vs_baseline_gbp: float
-    """Saving compared to the no-solar baseline: baseline_bill − total_outlay (£)."""
+    """The billed period's saving against the no-solar baseline bill (£)."""
 
     saving_pct: float
-    """Percentage saving vs baseline: 100 × saving_vs_baseline / baseline."""
+    """saving_vs_baseline_gbp as a percentage of baseline_bill_gbp."""
 
     self_consumption_fraction: float
-    """Fraction of total PV generation consumed on-site (dimensionless, 0–1)."""
+    """Fraction of the billed period's PV generation consumed on-site (dimensionless, 0–1)."""
 
     def __post_init__(self) -> None:
         """Enforce the CBS-slice identity for every producer, not just bill().
@@ -891,6 +884,9 @@ def householder_bill(
       * Apply the missing-tariff retail fallback (:func:`_physics_import_cost_gbp`,
         with a :class:`UserWarning`) before the physics/override switch, so
         both paths price an untariffed home's import at retail.
+      * Price the no-solar baseline at the retail rate (demand × retail / 100),
+        so bill()'s effective rate, and with it self_consumption_saving, is
+        the retail rate.
       * Always call bill(period_days=365, ...) so standing charge is
         annual regardless of the original simulation length.
 

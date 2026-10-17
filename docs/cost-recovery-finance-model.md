@@ -40,7 +40,7 @@ relationship to the system has three components:
 
 | Component | Who receives/pays | Where in code |
 |-----------|------------------|---------------|
-| Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `householder_bill()` `own_use_payment_gbp` |
+| Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `bill()` `own_use_payment_gbp` |
 | Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` (SEG rate reconciled from `ScenarioConfig.seg_tariff_pence_per_kwh` onto homes) |
 | Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff is configured) | `householder_bill()` `import_cost_gbp` |
 
@@ -110,10 +110,17 @@ money path moves to basis C.
 
 ## 3. Householder-Outlay Equations
 
-Source: `finance.py:householder_bill()`, `BillBreakdown`.
+Source: `finance.py:bill()`, the bill arithmetic, and `householder_bill()`, the annual wrapper that resolves its inputs; the result is a `BillBreakdown`.
 
 All monetary values in GBP (£).  VAT is applied to (import + standing + own-use)
 as a block; the householder receives **no SEG deduction**.
+
+The equations below are `bill()`'s identities on the inputs `householder_bill()` gives
+it: a 365-day period (`period_days = 365`), the home's totals scaled to that year when
+its window is under 360 days (§4, *Annual basis*), and a baseline that prices all demand
+at the retail rate (`baseline_import_cost_gbp = demand_kwh × retail_rate / 100`).  That
+baseline makes `bill()`'s effective rate, `baseline_import_cost_gbp / demand_kwh × 100`,
+the retail rate, which is why `self_consumption_saving_gbp` below is priced at retail.
 
 `own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
 With `self_consumption_override` set it comes from the override instead (*Override
@@ -795,15 +802,16 @@ fleet median — the board's single-home summary figure.
 | Concept | Equation | Code location |
 |---------|----------|---------------|
 | Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
-| Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `householder_bill()` |
+| Annual bill | `bill()` over a 365-day period, on the annualised totals, with the baseline at retail (§3) | `householder_bill()` |
+| Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `bill()` |
 | Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `householder_bill()`, `_seg_export_income_gbp()`, `_billed_energy()` |
-| VAT | `vat_rate × (import + standing + own_use_payment)` | `householder_bill()` |
-| Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
-| Saving | `baseline_bill − total_outlay` | `householder_bill()` |
+| VAT | `vat_rate × (import + standing + own_use_payment)` | `bill()` |
+| Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `bill()` |
+| Saving | `baseline_bill − total_outlay` | `bill()` |
 | CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ_homes `_billed_energy` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
 | Solve rate-base | `fleet_sc` = Σ_homes `_billed_energy` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
-| Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` |
+| Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |
