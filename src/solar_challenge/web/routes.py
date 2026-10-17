@@ -12,6 +12,22 @@ from flask import (
 )
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.charts import (
+    battery_soc_chart,
+    daily_energy_balance,
+    financial_breakdown,
+    fleet_aggregate_timeline,
+    fleet_box_plots,
+    fleet_distribution_histograms,
+    fleet_grid_impact,
+    fleet_heatmap,
+    heat_pump_analysis,
+    monthly_summary,
+    power_flow_timeline,
+    sankey_diagram,
+    seasonal_comparison,
+)
+from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
@@ -31,8 +47,6 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     Returns:
         Dict with total_runs, total_homes, and total_energy_mwh.
     """
-    from solar_challenge.web.database import get_db  # noqa: PLC0415
-
     with get_db(storage.db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -119,17 +133,6 @@ def home_results(run_id: str) -> Any:
         flash("Run not found.", "error")
         return redirect(url_for("main.index"))
 
-    from solar_challenge.web.charts import (  # noqa: PLC0415
-        battery_soc_chart,
-        daily_energy_balance,
-        financial_breakdown,
-        heat_pump_analysis,
-        monthly_summary,
-        power_flow_timeline,
-        sankey_diagram,
-        seasonal_comparison,
-    )
-
     has_battery = config.battery_config is not None
 
     charts: dict[str, Any] = {
@@ -188,14 +191,6 @@ def fleet_results(run_id: str) -> Any:
     except FileNotFoundError:
         flash("Fleet run not found.", "error")
         return redirect(url_for("main.index"))
-
-    from solar_challenge.web.charts import (  # noqa: PLC0415
-        fleet_aggregate_timeline,
-        fleet_box_plots,
-        fleet_distribution_histograms,
-        fleet_grid_impact,
-        fleet_heatmap,
-    )
 
     charts: dict[str, Any] = {
         "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),

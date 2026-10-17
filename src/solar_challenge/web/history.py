@@ -5,11 +5,8 @@ The JSON endpoints the run browser calls, and each run's CSV and YAML exports,
 live under /api/history/, in api.py.
 """
 
-import logging
 from dataclasses import asdict
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 from flask import (
     Blueprint,
@@ -21,6 +18,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
 from solar_challenge.web.shared import get_storage
 
 bp = Blueprint("history", __name__)
@@ -78,17 +76,12 @@ def compare_page() -> str | Response:
         flash("Could not find at least 2 valid runs to compare.", "error")
         return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
 
-    # Build comparison charts
-    charts: dict[str, str] = {}
-    try:
-        from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
-
-        summaries = [r.get("summary", {}) for r in runs]
-        labels = [r.get("name", f"Run {i+1}") for i, r in enumerate(runs)]
-        charts["bar"] = comparison_bar_chart(summaries, labels)
-        charts["radar"] = comparison_radar(summaries, labels)
-    except Exception:
-        logger.warning("Failed to generate comparison charts", exc_info=True)
+    summaries = [r.get("summary", {}) for r in runs]
+    labels = [r.get("name", f"Run {i+1}") for i, r in enumerate(runs)]
+    charts = {
+        "bar": comparison_bar_chart(summaries, labels),
+        "radar": comparison_radar(summaries, labels),
+    }
 
     return str(render_template(
         "history/compare.html",
