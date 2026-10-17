@@ -111,7 +111,7 @@ def _from_module(node: ast.ImportFrom, importer: str, is_package: bool) -> str:
 def _imported_modules(
     node: ast.Import | ast.ImportFrom, importer: str, is_package: bool
 ) -> list[str]:
-    """Return the dotted names of the modules *node* imports: a from-import of no module (`from . import fleet`) or of the top-level package (`from solar_challenge import fleet`) names each alias as a module of that package, so every spelling of one import names it alike."""
+    """Return the dotted names of the modules *node* imports; a from-import with no module or of the top-level package names each alias as a module of it, however it is spelled."""
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]
     from_module = _from_module(node, importer, is_package)
