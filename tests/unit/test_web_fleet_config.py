@@ -16,6 +16,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.fleet_config import (
+    DISTRIBUTION_KEYS,
     MAX_FLEET_HOMES,
     MAX_FLEET_SEED,
     apply_fleet_overlay,
@@ -38,7 +39,7 @@ _SINGLE_NUMBER_FIELDS = [
 ]
 
 #: The keys of a distribution as the distribution editor holds it, each sent in the field x.<key>.
-_FIELDS = {key: f"x.{key}" for key in ("type", "mean", "std", "min", "max", "values", "entries")}
+_FIELDS = {key: f"x.{key}" for key in DISTRIBUTION_KEYS}
 
 #: The keys of the editor's distribution, each mapped to the field the scenario builder sends a PV distribution's in.
 _BUILDER_PV_FIELDS = {

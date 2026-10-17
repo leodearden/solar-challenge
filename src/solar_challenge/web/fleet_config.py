@@ -478,13 +478,14 @@ def _editor_type(dist_type: object) -> _EditorType | None:
     return _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
 
 
-#: The keys of a distribution as the distribution editor holds it.
-_DISTRIBUTION_KEYS = ("type", "mean", "std", "min", "max", "values", "entries")
+#: The keys of a distribution as the distribution editor holds it: the keys a form's
+#: *fields* map for :func:`distribution_grammar_spec`.
+DISTRIBUTION_KEYS = ("type", "mean", "std", "min", "max", "values", "entries")
 
 
 def _fields_under(path: str) -> dict[str, str]:
     """Each key of an editor distribution, mapped to its field in the distribution at *path*: ``path.key``."""
-    return {key: f"{path}.{key}" for key in _DISTRIBUTION_KEYS}
+    return {key: f"{path}.{key}" for key in DISTRIBUTION_KEYS}
 
 
 def distribution_grammar_spec(

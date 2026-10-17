@@ -22,30 +22,31 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, distribution_grammar_spec
+from solar_challenge.web.fleet_config import (
+    DISTRIBUTION_KEYS,
+    MAX_FLEET_HOMES,
+    distribution_grammar_spec,
+)
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
 
 _BUILDER_FORM = "Builder form"
 
-#: Each key of the distribution editor's distribution, mapped to the suffix of the builder
-#: form field carrying it, after the component's key: scenario-builder.js componentFormData's
+#: The suffix of the builder form field carrying each key of the editor's distribution
+#: whose field is not named for the key itself: scenario-builder.js componentFormData's
 #: wire contract.
-_DISTRIBUTION_FIELD_SUFFIXES: Mapping[str, str] = {
+_FIELD_SUFFIX_OVERRIDES: Mapping[str, str] = {
     "type": "distribution_type",
-    "mean": "mean",
-    "std": "std",
-    "min": "min",
-    "max": "max",
     "values": "wd_values",
     "entries": "sp_entries",
 }
 
 
 def _distribution_fields(component: FleetComponent) -> dict[str, str]:
-    """Each key of the editor's distribution, mapped to the builder form field carrying it for *component*."""
+    """Each key of the editor's distribution, mapped to the builder form field carrying it for *component*: the component's key, then the key or its suffix override."""
     return {
-        key: f"{component.key}_{suffix}" for key, suffix in _DISTRIBUTION_FIELD_SUFFIXES.items()
+        key: f"{component.key}_{_FIELD_SUFFIX_OVERRIDES.get(key, key)}"
+        for key in DISTRIBUTION_KEYS
     }
 
 
