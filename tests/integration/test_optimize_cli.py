@@ -14,7 +14,7 @@ from typing import Optional
 
 import pytest
 import yaml
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
@@ -826,13 +826,13 @@ class TestOptimizeCLIE2EFast:
         options: list[str],
         *,
         n_homes: int = 5,
-    ) -> tuple[object, list[object]]:
+    ) -> tuple[Result, list[FleetConfig]]:
         """Run `optimize configs` on a fresh *n_homes*-home scenario with *options*, answering every fleet simulation with *fleet_results*.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
         """
-        simulated_fleets: list[object] = []
+        simulated_fleets: list[FleetConfig] = []
 
         def simulate(fleet_config, start, end):
             simulated_fleets.append(fleet_config)
