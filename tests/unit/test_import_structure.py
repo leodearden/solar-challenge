@@ -95,18 +95,25 @@ def _module_name(source: Path, src_dir: Path) -> str:
     return ".".join(parts)
 
 
+def _from_module(node: ast.ImportFrom, importer: str, is_package: bool) -> str:
+    """Return the dotted name of the module or package *node*'s `from` clause names, resolving a relative one against *importer*'s package."""
+    if node.level == 0:
+        return node.module or ""
+    package = importer if is_package else importer.rpartition(".")[0]
+    base = package.rsplit(".", node.level - 1)[0]
+    return f"{base}.{node.module}" if node.module else base
+
+
 def _imported_modules(
     node: ast.Import | ast.ImportFrom, importer: str, is_package: bool
 ) -> list[str]:
-    """Return the dotted names of the modules *node* imports, resolving a relative import against *importer*'s package."""
+    """Return the dotted names of the modules *node* imports: a from-import of no module (`from . import fleet`) or of the top-level package (`from solar_challenge import fleet`) names each alias as a module of that package, so every spelling of one import names it alike."""
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]
-    names = [node.module] if node.module else [alias.name for alias in node.names]
-    if node.level == 0:
-        return names
-    package = importer if is_package else importer.rpartition(".")[0]
-    base = package.rsplit(".", node.level - 1)[0]
-    return [f"{base}.{name}" for name in names]
+    from_module = _from_module(node, importer, is_package)
+    if node.module is None or from_module == _PACKAGE:
+        return [f"{from_module}.{alias.name}" for alias in node.names]
+    return [from_module]
 
 
 def _imports_nested_in_functions(
@@ -293,6 +300,15 @@ def test_an_allowed_pair_no_function_imports_is_reported_stale(tmp_path: Path) -
             id="relative",
         ),
         pytest.param(
+            "web/routes.py",
+            "def f():\n    from solar_challenge import fleet\n    from .. import fleet\n",
+            [
+                ("solar_challenge.web.routes", "solar_challenge.fleet", 2),
+                ("solar_challenge.web.routes", "solar_challenge.fleet", 3),
+            ],
+            id="package-itself-absolute-and-relative",
+        ),
+        pytest.param(
             "web/__init__.py",
             "def create():\n    from .app import create_app\n    return create_app()\n",
             [("solar_challenge.web", "solar_challenge.web.app", 2)],
@@ -303,7 +319,7 @@ def test_an_allowed_pair_no_function_imports_is_reported_stale(tmp_path: Path) -
 def test_the_scan_finds_only_package_imports_nested_in_a_function(
     tmp_path: Path, module: str, source: str, expected: list[tuple[str, str, int]]
 ) -> None:
-    """The scan finds an import of the package only inside a function or method, and resolves a relative one."""
+    """The scan finds an import of the package only inside a function or method, and names its module alike whether the import is absolute or relative."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
     found = _function_local_package_imports(src_dir)
