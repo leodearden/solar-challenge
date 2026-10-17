@@ -19,7 +19,6 @@ from solar_challenge.web.charts import (
     fleet_aggregate_timeline,
     fleet_grid_impact,
     heat_pump_analysis,
-    overlaid_power_flows,
     power_flow_timeline,
 )
 from tests._finance_builders import make_fleet_results_of, make_sim_results
@@ -82,7 +81,6 @@ def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> No
         "power_flow_timeline": power_flow_timeline(year),
         "battery_soc_chart": battery_soc_chart(year, battery_config=_TEN_KWH_BATTERY),
         "heat_pump_load_profile": heat_pump_charts.load_profile_chart,
-        "overlaid_power_flows": overlaid_power_flows([year], ["Run A"]),
         "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet),
         "fleet_grid_impact": fleet_grid_impact(fleet),
     }
