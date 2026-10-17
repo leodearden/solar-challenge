@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What importing the errors leaf and constructing the input types costs in imports.
+"""The errors leaf's refusal type, and what importing the leaf and constructing the input types cost in imports.
+
+ConfigurationError is a ValueError, so code that catches ValueError catches every refusal.
 
 Importing solar_challenge.errors loads no other module of the package. Constructing
 the finance, grid-services and flexibility input types, valid or refused, loads
 neither the scenario grammar (solar_challenge.config) nor pvlib.
 
-Each case runs in a fresh ``python -I`` interpreter, so the modules that earlier
-tests imported cannot hide what the case loads.
+Each import case runs in a fresh ``python -I`` interpreter, so the modules that
+earlier tests imported cannot hide what the case loads.
 """
 
 import json
@@ -14,6 +16,8 @@ import subprocess
 import sys
 
 import pytest
+
+from solar_challenge.errors import ConfigurationError
 
 _PROBE = """\
 import json
@@ -54,6 +58,10 @@ def _probe(statement: str) -> tuple[set[str], list[str] | None]:
     assert result.returncode == 0, f"the probe of {statement!r} failed:\n{result.stderr}"
     report = json.loads(result.stdout)
     return set(report["loaded"]), report["refusal"]
+
+
+def test_a_configuration_error_is_a_value_error() -> None:
+    assert issubclass(ConfigurationError, ValueError)
 
 
 def test_importing_the_errors_module_loads_no_other_package_module() -> None:

@@ -1015,6 +1015,13 @@ class TestScenarioFileBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal("scenarios[1].period", "days")):
             load_scenarios(path)
 
+    def test_a_load_scenarios_refusal_is_caught_as_a_value_error(self, tmp_path: Path) -> None:
+        """Code that catches ValueError catches the grammar's refusal of a scenario file as raised: a ConfigurationError, not a rewrap."""
+        path = _write(tmp_path, {**_SCENARIO, "period": {**_PERIOD, "days": 7}})
+        with pytest.raises(ValueError, match=_refusal("period", "days")) as refusal:
+            load_scenarios(path)
+        assert refusal.type is ConfigurationError
+
     @pytest.mark.parametrize(
         ("read", "data", "block_path", "type_name"),
         [
