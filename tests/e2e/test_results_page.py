@@ -352,7 +352,7 @@ def test_each_overview_chart_hidden_as_the_page_settles_is_as_wide_as_its_contai
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Showing Power Flow before the main column has settled hides the Overview charts while their containers' width still changes; once Overview is shown again, each ends as wide as its container."""
+    """Showing Power Flow before the main column has settled hides the Overview charts before they are fitted to their containers' settled width; once Overview is shown again, each ends as wide as its container."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
     _show_tab(page, "Power Flow")
