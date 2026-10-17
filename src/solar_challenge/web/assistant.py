@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -817,8 +817,8 @@ def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
     The SDK types both counts ``Optional[int]``; a count it reports as None adds 0.
     """
     return {
-        field: totals.get(field, 0) + (getattr(usage, field, None) or 0)
-        for field in ("cache_creation_input_tokens", "cache_read_input_tokens")
+        key: totals.get(key, 0) + (getattr(usage, key, None) or 0)
+        for key in ("cache_creation_input_tokens", "cache_read_input_tokens")
     }
 
 
@@ -981,7 +981,7 @@ class _ReplyRecord:
 
     reply: str = ""
     tools_run: tuple[str, ...] = ()
-    cache_usage: Mapping[str, int] = MappingProxyType({})
+    cache_usage: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
     def after(self, event: _ReplyEvent) -> "_ReplyRecord":
         """Return this record with *event* added."""
