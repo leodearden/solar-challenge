@@ -171,19 +171,19 @@ def sample_distribution(
 def _refuse_a_preview_without_what_its_type_is_drawn_from(
     distribution: Mapping[str, Any], fields: Mapping[str, str]
 ) -> None:
-    """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key config.py's grammar requires of its type: the preview draws from those keys and never runs the grammar.
+    """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key the preview draws its type from: the preview never runs config.py's grammar, which would name it.
 
     Raises:
         ValueError: Naming the first such key's field, from *fields*, and the keys the
             type is drawn from.
     """
     dist_type = distribution["type"]
-    required = _EDITOR_TYPES[dist_type].required
-    for key in required:
+    drawn_from = _EDITOR_TYPES[dist_type].drawn_from
+    for key in drawn_from:
         if distribution.get(key) is None:
             raise ValueError(
                 f"{fields[key]} must be given: the preview draws a {dist_type} distribution "
-                f"from its {' and '.join(required)}"
+                f"from its {' and '.join(drawn_from)}"
             )
 
 
@@ -442,32 +442,35 @@ class _EditorRows:
 
 @dataclasses.dataclass(frozen=True)
 class _EditorType:
-    """A distribution type the distribution editor offers: its scalar parameters, the keys config.py's grammar requires of it, and its rows, if it has rows."""
+    """A distribution type the distribution editor offers: its scalar parameters, the editor keys the preview draws it from, and its rows, if it has rows."""
 
     parameters: tuple[str, ...]
-    #: The keys config.py's grammar requires of the type: the forms leave a missing one for
-    #: the grammar to name, and only the preview, which never runs the grammar, refuses it.
-    required: tuple[str, ...]
+    #: The editor keys the preview draws the type from: the forms leave a missing one for
+    #: config.py's grammar to name, and only the preview, which never runs the grammar,
+    #: refuses it.
+    drawn_from: tuple[str, ...]
     rows: _EditorRows | None = None
 
 
-def _finite_floats(cells: list[tuple[str, Any]], rows_field: str) -> list[float]:
-    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field; *rows_field* goes unread, since only read_pool_counts' total refusal names it."""
+def _finite_floats(cells: Iterable[tuple[str, Any]]) -> list[float]:
+    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
     return [as_finite_float(value, field) for field, value in cells]
 
 
 #: The distribution types the fleet pages' distribution editor holds besides a fixed value.
 _EDITOR_TYPES: Mapping[str, _EditorType] = MappingProxyType({
-    "normal": _EditorType(parameters=("mean", "std", "min", "max"), required=("mean", "std")),
-    "uniform": _EditorType(parameters=("min", "max"), required=("min", "max")),
+    "normal": _EditorType(parameters=("mean", "std", "min", "max"), drawn_from=("mean", "std")),
+    "uniform": _EditorType(parameters=("min", "max"), drawn_from=("min", "max")),
     "weighted_discrete": _EditorType(
         parameters=(),
-        required=("values",),
-        rows=_EditorRows("values", "weight", "weights", _finite_floats),
+        drawn_from=("values",),
+        rows=_EditorRows(
+            "values", "weight", "weights", lambda cells, _rows_field: _finite_floats(cells)
+        ),
     ),
     "shuffled_pool": _EditorType(
         parameters=(),
-        required=("entries",),
+        drawn_from=("entries",),
         rows=_EditorRows("entries", "count", "counts", read_pool_counts),
     ),
 })
