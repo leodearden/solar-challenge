@@ -5,14 +5,19 @@ load, and serves each vendored one with the bytes its integrity attribute names.
 A script from another origin is a fetch the page depends on every time it loads, and a
 failed fetch breaks the page. base.html, the layout every page extends, loads Alpine,
 without which no page renders its UI. The scenario builder loads js-yaml, without which
-its Upload YAML reports 'jsyaml is not defined'.
+its Upload YAML reports 'jsyaml is not defined'. The results and compare pages load
+plotly.js, without which they draw no chart.
 
-So each third-party script is vendored under static/vendor/<package>/: its upstream
-release, verbatim, loaded with an integrity attribute naming the SHA-384 of the bytes
-jsdelivr serves for that release. Browsers enforce integrity on same-origin scripts too,
-so the app must serve exactly those bytes. The app's own scripts, under static/js/, need
-no integrity attribute. The off-origin scripts not vendored yet are the ones
-_OFFSITE_SCRIPTS_NOT_YET_VENDORED lists, and no template may load any other.
+So the app serves each script from one of three sources:
+- its own scripts, under static/js/, which need no integrity attribute;
+- plotly.js, from the installed plotly package: plotly writes figure JSON for the
+  plotly.js release it bundles, so web/plotly_js.py serves that release at
+  url_for('plotly_js.script'). uv.lock's hash of the plotly wheel pins those bytes, so
+  its tags carry no integrity attribute;
+- every other third-party script, vendored under static/vendor/<package>/: its upstream
+  release, verbatim, loaded with an integrity attribute naming the SHA-384 of the bytes
+  jsdelivr serves for that release. Browsers enforce integrity on same-origin scripts
+  too, so the app must serve exactly those bytes.
 
 To vendor a package, or move a vendored one to a new release:
 1. From the repository root, download the release file verbatim, under a name that
@@ -26,7 +31,6 @@ To vendor a package, or move a vendored one to a new release:
    `curl -fsS <that URL> | openssl dgst -sha384 -binary | openssl base64 -A`.
    That hashes the bytes jsdelivr serves, never a local file: a hash of the local file
    would have this test compare the file with itself, and pass an edited copy.
-4. Delete the script from _OFFSITE_SCRIPTS_NOT_YET_VENDORED, if that lists it.
 """
 
 import base64
@@ -43,9 +47,6 @@ from jinja2 import Environment
 
 from tests._html_page import element_attributes
 from tests._web_app import build_test_app
-
-_OFFSITE_SCRIPTS_NOT_YET_VENDORED = frozenset({"https://cdn.plot.ly/plotly-2.27.0.min.js"})
-"""The off-origin scripts a template may still load, until task 250 vendors them."""
 
 
 @pytest.fixture
@@ -139,21 +140,40 @@ def _serving_problem(
         return None
 
 
-def test_no_template_loads_a_script_from_another_origin_but_those_not_yet_vendored(
-    app: Flask,
-) -> None:
+def _status_of(client: FlaskClient, src: str) -> int:
+    with client.get(src) as response:
+        return response.status_code
+
+
+def test_no_template_loads_a_script_from_another_origin(app: Flask) -> None:
     offsite_by_template = {
         template: srcs
         for template, scripts in _scripts_by_template(app).items()
         if (srcs := [src for src, _ in scripts if urlsplit(src).netloc])
     }
-    offsite = {src for srcs in offsite_by_template.values() for src in srcs}
 
-    assert offsite == _OFFSITE_SCRIPTS_NOT_YET_VENDORED, (
+    assert offsite_by_template == {}, (
         f"templates load these scripts from other origins: {offsite_by_template}. A failed"
-        " fetch leaves a page without its script, so vendor each one"
-        " _OFFSITE_SCRIPTS_NOT_YET_VENDORED does not list, as this module's docstring"
-        " describes, and delete a listed one once no template loads it."
+        " fetch leaves a page without its script, so serve each one from the app, as this"
+        " module's docstring describes."
+    )
+
+
+def test_the_app_serves_every_script_a_template_loads(app: Flask) -> None:
+    client = app.test_client()
+
+    unserved = [
+        (template, src, status)
+        for template, scripts in _scripts_by_template(app).items()
+        for src, _ in scripts
+        if (status := _status_of(client, src)) != 200
+    ]
+
+    assert unserved == [], (
+        "the app does not answer 200 to these scripts its templates load, as"
+        f" (template, src, status): {unserved}. A page runs without each one: correct a"
+        " mistyped src, or serve the script from the app, as this module's docstring"
+        " describes."
     )
 
 

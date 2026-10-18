@@ -16,6 +16,10 @@ empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
 jobs inside their simulations until the test releases them.
 
+Every browser context a test opens refuses each request to another origin
+than the live server's, as if the network were down, and the test fails at
+teardown naming each refused URL.
+
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
@@ -27,6 +31,7 @@ the verify environment, which lacks the e2e extra.
 
 import functools
 import json
+import re
 import socket
 import sqlite3
 import threading
@@ -179,6 +184,49 @@ def dashboard_macros(_e2e_app: Flask) -> Any:
     A test compares what a page shows with what a macro draws for the same value.
     """
     return dashboard_macros_of(_e2e_app)
+
+
+# ---------------------------------------------------------------------------
+# Requests to other origins
+# ---------------------------------------------------------------------------
+
+
+def _urls_outside(origin: str) -> re.Pattern[str]:
+    """A pattern matching every URL outside *origin*.
+
+    Playwright matches a pattern in its driver; a predicate would stop every request the browser makes to ask this process.
+    """
+    return re.compile(f"^(?!{re.escape(origin)}/)")
+
+
+@pytest.fixture
+def new_context(
+    new_context, live_server: str, request: pytest.FixtureRequest
+) -> Iterator[Callable[..., Any]]:
+    """Wrap pytest-playwright's new_context so that each browser context it opens refuses every request to another origin than the live server's, as if the network were down.
+
+    It opens the context fixture's browser context, and so the page fixture's, as well as each one a test opens itself.
+    At teardown the test fails, naming each URL refused.
+    """
+    refused: list[str] = []
+
+    def _refuse(route) -> None:
+        refused.append(route.request.url)
+        route.abort("internetdisconnected")
+
+    def new_context_refusing_other_origins(**kwargs: Any):
+        context = new_context(**kwargs)
+        context.route(_urls_outside(live_server), _refuse)
+        return context
+
+    yield new_context_refusing_other_origins
+    if refused:
+        pytest.fail(
+            f"{request.node.nodeid} requested other origins ({', '.join(dict.fromkeys(refused))}); "
+            "an e2e test's browser reaches only the live server: serve each file a page loads from the app, "
+            "as tests/unit/test_web_page_scripts.py describes for scripts",
+            pytrace=False,
+        )
 
 
 # ---------------------------------------------------------------------------
