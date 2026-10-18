@@ -20,8 +20,11 @@ from solar_challenge.weather import (
     PvgisTmy,
     WeatherCache,
     WeatherDataError,
+    default_weather,
     get_tmy_data,
+    get_weather_cache,
     scale_tmy_to_annual_ghi,
+    set_weather_cache,
 )
 from solar_challenge.location import Location
 from tests._synthetic_weather import synthetic_june_weather
@@ -400,6 +403,59 @@ class TestPvgisTmy:
 
         assert restored.cache.cache_dir == seeded_cache.cache_dir
         pd.testing.assert_frame_equal(restored.get(Location.bristol()), june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+
+class TestDefaultWeather:
+    """default_weather() is PvgisTmy over get_weather_cache(): the cache set_weather_cache installed, else a new WeatherCache() at each call."""
+
+    @pytest.fixture
+    def no_cache_installed(self, monkeypatch, tmp_path):
+        """No cache installed and the variable unset, working in tmp_path, so that WeatherCache() resolves its default there."""
+        set_weather_cache(None)
+        monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
+        monkeypatch.chdir(tmp_path)
+
+    def test_get_weather_cache_with_none_installed_follows_the_variable_at_each_call(
+        self, no_cache_installed, monkeypatch, tmp_path
+    ):
+        """With no cache installed, each get_weather_cache() is a cache in the directory the variable names at that call."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "first"))
+        assert get_weather_cache().cache_dir == tmp_path / "first"
+
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "second"))
+        assert get_weather_cache().cache_dir == tmp_path / "second"
+
+    def test_set_weather_cache_overrides_the_variable(self, weather_cache, monkeypatch, tmp_path):
+        """get_weather_cache() returns the installed cache, whatever directory the variable names."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        assert get_weather_cache() is weather_cache
+
+    def test_default_weather_reads_the_installed_cache(self, weather_cache, pvgis_requests):
+        """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
+        june_day = synthetic_june_weather("2024-06-21")
+        weather_cache.put(june_day, "tmy", Location.bristol())
+
+        result = default_weather().get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    def test_default_weather_with_none_installed_reads_the_directory_the_variable_names(
+        self, no_cache_installed, monkeypatch, tmp_path, pvgis_requests
+    ):
+        """With no cache installed, default_weather() serves the TMY held in the directory the variable names, exactly,
+        and requests nothing from PVGIS."""
+        june_day = synthetic_june_weather("2024-06-21")
+        WeatherCache(cache_dir=tmp_path / "named").put(june_day, "tmy", Location.bristol())
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        result = default_weather().get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
 
