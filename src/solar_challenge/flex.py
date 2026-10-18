@@ -55,7 +55,7 @@ class FlexibilityValueBand:
             only for the low band (100 + 4 = 104 ≠ 120); central and high
             happen to sum exactly.
         provenance: Source reference for the numbers in this band, e.g.
-            ``"consulting §1.1 + PRD §6"``.
+            ``"consulting §1.1 + docs/prds/flexibility-value-finance-integration.md §6"``.
     """
 
     name: str
@@ -97,7 +97,10 @@ class FlexibilityValueBand:
 # max_discharge_kw; 2.5 is the consulting model's representative figure only.
 REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; config.py:264 default
 
-_PROVENANCE = "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4 + PRD §6"
+_PROVENANCE = (
+    "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4"
+    " + docs/prds/flexibility-value-finance-integration.md §6"
+)
 
 # Canonical band presets keyed "low"/"central"/"high".
 # Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total)

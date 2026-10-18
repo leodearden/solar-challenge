@@ -32,7 +32,7 @@ from solar_challenge.optimize import (
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.seg import SEGTariff
 
-app = typer.Typer(help="Discrete install-config sweep and optimisation commands (W3)")
+app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
 # --sensitivity alias → the knob it sweeps, over that knob's optimize.SENSITIVITY_BANDS values.
 _SENSITIVITY_ALIAS_MAP: dict[str, str] = {
