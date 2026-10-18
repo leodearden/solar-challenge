@@ -1,0 +1,383 @@
+# Machine-readable twin of dashboard-limits-and-distribution-table.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main ede1d99 (2026-10-17). Every grep check fails on main
+# ede1d99 and passes once its leaf lands (polarity checked with git grep at authoring).
+# Paths name fleet_distribution.py, which S5 γ creates; a check there fails until it exists.
+# task_id stays null until commit_planning stamps it.
+prd: docs/prds/dashboard-limits-and-distribution-table.md
+schema_version: 1
+signal_leaves: ["θ"]
+tasks:
+  - label: "α"
+    task_id: null
+    title: "Default window constants in timebase; the CLI and the web read them"
+    capabilities:
+      - name: "window-constants-defined"
+        binding: "new in α; timebase.py at ede1d99 holds only HOURS_PER_MINUTE among its constants"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^DEFAULT_WINDOW_START"
+          paths: ["src/solar_challenge/timebase.py"]
+          expect: present
+      - name: "cli-and-web-hold-no-default-date-literal"
+        binding: "grep: \"2024-01-01\"/\"2024-12-31\" as typer defaults in cli/home.py, cli/fleet.py (x2), cli/finance.py; cli/optimize.py's .get fallback; cli/config.py's two templates; home quick's \"2024-06-01\""
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"2024-(01-01|12-31|06-01)\""
+          paths: ["src/solar_challenge/cli/"]
+          expect: absent
+      - name: "simulation-params-reads-the-constants"
+        binding: "grep: FULL_YEAR_START = date(2024, 1, 1), FULL_YEAR_END, DAYS_WINDOW_START in web/simulation_params.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "date\\(2024, "
+          paths: ["src/solar_challenge/web/simulation_params.py"]
+          expect: absent
+      - name: "window-defaults-test"
+        binding: "new in α (W1, W2); no such module on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def test_"
+          paths: ["tests/unit/test_window_defaults.py"]
+          expect: present
+      - name: "cli-defaults-introspectable"
+        binding: "probe: typer.main.get_command exists in the locked typer; click parameters carry .default"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "W1 is observed by α's test over the real CLI app, not a grep"
+  - label: "β"
+    task_id: null
+    title: "PageLimits: every form bound rendered from one value; one range per component in every reader"
+    capabilities:
+      - name: "page-limits-defined"
+        binding: "new in β; fleet_components.py at ede1d99 holds FLEET_COMPONENTS only"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def page_limits\\("
+          paths: ["src/solar_challenge/web/fleet_components.py"]
+          expect: present
+      - name: "fleet-size-bound-moves-home"
+        binding: "grep: MAX_FLEET_HOMES = 10_000 in web/fleet_config.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^MAX_FLEET_HOMES"
+          paths: ["src/solar_challenge/web/fleet_config.py"]
+          expect: absent
+      - name: "one-channel-to-pages"
+        binding: "new in β; base.html has no page-limits element; Flask's context_processor API"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "id=\"page-limits\""
+          paths: ["src/solar_challenge/web/templates/base.html"]
+          expect: present
+      - name: "fleet-page-size-literals-gone"
+        binding: "grep: min=\"10\" max=\"500\" and range_input(... max=500 ...) in simulate/fleet.html; builder.html max=\"10000\""
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "max=\"?500|max=\"10000\""
+          paths: ["src/solar_challenge/web/templates/"]
+          expect: absent
+      - name: "script-refusals-and-parseint-gone"
+        binding: "grep: formErrors' n > 1000 and five parseInt calls in fleet-simulator.js"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "n > 1000|parseInt\\(|formErrors"
+          paths: ["src/solar_challenge/web/static/js/fleet-simulator.js"]
+          expect: absent
+      - name: "pv-range-literal-gone"
+        binding: "grep: 0.5 <= pv_kw <= 20.0 (simulation_params), pv < 0.5 || pv > 20 (home.html), (0.5–20) in assistant.py x2"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "0\\.5 <= pv_kw|pv < 0\\.5|\\(0\\.5–20\\)"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "home-battery-range-refused"
+        binding: "P1: parse_home_config accepts battery_kwh 500 (RED observed); the refusal is built in-leaf through Interval (860 upstream)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "L2 is observed by β's reader test through the Flask client"
+      - name: "homes-range-check"
+        binding: "new in β; P3 and P15 accept out-of-range homes (RED observed)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def refuse_homes_outside_ranges\\("
+          paths: ["src/solar_challenge/web/fleet_components.py"]
+          expect: present
+      - name: "form-label-macro"
+        binding: "new in β; macros.html holds toggle_switch and range_input, no number_field"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "macro number_field\\("
+          paths: ["src/solar_challenge/web/templates/components/macros.html"]
+          expect: present
+      - name: "interval-substrate"
+        binding: "producer: 860 (S4 α) delivers number_fields.Interval and within=; upstream of β"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; its own delivered checks live on 860"
+  - label: "γ"
+    task_id: null
+    title: "The per-type distribution table in fleet_distribution.py"
+    capabilities:
+      - name: "table-defined"
+        binding: "new in γ; config._DISTRIBUTION_SPEC_TYPES at ede1d99 holds keys and builders for six types; fleet_distribution.py is S5 γ's (upstream)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^DISTRIBUTION_TYPES: Mapping\\["
+          paths: ["src/solar_challenge/fleet_distribution.py"]
+          expect: present
+      - name: "private-table-replaced"
+        binding: "grep: _DISTRIBUTION_SPEC_TYPES in config.py (moved to fleet_distribution.py by S5 γ)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_DISTRIBUTION_SPEC_TYPES"
+          paths: ["src/"]
+          expect: absent
+      - name: "writer-is-the-inverse"
+        binding: "identity: every type's builder reads keys that are its spec dataclass's field names (mean, std, min, max, values, weights, counts); proportional_to writes its multiplier mapping explicitly"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def write_distribution_spec\\("
+          paths: ["src/solar_challenge/fleet_distribution.py"]
+          expect: present
+      - name: "editor-types-read-s7-kinds"
+        binding: "producer: 921 (S7 ε) delivers FieldKind and the F2 kind -> spec-type rule; upstream of γ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def editor_types\\("
+          paths: ["src/solar_challenge/fleet_distribution.py"]
+          expect: present
+  - label: "δ"
+    task_id: null
+    title: "One wire shape: both fleet pages edit and post the grammar's spec"
+    capabilities:
+      - name: "server-translators-deleted"
+        binding: "grep: _build_distribution_dict, _spec_number, _named_rows, read_pool_counts, distribution_form_spec in web/fleet_config.py and their importers"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_build_distribution_dict|_spec_number|_named_rows|read_pool_counts|distribution_form_spec|distribution_grammar_spec"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "builder-flat-fields-deleted"
+        binding: "grep: _DISTRIBUTION_FIELDS, def _distribution_spec, def _row_lists in builder_form.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_DISTRIBUTION_FIELDS|def _distribution_spec|def _row_lists|_distribution_type"
+          paths: ["src/solar_challenge/web/builder_form.py"]
+          expect: absent
+      - name: "script-serialisers-deleted"
+        binding: "grep: _buildDistPayload, _distFromConfig (fleet-simulator.js), componentFormData (scenario-builder.js)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_buildDistPayload|_distFromConfig|componentFormData"
+          paths: ["src/solar_challenge/web/static/js/"]
+          expect: absent
+      - name: "no-type-tag-in-editor-or-scripts"
+        binding: "grep: 'normal', 'uniform', 'weighted_discrete', 'shuffled_pool' in distribution-editor.html's x-show chain and the two page scripts"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "'(normal|uniform|weighted_discrete|shuffled_pool)'"
+          paths: ["src/solar_challenge/web/static/js/", "src/solar_challenge/web/templates/components/distribution-editor.html"]
+          expect: absent
+      - name: "one-starting-distribution"
+        binding: "grep: builder_default and fixed_field in fleet_components.py and their readers; _script_components in scenarios.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "builder_default|fixed_field|_script_components|_null_capacity_as_zero"
+          paths: ["src/solar_challenge/web/"]
+          expect: absent
+      - name: "invented-defaults-refused"
+        binding: "P4 (RED observed at ede1d99; task 313 in progress may remove the defaults first; δ depends on 313); the refusal is the grammar's existing 'requires mean and std' (P6)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "E2 is observed by δ's route test"
+      - name: "pool-guarantee-kept"
+        binding: "producer: 921's F6 (counts == n_homes, through 297) at parse, before generation; 697's tests reshaped"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "E7 is observed by δ's builder and fleet tests"
+      - name: "shape-translator-only-after-870"
+        binding: "producer: 870 (S4 η) makes _build_distribution_dict shape-only; upstream of δ"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering edge, not a delivered artifact"
+  - label: "ε"
+    task_id: null
+    title: "The fleet page previews the homes Run builds"
+    note: "Lead question 1 may replace ε with ε′ (delete the endpoint): then preview-has-a-page-caller flips to expect absent over src/solar_challenge/web/ and api.py's route."
+    capabilities:
+      - name: "copy-sampler-deleted"
+        binding: "grep: def sample_distribution and _draw_samples in web/fleet_config.py; P8-P10 observed"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_draw_samples|def sample_distribution"
+          paths: ["src/"]
+          expect: absent
+      - name: "preview-has-a-page-caller"
+        binding: "grep: no template or script names /api/fleet/preview-distribution at ede1d99 (G1 gap)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "preview-distribution"
+          paths: ["src/solar_challenge/web/static/js/fleet-simulator.js"]
+          expect: present
+      - name: "preview-is-the-generator"
+        binding: "producer: parse_fleet_form (wired into /api/simulate/fleet-from-distribution on main) generating through 916's sampler; upstream through γ and δ"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "P1 compares the answer with parse_fleet_form's homes in ε's test"
+  - label: "ζ"
+    task_id: null
+    title: "The builder imports scenarios and presets on the server, under the fleet page's policy"
+    capabilities:
+      - name: "browser-yaml-parsing-gone"
+        binding: "grep: jsyaml.load in scenario-builder.js; the js-yaml script tag in builder.html; static/vendor/js-yaml/"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "jsyaml|js-yaml"
+          paths: ["src/solar_challenge/web/static/js/", "src/solar_challenge/web/templates/"]
+          expect: absent
+      - name: "client-readers-gone"
+        binding: "grep: scenarioFormFields and loadPreset's || 51.45 in scenario-builder.js"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "scenarioFormFields|51\\.45"
+          paths: ["src/solar_challenge/web/static/js/scenario-builder.js"]
+          expect: absent
+      - name: "shared-import-module"
+        binding: "new in ζ; ImportedFleetForm, _read_blocks, _not_loaded, _read_typed_block in fleet_scenario.py at ede1d99"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class ImportedForm"
+          paths: ["src/solar_challenge/web/scenario_import.py"]
+          expect: present
+      - name: "builder-import-reader"
+        binding: "new in ζ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def builder_form_from_scenario\\("
+          paths: ["src/solar_challenge/web/builder_form.py"]
+          expect: present
+      - name: "builder-import-route"
+        binding: "new in ζ; api.py has /fleet/import-yaml only"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "/scenarios/import-yaml"
+          paths: ["src/solar_challenge/web/api.py"]
+          expect: present
+      - name: "silent-drops-observed"
+        binding: "read at ede1d99: scenarioFormFields' import_rate '' for a non-flat tariff and seg rate-only read; bristol-phase1-flex.yaml carries an Economy 7 tariff and a fleet_distribution block"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B1 is observed by ζ's route test"
+  - label: "η"
+    task_id: null
+    title: "The fleet form's tariff and dispatch choices from the server's tables"
+    capabilities:
+      - name: "form-settings-tables-replaced"
+        binding: "grep: _FORM_TARIFF_SETTINGS and _FORM_DISPATCH_SETTINGS in fleet_scenario.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_FORM_TARIFF_SETTINGS|_FORM_DISPATCH_SETTINGS"
+          paths: ["src/"]
+          expect: absent
+      - name: "dispatch-choices-from-the-server-table"
+        binding: "producer: 786 (S2 α) delivers dispatch.STRATEGY_CONFIG_BY_TYPE; upstream of η"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "STRATEGY_CONFIG_BY_TYPE"
+          paths: ["src/solar_challenge/web/fleet_scenario.py"]
+          expect: present
+      - name: "no-type-literal-on-the-page"
+        binding: "grep: the six option values in simulate/fleet.html and the type branches in fleet-simulator.js (12 sites, fk-006c3339e3b2's measurement)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "'(flat_rate|economy_7|economy_10|self_consumption|tou_optimized|peak_shaving)'|value=\"(flat_rate|economy_7|economy_10|self_consumption|tou_optimized|peak_shaving)\""
+          paths: ["src/solar_challenge/web/static/js/fleet-simulator.js", "src/solar_challenge/web/templates/simulate/fleet.html"]
+          expect: absent
+      - name: "flat-rate-start-stated-once"
+        binding: "grep: 0.28 in fleet-simulator.js and home.html, 0.245 in scenario-builder.js"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "0\\.28|0\\.245"
+          paths: ["src/solar_challenge/web/static/js/", "src/solar_challenge/web/templates/"]
+          expect: absent
+      - name: "heat-pump-options-from-the-vocabulary"
+        binding: "grep: <option value=\"ASHP\"> and <option value=\"GSHP\"> in simulate/partials/heat-pump-config.html; producer: 911 (S7 α) delivers heat_pump.HEAT_PUMP_TYPES, upstream of η"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "value=\"(ASHP|GSHP)\""
+          paths: ["src/solar_challenge/web/templates/"]
+          expect: absent
+      - name: "tariff-clock-substrate"
+        binding: "producer: 839 (S11 β) makes TOUOptimizedStrategyConfig.peak_hours optional; 841 (S11 γ) delivers PRESET_RATES rendered; both upstream of η. V2 RED by construction: _one_peak_window refuses a missing window"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "V2 is observed by η's import test"
+  - label: "θ"
+    task_id: null
+    title: "Integration gate: both fleet pages edit, post, import and bound every distribution from one table"
+    capabilities:
+      - name: "integration-module"
+        binding: "new in θ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def test_"
+          paths: ["tests/integration/test_dashboard_forms_one_table.py"]
+          expect: present
+      - name: "briefing-rule"
+        binding: "review/briefing.yaml conventions list exists; no page_limits rule at ede1d99"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "page_limits"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "every-capability-upstream"
+        binding: "θ depends on β, δ, ε, ζ, η; each producer is upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "G1 runs in the per-task verify; E5 in the lane's e2e job"

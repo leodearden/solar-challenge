@@ -213,7 +213,7 @@ tasks:
           kind: manual
           reason: "refusal of import_limit_kw/target_soc_fraction True judged by δ's own tests (D4) and validate config run"
   - label: "ε"
-    task_id: null
+    task_id: 866
     title: "Config's block readers construct through one wrap and pass values as written"
     capabilities:
       - name: "wrap-exists"
@@ -221,7 +221,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "^def _constructed\\("
+          pattern: "^def _?constructed\\("
           paths: ["src/solar_challenge/"]
           expect: present
       - name: "number-coercion-helper-deleted"

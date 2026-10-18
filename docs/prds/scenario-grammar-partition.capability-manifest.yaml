@@ -1,13 +1,13 @@
 # Machine-readable twin of scenario-grammar-partition.capability-manifest.md (review-all stream S5).
 # Code anchors verified against main ac1fdf18ef8c (2026-10-17); checks are pattern-anchored.
-# Every grep/path check fails on main ac1fdf18 and passes once its leaf lands. task_id values stay
-# null until commit_planning stamps them.
+# Every grep/path check fails on main ac1fdf18 and passes once its leaf lands; re-run against main
+# dfcbde8 at decompose (2026-10-17). task_id values stay null until commit_planning stamps them.
 prd: docs/prds/scenario-grammar-partition.md
 schema_version: 1
 signal_leaves: ["α", "γ", "δ", "ε"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 945
     title: "Delete the parameter-sweep runner and its tests"
     capabilities:
       - name: "runner-deleted"
@@ -48,9 +48,9 @@ tasks:
           kind: manual
           reason: "the line's wording is the leaf's; the reviewer checks it names the three removed names"
   - label: "β"
-    task_id: null
+    task_id: 946
     title: "scenario_blocks.py: the block toolkit and every block reader"
-    note: "Intermediate: unlocks γ and S4 ε (866). Prereqs out of batch: 774, 775, 786, 787, 860; S7's config.py leaves per lead question 1."
+    note: "Intermediate: unlocks γ and S4 ε (866). Prereqs out of batch: 774, 775, 786, 787, 860; S7's config.py leaves 911, 914, 916, 919, 921 (L37). Decompose: cli-importer-repointed checks that the old config spelling is gone, not that cli/home.py imports scenario_blocks, so a task that changes how cli/home.py reads a home file (422, S6) cannot wedge it."
     capabilities:
       - name: "scenario-blocks-module-exists"
         binding: "absent on main; delivered by β"
@@ -84,13 +84,13 @@ tasks:
           paths: ["src/solar_challenge/scenario_blocks.py"]
           expect: present
       - name: "cli-importer-repointed"
-        binding: "cli/home.py imports parse_home_block, parse_location_block and parse_seg_rate from solar_challenge.config at ac1fdf18"
+        binding: "cli/home.py imports parse_home_block, parse_location_block and parse_seg_rate from solar_challenge.config at ac1fdf18 (re-checked at dfcbde8)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "from solar_challenge\\.scenario_blocks import"
+          pattern: "from solar_challenge\\.config import .*(parse_home_block|parse_location_block|parse_seg_rate)"
           paths: ["src/solar_challenge/cli/home.py"]
-          expect: present
+          expect: absent
       - name: "dispatch-types-moved-first"
         binding: "producer: 786 (S2 α) upstream moves GridChargeConfig and the strategy union to dispatch.py"
         verdict: PASS
@@ -104,8 +104,9 @@ tasks:
           kind: manual
           reason: "P2 is β's test; its module name is tactical"
   - label: "γ"
-    task_id: null
+    task_id: 947
     title: "fleet_distribution.py: the fleet grammar, sampler and sweep expansion; the layering guard"
+    note: "Decompose: the moved-code check names the public generator, not the private sampler class, which S18 may promote; the guard check names γ's no-runner rule (simulate_), because β's first rule already names fleet_distribution."
     capabilities:
       - name: "fleet-distribution-module-exists"
         binding: "absent on main; delivered by γ"
@@ -122,20 +123,20 @@ tasks:
           pattern: "def generate_homes_from_distribution"
           paths: ["src/solar_challenge/config.py"]
           expect: absent
-      - name: "sampler-in-fleet-distribution"
-        binding: "delivered by γ"
+      - name: "generator-in-fleet-distribution"
+        binding: "delivered by γ; generate_homes_from_distribution keeps its signature through S7 δ (919)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "class _DistributionSampler"
+          pattern: "def generate_homes_from_distribution\\("
           paths: ["src/solar_challenge/fleet_distribution.py"]
           expect: present
-      - name: "layering-guard-names-the-grammar"
-        binding: "tests/unit/test_import_structure.py comes from 775 (S1 γ, upstream via β) without grammar rules; γ adds them"
+      - name: "layering-guard-refuses-runners"
+        binding: "tests/unit/test_import_structure.py comes from 775 (S1 γ, upstream via β) and names no simulate_ rule (task/775 at a442fd7); γ adds C2"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "fleet_distribution"
+          pattern: "simulate_"
           paths: ["tests/unit/test_import_structure.py"]
           expect: present
       - name: "briefing-points-at-the-layering"
@@ -161,7 +162,7 @@ tasks:
           kind: manual
           reason: "the seeded-violation assertions are γ's own tests"
   - label: "δ"
-    task_id: null
+    task_id: 948
     title: "Every grammar refusal names its block: one refusal constructor and its guard"
     note: "Prereqs out of batch: 866 (S4 ε, _constructed) and 868 (S4 ζ). Supersedes 423."
     capabilities:
@@ -210,7 +211,7 @@ tasks:
           kind: manual
           reason: "ordering edge δ -> 866; 866's own sidecar checks _constructed"
   - label: "ε"
-    task_id: null
+    task_id: 949
     title: "The scenario document refuses what nothing reads; the templates stop emitting output:"
     capabilities:
       - name: "templates-emit-no-output-block"

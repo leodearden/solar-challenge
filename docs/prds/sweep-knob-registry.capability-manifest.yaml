@@ -1,0 +1,148 @@
+# Machine-readable twin of sweep-knob-registry.capability-manifest.md (review-all stream S26).
+# Code anchors verified against main dfcbde8 (2026-10-17); checks are pattern-anchored.
+# Every grep/path check fails on main dfcbde8 and passes once its leaf lands; re-run at decompose.
+# task_id values stay null until commit_planning stamps them.
+prd: docs/prds/sweep-knob-registry.md
+schema_version: 1
+signal_leaves: ["β", "γ", "δ", "ε", "ζ", "η", "θ"]
+tasks:
+  - label: "α"
+    task_id: null
+    title: "SweepSpec: one value generator with a typed mode, one default and finite points"
+    note: "Intermediate: unlocks δ, ζ, η. Prereqs out of batch: S5 γ (fleet_distribution.py), 868 (S4 ζ)."
+    capabilities:
+      - name: "sweep-mode-typed"
+        binding: "SweepSpec.mode is a str at dfcbde8 (config.py); fleet_distribution.py is created by S5 γ, upstream"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "class SweepMode\\(StrEnum\\)", paths: ["src/solar_challenge/fleet_distribution.py"], expect: present}
+      - name: "yaml-parse-default-not-restated"
+        binding: "grep: data.get(\"mode\", \"geometric\") in _parse_proportional_to_multiplier at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "get\\(\"mode\", \"geometric\"\\)", paths: ["src/solar_challenge"], expect: absent}
+      - name: "overflow-refused"
+        binding: "probe: SweepSpec(1e-300, 1e300, 3) gives [1e-300, inf, inf]; validate config row says 'got inf kWh'"
+        verdict: PASS
+        delivered_check: {kind: manual, reason: "behaviour test P2 and the validate-config row name min and max"}
+  - label: "β"
+    task_id: null
+    title: "scenario_knobs.py: the knob registry and its one alias table; optimize and its CLI resolve names through it"
+    note: "Prereqs out of batch: S6 homes() and SEG-policy leaves (labels from the lead), 802, 803."
+    capabilities:
+      - name: "registry-module"
+        binding: "absent on main; delivered by β"
+        verdict: PASS
+        delivered_check: {kind: path, paths: ["src/solar_challenge/scenario_knobs.py"], expect: present}
+      - name: "knob-named"
+        binding: "absent on main; delivered by β"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "def knob_named\\(", paths: ["src/solar_challenge/scenario_knobs.py"], expect: present}
+      - name: "apply-knob-moved"
+        binding: "grep: def apply_knob in optimize.py at dfcbde8 (task 717)"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "def apply_knob\\(", paths: ["src/solar_challenge/optimize.py"], expect: absent}
+      - name: "install-rule-through-knobs"
+        binding: "grep: def _apply_install in optimize.py at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "def _apply_install\\(", paths: ["src/solar_challenge/optimize.py"], expect: absent}
+      - name: "cli-alias-map-merged"
+        binding: "grep: _SENSITIVITY_ALIAS_MAP in cli/optimize.py at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "_SENSITIVITY_ALIAS_MAP", paths: ["src/solar_challenge/cli/optimize.py"], expect: absent}
+  - label: "γ"
+    task_id: null
+    title: "sensitivity_panel takes the baseline RankedSweep; the retained-cash floor has one setter"
+    note: "Prereqs out of batch: 930 (S8 ζ), 885 (S16 γ), S6 cli/optimize leaf. Supersedes 718."
+    capabilities:
+      - name: "panel-takes-baseline"
+        binding: "sensitivity_panel runs its own baseline run_sweep at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "baseline: RankedSweep", paths: ["src/solar_challenge/optimize.py"], expect: present}
+      - name: "floor-name-special-case-gone"
+        binding: "grep: name == \"retained_cash_floor_per_home_per_year_gbp\" in sensitivity_panel at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "== \"retained_cash_floor_per_home_per_year_gbp\"", paths: ["src/solar_challenge/optimize.py"], expect: absent}
+      - name: "sweep-cache-gone"
+        binding: "grep: _sweep_cache in sensitivity_panel at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "_sweep_cache", paths: ["src/solar_challenge/optimize.py"], expect: absent}
+  - label: "δ"
+    task_id: null
+    title: "POST /api/simulate/sweep reads one SweepRequest and builds every point through the registry"
+    note: "Prereqs out of batch: 807, 870, 938, 440 (lead question 1)."
+    capabilities:
+      - name: "sweep-request-reader"
+        binding: "absent on main; delivered by δ"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "def read_sweep_request\\(", paths: ["src/solar_challenge/web/sweep_request.py"], expect: present}
+      - name: "home-key-table-gone"
+        binding: "grep: _SWEEP_PARAMETER_HOME_KEYS in web/api.py at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "_SWEEP_PARAMETER_HOME_KEYS", paths: ["src/solar_challenge/web"], expect: absent}
+      - name: "linear-fallback-gone"
+        binding: "grep: data.get(\"mode\", \"linear\") in simulate_sweep at dfcbde8; probe: mode 'log' answers 201"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "get\\(\"mode\", \"linear\"\\)", paths: ["src/solar_challenge/web"], expect: absent}
+  - label: "ε"
+    task_id: null
+    title: "The sweep page renders its parameters, ranges, mode and preview from the server"
+    note: "Prereqs out of batch: 807, 835. Supersedes 140."
+    capabilities:
+      - name: "js-options-gone"
+        binding: "grep: parameterOptions: [ in parameter-sweep.js at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "parameterOptions: \\[", paths: ["src/solar_challenge/web/static/js/parameter-sweep.js"], expect: absent}
+      - name: "js-arithmetic-gone"
+        binding: "grep: Math.log / Math.exp in previewValues at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "Math\\.(log|exp)\\(", paths: ["src/solar_challenge/web/static/js/parameter-sweep.js"], expect: absent}
+      - name: "view-passes-table"
+        binding: "scenarios.sweep passes only max_window_days at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "SWEEP_PARAMETERS", paths: ["src/solar_challenge/web/scenarios.py"], expect: present}
+  - label: "ζ"
+    task_id: null
+    title: "A YAML sweep's placement is grammar data; a misplaced or second sweep is refused at parse time naming its path"
+    note: "Prereqs out of batch: 919 (S7 δ), 921 (S7 ε)."
+    capabilities:
+      - name: "placement-table"
+        binding: "absent on main; delivered by ζ"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "SWEEP_PLACEMENTS", paths: ["src/solar_challenge/fleet_distribution.py"], expect: present}
+      - name: "internal-message-gone"
+        binding: "probe: validate config / fleet run print 'Use expand_sweep_configs() to expand sweep values first'"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "Use expand_sweep_configs\\(\\) to expand sweep values first", paths: ["src/solar_challenge"], expect: absent}
+      - name: "contradictory-message-gone"
+        binding: "probe: parse_sweep_fleet_configs says 'No sweep specification found in config. Use proportional_to with type: sweep'"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "Use proportional_to with type: sweep in multiplier", paths: ["src/solar_challenge"], expect: absent}
+  - label: "η"
+    task_id: null
+    title: "fleet sweep resolves --param through the registry and labels every point by its axis"
+    note: "Prereqs out of batch: 739 (in progress), S6 fleet-document reader leaf."
+    capabilities:
+      - name: "cli-resolves-knobs"
+        binding: "cli/fleet.py names no registry at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "knob_named", paths: ["src/solar_challenge/cli/fleet.py"], expect: present}
+      - name: "multiplier-label-gone"
+        binding: "grep: param_name: str = \"multiplier\" on main; param_name = \"multiplier\" on task/739"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "= \"multiplier\"", paths: ["src/solar_challenge/cli/fleet.py"], expect: absent}
+      - name: "cli-default-mode-not-restated"
+        binding: "grep: ] = \"geometric\", on fleet sweep's --mode at dfcbde8"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "\\] = \"geometric\"", paths: ["src/solar_challenge/cli/fleet.py"], expect: absent}
+  - label: "θ"
+    task_id: null
+    title: "Integration gate: one knob, one meaning at every entry point"
+    note: "Prereqs: γ, δ, ε, η."
+    capabilities:
+      - name: "entry-point-test"
+        binding: "absent on main; delivered by θ (I1)"
+        verdict: PASS
+        delivered_check: {kind: path, paths: ["tests/integration/test_sweep_knob_entry_points.py"], expect: present}
+      - name: "briefing-convention"
+        binding: "review/briefing.yaml has a conventions list; θ adds the guard line"
+        verdict: PASS
+        delivered_check: {kind: grep, pattern: "scenario_knobs", paths: ["review/briefing.yaml"], expect: present}
