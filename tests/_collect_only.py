@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run a pytest command verbatim in collect-only mode, for the orchestrator contract tests.
 
-collect() reads what the command collected from the collection-report plugin in
-tests/_pytest_plugins, whose module docstring defines the report, never from the
-command's output. run_collect_only, which collect() runs through, returns only
-the finished process, for a probe that reads just a command's exit code and
+collect() reads what the command collected from the collection-report plugin,
+never from the command's output. It loads the plugin by its name,
+COLLECTION_REPORT_PLUGIN, given to -p, from COLLECTION_REPORT_PLUGIN_DIRECTORY
+(tests/_pytest_plugins) on PYTHONPATH. The plugin's module docstring defines
+the report. run_collect_only, which collect() runs through, returns only the
+finished process, for a probe that reads just a command's exit code and
 output; describe_outcome describes that process.
 
 Usage::
@@ -34,9 +36,9 @@ requires_uv = pytest.mark.skipif(
     shutil.which("uv") is None, reason="uv is not installed; the orchestrator command under test runs through it"
 )
 
-_COLLECTION_REPORT_PLUGIN = "solar_challenge_collection_report"
+COLLECTION_REPORT_PLUGIN = "solar_challenge_collection_report"
 
-_PLUGIN_DIRECTORY = Path(__file__).resolve().parent / "_pytest_plugins"
+COLLECTION_REPORT_PLUGIN_DIRECTORY = Path(__file__).resolve().parent / "_pytest_plugins"
 
 _STREAM_TAIL_CHARS = 5000
 
@@ -101,14 +103,16 @@ def collect(command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] |
     the plugin's report is written to a temporary directory of collect()'s own.
     """
     collect_env = dict(os.environ if env is None else env)
-    collect_env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(_PLUGIN_DIRECTORY), collect_env.get("PYTHONPATH")]))
+    collect_env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(COLLECTION_REPORT_PLUGIN_DIRECTORY), collect_env.get("PYTHONPATH")])
+    )
     with tempfile.TemporaryDirectory(prefix="collection-report-") as report_directory:
         report_path = Path(report_directory) / "report.json"
         result = run_collect_only(
             command,
             cwd,
             "-p",
-            _COLLECTION_REPORT_PLUGIN,
+            COLLECTION_REPORT_PLUGIN,
             f"--collection-report={report_path}",
             *pytest_args,
             env=collect_env,

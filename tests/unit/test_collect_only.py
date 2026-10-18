@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import CollectedTest, collect
+from tests._collect_only import COLLECTION_REPORT_PLUGIN, COLLECTION_REPORT_PLUGIN_DIRECTORY, CollectedTest, collect
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -282,11 +282,11 @@ def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_l
 def test_loaded_without_a_report_path_the_plugin_leaves_the_run_as_it_was(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The plugin's load location, restated: -p solar_challenge_collection_report with tests/_pytest_plugins on PYTHONPATH."""
-    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "_pytest_plugins"), prepend=os.pathsep)
+    """It is loaded as collect() loads it, but given no --collection-report."""
+    monkeypatch.setenv("PYTHONPATH", str(COLLECTION_REPORT_PLUGIN_DIRECTORY), prepend=os.pathsep)
     pytester.makepyfile("def test_passes():\n    pass\n")
 
-    result = pytester.runpytest_subprocess("-p", "solar_challenge_collection_report", "-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("-p", COLLECTION_REPORT_PLUGIN, "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
     assert not list(pytester.path.rglob("*.json"))
