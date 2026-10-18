@@ -15,7 +15,15 @@
   - **L10.** S16 owns the age-0 simulations.
   - **L24.** S9 α′ is 837.
   - **L33.** S8's board figures.
-- **Status:** authored 2026-10-17 by an author-only /prd session. Not committed and not decomposed. Decompose waits until the lead hands over the filed ids this batch depends on, S6's above all.
+- **Status:** authored 2026-10-17 by an author-only /prd session; decomposed 2026-10-18 (main beb1d91; `src/` unchanged since dfcbde8). Filed: α = task 705 (re-scoped in place, fk-6a52ed98b18e stamped), β 970, γ 973, δ 974, ε 975, ζ 976 (held for S29). S6's `cli/finance` reader leaf is S6 ε, task 959. Decompose-time changes:
+  - **Edges added beyond §10:**
+    - β → 724: task 724's branch deletes the three ratio wrappers β also deletes.
+    - ε → 439: in-progress 439 splits `calculate_fleet_summary` and adds a rate-passing `calculate_home_summaries`, which ε also removes.
+    - 358 → γ: task 358 carries Leo's esc-308-3 ruling, "label, do not thread", which D24/D48 reverse. The edge holds 358 until the lead reconciles the two rulings.
+  - **Sidecar checks re-anchored** (polarity re-run on main and the open `task/*` branches):
+    - ε's FleetSummary-pair check and ζ's field check leave out `web/stored_runs.py`, where their own `RunDocumentStep`s spell the keys.
+    - ζ's surface check reads the form string under `tests/`.
+    - ε's "counted twice" comment check, which task 741 can turn green first, becomes `seg_tariff_pence_per_kwh` absent from `output.py`.
 - **Approach:** B + H. The work touches 9 modules: a new `board_report`, `output`, `finance`, `projection`, `home`, `fleet`, the four CLI modules and the stored-run steps. It has 10 mechanisms and sits on seams of S6, S8, S9, S10, S16 and S19. So it carries a contract (§5) and a two-way boundary-test sketch (§9).
 - **Code anchors** verified against main `dfcbde8` (2026-10-17). Main moves fast, so anchors cite symbols; re-locate lines at implementation time.
   - Changes since the findings' pin `7dfea36`, by file:
@@ -118,7 +126,9 @@ None of this stream's keys is weakened (D28 lists none of them). The freshness c
   - S10: 780 (γ2), 782 (ε), 783 (ζ);
   - S16: 882 (β), 890 (ε);
   - S19: 822 (κ);
-  - S6's `cli/finance` reader leaf, not yet filed.
+  - S6's `cli/finance` reader leaf: S6 ε, task 959;
+  - task 724 (β: deletes the ratio wrappers) and task 439 (ε: splits `calculate_fleet_summary`), both added at decompose.
+- **Held behind γ:** task 358 (esc-308-3, "label, do not thread"; reconciliation with D24/D48 is the lead's).
 - **Overlapping files, no edge:**
   - 741 (cli prose);
   - 764 (`cli/finance.py` prose);
@@ -331,7 +341,7 @@ No computation reads the scenario's raw `finance`. The bill run and every projec
 
 - **α:** none. Task 705's branch carries it.
 - **β:** S10 ζ (783: the extrapolation notice in both reports), S9 α′ (837: the events rows), S8 ζ (930: the ranking header; and through it 928's report imports, 738, 890), and task 765 (`output.py` docstring pointers). β moves code those tasks edit, so it lands after them.
-- **γ:** β; S8 ζ (930), and through it 925 (`OwnUseBasis`, `home_ledger`), 928 (`scenario_fleet`), 929 (`project_fleet`, `FleetProjection`) and 890 (`reusing`); S6's leaf that makes `cli/finance.run` read the scenario through the one reader (label from the lead).
+- **γ:** β; S8 ζ (930), and through it 925 (`OwnUseBasis`, `home_ledger`), 928 (`scenario_fleet`), 929 (`project_fleet`, `FleetProjection`) and 890 (`reusing`); S6 ε (959), which makes `cli/finance.run` read the scenario through the one reader.
 - **δ:** γ; S9 γ (803: `GridServicesBand`); 837 and 802 through β and 928.
 - **ε:** α (705); S8 β (922: `RunPricing`, `SummaryStatistics.pricing`); S10 γ2 (780: `aggregate_annual` deleted); S19 κ (822: `RUN_DOCUMENT_STEPS`).
 - **ζ:** ε; 822; held for S29.
@@ -354,7 +364,7 @@ No other substrate is assumed.
 
 | Other stream / task | Direction | Seam mechanism | Owner | Status |
 |---|---|---|---|---|
-| S6 Fleet-document overlays | consumes | the one reader `cli/finance.run` calls instead of hand-building a `ScenarioConfig`; the scenario's `flex_band` | S6 | γ depends on S6's `cli/finance` leaf (label from the lead) |
+| S6 Fleet-document overlays | consumes | the one reader `cli/finance.run` calls instead of hand-building a `ScenarioConfig`; the scenario's `flex_band` | S6 | γ depends on S6 ε (959) |
 | S8 Finance partition (922–936) | consumes | `OwnUseBasis` and `home_ledger` (925); `scenario_fleet` (928); `project_fleet`/`FleetProjection` (929); `run_cost_recovery` (930); `RunPricing` (922) | S8 | γ → β → 930; ε → 922 |
 | S8 (925, 929) | extends | γ adds `own_use_basis` and `with_own_use_basis`, and `home_ledger` reads its basis through `own_use_basis`; δ adds `FleetProjection.grid_services_income_gbp`, filled by `_simulate_node` | S25 | after 925 and 929 (transitive) |
 | S9 Grid services (801, 802, 803, 837) | consumes | pricing values and `annual_income_gbp`; 837's breakdown and `delivery_baseline`; `GridServicesBand` | S9 the values; S25 the rendering and per-mode placement (S9 §8) | δ → 803; 837 and 802 upstream of β and 928 |
@@ -420,7 +430,7 @@ Labels are the sidecar's. Every leaf carries `x_finding_key`, `x_finding_run = r
   - Record on the task complexipy's per-function figures for the three report functions, before and after, read as a pair with the module totals (a measurement, not the signal).
 - **Signal (user-observable):** B2–B4. `finance run --project --cost-recovery` and `optimize configs` print the same reports as before. A solution with an out-of-vocabulary binding is refused by name in both (today it prints INFEASIBLE in one and the raw string in the other). `output.py` imports no board-report type.
 - **Consumer:** γ and δ (they rewrite the moved report); `finance run` and `optimize configs` users.
-- **Prereqs:** 783, 837, 930, 765.
+- **Prereqs:** 783, 837, 930, 765; 724 (added at decompose).
 
 **γ — Each `--assumptions` mode drives every computation from its own finance configuration; the report is one column per mode** (leaf; high; key fk-b7241e0ce122)
 
@@ -436,7 +446,7 @@ Labels are the sidecar's. Every leaf carries `x_finding_key`, `x_finding_run = r
   - Its economics and solved rate are the override's (today physics). On the calibration scenario's YAML override, `--assumptions physics` is physics (today the override's).
   - `--assumptions both` prints every block in two labelled columns.
 - **Consumer:** `finance run` users (the board); δ.
-- **Prereqs:** β; 930; S6's `cli/finance` reader leaf.
+- **Prereqs:** β; 930; S6 ε (959).
 
 **δ — The grid-services income renders with the economics it changes, under its model, band and delivery baseline** (leaf, integration gate; high; key fk-b7241e0ce122)
 
@@ -467,7 +477,7 @@ Labels are the sidecar's. Every leaf carries `x_finding_key`, `x_finding_run = r
 - **Work:** §5.6, in-leaf part.
 - **Signal (user-observable):** B14, B15. `home run --report` on a 15 p SEG home prints the rate beside the one export revenue and no "## SEG Revenue" section (today a second, recomputed revenue). `calculate_summary` refuses the rate argument. A fleet run stored before ε opens after `web migrate`.
 - **Consumer:** `home run` and `fleet run` users; library consumers of `calculate_summary`; ζ.
-- **Prereqs:** α (705); 922; 780; 822.
+- **Prereqs:** α (705); 922; 780; 822; 439 (added at decompose).
 
 **ζ — SummaryStatistics.seg_revenue_gbp is retired** (held leaf; low; key fk-ef13881623be; `metadata.x_seam_wait = {stream: "S29", contract: "the surface bump release window"}`; excluded from this batch's `commit_planning`)
 
@@ -480,11 +490,12 @@ Labels are the sidecar's. Every leaf carries `x_finding_key`, `x_finding_run = r
 
 - **In batch:** α → ε → ζ (held); β → γ → δ.
 - **Out of batch:**
-  - β → 783, 837, 930, 765;
-  - γ → 930, S6's `cli/finance` leaf;
+  - β → 783, 837, 930, 765, 724;
+  - γ → 930, 959;
   - δ → 803;
-  - ε → 705 (α itself), 922, 780, 822;
-  - ζ → 822.
+  - ε → 705 (α itself), 922, 780, 822, 439;
+  - ζ → 822;
+  - 358 → γ (a hold, see Status).
 - **Gate:** gate 772 depends on γ and δ.
 
 **G7** is advisory, because this repo has no `docs/legibility/design-invariants.md`. Screened against dark-factory's trigger shapes:
@@ -505,7 +516,7 @@ No hit.
 
 ## 11. Out of scope
 
-- **The scenario reader and the SEG-fill policy** (S6): `ScenarioConfig.homes()`/`with_seg()`, D10, D11's period policy for `finance run`, and the hand-built `ScenarioConfig` in `cli/optimize.configs`.
+- **The scenario reader and the SEG-fill policy** (S6): `ScenarioConfig.simulated_homes()` (there is no `with_seg()`, L41), D10, D11's period policy for `finance run`, and the hand-built `ScenarioConfig` in `cli/optimize.configs`.
 - **The projection's engine, the solve and their simulation counts** (S8), and the age-0 reuse (S16). Sharing node simulations across modes is §12 lead question 4.
 - **Pricing models, firmness, the counterfactual event simulation** (S9 and its successor PRD).
 - **The window rule and its notice text** (S10).

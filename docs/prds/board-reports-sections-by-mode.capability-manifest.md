@@ -20,7 +20,14 @@ The YAML twin, `board-reports-sections-by-mode.capability-manifest.yaml`, carrie
   - S16: 882, 890 (γ, through 930);
   - S19: 822 (ε, ζ);
   - tasks 765 (β), 738 (γ, through 930), 705 (α itself, and ε);
-  - S6's `cli/finance` reader leaf (γ; not yet filed).
+  - S6 ε, task 959 (γ: `cli/finance.run` reads the one reader);
+  - tasks 724 (β) and 439 (ε), edges added at decompose (2026-10-18).
+- **Decompose re-walk (2026-10-18, main beb1d91).** Every grep check was re-run on main and on each `task/*` branch ahead of main that touches the leaves' files. Three checks changed:
+  - ε's FleetSummary-pair check and ζ's field check could never pass, because their own `RunDocumentStep`s in `web/stored_runs.py` spell the keys. Both now name the modules that must lose the field.
+  - ζ's surface check reads the form string `seg_revenue_gbp: float | None = None` under `tests/`, so it holds wherever S23 moves the table.
+  - ε's "counted twice" check would go green if task 741 landed first. It is now `seg_tariff_pence_per_kwh` absent from `output.py`.
+
+  β's wrapper check goes green on `task/724`, now β's prerequisite. α's checks go green on `task/705`, α's own branch.
 - **Held leaf:** ζ waits for S29 and is excluded from this batch's `commit_planning`.
 
 ---
@@ -40,7 +47,7 @@ The YAML twin, `board-reports-sections-by-mode.capability-manifest.yaml`, carrie
 |---|---|---|
 | The two board reports are outside every frozen table | `grep:__init__.py` (no `generate_finance_report`, `generate_config_ranking_report` or `output` entry); `FROZEN_SURFACE`/`FROZEN_CLOSURE` (none) | PASS |
 | The duplicate label chain and inline formatting exist today | `grep:output.py::generate_finance_report` (`binding == "floor"`, `"rate_clamped_zero"`; `math.isnan(economics.equity_irr)`, `math.isinf(economics.min_dscr)`) beside `_BINDING_LABELS` and `_fmt_*` | PASS |
-| The three ratio wrappers are dead | `grep:src` (no caller of `calculate_self_consumption_ratio`, `calculate_grid_dependency_ratio`, `calculate_export_ratio`; only `tests/unit/test_output.py`) | PASS |
+| The three ratio wrappers are dead | `grep:src` (no caller of `calculate_self_consumption_ratio`, `calculate_grid_dependency_ratio`, `calculate_export_ratio`; only `tests/unit/test_output.py`); `producer:task-724` deletes them first (branch `task/724`) | PASS |
 | An unknown binding reaches the reports today (B3's RED) | `grep:finance.py::CostRecoverySolution.binding` is `str`; S8 η (934) refuses only `feasible != (binding != "infeasible_above_retail")`, so `binding="other"` with `feasible=True` constructs | PASS |
 | The upstream edits to the two reports land first | `producer:task-783` (the notice), `producer:task-837` (the events rows), `producer:task-930` (the ranking header; 928's imports through it), `producer:task-765` (docstring pointers) | PASS |
 | Byte-identical output (B2) | behaviour-preserving move; the reports captured at β's base are the reference | PASS |
@@ -53,7 +60,7 @@ The YAML twin, `board-reports-sections-by-mode.capability-manifest.yaml`, carrie
 | `scenario_fleet`, `project_fleet`, `FleetProjection`, `run_cost_recovery` | `producer:task-928`, `producer:task-929`, `producer:task-930` | PASS |
 | `fleet.reusing` and `invocation(ctx).runner` in `cli/finance.run` | `producer:task-890`, `producer:task-882` (both upstream of 930) | PASS |
 | `BillDistribution.annualised_from` and `_extrapolation_notice` (R4, the one notice) | `producer:task-782`, `producer:task-783` | PASS |
-| The scenario is read through S6's reader | `producer:S6` (the lead hands over the leaf id; γ is filed after it) | PASS (pending filing) |
+| The scenario is read through S6's reader | `producer:task-959` (S6 ε: `load_scenario` plus the option pair in `cli/finance.run`; S6 PRD §4.4) | PASS |
 | The spreadsheet default is 0.70 | `grep:finance.py::DEFAULT_SPREADSHEET_SELF_CONSUMPTION` = 0.70 | PASS |
 | The mislabel ships today (B6's RED) | `probe:` the finding: `generate_finance_report(bill_distribution([home], replace(f, self_consumption_override=0.7), 365))` prints "## Householder Bill (Physics Assumptions)" over £420.00; `grep:output.py` "Physics Assumptions"; task 738's branch keeps the primary in the `bill_physics` slot | PASS |
 | £420 against £180 | `identity:` min(0.7 × 4,000, 3,400) = 2,800 kWh × 15 p = £420.00; 3,400 − 2,200 = 1,200 kWh × 15 p = £180.00 | PASS |
@@ -89,6 +96,8 @@ The YAML twin, `board-reports-sections-by-mode.capability-manifest.yaml`, carrie
 | The CLI row exists to remove | `producer:task-705` (`_money_rows`' "SEG Revenue") | PASS |
 | The recomputation and its readers exist today (B14's RED) | `grep:` 6 `calculate_summary(<r>, seg_tariff_pence_per_kwh=` calls; "## SEG Revenue" ×2; `total_seg_revenue_gbp`/`per_home_seg_revenue_mean_gbp` ×8; `cli/home.py`'s "counted twice" comment | PASS |
 | Removing the parameter raises `TypeError` | Python's keyword-argument check | PASS |
+| `calculate_home_summaries` (task 439) passes the rate too | `producer:task-439` (branch `task/439`: `calculate_home_summaries(results, seg_tariff_pence_per_kwh=None)`, `aggregate_home_summaries` aggregates the pair); ε depends on 439 and removes both | PASS |
+| The absent checks can pass after ε's own migration step | ε's `RunDocumentStep` in `web/stored_runs.py` spells both keys, so the pair check reads `fleet.py`, `cli/` and `output.py` only | PASS |
 
 ## ζ — the frozen field retired (held leaf)
 
@@ -97,3 +106,4 @@ The YAML twin, `board-reports-sections-by-mode.capability-manifest.yaml`, carrie
 | The field is on the frozen form | `grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE["SummaryStatistics"]` includes `seg_revenue_gbp: float \| None = None` | PASS |
 | The platform passes it by keyword | `probe:` grep of solar-challenge-platform: 3 test sites `seg_revenue_gbp=None` | PASS |
 | Step mechanism | `producer:task-822` | PASS |
+| The absent checks can pass after ζ's own migration step | ζ's `RunDocumentStep` in `web/stored_runs.py` spells the key, so the field check reads the domain, report and CLI modules; the surface check matches the form string under `tests/`, which B16's keyword test does not | PASS |
