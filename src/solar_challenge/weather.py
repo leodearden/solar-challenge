@@ -8,9 +8,10 @@ import os
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Optional
+from typing import Optional, Protocol
 
 import pandas as pd
 from pvlib.iotools import get_pvgis_hourly, get_pvgis_tmy
@@ -50,7 +51,7 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
         "map_variables": True,
     }
 )
-"""The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
+"""The arguments of PvgisTmy's get_pvgis_tmy request, except the point's latitude and longitude."""
 
 
 class WeatherDataError(RuntimeError):
@@ -262,6 +263,51 @@ class WeatherCache:
         return removed
 
 
+class WeatherProvider(Protocol):
+    """Supplies the hourly weather a simulation at a location runs on."""
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """One year of hourly weather for location: temp_air, ghi, dni and dhi at least, on a DatetimeIndex."""
+        ...
+
+
+@dataclass(frozen=True)
+class PvgisTmy:
+    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there; with no cache, fetched on every get."""
+
+    cache: WeatherCache | None
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The scaled TMY for location, as its cache holds it, else as fetched from PVGIS.
+
+        Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
+        the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
+
+        Returns:
+            DataFrame with columns including:
+            - temp_air: Ambient temperature (°C)
+            - ghi: Global horizontal irradiance (W/m²)
+            - dni: Direct normal irradiance (W/m²)
+            - dhi: Diffuse horizontal irradiance (W/m²)
+            - wind_speed: Wind speed at 10m (m/s)
+            Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+            the timezone it was put in.
+
+        Raises:
+            WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
+                or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
+                ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
+        """
+        if self.cache is None:
+            return _fetch_scaled_tmy(location)
+        cached = self.cache.get("tmy", location)
+        if cached is not None:
+            return cached
+        tmy = _fetch_scaled_tmy(location)
+        self.cache.put(tmy, "tmy", location)
+        return tmy
+
+
 # Global cache instance (can be replaced for testing)
 _weather_cache: Optional[WeatherCache] = None
 
@@ -302,43 +348,24 @@ def get_tmy_data(
 ) -> pd.DataFrame:
     """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
 
-    The TMY's ghi, dni and dhi are multiplied by one factor so that the year's GHI equals the mean annual GHI
-    of PVGIS's 2005-2020 hourly series at the point; docs/tmy-irradiation-scaling.md has the measurements
-    and the rejected alternatives. The scaled TMY is cached, and a cached TMY is returned as stored.
+    It is PvgisTmy over the installed weather cache, or over none when use_cache is False; PvgisTmy.get says
+    what it returns and raises.
 
     Args:
         location: Location object with latitude, longitude, and altitude
         use_cache: Whether to use caching (default True)
-
-    Returns:
-        DataFrame with columns including:
-        - temp_air: Ambient temperature (°C)
-        - ghi: Global horizontal irradiance (W/m²)
-        - dni: Direct normal irradiance (W/m²)
-        - dhi: Diffuse horizontal irradiance (W/m²)
-        - wind_speed: Wind speed at 10m (m/s)
-        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
-        the timezone it was put in.
-
-    Raises:
-        WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
-            or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
-            ValueError then being the cause; a WeatherDataError is a RuntimeError
     """
-    if use_cache:
-        cached_data = get_weather_cache().get("tmy", location)
-        if cached_data is not None:
-            return cached_data
+    return PvgisTmy(get_weather_cache() if use_cache else None).get(location)
 
+
+def _fetch_scaled_tmy(location: Location) -> pd.DataFrame:
+    """PVGIS's TMY for location, scaled to the mean annual GHI of PVGIS's CLIMATE_YEARS hourly series at location."""
     pvgis_tmy = _fetch_pvgis_tmy(location)
     annual_ghi_kwh_per_m2 = _fetch_mean_annual_ghi_kwh_per_m2(location)
     try:
-        tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
+        return scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
     except ValueError as e:
         raise WeatherDataError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
-    if use_cache:
-        get_weather_cache().put(tmy, "tmy", location)
-    return tmy
 
 
 def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
