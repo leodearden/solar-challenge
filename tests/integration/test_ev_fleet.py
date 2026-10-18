@@ -2,6 +2,7 @@
 
 The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
 Each fleet runs in this process (parallel=False); tests/unit/test_fleet.py covers the worker pool.
+Tests that ask june_fleet_run for equal fleets over as many days share one simulation, which they only read.
 Tests EV integration with fleet-level aggregation and diversity.
 """
 
@@ -22,6 +23,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache
+from tests._computed_once import ComputedOnce
 from tests._seeded_tmy import ClearJuneDays
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
@@ -37,6 +39,12 @@ def _simulate_june_days(config: FleetConfig, days: int) -> FleetResults:
     """The fleet simulated in this process over the first *days* of _JUNE_DAYS, with every minute's energy balance validated."""
     start, end = _JUNE_DAYS.window(days)
     return simulate_fleet(config, start, end, validate_balance=True, parallel=False)
+
+
+@pytest.fixture(scope="module")
+def june_fleet_run() -> ComputedOnce[FleetResults]:
+    """_simulate_june_days, run once per equal fleet and day count in this module by the first test that asks, from that test's seeded TMY."""
+    return ComputedOnce(_simulate_june_days)
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
@@ -168,10 +176,10 @@ class TestFleetWithEVs:
             ))
         return FleetConfig(homes=homes, name="All EV fleet")
 
-    def test_simulates_mixed_ev_fleet_successfully(self, mixed_ev_fleet_config):
+    def test_simulates_mixed_ev_fleet_successfully(self, mixed_ev_fleet_config, june_fleet_run):
         """Simulates fleet with mixed EV/non-EV homes successfully."""
         days = 3
-        results = _simulate_june_days(mixed_ev_fleet_config, days)
+        results = june_fleet_run(mixed_ev_fleet_config, days)
 
         # Verify 10 homes simulated
         assert len(results) == 10
@@ -185,9 +193,9 @@ class TestFleetWithEVs:
             assert (home_results.generation >= 0).all()
             assert (home_results.demand >= 0).all()
 
-    def test_ev_homes_have_higher_demand(self, mixed_ev_fleet_config):
+    def test_ev_homes_have_higher_demand(self, mixed_ev_fleet_config, june_fleet_run):
         """Homes with EVs have higher total demand than those without."""
-        results = _simulate_june_days(mixed_ev_fleet_config, 3)
+        results = june_fleet_run(mixed_ev_fleet_config, 3)
 
         # Calculate total demand for EV homes (0-4) vs non-EV homes (5-9)
         ev_home_demands = [results[i].demand.sum() / 60 for i in range(5)]  # Convert to kWh
@@ -201,9 +209,9 @@ class TestFleetWithEVs:
         # EV charging adds substantial load (35+ kWh over 3 days minimum)
         assert max_ev_demand > max_non_ev_demand + 30  # At least 30 kWh more
 
-    def test_ev_charging_appears_in_demand_profile(self, all_ev_fleet_config):
+    def test_ev_charging_appears_in_demand_profile(self, all_ev_fleet_config, june_fleet_run):
         """EV charging load appears in demand profiles at expected times."""
-        results = _simulate_june_days(all_ev_fleet_config, 1)
+        results = june_fleet_run(all_ev_fleet_config, 1)
 
         # All homes have 7kW EV arriving at 18:00 (minute 1080)
         for i in range(5):
@@ -217,10 +225,10 @@ class TestFleetWithEVs:
             # Should have some high demand from EV charging
             assert evening_demand.max() >= 7.0  # At least EV charger power
 
-    def test_fleet_aggregates_include_ev_load(self, mixed_ev_fleet_config):
+    def test_fleet_aggregates_include_ev_load(self, mixed_ev_fleet_config, june_fleet_run):
         """Fleet aggregates correctly include EV charging load."""
         days = 2
-        results = _simulate_june_days(mixed_ev_fleet_config, days)
+        results = june_fleet_run(mixed_ev_fleet_config, days)
 
         # Total demand should be sum of individual demands (including EV)
         total_demand = results.total_demand
@@ -229,10 +237,10 @@ class TestFleetWithEVs:
         assert (total_demand == manual_total_demand).all()
         assert len(total_demand) == days * 1440
 
-    def test_fleet_summary_reflects_ev_impact(self, mixed_ev_fleet_config):
+    def test_fleet_summary_reflects_ev_impact(self, mixed_ev_fleet_config, june_fleet_run):
         """Fleet summary statistics reflect EV charging impact."""
         days = 3
-        results = _simulate_june_days(mixed_ev_fleet_config, days)
+        results = june_fleet_run(mixed_ev_fleet_config, days)
         summary = calculate_fleet_summary(results)
 
         assert isinstance(summary, FleetSummary)
@@ -246,10 +254,10 @@ class TestFleetWithEVs:
         assert 0 <= summary.fleet_self_consumption_ratio <= 1
         assert 0 <= summary.fleet_grid_dependency_ratio <= 1
 
-    def test_energy_balance_validates_with_evs(self, all_ev_fleet_config):
+    def test_energy_balance_validates_with_evs(self, all_ev_fleet_config, june_fleet_run):
         """Energy balance validates correctly with EV charging."""
         # Should complete without raising energy balance errors
-        results = _simulate_june_days(all_ev_fleet_config, 2)
+        results = june_fleet_run(all_ev_fleet_config, 2)
 
         # All homes should have valid results with no NaN values
         for i in range(len(results)):
@@ -259,9 +267,9 @@ class TestFleetWithEVs:
             assert not home_results.grid_import.isna().any()
             assert not home_results.grid_export.isna().any()
 
-    def test_no_negative_values_with_evs(self, mixed_ev_fleet_config):
+    def test_no_negative_values_with_evs(self, mixed_ev_fleet_config, june_fleet_run):
         """All output values remain non-negative with EV charging."""
-        results = _simulate_june_days(mixed_ev_fleet_config, 3)
+        results = june_fleet_run(mixed_ev_fleet_config, 3)
 
         # Check each home
         for i in range(len(results)):
@@ -275,9 +283,9 @@ class TestFleetWithEVs:
             assert (home_results.grid_import >= 0).all()
             assert (home_results.grid_export >= 0).all()
 
-    def test_different_charger_types_in_fleet(self, mixed_ev_fleet_config):
+    def test_different_charger_types_in_fleet(self, mixed_ev_fleet_config, june_fleet_run):
         """Fleet handles different EV charger types correctly."""
-        results = _simulate_june_days(mixed_ev_fleet_config, 1)
+        results = june_fleet_run(mixed_ev_fleet_config, 1)
 
         # Home 0: 7kW charger
         # Home 2: 3.6kW charger
@@ -296,7 +304,7 @@ class TestFleetWithEVs:
         # 22kW charger home (3) should deliver energy faster (shorter charging time)
         # but total energy over the day should reflect required charge + base load
 
-    def test_solar_charging_mode_in_fleet(self):
+    def test_solar_charging_mode_in_fleet(self, june_fleet_run):
         """Solar-aware EV charging works in fleet simulation."""
         # Create fleet with solar-aware EV charging
         homes = []
@@ -317,7 +325,7 @@ class TestFleetWithEVs:
             ))
 
         fleet_config = FleetConfig(homes=homes, name="Solar EV fleet")
-        results = _simulate_june_days(fleet_config, 1)
+        results = june_fleet_run(fleet_config, 1)
 
         # All homes should have completed successfully
         assert len(results) == 3
@@ -332,7 +340,7 @@ class TestFleetWithEVs:
             # Should have elevated demand during solar window
             assert solar_window_demand.sum() > 0
 
-    def test_off_peak_charging_mode_in_fleet(self):
+    def test_off_peak_charging_mode_in_fleet(self, june_fleet_run):
         """Off-peak EV charging works in fleet simulation."""
         # Create fleet with off-peak EV charging
         homes = []
@@ -353,7 +361,7 @@ class TestFleetWithEVs:
             ))
 
         fleet_config = FleetConfig(homes=homes, name="Off-peak EV fleet")
-        results = _simulate_june_days(fleet_config, 2)
+        results = june_fleet_run(fleet_config, 2)
 
         # All homes should have completed successfully
         assert len(results) == 3
@@ -365,9 +373,9 @@ class TestFleetWithEVs:
             total_demand = demand.sum() / 60  # Convert to kWh
             assert total_demand > 0
 
-    def test_heterogeneous_ev_configs_preserved(self, mixed_ev_fleet_config):
+    def test_heterogeneous_ev_configs_preserved(self, mixed_ev_fleet_config, june_fleet_run):
         """Different EV configurations produce different results."""
-        results = _simulate_june_days(mixed_ev_fleet_config, 3)
+        results = june_fleet_run(mixed_ev_fleet_config, 3)
         summary = calculate_fleet_summary(results)
 
         # Heterogeneous fleet should have variation in per-home generation
@@ -385,10 +393,10 @@ class TestFleetWithEVs:
         demand_range = demand_max - demand_min
         assert demand_range > 10  # At least 10 kWh difference over 3 days
 
-    def test_fleet_dataframe_output_with_evs(self, all_ev_fleet_config):
+    def test_fleet_dataframe_output_with_evs(self, all_ev_fleet_config, june_fleet_run):
         """Fleet aggregate DataFrame includes EV load correctly."""
         days = 1
-        results = _simulate_june_days(all_ev_fleet_config, days)
+        results = june_fleet_run(all_ev_fleet_config, days)
         df = results.to_aggregate_dataframe()
 
         assert isinstance(df, pd.DataFrame)
@@ -402,7 +410,7 @@ class TestFleetWithEVs:
         # Demand should be elevated due to EV charging
         assert df["demand_kw"].sum() > 0
 
-    def test_ev_impact_on_grid_dependency(self):
+    def test_ev_impact_on_grid_dependency(self, june_fleet_run):
         """EV charging increases grid demand and import."""
         # Create two identical fleets, one with EVs, one without
         # Use same seed for load profiles to eliminate randomness
@@ -440,8 +448,8 @@ class TestFleetWithEVs:
         fleet_with_ev = FleetConfig(homes=homes_with_ev, name="With EV fleet")
 
         days = 3
-        results_no_ev = _simulate_june_days(fleet_no_ev, days)
-        results_with_ev = _simulate_june_days(fleet_with_ev, days)
+        results_no_ev = june_fleet_run(fleet_no_ev, days)
+        results_with_ev = june_fleet_run(fleet_with_ev, days)
 
         summary_no_ev = calculate_fleet_summary(results_no_ev)
         summary_with_ev = calculate_fleet_summary(results_with_ev)
@@ -453,7 +461,7 @@ class TestFleetWithEVs:
         # Fleet with EVs should have higher grid import (most EV charging at night)
         assert summary_with_ev.total_grid_import_kwh > summary_no_ev.total_grid_import_kwh
 
-    def test_overnight_ev_charging_in_fleet(self):
+    def test_overnight_ev_charging_in_fleet(self, june_fleet_run):
         """Overnight EV charging works correctly across midnight."""
         homes = []
         for i in range(3):
@@ -473,7 +481,7 @@ class TestFleetWithEVs:
             ))
 
         fleet_config = FleetConfig(homes=homes, name="Overnight EV fleet")
-        results = _simulate_june_days(fleet_config, 2)
+        results = june_fleet_run(fleet_config, 2)
 
         # All homes should complete successfully
         assert len(results) == 3
