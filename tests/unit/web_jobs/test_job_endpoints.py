@@ -130,7 +130,7 @@ _FLEET_COMPLETED = _sse(
     '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
     ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
 )
-_FAILED =_sse("error", '{"status": "failed", "message": "the simulation failed"}')
+_FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
 
 
 class TestGetJobStatusEndpoint:
