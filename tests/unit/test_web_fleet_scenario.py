@@ -636,7 +636,7 @@ class TestFleetFormFromScenario:
                         }
                     }
                 ),
-                "fleet_distribution.pv.capacity_kw.counts counts must total at most "
+                "fleet_distribution.pv.capacity_kw counts must total at most "
                 f"{MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
                 id="pool-counts-totalling-more-than-the-fleet-limit",
             ),

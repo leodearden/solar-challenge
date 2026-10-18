@@ -58,14 +58,14 @@ def read_fleet_seed(value: Any, field: str) -> int:
     return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
 
 
-def read_pool_counts(counts: Iterable[tuple[str, Any]], entries_field: str) -> list[int]:
-    """Read *counts*, each count of the *entries_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
+def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list[int]:
+    """Read *counts*, each count of the *pool_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
 
     Raises:
         ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
             naming a count's field and the value sent; or, when the counts total more than
             MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
-            *entries_field* and the total.
+            *pool_field* and the total.
     """
     read_counts = [
         as_whole_number_within(value, field, 0, MAX_FLEET_HOMES) for field, value in counts
@@ -73,7 +73,7 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], entries_field: str) -> l
     total = sum(read_counts)
     if total > MAX_FLEET_HOMES:
         raise ValueError(
-            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
+            f"{pool_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
         )
     return read_counts
 
@@ -598,7 +598,7 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
         }
     counts = read_pool_counts(
         [(f"{path}.counts[{index}]", count) for index, count in enumerate(spec["counts"])],
-        f"{path}.counts",
+        path,
     )
     return {
         "type": dist_type,

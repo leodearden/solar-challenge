@@ -1598,12 +1598,12 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_refuses_pool_counts_totalling_more_than_the_fleet_limit(
         self,
     ) -> None:
-        """Counts that each fit but total MAX_FLEET_HOMES + 1 are refused naming the counts field and the total."""
+        """Counts that each fit but total MAX_FLEET_HOMES + 1 are refused naming the pool's path and the total."""
         spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": [MAX_FLEET_HOMES, 1]}
         with pytest.raises(ValueError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert str(exc_info.value) == (
-            "fleet_distribution.pv.capacity_kw.counts "
+            "fleet_distribution.pv.capacity_kw "
             f"counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
         )
 
