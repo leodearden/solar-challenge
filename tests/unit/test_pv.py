@@ -800,6 +800,18 @@ def overcast_january_daytime() -> pd.DataFrame:
     )
 
 
+@pytest.fixture
+def sapm_module() -> dict[str, float]:
+    """The first row of pvlib's SAPM module library (SandiaMod), which rates its module by neither a pdc0 nor an STC."""
+    return dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
+
+
+@pytest.fixture
+def rated_sapm_module(sapm_module: dict[str, float]) -> dict[str, float]:
+    """sapm_module rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
+    return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
+
+
 class TestInverterMatchesStringVoltage:
     """The CEC inverter's MPPT window takes the array's STC string voltage, whatever the capacity.
 
@@ -912,12 +924,12 @@ class TestInverterMatchesStringVoltage:
         with pytest.raises(ValueError, match="MPPT window"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module))
 
-    def test_a_sapm_module_needs_an_explicit_inverter(self) -> None:
+    def test_a_sapm_module_needs_an_explicit_inverter(
+        self, rated_sapm_module: dict[str, float]
+    ) -> None:
         """A SAPM module has no V_mp_ref to voltage-match a CEC inverter to, and no pdc0 and gamma_pdc for a PVWatts inverter."""
-        sapm_module = dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
-
         with pytest.raises(ValueError, match="custom_inverter_params"):
-            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=sapm_module))
+            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module))
 
 
 class TestBatteryInverterChargersAreNotPicked:
@@ -1216,23 +1228,81 @@ class TestInverterModelMatchesModuleModel:
         )
 
 
+_PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
+
+
+def _wired_module_count(system: pvlib.pvsystem.PVSystem) -> int:
+    """The modules wired across all of the system's arrays."""
+    return sum(array.modules_per_string * array.strings for array in system.arrays)
+
+
+def _dc_power_at_stc_w(config: PVConfig) -> float:
+    """The DC power, in W, that config's model chain gives before system losses at STC: 1000 W/m2 on cells at 25 C."""
+    chain = create_model_chain(dataclasses.replace(config, system_losses=0.0), Location.bristol())
+    at_stc = pd.DataFrame(
+        {"effective_irradiance": [1000.0], "cell_temperature": [25.0]},
+        index=pd.DatetimeIndex(["2024-06-21 12:00"], tz="Europe/London"),
+    )
+    chain.run_model_from_effective_irradiance((at_stc,) * len(chain.system.arrays))
+    return sum(
+        float((dc["p_mp"] if isinstance(dc, pd.DataFrame) else dc).iloc[0])
+        for dc in _dc_per_array(chain)
+    )
+
+
 class TestWiredDcCapacity:
-    """wired_dc_capacity_kw is the DC capacity create_pv_system wires: a whole number of modules, so not always the configured capacity_kw."""
+    """create_pv_system wires the whole number of modules nearest capacity_kw, each rated at its pdc0 if it has PVWatts parameters and at its STC otherwise; wired_dc_capacity_kw is the DC those modules give at STC."""
 
     @pytest.mark.parametrize(
-        "config", [PVConfig(capacity_kw=0.3), *SYSTEM_SIZE_CONFIGS], ids=_config_id
+        "config",
+        [
+            PVConfig(capacity_kw=0.3),
+            *SYSTEM_SIZE_CONFIGS,
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                id="pvwatts-module-without-STC",
+            ),
+            pytest.param(
+                PVConfig(
+                    capacity_kw=1.1,
+                    custom_module_params=create_simple_module_params(module_power_w=250.0),
+                ),
+                id="create_simple_module_params",
+            ),
+        ],
+        ids=_config_id,
     )
-    def test_is_the_dc_of_the_modules_create_pv_system_wires(self, config: PVConfig) -> None:
-        system = create_pv_system(config)
-        wired_w = sum(
-            array.modules_per_string * array.strings * array.module_parameters["STC"]
-            for array in system.arrays
+    def test_is_the_dc_the_model_chain_gives_at_stc(self, config: PVConfig) -> None:
+        wired_kw = wired_dc_capacity_kw(config)
+        dc_at_stc_w = _dc_power_at_stc_w(config)
+
+        assert wired_kw * 1000 == pytest.approx(dc_at_stc_w, rel=1e-6), (
+            f"{config.capacity_kw} kW wires {wired_kw:.6f} kWp, but its model chain gives "
+            f"{dc_at_stc_w:.3f} W of DC at STC"
         )
 
-        assert wired_dc_capacity_kw(config) == pytest.approx(wired_w / 1000), (
-            f"{config.capacity_kw} kW wired as {_wiring(system)} "
-            f"(modules per string, strings) is {wired_w:.0f} W of modules"
+    @pytest.mark.parametrize(
+        ("config", "modules", "module_w"),
+        [
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                13,
+                300.0,
+                id="4kW-of-300W-pvwatts-modules-without-STC",
+            ),
+            pytest.param(PVConfig(capacity_kw=0.3), 1, 400.428, id="0.3kW-of-the-default-module"),
+            pytest.param(PVConfig(capacity_kw=4.0), 10, 400.428, id="4kW-of-the-default-module"),
+        ],
+    )
+    def test_wires_the_whole_modules_nearest_the_capacity_at_their_rating(
+        self, config: PVConfig, modules: int, module_w: float
+    ) -> None:
+        system = create_pv_system(config)
+
+        assert _wired_module_count(system) == modules, (
+            f"{config.capacity_kw} kW wired as {_wiring(system)} (modules per string, strings)"
         )
+        assert wired_dc_capacity_kw(config) == pytest.approx(modules * module_w / 1000)
 
     @pytest.mark.parametrize(
         ("capacity_kw", "expected_kw"), [(4.0, 4.0), (1.1, 1.0), (0.3, 0.25)]
@@ -1246,6 +1316,32 @@ class TestWiredDcCapacity:
         )
 
         assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)
+
+    @pytest.mark.parametrize(
+        "custom_inverter_params",
+        [None, create_simple_inverter_params()],
+        ids=["voltage-matched-inverter", "custom-sandia-inverter"],
+    )
+    @pytest.mark.parametrize(
+        "build", [create_pv_system, wired_dc_capacity_kw], ids=lambda build: build.__name__
+    )
+    def test_a_module_with_neither_pdc0_nor_stc_is_refused(
+        self,
+        build: Callable[[PVConfig], object],
+        custom_inverter_params: dict[str, float] | None,
+        sapm_module: dict[str, float],
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=sapm_module,
+            custom_inverter_params=custom_inverter_params,
+        )
+
+        with pytest.raises(ValueError) as refusal:
+            build(config)
+
+        message = str(refusal.value)
+        assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
 
 
 LINEAR_INVERTER_CONFIG = PVConfig(
