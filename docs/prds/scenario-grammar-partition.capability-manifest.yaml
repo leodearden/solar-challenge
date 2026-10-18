@@ -1,0 +1,265 @@
+# Machine-readable twin of scenario-grammar-partition.capability-manifest.md (review-all stream S5).
+# Code anchors verified against main ac1fdf18ef8c (2026-10-17); checks are pattern-anchored.
+# Every grep/path check fails on main ac1fdf18 and passes once its leaf lands; re-run against main
+# dfcbde8 at decompose (2026-10-17). task_id values stay null until commit_planning stamps them.
+prd: docs/prds/scenario-grammar-partition.md
+schema_version: 1
+signal_leaves: ["α", "γ", "δ", "ε"]
+tasks:
+  - label: "α"
+    task_id: 945
+    title: "Delete the parameter-sweep runner and its tests"
+    capabilities:
+      - name: "runner-deleted"
+        binding: "grep: def run_parameter_sweep in config.py at ac1fdf18; 0 src callers"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def run_parameter_sweep"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "sweep-config-type-deleted"
+        binding: "grep: class ParameterSweepConfig in config.py at ac1fdf18; outside __all__ and the frozen closure"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class (ParameterSweepConfig|SweepResult)\\b"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "config-imports-no-runner"
+        binding: "grep: config.py imports simulate_home and simulate_fleet at top level, used only by the runner"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_(home|fleet)"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "runner-test-module-deleted"
+        binding: "tests/unit/config/test_parameter_sweep.py exists at ac1fdf18 (181 lines)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/config/test_parameter_sweep.py"]
+          expect: absent
+      - name: "consumption-guide-line"
+        binding: "docs/domain-library-consumption.md takes Unreleased-on-main lines (§Tag / release convention)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the line's wording is the leaf's; the reviewer checks it names the three removed names"
+  - label: "β"
+    task_id: 946
+    title: "scenario_blocks.py: the block toolkit and every block reader"
+    note: "Intermediate: unlocks γ and S4 ε (866). Prereqs out of batch: 774, 775, 786, 787, 860; S7's config.py leaves 911, 914, 916, 919, 921 (L37). Decompose: cli-importer-repointed checks that the old config spelling is gone, not that cli/home.py imports scenario_blocks, so a task that changes how cli/home.py reads a home file (422, S6) cannot wedge it."
+    capabilities:
+      - name: "scenario-blocks-module-exists"
+        binding: "absent on main; delivered by β"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "home-block-reader-moved"
+        binding: "grep: def parse_home_block in config.py at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def parse_home_block"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "finance-block-reader-moved"
+        binding: "grep: def parse_finance_config in config.py at ac1fdf18 (decision 2: every block reader of a domain value moves)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def parse_finance_config"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "toolkit-public-in-scenario-blocks"
+        binding: "config._refuse_unrecognised_keys is private at ac1fdf18; β makes it public in the lower module (decision 3)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def refuse_unrecognised_keys"
+          paths: ["src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "cli-importer-repointed"
+        binding: "cli/home.py imports parse_home_block, parse_location_block and parse_seg_rate from solar_challenge.config at ac1fdf18 (re-checked at dfcbde8)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "from solar_challenge\\.config import .*(parse_home_block|parse_location_block|parse_seg_rate)"
+          paths: ["src/solar_challenge/cli/home.py"]
+          expect: absent
+      - name: "dispatch-types-moved-first"
+        binding: "producer: 786 (S2 α) upstream moves GridChargeConfig and the strategy union to dispatch.py"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering edge β -> 786; 786's own sidecar checks the types in dispatch.py"
+      - name: "fresh-interpreter-p2"
+        binding: "pattern: tests/unit/test_init_lazy_surface.py (-I subprocess, sys.modules)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "P2 is β's test; its module name is tactical"
+  - label: "γ"
+    task_id: 947
+    title: "fleet_distribution.py: the fleet grammar, sampler and sweep expansion; the layering guard"
+    note: "Decompose: the moved-code check names the public generator, not the private sampler class, which S18 may promote; the guard check names γ's no-runner rule (simulate_), because β's first rule already names fleet_distribution."
+    capabilities:
+      - name: "fleet-distribution-module-exists"
+        binding: "absent on main; delivered by γ"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["src/solar_challenge/fleet_distribution.py"]
+          expect: present
+      - name: "sampler-moved"
+        binding: "grep: def generate_homes_from_distribution in config.py at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def generate_homes_from_distribution"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "generator-in-fleet-distribution"
+        binding: "delivered by γ; generate_homes_from_distribution keeps its signature through S7 δ (919)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def generate_homes_from_distribution\\("
+          paths: ["src/solar_challenge/fleet_distribution.py"]
+          expect: present
+      - name: "layering-guard-refuses-runners"
+        binding: "tests/unit/test_import_structure.py comes from 775 (S1 γ, upstream via β) and names no simulate_ rule (task/775 at a442fd7); γ adds C2"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_"
+          paths: ["tests/unit/test_import_structure.py"]
+          expect: present
+      - name: "briefing-points-at-the-layering"
+        binding: "review/briefing.yaml has a conventions: list; no entry names scenario_blocks at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "scenario_blocks"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "claude-md-architecture-updated"
+        binding: "CLAUDE.md's Configuration System section describes config.py alone at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "scenario_blocks"
+          paths: ["CLAUDE.md"]
+          expect: present
+      - name: "guard-catches-seeded-violations"
+        binding: "bound in-leaf: P4/P5 tmp_path tests observe the report"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the seeded-violation assertions are γ's own tests"
+  - label: "δ"
+    task_id: 948
+    title: "Every grammar refusal names its block: one refusal constructor and its guard"
+    note: "Prereqs out of batch: 866 (S4 ε, _constructed) and 868 (S4 ζ). Supersedes 423."
+    capabilities:
+      - name: "refusal-constructor-exists"
+        binding: "absent on main; delivered by δ in scenario_blocks.py (producer β upstream)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def refusal\\("
+          paths: ["src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "old-unrecognised-keys-form-gone"
+        binding: "grep: 'Unrecognised keys in' in config._refuse_unrecognised_keys at ac1fdf18; δ rephrases it to '<label>: unrecognised keys …'"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Unrecognised keys in"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "path-less-requires-messages-gone"
+        binding: "grep: 'heat_pump configuration requires', 'ev configuration requires' in config.py at ac1fdf18 (R1 RED observed)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "configuration requires '"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "scenario-name-message-has-path"
+        binding: "grep: \"Scenario must have a 'name' field\" in config._parse_scenario at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Scenario must have a 'name' field"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "list-shaped-block-refused-by-name"
+        binding: "ran: validate config on homes: 5 -> TypeError traceback at ac1fdf18 (R2 RED observed)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "R2 is a CliRunner assertion in δ's tests"
+      - name: "construction-refusals-carry-path"
+        binding: "producer: 866 (S4 ε) upstream; C3"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering edge δ -> 866; 866's own sidecar checks _constructed"
+  - label: "ε"
+    task_id: 949
+    title: "The scenario document refuses what nothing reads; the templates stop emitting output:"
+    capabilities:
+      - name: "templates-emit-no-output-block"
+        binding: "grep: HOME_TEMPLATE and SCENARIO_TEMPLATE carry an output: block at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^output:"
+          paths: ["src/solar_challenge/cli/config.py"]
+          expect: absent
+      - name: "output-block-reader-deleted"
+        binding: "grep: def _parse_output_config in config.py at ac1fdf18; no reader of ScenarioConfig.output"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _parse_output_config"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "scenario-document-refuses-unread-keys"
+        binding: "ran: validate config on a scenario: document with output:, tariff_config: and bogus: -> 'Configuration is valid', exit 0 (S1/S2 RED observed)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "S1-S3 are CliRunner assertions in ε's tests; message wording is tactical"
+  - label: "ζ"
+    task_id: 950
+    title: "Retire ScenarioConfig.output and OutputConfig (and ScenarioConfig.tariff_config unless S6 claims it) at the surface bump"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on ε; excluded from this batch's commit_planning. The tariff_config clause waits on lead question 2."
+    capabilities:
+      - name: "output-config-class-retired"
+        binding: "grep: class OutputConfig in config.py at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class OutputConfig"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "frozen-closure-entry-dropped"
+        binding: "grep: \"config.OutputConfig\" in FROZEN_CLOSURE at ac1fdf18"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "config\\.OutputConfig"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "tariff-config-field-fate"
+        binding: "lead question 2: S6 keeps ScenarioConfig.tariff_config as a typed scenario tariff, or ζ retires it"
+        verdict: OPEN
+        delivered_check:
+          kind: manual
+          reason: "decided before S29 releases ζ"

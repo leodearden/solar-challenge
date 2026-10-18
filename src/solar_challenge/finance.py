@@ -21,13 +21,16 @@ import dataclasses
 import math
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, List, Mapping, NamedTuple, Optional, Sequence
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
+from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
@@ -48,6 +51,7 @@ class FinanceConfig:
     Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
     used to compute project NPV, payback period, and per-home savings.
     All monetary values are in nominal GBP or pence; rates are fractional.
+    Every number must be finite.
 
     Attributes:
         standing_charge_pence_per_day: Retail grid standing charge (required).
@@ -66,10 +70,14 @@ class FinanceConfig:
             capacity (default 0.0; 0 permitted).
         grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
         equity_fraction: Fraction of project cost financed by equity (default 0.75).
-        loan_term_years: Loan repayment term in years (default 15).
+        loan_term_years: Loan repayment term, a whole number of years (default 15).
+            A whole-number float such as 20.0 is held as the int 20; a bool,
+            Python's or numpy's, is refused.
         loan_rate: Annual loan interest rate as a fraction (default 0.07).
         opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
-        asset_life_years: Useful life of the asset in years (default 25).
+        asset_life_years: Useful life of the asset, a whole number of years
+            (default 25); like loan_term_years, a whole-number float is held as
+            the int it equals and a bool is refused.
         own_use_rate_pence_per_kwh: CBS transfer price for self-consumed CBS-owned solar
             (default 15.0 p/kWh; 0 permitted).
         retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
@@ -109,8 +117,14 @@ class FinanceConfig:
 
     def __post_init__(self) -> None:
         """Validate financial parameters, raising ConfigurationError on violation."""
-        from solar_challenge.config import ConfigurationError  # lazy: avoids import cycle; sys.modules cache makes repeat lookups O(1)
-
+        for field_name in ("loan_term_years", "asset_life_years"):
+            years = getattr(self, field_name)
+            whole_years = whole_number(years)
+            if whole_years is None:
+                raise ConfigurationError(
+                    f"{field_name} must be a finite whole number, got {years}"
+                )
+            object.__setattr__(self, field_name, whole_years)
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(
                 f"vat_rate must be in [0, 1], got {self.vat_rate}"
@@ -129,16 +143,11 @@ class FinanceConfig:
             raise ConfigurationError(
                 f"loan_term_years must be > 0, got {self.loan_term_years}"
             )
-        if self.loan_rate < 0.0:
-            raise ConfigurationError(
-                f"loan_rate must be >= 0, got {self.loan_rate}"
-            )
         if self.asset_life_years < self.loan_term_years:
             raise ConfigurationError(
                 f"asset_life_years ({self.asset_life_years}) must be >= "
                 f"loan_term_years ({self.loan_term_years})"
             )
-        # Cost/rate fields must be strictly positive
         _positive_fields = {
             "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
             "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
@@ -148,35 +157,23 @@ class FinanceConfig:
             "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
         }
         for field_name, value in _positive_fields.items():
-            if value <= 0.0:
+            if not 0.0 < value < math.inf:
                 raise ConfigurationError(
-                    f"{field_name} must be > 0, got {value}"
+                    f"{field_name} must be > 0 and finite, got {value}"
                 )
-        # Grant may be zero but not negative
-        if self.grant_gbp < 0.0:
-            raise ConfigurationError(
-                f"grant_gbp must be >= 0, got {self.grant_gbp}"
-            )
-        # Inverter cost may be zero (opt-in default) but not negative
-        if self.inverter_cost_per_kw_gbp < 0.0:
-            raise ConfigurationError(
-                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
-            )
-        # Cost-recovery fields: zero allowed, negative rejected
-        if self.own_use_rate_pence_per_kwh < 0.0:
-            raise ConfigurationError(
-                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
-            )
-        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
-                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
-            )
-        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
-                f"got {self.grid_services_income_per_kw_per_year_gbp}"
-            )
+        _non_negative_fields = {
+            "loan_rate": self.loan_rate,
+            "grant_gbp": self.grant_gbp,
+            "inverter_cost_per_kw_gbp": self.inverter_cost_per_kw_gbp,
+            "own_use_rate_pence_per_kwh": self.own_use_rate_pence_per_kwh,
+            "retained_cash_floor_per_home_per_year_gbp": self.retained_cash_floor_per_home_per_year_gbp,
+            "grid_services_income_per_kw_per_year_gbp": self.grid_services_income_per_kw_per_year_gbp,
+        }
+        for field_name, value in _non_negative_fields.items():
+            if not 0.0 <= value < math.inf:
+                raise ConfigurationError(
+                    f"{field_name} must be >= 0 and finite, got {value}"
+                )
         _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
         if self.grid_services_model not in _VALID_GS_MODELS:
             raise ConfigurationError(
@@ -192,23 +189,17 @@ class FinanceConfig:
 
 @dataclass(frozen=True)
 class BillBreakdown:
-    """Per-householder annual cost-recovery outlay broken into component line items (CR3).
+    """One householder's cost-recovery outlay for the billed period, in line items (CR3).
 
     The CBS owns the PV/battery assets and the export MPAN.  The householder
-    pays the CBS an own-use rate for self-consumed solar, pays retail for grid
-    import, and pays the standing charge.  No SEG credit flows to the householder.
+    pays the CBS an own-use rate for self-consumed solar, and pays the retailer
+    for grid import and the standing charge.  No SEG credit flows to the
+    householder.
 
-    Definitional invariants (§3.1):
-      own_use_payment_gbp      = own_use_rate_pence_per_kwh × self_consumed_kwh / 100
-      vat_gbp                  = vat_rate × (import_cost_gbp + standing_charge_gbp
-                                             + own_use_payment_gbp)
-      total_outlay_gbp         = (import_cost_gbp + standing_charge_gbp
-                                  + own_use_payment_gbp) × (1 + vat_rate)
-      own_use_vat_gbp          = vat_rate × own_use_payment_gbp
-      cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
-      self_consumption_saving_gbp = self_consumed_kwh × (retail − own_use_rate)
-                                    × (1 + vat_rate) / 100
-      saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
+    Every figure covers the billed period.  :func:`bill` is the library's
+    producer of this type and takes that period as ``period_days``;
+    :func:`householder_bill` bills the simulator's homes for a year.  The
+    identities between the fields are stated once, in :func:`bill`'s docstring.
 
     Two overlapping views — never sum across them:
 
@@ -226,39 +217,36 @@ class BillBreakdown:
     invoice means summing exactly {own_use_payment_gbp, own_use_vat_gbp}
     against cbs_amount_due_gbp and reading no other field.
 
-    All monetary values are in GBP (£).  The H3 board identity holds when
-    import is retail-priced and import_kwh == demand − sc:
-      saving_vs_baseline == self_consumed × (retail − own_use) × (1+vat) / 100
+    All monetary values are in GBP (£).
     """
 
     standing_charge_gbp: float
-    """Annual grid standing charge (£)."""
+    """Grid standing charge for the billed period (£, ex-VAT)."""
 
     import_cost_gbp: float
-    """Cost of electricity imported from the grid (£, ex-VAT)."""
+    """Cost of the billed period's grid import, as the caller priced it (£, ex-VAT)."""
 
     own_use_payment_gbp: float
-    """CBS own-use transfer payment for self-consumed solar (£, ex-VAT).
+    """CBS own-use transfer payment for the solar self-consumed in the billed period (£, ex-VAT).
 
-    Computed as own_use_rate_pence_per_kwh × self_consumed_kwh / 100.
     This is the community-benefit-society transfer price for CBS-owned solar
     consumed on-site; it is NOT SEG and does not involve the export MPAN.
     """
 
     vat_gbp: float
-    """VAT on (import + standing + own_use_payment) at the scenario VAT rate (£)."""
+    """VAT on the billed period's import, standing charge and own-use payment (£)."""
 
     total_outlay_gbp: float
-    """Total annual householder outlay (headline): (import + standing + own_use) × (1+vat) (£).
+    """Total householder outlay for the billed period, VAT included (£): the headline figure.
 
-    Replaces net_annual_bill_gbp from the old W2 model.  No SEG deduction.
+    No SEG deduction: the export income belongs to the CBS.
     """
 
     own_use_vat_gbp: float
-    """VAT on the CBS own-use payment: vat_rate × own_use_payment_gbp (£)."""
+    """VAT on the own-use payment (£): the part of vat_gbp the CBS invoices."""
 
     cbs_amount_due_gbp: float
-    """What the household pays the CBS: own_use_payment_gbp + own_use_vat_gbp (£).
+    """What the household pays the CBS for the billed period: own_use_payment_gbp + own_use_vat_gbp (£).
 
     Import and standing charge are paid to the retailer and are NOT part of
     this figure.  Defined as the float SUM of the two fields above (never
@@ -267,27 +255,29 @@ class BillBreakdown:
     """
 
     self_consumption_saving_gbp: float
-    """Value of solar used on-site relative to full retail purchase (£, VAT-inclusive).
+    """Value of the solar used on-site in the billed period, net of its own-use price (£, VAT-inclusive).
 
-    = self_consumed × (retail_rate − own_use_rate) × (1 + vat_rate) / 100.
-    Represents the retail↔own-use price gap benefit, not the full avoided-retail value.
-    Zero when own_use_rate == retail_rate.
+    Each self-consumed kWh is valued at the gap between the baseline's effective
+    import rate (``eff_rate`` in :func:`bill`'s identities) and the own-use
+    rate.  This is the price-gap benefit, not the full avoided-import value, and
+    is zero when the two rates are equal.
     """
 
     baseline_bill_gbp: float
-    """Hypothetical annual bill without any solar / battery system (£, VAT-inclusive).
+    """Hypothetical bill for the billed period without any solar / battery system (£, VAT-inclusive).
 
-    All demand priced at the retail baseline rate; standing charge added.
+    The caller's cost of importing all demand (:func:`bill`'s
+    ``baseline_import_cost_gbp``) plus the standing charge.
     """
 
     saving_vs_baseline_gbp: float
-    """Saving compared to the no-solar baseline: baseline_bill − total_outlay (£)."""
+    """The billed period's saving against the no-solar baseline bill (£)."""
 
     saving_pct: float
-    """Percentage saving vs baseline: 100 × saving_vs_baseline / baseline."""
+    """saving_vs_baseline_gbp as a percentage of baseline_bill_gbp."""
 
     self_consumption_fraction: float
-    """Fraction of total PV generation consumed on-site (dimensionless, 0–1)."""
+    """Fraction of the billed period's PV generation consumed on-site (dimensionless, 0–1)."""
 
     def __post_init__(self) -> None:
         """Enforce the CBS-slice identity for every producer, not just bill().
@@ -447,9 +437,9 @@ class CostRecoverySolution:
             raise ValueError(
                 f"binding must be one of {_BINDING_VALUES!r}, got {self.binding!r}"
             )
-        if self.own_use_rate_pence_per_kwh < 0.0:
+        if not 0.0 <= self.own_use_rate_pence_per_kwh < math.inf:
             raise ValueError(
-                f"own_use_rate_pence_per_kwh must be >= 0, "
+                f"own_use_rate_pence_per_kwh must be >= 0 and finite, "
                 f"got {self.own_use_rate_pence_per_kwh!r}"
             )
 
@@ -894,6 +884,9 @@ def householder_bill(
       * Apply the missing-tariff retail fallback (:func:`_physics_import_cost_gbp`,
         with a :class:`UserWarning`) before the physics/override switch, so
         both paths price an untariffed home's import at retail.
+      * Price the no-solar baseline at the retail rate (demand × retail / 100),
+        so bill()'s effective rate, and with it self_consumption_saving, is
+        the retail rate.
       * Always call bill(period_days=365, ...) so standing charge is
         annual regardless of the original simulation length.
 
@@ -990,6 +983,7 @@ class YearPoint:
     installation).  SOH fractions are mean fleet values:
     ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
     from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
+    Every number must be finite.
 
     Energy fields and ``fleet_revenue_gbp`` share one 365-day basis.  On a
     simulation window under 360 days, :func:`project_multi_year` scales each
@@ -1004,7 +998,11 @@ class YearPoint:
     """
 
     year: int
-    """Calendar age of the system in years (≥ 0)."""
+    """Calendar age of the system, a whole number of years (≥ 0).
+
+    A whole-number float such as 2.0 is held as the int 2; a bool, Python's or
+    numpy's, is refused.
+    """
 
     pv_soh: float
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
@@ -1044,11 +1042,13 @@ class YearPoint:
     """Total grid import by the fleet that year (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """CBS revenue (own-use + SEG + grid-services topper) (£)."""
+    """CBS revenue (own-use + SEG + grid-services topper) (£); finite, and may have any sign."""
 
     def __post_init__(self) -> None:
-        if self.year < 0:
-            raise ValueError(f"year must be ≥ 0, got {self.year!r}")
+        whole_year = whole_number(self.year)
+        if whole_year is None or whole_year < 0:
+            raise ValueError(f"year must be a whole number >= 0, got {self.year!r}")
+        object.__setattr__(self, "year", whole_year)
         if not (0.0 <= self.pv_soh <= 1.0):
             raise ValueError(
                 f"pv_soh must be in [0, 1], got {self.pv_soh!r}"
@@ -1057,18 +1057,19 @@ class YearPoint:
             raise ValueError(
                 f"battery_soh must be in [0, 1], got {self.battery_soh!r}"
             )
-        if self.fleet_self_consumption_kwh < 0.0:
+        fleet_energies_kwh = {
+            "fleet_self_consumption_kwh": self.fleet_self_consumption_kwh,
+            "fleet_export_kwh": self.fleet_export_kwh,
+            "fleet_import_kwh": self.fleet_import_kwh,
+        }
+        for field_name, kwh in fleet_energies_kwh.items():
+            if not 0.0 <= kwh < math.inf:
+                raise ValueError(
+                    f"{field_name} must be >= 0 and finite, got {kwh!r}"
+                )
+        if not -math.inf < self.fleet_revenue_gbp < math.inf:
             raise ValueError(
-                f"fleet_self_consumption_kwh must be ≥ 0, got "
-                f"{self.fleet_self_consumption_kwh!r}"
-            )
-        if self.fleet_export_kwh < 0.0:
-            raise ValueError(
-                f"fleet_export_kwh must be ≥ 0, got {self.fleet_export_kwh!r}"
-            )
-        if self.fleet_import_kwh < 0.0:
-            raise ValueError(
-                f"fleet_import_kwh must be ≥ 0, got {self.fleet_import_kwh!r}"
+                f"fleet_revenue_gbp must be finite, got {self.fleet_revenue_gbp!r}"
             )
 
 
@@ -1096,7 +1097,7 @@ class MultiYearCurve:
     """Ages at which full simulations were run (subset of 0..asset_life-1)."""
 
     interp_error_estimate: float
-    """Max remaining PCHIP midpoint deviation (%) across all driven metrics
+    """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
     (fleet_self_consumption_kwh, fleet_export_kwh, fleet_import_kwh,
     fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
@@ -1105,10 +1106,10 @@ class MultiYearCurve:
             raise ValueError("points must be non-empty")
         if not self.sampled_ages:
             raise ValueError("sampled_ages must be non-empty")
-        if self.interp_error_estimate < 0.0:
+        if not 0.0 <= self.interp_error_estimate < math.inf:
             raise ValueError(
-                f"interp_error_estimate must be ≥ 0, got "
-                f"{self.interp_error_estimate!r}"
+                f"interp_error_estimate must be >= 0 and finite, "
+                f"got {self.interp_error_estimate!r}"
             )
 
 
@@ -1122,7 +1123,7 @@ class ProjectEconomics:
     """Project-level financial appraisal results for a community PV/battery fleet.
 
     Produced by :func:`project_economics` from a :class:`MultiYearCurve` and a
-    :class:`~solar_challenge.config.FinanceConfig`.  All monetary values are in
+    :class:`FinanceConfig`.  All monetary values are in
     nominal GBP (£).
 
     Attributes:
@@ -1319,39 +1320,75 @@ def bill_distribution(
 MAX_NODES: int = 12
 
 
-class _NodeData(NamedTuple):
+class _AggregateShape(Enum):
+    """Whether a :class:`_NodeData` aggregate holds one value for the fleet or one per home, in fleet order."""
+
+    FLEET = auto()
+    PER_HOME = auto()
+
+
+_AGGREGATE_SHAPE = "aggregate_shape"
+_FLEET_AGGREGATE: Mapping[str, _AggregateShape] = {_AGGREGATE_SHAPE: _AggregateShape.FLEET}
+_PER_HOME_AGGREGATE: Mapping[str, _AggregateShape] = {_AGGREGATE_SHAPE: _AggregateShape.PER_HOME}
+
+
+@dataclass(frozen=True)
+class _NodeData:
     """Aggregates from one simulated fleet age in the forward-march.
 
     Collected once per :func:`_simulate_age` call and stored in ``sampled_data``
-    (keyed by age).  Named fields replace magic-index access throughout the driver.
+    (keyed by age).  Each float aggregate gives its :class:`_AggregateShape` in
+    its field metadata, and construction refuses one that is NaN or infinite,
+    naming the age and each such aggregate with its value.
     """
 
-    fleet_sc: float
+    age: int
+    """System age in calendar years at which the fleet was simulated."""
+
+    fleet_sc: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
 
-    fleet_exp: float
+    fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid export, annualised to a 365-day year (kWh/yr)."""
 
-    fleet_imp: float
+    fleet_imp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid import, annualised to a 365-day year (kWh/yr)."""
 
-    per_home_discharge: List[float]
+    per_home_discharge: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home battery discharge, annualised to a 365-day year (kWh/yr)."""
 
-    mean_pv_soh: float
+    mean_pv_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
 
-    mean_battery_soh: float
+    mean_battery_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean battery state-of-health across the fleet (fraction, 0–1)."""
 
-    fleet_revenue: float
+    fleet_revenue: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
     annualised_from_days: int
     """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
-    per_home_throughput: List[float]
+    per_home_throughput: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home cumulative battery throughput (kWh) from installation to this age, which its battery SOH counts."""
+
+    def __post_init__(self) -> None:
+        """Refuse an aggregate that is NaN or infinite, naming the age and each such aggregate and its value."""
+        refused = [f"{name}={value!r}" for name, value in self._aggregates() if not math.isfinite(value)]
+        if refused:
+            raise ValueError(
+                f"every aggregate of the fleet simulated at age {self.age} must be finite: got {', '.join(refused)}"
+            )
+
+    def _aggregates(self) -> Iterator[tuple[str, float]]:
+        """Each aggregate's name and value in field order, a per-home aggregate's value for home i as name[i]."""
+        for attribute in dataclasses.fields(self):
+            shape = attribute.metadata.get(_AGGREGATE_SHAPE)
+            if shape is _AggregateShape.FLEET:
+                yield attribute.name, getattr(self, attribute.name)
+            elif shape is _AggregateShape.PER_HOME:
+                for i, value in enumerate(getattr(self, attribute.name)):
+                    yield f"{attribute.name}[{i}]", value
 
 
 def _aged_homes(
@@ -1462,6 +1499,13 @@ def project_multi_year(
     Returns:
         :class:`MultiYearCurve` with one :class:`YearPoint` per year and
         metadata about the sampled ages and interpolation error.
+
+    Raises:
+        ValueError: If a simulated age, seed or bisection trial, gives an
+            aggregate that is NaN or infinite: the fleet's own-use, export,
+            import or revenue, its mean PV or battery state of health, or a
+            home's battery discharge or cumulative battery throughput.  The
+            message names the age and each such aggregate with its value.
     """
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
@@ -1488,7 +1532,6 @@ def project_multi_year(
     # done (the inner guard in _simulate_age would only fire after the first
     # full fleet simulation, which wastes a full age-0 run for a 100-home fleet).
     if finance.grid_services_model == "capacity_at_events" and finance.grid_services_events is None:
-        from solar_challenge.config import ConfigurationError
         raise ConfigurationError(
             "grid_services_model='capacity_at_events' requires "
             "grid_services_events to be configured"
@@ -1535,7 +1578,7 @@ def project_multi_year(
         )
         fleet_exp = sum(phys.export_kwh for _, phys in annualised_homes)
         fleet_imp = sum(phys.import_kwh for _, phys in annualised_homes)
-        per_home_discharge = [phys.battery_discharge_kwh for _, phys in annualised_homes]
+        per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
@@ -1579,6 +1622,7 @@ def project_multi_year(
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return _NodeData(
+            age=age,
             fleet_sc=fleet_sc,
             fleet_exp=fleet_exp,
             fleet_imp=fleet_imp,
@@ -1587,7 +1631,7 @@ def project_multi_year(
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
             annualised_from_days=min(s.simulation_days for s in per_home_summaries),
-            per_home_throughput=list(cum_tp),
+            per_home_throughput=tuple(cum_tp),
         )
 
     # ---- Seed forward-march: ascending ages, each aged by _throughput_at ----

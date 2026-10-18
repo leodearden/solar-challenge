@@ -1,0 +1,136 @@
+# Machine-readable twin of rng-hand-off.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main c06d12b (2026-10-17); checks are pattern-anchored.
+# task_id stays null until commit_planning stamps it.
+prd: docs/prds/rng-hand-off.md
+schema_version: 1
+signal_leaves: ["α", "β"]
+tasks:
+  - label: "α"
+    task_id: 906
+    title: "RNG hand-off and the injectable household model"
+    note: "Priority high (fk-16df1a7ac416); dependency of trigger-chain gate 772. Also carries fk-c78416de5500 (its guarded-region half is S12 beta's decision 15). S12 beta is held on this leaf (L26). Supersedes 766 and 573's range rule (PRD section 13)."
+    capabilities:
+      - name: "household-model-seam-defined"
+        binding: "producer:α — richardsonpy_household is new in load.py; absent at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def richardsonpy_household\\("
+          paths: ["src/solar_challenge/load.py"]
+          expect: present
+      - name: "generate-load-profile-takes-household-model"
+        binding: "producer:α — keyword-only household_model on generate_load_profile (contract C1); absent at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "household_model: HouseholdModel = richardsonpy_household"
+          paths: ["src/solar_challenge/load.py"]
+          expect: present
+      - name: "inline-global-seeding-gone"
+        binding: "grep: _try_richardsonpy_profile calls np.random.seed(config.seed) at c06d12b; C4 moves seeding into the hand-off context"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "np\\.random\\.seed\\(config\\.seed\\)"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "private-day-function-gone"
+        binding: "grep: load._simulate_stochastic_day defined at c06d12b; its body moves into richardsonpy_household (decision 9). Check narrowed at decompose to the src definition: a B8 test asserting the name is gone may spell it."
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _simulate_stochastic_day\\("
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "fork-resets-the-lock"
+        binding: "producer:α — os.register_at_fork in load.py (C5); absent at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "register_at_fork\\("
+          paths: ["src/solar_challenge/load.py"]
+          expect: present
+      - name: "richardsonpy-internals-unpatched"
+        binding: "grep: three run_application_simulation counters and one ElectricityProfile.power_sim patch in tests/unit/test_load.py at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "run_application_simulation|\"power_sim\""
+          paths: ["tests/unit/test_load.py"]
+          expect: absent
+      - name: "invariant-3-module-exists"
+        binding: "producer:α — new test module (B1-B6, B9)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_load_reproducibility.py"]
+          expect: present
+      - name: "dashboard-jobs-test-exists"
+        binding: "producer:α — new web_jobs test (B7); RED 10 of 10 observed at c06d12b, GREEN premise 0 of 10 under a lock"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/web_jobs/test_seeded_jobs_reproduce.py"]
+          expect: present
+      - name: "concurrent-and-ordered-reproducibility"
+        binding: "probe at c06d12b: B1 10 of 10 differ, B3 equal, B4 state clobbered, B5 Elexon for -1/2**32/2**40"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour judged by α's own tests (B1, B3, B4, B5, B7); not greppable"
+      - name: "seeded-output-unchanged"
+        binding: "identity: C4 keeps random.seed(s) and np.random.seed(s) for 0 <= s < 2**32; B2 pins it through the seam; byte-identity of seed-42/43 profiles recorded on the task"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a before/after measurement recorded on the task plus B2's draw comparison"
+      - name: "briefing-rule-points-at-the-test"
+        binding: "grep: review/briefing.yaml carries the seeding rule without a test pointer at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_load_reproducibility\\.py"
+          paths: ["review/briefing.yaml"]
+          expect: present
+  - label: "β"
+    task_id: 908
+    title: "Fleet constructors seed each home by one rule"
+    note: "Priority low (fk-e0e34ef46058). Supersedes task 746. Out-of-batch upstream: 774 (S1 beta). Additive frozen members (D29): FROZEN_MEMBERS entries and an Unreleased-on-main line in-leaf."
+    capabilities:
+      - name: "per-home-seed-rule-defined"
+        binding: "producer:β — fleet.fleet_home_seed; absent at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def fleet_home_seed\\("
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "inline-per-home-seed-gone-from-config"
+        binding: "grep: generate_homes_from_distribution's `home_seed = config.seed + i` at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "home_seed = config\\.seed \\+ i"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "constructors-pinned-with-seed"
+        binding: "grep: FROZEN_MEMBERS FleetConfig forms end `name: str = '') -> FleetConfig` at c06d12b; β adds the keyword-only seed"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"create_heterogeneous\": \"classmethod .*\\*, seed: int \\| None = None\\)"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: present
+      - name: "seeded-template-refused"
+        binding: "rejection-check: no refusal exists at c06d12b (create_uniform shares the seeded LoadConfig); β adds a ConfigurationError naming load_config.seed, asserted by B10"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal and message judged by β's own pytest.raises test (B10)"
+      - name: "fleet-homes-seeded-and-distinct"
+        binding: "producer:β — B10: seeds 7, 8, 9 on both constructors; profiles repeat run to run and differ home to home"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour judged by β's own tests (B10)"

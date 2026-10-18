@@ -16,20 +16,32 @@ gives the reason.
 
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import closing
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Generator
+from typing import Any, Generator, assert_never
 from uuid import uuid4
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, session
-from flask.helpers import stream_with_context
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import NotAJsonObject, get_job_manager, request_json_object
-from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
+from solar_challenge.web.simulation_params import (
+    DAYS_WINDOW_START,
+    FULL_YEAR_DAYS_SENTINEL,
+    FULL_YEAR_END,
+    FULL_YEAR_START,
+    MAX_WINDOW_DAYS,
+    parse_home_config,
+    with_default_days,
+)
+from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
 
@@ -64,6 +76,9 @@ MAX_HISTORY_TURNS = 20
 # Maximum number of tool-use iterations per request; prevents a runaway model
 # from looping and streaming forever (hanging the single worker / test suite).
 MAX_TOOL_ITERATIONS = 10
+
+# The text that ends a reply whose model still calls tools after MAX_TOOL_ITERATIONS calls.
+TOOL_CALL_LIMIT_NOTICE = "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
 
 # ---------------------------------------------------------------------------
 # Grounded metric table — canonical UK benchmark bands
@@ -266,6 +281,40 @@ def suggest_config(
     }
 
 
+# The days a trigger tool's simulation spans when the model sends no window.
+_TRIGGER_TOOL_DEFAULT_DAYS = 7
+
+# The window both trigger tools take, days or a start and end, as parse_date_range reads it.
+_TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
+    "days": {
+        "type": "integer",
+        "description": (
+            f"Simulation duration in days (1–{MAX_WINDOW_DAYS}), counted from "
+            f"{DAYS_WINDOW_START}, except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year "
+            f"{FULL_YEAR_START} to {FULL_YEAR_END}. Must not be sent with start or end; with "
+            f"none of the three sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
+        ),
+    },
+    "start": {
+        "type": "string",
+        "format": "date",
+        "description": (
+            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_START} when only "
+            "end is sent. Must not be sent with days."
+        ),
+    },
+    "end": {
+        "type": "string",
+        "format": "date",
+        "description": (
+            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_END} "
+            "when only start is sent. Must not be sent with days. The window from start to "
+            f"end spans at most {MAX_WINDOW_DAYS} days."
+        ),
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions — fixed order for prompt-cache stability.  The tools render
 # ahead of the cached system block, so they belong to the cached prompt prefix;
@@ -391,7 +440,9 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                 },
                 "consumption_kwh": {
                     "type": "number",
-                    "description": "Annual household electricity consumption in kWh.",
+                    "description": "Annual household electricity consumption in kWh ({:g}–{:g}).".format(
+                        *FLEET_COMPONENTS["load"].fixed_range
+                    ),
                 },
                 "occupants": {
                     "type": "integer",
@@ -401,10 +452,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                     "type": "string",
                     "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
                 },
-                "days": {
-                    "type": "integer",
-                    "description": "Simulation duration in days (default 7).",
-                },
+                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
             },
             "required": ["pv_kw"],
         },
@@ -435,10 +483,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                     "type": "string",
                     "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
                 },
-                "days": {
-                    "type": "integer",
-                    "description": "Simulation duration in days (default 7).",
-                },
+                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
             },
             "required": ["n_homes"],
         },
@@ -446,7 +491,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
 )
 
 
-def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
+def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
     """Return a simulation run's fields and parsed summary, or a graceful error dict.
 
     Tries to resolve *run_id_or_name* first as an ``id`` (exact match), then as a
@@ -454,7 +499,7 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
 
     Args:
         run_id_or_name: A run ``id`` or ``name`` string to look up.
-        db_path:        Path to the SQLite database file.
+        storage:        The RunStorage whose runs are looked up.
 
     Returns:
         Dict with keys ``run_id``, ``name``, ``type``, ``status``,
@@ -463,38 +508,19 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
         Never raises.
     """
     try:
-        with database.get_db(db_path) as conn:
-            cursor = conn.cursor()
-            # First attempt: exact id match
-            cursor.execute(
-                "SELECT id, name, type, status, created_at, n_homes, summary_json "
-                "FROM runs WHERE id = ?",
-                (run_id_or_name,),
-            )
-            row = cursor.fetchone()
-
-            # Fallback: most-recent row with matching name
-            if row is None:
-                cursor.execute(
-                    "SELECT id, name, type, status, created_at, n_homes, summary_json "
-                    "FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1",
-                    (run_id_or_name,),
-                )
-                row = cursor.fetchone()
-
-        if row is None:
+        run = storage.run_record(run_id_or_name) or storage.latest_run_named(run_id_or_name)
+        if run is None:
             return {"error": f"Run not found: {run_id_or_name!r}"}
 
-        summary_raw: Any = row["summary_json"]
-        summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+        summary: dict[str, Any] = json.loads(run.summary_json) if run.summary_json else {}
 
         return {
-            "run_id": row["id"],
-            "name": row["name"],
-            "type": row["type"],
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "n_homes": row["n_homes"],
+            "run_id": run.id,
+            "name": run.name,
+            "type": run.type,
+            "status": run.status,
+            "created_at": run.created_at,
+            "n_homes": run.n_homes,
             "summary": summary,
         }
     except Exception as exc:
@@ -574,8 +600,10 @@ def run_home_simulation(
 
     Args:
         params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
-                     location, days, name, …) — same shape as the JSON body
-                     accepted by POST /api/simulate/home.
+                     location, days or start/end, name, …) — same shape as
+                     the JSON body accepted by POST /api/simulate/home, and
+                     its window is read as that endpoint reads it.  Params
+                     that send no window run _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
@@ -584,18 +612,10 @@ def run_home_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
-    # A caller-supplied non-None 'days' always wins because **params overrides the sentinel
-    # key; the caller's tool_input dict is not mutated (we build a new dict).
-    # The extra None-check is needed because {"days": 7, **params} leaves days=None when
-    # the model emits an explicit null — parse_date_range would then fall through to the
-    # full 2024 calendar year (~366 days), contradicting the schema's "(default 7)".
-    effective_params: dict[str, Any] = {"days": 7, **params}
-    if effective_params.get("days") is None:
-        effective_params["days"] = 7
-
     try:
-        home_config, start_date, end_date, name = parse_home_config(effective_params)
+        home_config, start_date, end_date, name = parse_home_config(
+            with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
+        )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
@@ -623,13 +643,16 @@ def run_fleet_simulation(
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
     Builds a homogeneous N-home fleet by parsing the per-home param dict
-    (minus ``n_homes``) N times using ``parse_home_config``.  ``n_homes``
+    (minus ``n_homes``) once with ``parse_home_config`` and repeating the
+    resulting frozen ``HomeConfig`` ``n_homes`` times.  ``n_homes``
     is clamped to [1, 100] to protect the single-worker JobManager.
 
     Args:
         params:      Flat parameter dict including ``n_homes`` plus the per-home
                      fields accepted by ``parse_home_config``
-                     (pv_kw, battery_kwh, location, days, …).
+                     (pv_kw, battery_kwh, location, days or start/end, …).
+                     Params that send no window run
+                     _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
@@ -646,16 +669,12 @@ def run_fleet_simulation(
 
     # Build per-home dict by excluding the fleet-level n_homes key
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
-    # Inject the documented default (7 days) when absent OR explicitly None.
-    # setdefault only guards absent keys; an explicit None bypasses it and would
-    # fall through to parse_date_range's full-year default — check both cases.
-    per_home.setdefault("days", 7)
-    if per_home.get("days") is None:
-        per_home["days"] = 7
 
     # Validate once; if it fails, return early without submitting
     try:
-        home_config_0, start_date, end_date, name = parse_home_config(per_home)
+        home_config_0, start_date, end_date, name = parse_home_config(
+            with_default_days(per_home, _TRIGGER_TOOL_DEFAULT_DAYS)
+        )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
@@ -715,7 +734,7 @@ def dispatch_tool(
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, db_path)
+        return get_run_results(run_id_or_name, RunStorage(db_path=db_path, data_dir=data_dir))
     if name == "list_recent_runs":
         try:
             limit: int = int(tool_input.get("limit", 10))
@@ -745,8 +764,7 @@ def _session_id() -> str:
 def chat_page() -> str:
     """Render the AI assistant chat shell page."""
     api_key_configured = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    return str(render_template("assistant/chat.html", page="assistant",
-                               api_key_configured=api_key_configured))
+    return str(render_template("assistant/chat.html", api_key_configured=api_key_configured))
 
 
 @bp.route("/history", methods=["GET"])
@@ -791,9 +809,14 @@ def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
     }
 
 
+def _sse_frame(event: str, payload: Mapping[str, Any]) -> str:
+    """Return the SSE frame that sends *event* with *payload* as its JSON data."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
 def _error_frame(message: str) -> str:
     """Return the SSE ``error`` frame carrying *message*."""
-    return f"event: error\ndata: {json.dumps({'message': message})}\n\n"
+    return _sse_frame("error", {"message": message})
 
 
 def _event_stream(frames: Iterable[str]) -> Response:
@@ -808,13 +831,324 @@ def _event_stream(frames: Iterable[str]) -> Response:
     )
 
 
+def _has_text(content: str) -> bool:
+    """Whether *content* holds text a Messages API message may carry: something besides whitespace."""
+    return bool(content.strip())
+
+
+def _replay_window(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return the messages that replay the stored *turns* to the model.
+
+    A turn without text is left out, because the API refuses an empty message
+    anywhere but last. At most MAX_HISTORY_TURNS turns are kept, and the window
+    starts on a user turn, because the API needs one first; the API combines the
+    consecutive user turns a left-out reply leaves behind.
+    """
+    window = [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in turns
+        if _has_text(turn["content"])
+    ][-MAX_HISTORY_TURNS:]
+    first_user = next((i for i, m in enumerate(window) if m["role"] == "user"), len(window))
+    return window[first_user:]
+
+
+def request_messages(
+    history: Sequence[Mapping[str, Any]], user_message: str, run_context: str = ""
+) -> list[dict[str, Any]]:
+    """Return the messages a chat turn sends the model.
+
+    They are the stored *history*, replayed, then *user_message* with
+    *run_context* in front.
+    """
+    return _replay_window([*history, {"role": "user", "content": run_context + user_message}])
+
+
+def _run_context(run_id: str, storage: RunStorage) -> str:
+    """Return the preamble that tells the model the name and summary of the run *run_id* names.
+
+    Empty when *run_id* is empty or names no run in *storage*.
+    """
+    if not run_id:
+        return ""
+    run = get_run_results(run_id, storage)
+    if "error" in run:
+        return ""
+    return (
+        f"[Run context for run_id={run_id!r}, name={run['name']!r}: "
+        f"{json.dumps(run['summary'], ensure_ascii=False)}]\n\n"
+    )
+
+
+def _model_request(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the Messages API request asking *model* to answer *messages*.
+
+    It offers TOOLS and sends SIMULATOR_SYSTEM_PROMPT as the cached system block.
+    """
+    return {
+        "model": model,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "low"},
+        "max_tokens": 4096,
+        "system": [
+            {"type": "text", "text": SIMULATOR_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        ],
+        "messages": messages,
+        "tools": TOOLS,
+    }
+
+
+@dataclass(frozen=True)
+class _ReplyText:
+    """A piece of the reply's text, as the user sees it."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class _ToolCalled:
+    """The model called the tool *name*, which runs next."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class _ToolRan:
+    """The tool *name* ran."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class _ModelCallEnded:
+    """One call to the model ended; *usage* is the token usage the SDK reported for it."""
+
+    usage: Any
+
+
+_ReplyEvent = _ReplyText | _ToolCalled | _ToolRan | _ModelCallEnded
+_ToolRunner = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+
+def _reply_events(
+    client: Any, request: Mapping[str, Any], run_tool: _ToolRunner
+) -> Generator[_ReplyEvent, None, None]:
+    """Yield the events of the model's reply to *request*, running each tool it calls with *run_tool*.
+
+    The model is called at most MAX_TOOL_ITERATIONS times; a reply that still
+    calls tools then ends with TOOL_CALL_LIMIT_NOTICE as its text. The text of
+    every call, those after a tool call included, is yielded as it streams:
+    tests/unit/web_assistant/test_tool_use.py::TestToolUseLoop::test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk
+    """
+    messages = list(request["messages"])
+    for _ in range(MAX_TOOL_ITERATIONS):
+        message = yield from _model_call(client, {**request, "messages": messages})
+        if getattr(message, "stop_reason", None) != "tool_use":
+            return
+        results = yield from _tool_results(message.content, run_tool)
+        messages = [
+            *messages,
+            {"role": "assistant", "content": list(message.content)},
+            {"role": "user", "content": results},
+        ]
+    yield _ReplyText(TOOL_CALL_LIMIT_NOTICE)
+
+
+def _model_call(client: Any, request: Mapping[str, Any]) -> Generator[_ReplyEvent, None, Any]:
+    """Yield the text of one call to the model as it streams, then the call's end; return the message the model sent."""
+    with client.messages.stream(**request) as stream:
+        for text in stream.text_stream:
+            yield _ReplyText(text)
+        message = stream.get_final_message()
+    yield _ModelCallEnded(message.usage)
+    return message
+
+
+def _tool_results(
+    content: Sequence[Any], run_tool: _ToolRunner
+) -> Generator[_ReplyEvent, None, list[dict[str, Any]]]:
+    """Run the tool calls among *content*'s blocks with *run_tool*, in order, each announced before it runs.
+
+    Returns the tool_result blocks that answer the calls.
+    """
+    results: list[dict[str, Any]] = []
+    for call in [block for block in content if block.type == "tool_use"]:
+        yield _ToolCalled(call.name)
+        result = run_tool(call.name, dict(call.input))
+        yield _ToolRan(call.name)
+        results.append({
+            "type": "tool_result",
+            "tool_use_id": call.id,
+            "content": json.dumps(result, ensure_ascii=False),
+        })
+    return results
+
+
+@dataclass(frozen=True)
+class _ReplyRecord:
+    """What a reply's events put on record: its text, the tools that ran and the cache tokens its model calls used."""
+
+    reply: str = ""
+    tools_run: tuple[str, ...] = ()
+    cache_usage: Mapping[str, int] = MappingProxyType({})
+
+    def after(self, event: _ReplyEvent) -> "_ReplyRecord":
+        """Return this record with *event* added."""
+        if isinstance(event, _ReplyText):
+            return replace(self, reply=self.reply + event.text)
+        if isinstance(event, _ToolCalled):
+            return self
+        if isinstance(event, _ToolRan):
+            return replace(self, tools_run=(*self.tools_run, event.name))
+        if isinstance(event, _ModelCallEnded):
+            return replace(
+                self, cache_usage=MappingProxyType(_add_cache_usage(self.cache_usage, event.usage))
+            )
+        assert_never(event)
+
+
+_DONE_FRAME = _sse_frame("done", {})
+_NO_REPLY_TEXT = "[No reply text was received.]"
+
+
+@dataclass(frozen=True)
+class _TurnEnding:
+    """How an assistant turn ended.
+
+    *final_frame* ends the client's stream, and is empty once the client has
+    left; *stand_in* is stored as the reply when no text streamed; *metadata*
+    joins the stored reply's metadata.
+    """
+
+    final_frame: str
+    stand_in: str
+    metadata: Mapping[str, Any]
+
+
+_FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
+_CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
+
+
+def _failed(error: Exception) -> _TurnEnding:
+    """The ending of a turn that *error* stopped.
+
+    The notice it shows the user stands in for the reply when no text streamed.
+    """
+    notice = f"Streaming error: {error}"
+    return _TurnEnding(
+        _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
+    )
+
+
+@dataclass(frozen=True)
+class _TurnRecorder:
+    """Stores one chat turn in the session's chat_messages rows: the user's message, then the reply."""
+
+    db_path: "str | Path"
+    session_id: str
+    model: str
+
+    def store_user_message(self, text: str) -> None:
+        """Store *text* as the turn's user row."""
+        database.save_chat_message(self.db_path, self.session_id, "user", text)
+
+    def store_reply(self, record: _ReplyRecord, ending: _TurnEnding) -> None:
+        """Store the turn's one reply row: *record*'s text, or *ending*'s stand-in when it has none.
+
+        Its metadata holds the cache tokens the turn used and the model, the
+        tools that ran, then *ending*'s marks; it is None when that is empty.
+        """
+        metadata: dict[str, Any] = {**record.cache_usage, "model": self.model} if record.cache_usage else {}
+        if record.tools_run:
+            metadata["invoked_tools"] = list(record.tools_run)
+        database.save_chat_message(
+            self.db_path,
+            self.session_id,
+            "assistant",
+            record.reply if _has_text(record.reply) else ending.stand_in,
+            metadata={**metadata, **ending.metadata} or None,
+        )
+
+
+def _sse_frames(event: _ReplyEvent) -> tuple[str, ...]:
+    """Return the SSE frames that show *event* to the client: ``delta`` for reply text, ``tool`` for a tool call, none for the rest."""
+    if isinstance(event, _ReplyText):
+        return (_sse_frame("delta", {"text": event.text}),)
+    if isinstance(event, _ToolCalled):
+        return (_sse_frame("tool", {"name": event.name}),)
+    if isinstance(event, (_ToolRan, _ModelCallEnded)):
+        return ()
+    assert_never(event)
+
+
+def _turn_frames(
+    user_message: str, events: Generator[_ReplyEvent, None, None], recorder: _TurnRecorder
+) -> Generator[str, None, None]:
+    """Yield the SSE frames of the turn that answers *user_message* with the reply *events*.
+
+    *recorder* stores the user row as the turn starts, and the reply once,
+    however the turn ends, before the frame that ends the stream:
+    tests/unit/web_assistant/test_chat.py::TestEveryTurnStoresAReplyWithText
+    """
+    recorder.store_user_message(user_message)
+    record, ending = _ReplyRecord(), _CUT_SHORT
+    try:
+        with closing(events):
+            for event in events:
+                record = record.after(event)
+                yield from _sse_frames(event)
+        ending = _FINISHED
+    except Exception as error:
+        ending = _failed(error)
+    finally:
+        recorder.store_reply(record, ending)
+    yield ending.final_frame
+
+
+def _refusal(user_message: str) -> str | None:
+    """Return why a turn with *user_message* cannot reach the model, or None when it can."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return "AI assistant is not configured: set ANTHROPIC_API_KEY."
+    if not user_message:
+        return "Message cannot be empty."
+    return None
+
+
+def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
+    """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
+
+    The run *run_id* names, if any, is the turn's context. This reads the app's
+    config, the session and the app's extensions, in the request; the frames it
+    returns read none of them, so the stream needs no request context.
+    """
+    db_path = current_app.config["DATABASE"]
+    session_id = _session_id()
+    model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
+    messages = request_messages(
+        database.get_chat_history(db_path, session_id), user_message, _run_context(run_id, get_storage())
+    )
+    run_tool = partial(
+        dispatch_tool,
+        db_path=db_path,
+        job_manager=get_job_manager(),
+        data_dir=current_app.config["DATA_DIR"],
+    )
+    return _turn_frames(
+        user_message,
+        _reply_events(client, _model_request(model, messages), run_tool),
+        _TurnRecorder(db_path, session_id, model),
+    )
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
 
     Request JSON body: ``{"message": "<user text>", "run_id": "<optional>"}``.
-    A body that is not a JSON object is answered with a lone ``error`` frame.
     A ``run_id`` puts that run's summary in front of the message as context.
+    A body that is not a JSON object, an unset ANTHROPIC_API_KEY, a message
+    without text and a client that cannot be built are each answered with a
+    lone ``error`` frame, and no turn is stored.
 
     SSE frame contract:
     - ``event: delta`` / ``data: {"text": "<token>"}``  — streamed token
@@ -830,191 +1164,12 @@ def chat() -> Response:
     except NotAJsonObject as refusal:
         return _event_stream([_error_frame(str(refusal))])
     user_message: str = str(data.get("message", "")).strip()
+    refusal_reason = _refusal(user_message)
+    if refusal_reason is not None:
+        return _event_stream([_error_frame(refusal_reason)])
+    try:
+        client = _create_client()
+    except Exception as exc:
+        return _event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
     run_id: str = str(data.get("run_id", "")).strip()
-    sid = _session_id()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-    job_manager = get_job_manager()
-
-    def generate() -> Generator[str, None, None]:
-        # Pre-check: API key must be set
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            yield _error_frame("AI assistant is not configured: set ANTHROPIC_API_KEY.")
-            return
-
-        # Pre-check: reject empty/whitespace messages before hitting the API
-        # or writing a dangling user row (JS guards are insufficient).
-        if not user_message:
-            yield _error_frame("Message cannot be empty.")
-            return
-
-        # Constructing a client fails on a misconfigured environment, such as a
-        # malformed ANTHROPIC_BASE_URL.
-        try:
-            client = _create_client()
-        except Exception as exc:
-            yield _error_frame(f"Could not initialise Anthropic client: {exc}")
-            return
-
-        # Persist the user turn
-        database.save_chat_message(db_path, sid, "user", user_message)
-
-        # Build conversation history for the API.  The just-saved user turn is
-        # intentionally included as the final message in the request.
-        # Cap to MAX_HISTORY_TURNS to prevent unbounded context growth.
-        all_turns = database.get_chat_history(db_path, sid)
-        messages: list[dict[str, Any]] = [
-            {"role": row["role"], "content": row["content"]}
-            for row in all_turns[-MAX_HISTORY_TURNS:]
-        ]
-        # API invariant: the first message must be role=user and roles must
-        # strictly alternate.  After the even-width tail-slice, the window can
-        # start on an assistant row once the history exceeds MAX_HISTORY_TURNS.
-        # Drop any leading non-user turns to restore the invariant.
-        while messages and messages[0]["role"] != "user":
-            messages.pop(0)
-
-        # Run-context injection: when the request carries a run_id,
-        # prepend a compact preamble to the final (user) message in-memory ONLY.
-        # - NOT written to chat_messages (keeps stored history clean).
-        # - NOT placed in the cached system block (preserves prompt-cache stability).
-        # - Graceful no-op when run_id is absent/empty or the run is not found.
-        if run_id and messages and messages[-1]["role"] == "user":
-            run_data = get_run_results(run_id, db_path)
-            if "error" not in run_data:
-                preamble = (
-                    f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "
-                    f"{json.dumps(run_data.get('summary', {}), ensure_ascii=False)}]\n\n"
-                )
-                original_content: str = str(messages[-1]["content"])
-                messages[-1] = dict(messages[-1])
-                messages[-1]["content"] = preamble + original_content
-
-        model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
-        system_block: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": SIMULATOR_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-        params: dict[str, Any] = {
-            "model": model,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "low"},
-            "max_tokens": 4096,
-            "system": system_block,
-            "messages": messages,
-            "tools": TOOLS,
-        }
-
-        accumulated = ""
-        cache_usage: dict[str, int] = {}
-        invoked_tools: list[str] = []
-
-        try:
-            # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
-            # runaway model cannot hang the single Flask worker or the test suite.
-            # The manual loop is REQUIRED for per-token SSE streaming WITH tools:
-            # the SDK tool_runner returns complete messages, not deltas.
-            for _iteration in range(MAX_TOOL_ITERATIONS):
-                with client.messages.stream(**params) as stream:
-                    for text in stream.text_stream:
-                        accumulated += text
-                        yield f"event: delta\ndata: {json.dumps({'text': text})}\n\n"
-                    final_msg = stream.get_final_message()
-                    usage = getattr(final_msg, "usage", None)
-                    if usage is not None:
-                        # Accumulate across all loop iterations so the persisted
-                        # metadata reflects the full turn's token cost, not just
-                        # the final API call.
-                        cache_usage = _add_cache_usage(cache_usage, usage)
-
-                # Only "tool_use" means the model is waiting for tool results.
-                # Any other stop_reason ends the loop — including None, which
-                # getattr returns when the final message has no stop_reason.
-                stop_reason: Any = getattr(final_msg, "stop_reason", None)
-                if stop_reason != "tool_use":
-                    break
-
-                # Process each tool_use block emitted by the model.
-                content_blocks: Any = getattr(final_msg, "content", [])
-                tool_calls = [
-                    block for block in content_blocks
-                    if getattr(block, "type", None) == "tool_use"
-                ]
-                tool_result_content: list[dict[str, Any]] = []
-
-                for block in tool_calls:
-                    block_id: str = str(getattr(block, "id", ""))
-                    block_name: str = str(getattr(block, "name", ""))
-                    raw_input: Any = getattr(block, "input", {})
-                    block_input: dict[str, Any] = dict(raw_input) if raw_input else {}
-
-                    # Emit the `tool` SSE frame (§8 contract).
-                    yield (
-                        f"event: tool\n"
-                        f"data: {json.dumps({'name': block_name})}\n\n"
-                    )
-
-                    # Dispatch to the handler and collect the result.
-                    tool_result = dispatch_tool(
-                        block_name,
-                        block_input,
-                        db_path=db_path,
-                        job_manager=job_manager,
-                        data_dir=data_dir,
-                    )
-                    invoked_tools.append(block_name)
-
-                    tool_result_content.append({
-                        "type": "tool_result",
-                        "tool_use_id": block_id,
-                        # tool_result content must be a text string.
-                        # ensure_ascii=False preserves Unicode characters
-                        # (e.g. em-dashes in benchmark band strings).
-                        "content": json.dumps(tool_result, ensure_ascii=False),
-                    })
-
-                # Replay the turn exactly as the model sent it: with thinking on,
-                # the API needs its thinking blocks back unchanged.
-                cur_messages: list[dict[str, Any]] = list(params["messages"])
-                cur_messages.append({"role": "assistant", "content": list(content_blocks)})
-                cur_messages.append({"role": "user", "content": tool_result_content})
-                params["messages"] = cur_messages
-            else:
-                # for/else: loop completed without a break, meaning stop_reason was
-                # "tool_use" on every iteration — the cap was reached.  Emit a brief
-                # notice so the user isn't left with an empty or unexplained response.
-                _cap_notice = (
-                    "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
-                )
-                accumulated += _cap_notice
-                yield (
-                    f"event: delta\n"
-                    f"data: {json.dumps({'text': _cap_notice})}\n\n"
-                )
-
-        except Exception as exc:
-            # Persist whatever was accumulated so history stays consistent with
-            # what the user already saw, and role alternation is preserved for
-            # future turns (a dangling user-only row causes consecutive
-            # user-role messages which the Anthropic API rejects with a 400).
-            database.save_chat_message(
-                db_path, sid, "assistant", accumulated,
-                metadata={"error": str(exc), "truncated": True},
-            )
-            yield _error_frame(f"Streaming error: {exc}")
-            return
-
-        # Persist assistant turn on success; record any invoked tool names.
-        final_meta: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
-        if invoked_tools:
-            final_meta["invoked_tools"] = invoked_tools
-        database.save_chat_message(
-            db_path, sid, "assistant", accumulated, metadata=final_meta or None
-        )
-
-        yield "event: done\ndata: {}\n\n"
-
-    return _event_stream(stream_with_context(generate()))
+    return _event_stream(_answer_frames(client, user_message, run_id))

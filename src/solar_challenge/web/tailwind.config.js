@@ -8,6 +8,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Copies Tailwind's built-in amber: tests/unit/test_web_theme_colours.py relies on that.
         primary: {
           50: '#fffbeb',
           100: '#fef3c7',

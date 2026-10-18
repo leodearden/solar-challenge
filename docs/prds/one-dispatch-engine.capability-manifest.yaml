@@ -1,0 +1,270 @@
+# Machine-readable twin of one-dispatch-engine.capability-manifest.md
+# (review-all stream S3). task_id values stay null until commit_planning stamps them.
+# Every grep/path check fails on main 1fa8f79 and passes once its leaf lands;
+# every `absent` pattern was grepped present on main first.
+prd: docs/prds/one-dispatch-engine.md
+schema_version: 1
+signal_leaves: ["β", "γ", "δ", "ε"]
+tasks:
+  - label: "α"
+    task_id: 896
+    title: "One settle function both engines return through"
+    capabilities:
+      - name: "one-settle-function"
+        binding: "built by α; the 23-line tail is byte-identical in simulate_timestep and simulate_timestep_tou at 1fa8f79; task 270 (done, 57ce3c2) extracted it as _settle_timestep with six keyword inputs, which α reshapes into §5.1's _settle(step, exchange, battery_soc_kwh)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _settle\\("
+          paths: ["src/solar_challenge/flow.py"]
+          expect: present
+      - name: "one-preamble"
+        binding: "built by α; the duration/excess/shortfall preamble is copied at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class _StepEnergies"
+          paths: ["src/solar_challenge/flow.py"]
+          expect: present
+      - name: "single-energyflowresult-construction"
+        binding: "flow.py constructs EnergyFlowResult twice at 1fa8f79 and once since task 270 (in _settle_timestep); α keeps one, in _settle (a count, not grep-expressible)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "occurrence count; PRD §9 row 1"
+      - name: "s2-flow-edits-upstream"
+        binding: "producer: 786, 788 (S2 α, γ), out-of-batch dependencies"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edges"
+  - label: "β"
+    task_id: 898
+    title: "One grid-charge gate sized from the SOC after the step's PV charge"
+    capabilities:
+      - name: "one-gate-helper"
+        binding: "built by β; both strategies call it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _grid_charge_kw\\("
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "copied-gate-blocks-deleted"
+        binding: "the copied block's 'and grid_charge_ctx.is_cheap_period' line appears twice in dispatch.py at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "and grid_charge_ctx\\.is_cheap_period"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: absent
+      - name: "one-headroom-expression"
+        binding: "built by β; read by compute_grid_charge_power_kw and, at δ, StepLimits"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _charge_headroom_kw\\("
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "post-pv-gate-equivalence"
+        binding: "measured at 1fa8f79: E10 morning-drain day, strategy 5.047494 vs inline 5.045223 kWh today; 1.776e-15 kWh per minute with the post-PV gate emulated"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "numeric behaviour; PRD §9 row 7 test"
+      - name: "target-capped-at-ceiling"
+        binding: "producer: 788 (grid_charge_target_kwh capped at max_soc_kwh), upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
+  - label: "γ"
+    task_id: 900
+    title: "Settle on the energy the battery drew: charge losses leave export and enter import"
+    capabilities:
+      - name: "settlement-speaks-drawn-energy"
+        binding: "flow.py names its charge energies *_stored_kwh 17 times at 1fa8f79; γ settles on drawn energy"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_stored_kwh"
+          paths: ["src/solar_challenge/flow.py"]
+          expect: absent
+      - name: "battery-charge-reports-drawn-energy"
+        binding: "Battery.charge returns energy_stored_kwh at 1fa8f79; γ makes it return the energy drawn"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "return energy_stored_kwh"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "storage-identity-test"
+        binding: "built by γ (PRD §9 rows 2-6)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_battery_energy_accounts.py"]
+          expect: present
+      - name: "finance-model-header-line"
+        binding: "built by γ; docs/cost-recovery-finance-model.md carries no charge-loss line at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "charg(e|ing) loss"
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          expect: present
+      - name: "briefing-balance-convention-on-bus-energy"
+        binding: "built by γ; review/briefing.yaml's energy-balance convention names no storage identity test at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_battery_energy_accounts"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "cli-arbitrage-day-figures"
+        binding: "measured at 1fa8f79 (cached TMY) and settled on drawn energy: import 7.958723, export 0.000000, grid charge 2.178983 kWh, cost £1.341602 at 0.09/0.25 or £1.894444 at S11 γ's 0.13/0.35"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI run needs the Bristol TMY; the leaf's tests use synthetic fixtures"
+  - label: "δ"
+    task_id: 902
+    title: "Bounded decisions and engine checks through Interval.admits"
+    capabilities:
+      - name: "step-limits-value"
+        binding: "built by δ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class StepLimits"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "engine-applies-the-bound"
+        binding: "built by δ; simulate_timestep checks every decision before _execute"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "require_admissible\\("
+          paths: ["src/solar_challenge/flow.py"]
+          expect: present
+      - name: "checks-through-the-interval"
+        binding: "producer: S4 α (Interval, NON_NEGATIVE, POSITIVE), upstream out-of-batch; dispatch.py names none at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "NON_NEGATIVE"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "copied-input-blocks-collapsed"
+        binding: "'if generation_kw < 0:' appears three times in dispatch.py at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if generation_kw < 0:"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: absent
+      - name: "decision-sign-guards-replaced"
+        binding: "DispatchDecision.__post_init__ checks 'if self.charge_kw < 0:' at 1fa8f79 (NaN and inf pass)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if self\\.charge_kw < 0:"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: absent
+      - name: "bounds-test"
+        binding: "built by δ (PRD §9 rows 8-12)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/dispatch/test_decision_bounds.py"]
+          expect: present
+      - name: "s4-interval-upstream"
+        binding: "producer: S4 α, authored in docs/prds/finite-quantities.md, filed by the S4 decompose"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
+  - label: "ε"
+    task_id: 904
+    title: "Route the home-level tou_optimized through the factory; simulate_timestep_tou delegates"
+    capabilities:
+      - name: "home-no-longer-reaches-the-inline-path"
+        binding: "home.py names simulate_timestep_tou three times at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_timestep_tou"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "tariff-tou-timestep-deleted"
+        binding: "home._tariff_tou_timestep exists at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_tariff_tou_timestep"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "inline-path-delegates"
+        binding: "built by ε; requires 839 (S11 β): TOUOptimizedStrategy(tariff=)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "TOUOptimizedStrategy\\(tariff=tariff\\)"
+          paths: ["src/solar_challenge/flow.py"]
+          expect: present
+      - name: "briefing-one-engine"
+        binding: "built by ε; review/briefing.yaml reads 'Two dispatch paths coexist' at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "One dispatch engine"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "scenario-comment-corrected"
+        binding: "scenarios/bristol-arbitrage.yaml's comment names simulate_timestep_tou at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_timestep_tou"
+          paths: ["scenarios/bristol-arbitrage.yaml"]
+          expect: absent
+      - name: "equivalence-test"
+        binding: "built by ε (PRD §9 rows 13-14), written against the inline path at the leaf's base"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_one_dispatch_engine.py"]
+          expect: present
+      - name: "tariff-clock-arm-upstream"
+        binding: "producer: 839 (S11 β) and 787 (S2 β), upstream out-of-batch dependencies"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producers; gated by the add_dependency edges"
+  - label: "ζ"
+    task_id: 905
+    title: "Retire simulate_timestep_tou at the bump"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning."
+    capabilities:
+      - name: "name-retired-from-src"
+        binding: "src/solar_challenge names simulate_timestep_tou in flow.py, home.py and __init__.py at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_timestep_tou"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "flow-tests-moved-to-the-engine"
+        binding: "tests/unit/test_flow.py calls simulate_timestep_tou 21 times at 1fa8f79"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_timestep_tou"
+          paths: ["tests/unit/test_flow.py"]
+          expect: absent
+      - name: "bump-window"
+        binding: "S29 releases the held leaf"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "held for the S29 release window"

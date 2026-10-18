@@ -8,7 +8,6 @@ flat-rate tariffs, and preset UK tariff configurations.
 from dataclasses import dataclass
 from datetime import time
 from functools import cached_property
-from typing import Optional
 
 import pandas as pd
 

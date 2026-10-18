@@ -1,0 +1,337 @@
+# Machine-readable twin of lane-harness-one-collection-source.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main 962552956508 (2026-10-15); checks are pattern-anchored.
+# task_id stays null until commit_planning stamps it. θ depends on task 366 (out of batch).
+# Decompose session, 2026-10-17: every mechanical check re-run against main 2ff5673.
+# Five checks re-scoped so that each fails today and can pass once its leaf lands,
+# and stays green after later leaves; each says why in its binding or reason.
+prd: docs/prds/lane-harness-one-collection-source.md
+schema_version: 1
+signal_leaves: ["δ", "ζ", "η", "θ"]
+tasks:
+  - label: "α"
+    task_id: 873
+    title: "Collection report: one typed collection from an in-repo pytest plugin"
+    capabilities:
+      - name: "plugin-writes-the-collection-report"
+        binding: "probe: a -p top-level plugin from a PYTHONPATH dir, run by `uv run … pytest`, wrote node ids, paths, parametrise ids and skipped modules; no pytest_collection_finish hook in tests/ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def pytest_collection_finish"
+          paths: ["tests/"]
+          expect: present
+      - name: "colon-filter-deleted"
+        binding: "grep: _collect_only.collected_node_ids keeps every stdout line containing '::' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"::\" in line"
+          paths: ["tests/"]
+          expect: absent
+      - name: "collected-node-ids-deleted"
+        binding: "grep: def collected_node_ids in tests/_collect_only.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def collected_node_ids"
+          paths: ["tests/"]
+          expect: absent
+      - name: "parametrise-id-surgery-deleted"
+        binding: "grep: test_interpreter_matrix_lane._interpreters_named_by does rpartition(\"[\") on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "rpartition\\(\"\\[\"\\)"
+          paths: ["tests/"]
+          expect: absent
+      - name: "junit-parse-moved-onto-the-report"
+        binding: "grep: test_per_task_verify imports xml.etree.ElementTree on main; probe: a collect-only JUnit report holds no collected test"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "xml\\.etree"
+          paths: ["tests/unit/test_per_task_verify.py"]
+          expect: absent
+      - name: "verbosity-mode-deleted"
+        binding: "grep: run_collect_only's PYTEST_ADDOPTS carries --verbosity=-1 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "--verbosity=-1"
+          paths: ["tests/_collect_only.py"]
+          expect: absent
+      - name: "b1-stray-colon-line-not-a-test"
+        binding: "bound in-leaf: α's synthetic-project test (B1) is RED against collected_node_ids by construction"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a behavioural test α writes; its verdict is the verify's"
+  - label: "β"
+    task_id: 874
+    title: "One orchestrator command value and one process runner"
+    capabilities:
+      - name: "command-value-constructors"
+        binding: "grep: no verify_command or lane_command in tests/_orchestrator_config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def (verify_command|lane_command)\\("
+          paths: ["tests/_orchestrator_config.py"]
+          expect: present
+      - name: "lane-rule-helpers-folded-in"
+        binding: "grep: lane_job_directory and lane_job_enabled defined and called in tests/ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "lane_job_directory|lane_job_enabled"
+          paths: ["tests/"]
+          expect: absent
+      - name: "test-command-indexing-gone"
+        binding: "grep: [\"test_command\"] in test_per_task_verify and _verify_suite on main; scoped to the call-site files because the signal allows it inside tests/_orchestrator_config.py, whose docstring holds it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\[\"test_command\"\\]"
+          paths: ["tests/_verify_suite.py", "tests/_collect_only.py", "tests/_lane_collection.py", "tests/unit/", "tests/interpreter_matrix/", "tests/newest_releases/"]
+          expect: absent
+      - name: "slot-indexing-gone"
+        binding: "grep: config[key] in test_stale_uv_lock.test_the_verify_refuses_a_stale_lock_naming_uv_lock on main; scoped to that file because tests/unit/test_web_fleet_config.py has an unrelated config[key] that β never touches"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "config\\[key\\]"
+          paths: ["tests/unit/test_stale_uv_lock.py"]
+          expect: absent
+      - name: "collect-runner-is-not-subprocess-run"
+        binding: "grep: run_collect_only uses subprocess.run(shell=True, timeout=300) on main, which kills only the shell"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "subprocess\\.run\\("
+          paths: ["tests/_collect_only.py"]
+          expect: absent
+      - name: "probe-environment-carries-the-role"
+        binding: "grep in dark-factory offline_lane.py: lane env is {**os.environ, 'DF_VERIFY_ROLE': 'offline'}; no DF_VERIFY_ROLE in tests/ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "DF_VERIFY_ROLE"
+          paths: ["tests/"]
+          expect: present
+      - name: "b6-no-process-outlives-a-hung-probe"
+        binding: "bound in-leaf: the test_verify_suite_helper process-group pattern, run against the collect runner"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a process-group property observed by β's own test"
+  - label: "γ"
+    task_id: 875
+    title: "Lane-only stated once: e2e joins collect_ignore; the e2e mark comes from its directory"
+    capabilities:
+      - name: "e2e-in-collect-ignore"
+        binding: "grep: tests/conftest.py collect_ignore lists interpreter_matrix, css_build, newest_releases on one line on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^collect_ignore = .*\"e2e\""
+          paths: ["tests/conftest.py"]
+          expect: present
+      - name: "hand-written-e2e-marks-deleted"
+        binding: "grep: pytestmark = pytest.mark.e2e in 23 tests/e2e modules on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "pytestmark = pytest\\.mark\\.e2e"
+          paths: ["tests/e2e/"]
+          expect: absent
+      - name: "hook-adds-the-e2e-mark"
+        binding: "probe: a hook-added mark is seen by -m and get_closest_marker; no pytest.mark.e2e in tests/e2e/conftest.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "θ deletes the mark from the hook, so a present-check would turn red after θ and hold up γ's dependent η; B9's pytester test in the verify carries it"
+      - name: "addopts-restatement-deleted"
+        binding: "grep: pyproject addopts carries --ignore=tests/e2e on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "--ignore=tests/e2e"
+          paths: ["pyproject.toml"]
+          expect: absent
+      - name: "matrix-addopts-restatement-deleted"
+        binding: "grep: interpreter_matrix/test_verify_suite._suite_env sets PYTEST_ADDOPTS on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "PYTEST_ADDOPTS"
+          paths: ["tests/interpreter_matrix/"]
+          expect: absent
+      - name: "test-command-keeps-its-e2e-ignore"
+        binding: "decision 4: config/tree skew; present on main and must stay"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "already true on main, so a present-check is vacuous and the polarity gate refuses it; review checks that γ leaves test_command byte-identical"
+  - label: "δ"
+    task_id: 881
+    title: "Mark vocabulary: retire integration, refuse unregistered marks, delete the hand-kept network lists"
+    capabilities:
+      - name: "marker-registration-file-deleted"
+        binding: "grep: tests/unit/test_marker_registration.py on main with INTEGRATION_FILES, NETWORKED_UNIT_CLASSES, PURE_UNIT_CLASSES"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_marker_registration.py"]
+          expect: absent
+      - name: "integration-mark-retired-from-tests"
+        binding: "grep: mark.integration in 14 integration modules on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "mark\\.integration"
+          paths: ["tests/"]
+          expect: absent
+      - name: "integration-mark-unregistered"
+        binding: "grep: pyproject markers carry \"integration: …\" on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"integration:"
+          paths: ["pyproject.toml"]
+          expect: absent
+      - name: "strict-markers-on"
+        binding: "rejection-check: pytest 9.0.3 with strict_markers = true refuses @pytest.mark.slwo at collection (exit 2)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^strict_markers = true"
+          paths: ["pyproject.toml"]
+          expect: present
+  - label: "ε"
+    task_id: 877
+    title: "D23: every dependency floor is the locked release; the capability-claim tests go"
+    capabilities:
+      - name: "floor-rule-test-exists"
+        binding: "no test_every_declared_floor_is_the_locked_release on main; probe: 19 of 20 floors below uv.lock's versions"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def test_every_declared_floor_is_the_locked_release"
+          paths: ["tests/unit/"]
+          expect: present
+      - name: "stale-floors-raised"
+        binding: "grep: pyproject declares pandas>=2.0.0, pytest>=7.0.0, playwright>=1.51.0 on main against locked 3.0.3, 9.0.3, 1.61.0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"(pandas>=2\\.0\\.0|pytest>=7\\.0\\.0|playwright>=1\\.51\\.0)\""
+          paths: ["pyproject.toml"]
+          expect: absent
+      - name: "capability-claim-tests-deleted"
+        binding: "grep: test_e2e_extra.py and test_build_system.py on main; test_dev_extra.py from task 644 (upstream)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_e2e_extra.py", "tests/unit/test_build_system.py", "tests/unit/test_dev_extra.py"]
+          expect: absent
+      - name: "newest-releases-deselects-the-floor-test"
+        binding: "probe: --deselect of a function node id deselects every parametrisation; newest-releases runs the verify on an upgraded lock (grep); the check matches the test's name, which decision 7 fixes, not the argv spelling"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_every_declared_floor_is_the_locked_release"
+          paths: ["tests/newest_releases/"]
+          expect: present
+      - name: "claude-md-states-the-floor-rule"
+        binding: "CLAUDE.md Key Patterns has no floor rule on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "prose wording is the implementer's; checked at review"
+      - name: "lock-versions-unchanged-by-the-raise"
+        binding: "probe: the current resolution satisfies floor == lock; no direct dependency is forked"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a git-diff property of uv.lock observed in the leaf's own commit"
+  - label: "ζ"
+    task_id: 884
+    title: "The lint and the helper type check cover tests/"
+    capabilities:
+      - name: "name-defined-ignores-deleted"
+        binding: "ran: 29 type: ignore[name-defined] in 12 test files on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "type: ignore\\[name-defined\\]"
+          paths: ["tests/"]
+          expect: absent
+      - name: "invalid-noqa-directives-fixed"
+        binding: "ran: ruff warns of 4 invalid `# noqa: no assignment …` directives in tests/unit/test_flex.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "# noqa: no assignment"
+          paths: ["tests/"]
+          expect: absent
+      - name: "lint-and-type-gates-cover-tests"
+        binding: "ran: ruff F over tests → 59 findings in 23 files; mypy strict over 32 helpers → 2 errors; test_lint lints src/solar_challenge only on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "gate scope is asserted by ζ's own tests in the verify; successor names are tactical"
+  - label: "η"
+    task_id: 887
+    title: "The orchestrator config's rationale moves to docs; measured durations go"
+    capabilities:
+      - name: "yaml-points-at-its-doc"
+        binding: "grep: no docs/ pointer for the lane or orchestrator config in the yaml on main; docs/lint-gate.md precedent"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "docs/(orchestrator-config|offline-lane)\\.md"
+          paths: ["dark-factory-orchestrator.yaml"]
+          expect: present
+      - name: "measured-durations-deleted"
+        binding: "grep: 214 s, 17-38 s, 17-19 min in the yaml on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "214 s|17-19 min|17-38 s"
+          paths: ["dark-factory-orchestrator.yaml"]
+          expect: absent
+      - name: "yaml-comment-count-at-most-15"
+        binding: "ran: 85 comment lines of 134 on main; basis for ≤ 15: two header lines plus one per block for 8 blocks"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a line count; delivered_check grep has no count threshold"
+  - label: "θ"
+    task_id: 891
+    title: "Retire the e2e mark once task 366 takes e2e off the offline exemption"
+    capabilities:
+      - name: "e2e-mark-gone-from-tests"
+        binding: "producer: γ puts the mark in one hook; 366 (upstream, out of batch) removes its last consumer"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "pytest\\.mark\\.e2e"
+          paths: ["tests/"]
+          expect: absent
+      - name: "e2e-mark-unregistered"
+        binding: "grep: pyproject markers carry \"e2e: …\" on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"e2e:"
+          paths: ["pyproject.toml"]
+          expect: absent
+      - name: "test-command-selects-on-slow-only"
+        binding: "grep: test_command's -m reads 'not slow and not e2e' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "not e2e"
+          paths: ["dark-factory-orchestrator.yaml"]
+          expect: absent

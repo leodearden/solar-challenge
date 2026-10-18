@@ -11,9 +11,26 @@ from __future__ import annotations
 
 import dataclasses
 
+import pandas as pd
 import pytest
 
-from tests._finance_builders import make_fleet_results, make_home_config, make_scenario_and_finance
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import (
+    FinanceConfig,
+    _annualise_physics,
+    _seg_export_income_gbp,
+    householder_bill,
+    project_multi_year,
+)
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_home_config,
+    make_scenario_and_finance,
+)
 
 
 class TestProjectMultiYearRevenue:
@@ -26,8 +43,6 @@ class TestProjectMultiYearRevenue:
         seg_tariff_pence: float | None = 5.0,
     ) -> tuple:
         """Build scenario + finance for revenue tests."""
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-
         homes = [make_home_config() for _ in range(n_homes)]
         finance = FinanceConfig(
             standing_charge_pence_per_day=28.0,
@@ -51,13 +66,6 @@ class TestProjectMultiYearRevenue:
         Own-use is own_use_rate_pence_per_kwh × fleet own-use and SEG is the sum of
         _seg_export_income_gbp; neither is priced at retail_baseline_rate.
         """
-        from solar_challenge.finance import (  # type: ignore[attr-defined]
-            _annualise_physics,
-            _seg_export_income_gbp,
-            project_multi_year,
-        )
-        from solar_challenge.home import calculate_summary
-
         n_homes = 2
         sc, exp, imp = 3000.0, 1500.0, 500.0
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
@@ -81,9 +89,6 @@ class TestProjectMultiYearRevenue:
 
     def test_grid_services_included_in_fleet_revenue(self) -> None:
         """fleet_revenue_gbp includes grid_services = rate × Σ max_discharge_kw when rate > 0."""
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         # Battery-equipped homes so max_discharge_kw is available
         bat_config = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
         n_homes = 2
@@ -114,8 +119,6 @@ class TestProjectMultiYearRevenue:
         min(0.50 × 5,000, 4,500) = 2,500 kWh, where the cap does not bind.  SEG adds £0
         on both paths: the builder's exports earn £0, so the effective export rate is 0 p.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         fr = make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
         def year_0(self_consumption_override: float | None) -> "YearPoint":  # type: ignore[name-defined]
@@ -139,8 +142,6 @@ class TestProjectMultiYearRevenue:
         and the rest of its 4,000 kWh generation, 1,200 kWh, is exported at its physics
         export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         n_homes = 2
         fleet = make_fleet_results(
             n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
@@ -158,8 +159,6 @@ class TestProjectMultiYearRevenue:
 
     def test_fleet_revenue_non_negative(self) -> None:
         """fleet_revenue_gbp is non-negative for all years."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = self._make_revenue_scenario(n_homes=1)
         # every CBS revenue term is non-negative
         fr = make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0)
@@ -176,7 +175,7 @@ def _make_grid_charging_sim_results(
     peak_pence: float = 30.0,
     off_peak_pence: float = 9.0,
     n_steps: int = 8760,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> SimulationResults:
     """Full-year TOU home whose battery grid-charges off-peak through the grid meter.
 
     Grid charge is metered import: grid_import = import_to_load + grid_charge, with
@@ -186,18 +185,15 @@ def _make_grid_charging_sim_results(
     Defaults give per home: total_import_cost_gbp £258.00, of which
     total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.
 
-    Hourly index with kW = kWh / (n_steps / 60), so calculate_summary's 1/60
-    integration returns the kWh totals and simulation_days is 365.
+    Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
+    each row over the hour it lasts, returns the kWh totals and simulation_days is 365.
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
 
-    def constant_kw(kwh: float) -> "pd.Series":
-        return pd.Series(kwh / (n_steps / 60.0), index=idx)
+    def constant_kw(kwh: float) -> pd.Series:
+        return pd.Series(kwh / n_steps, index=idx)
 
-    def constant_gbp(pence: float) -> "pd.Series":
+    def constant_gbp(pence: float) -> pd.Series:
         return pd.Series(pence / 100.0 / n_steps, index=idx)
 
     zeros = pd.Series(0.0, index=idx)
@@ -229,18 +225,11 @@ class TestGridChargeEnergyPaidOnce:
 
     N_HOMES = 2
 
-    def _fleet(self) -> "FleetResults":  # type: ignore[name-defined]
-        from solar_challenge.fleet import FleetResults
-
-        return FleetResults(
-            per_home_results=[_make_grid_charging_sim_results() for _ in range(self.N_HOMES)],
-            home_configs=[make_home_config() for _ in range(self.N_HOMES)],
-        )
+    def _fleet(self) -> FleetResults:
+        return make_fleet_results_of([_make_grid_charging_sim_results() for _ in range(self.N_HOMES)])
 
     @staticmethod
-    def _without_grid_charge_cost_series(fleet: "FleetResults") -> "FleetResults":  # type: ignore[name-defined]
-        from solar_challenge.fleet import FleetResults
-
+    def _without_grid_charge_cost_series(fleet: FleetResults) -> FleetResults:
         return FleetResults(
             per_home_results=[
                 dataclasses.replace(r, grid_charge_cost=None) for r in fleet.per_home_results
@@ -250,11 +239,9 @@ class TestGridChargeEnergyPaidOnce:
 
     @staticmethod
     def _householder_import_cost_gbp(
-        summary: "SummaryStatistics",  # type: ignore[name-defined]
-        finance: "FinanceConfig",  # type: ignore[name-defined]
+        summary: SummaryStatistics,
+        finance: FinanceConfig,
     ) -> float:
-        from solar_challenge.finance import householder_bill
-
         basis_c_own_use_kwh = summary.total_demand_kwh - summary.total_grid_import_kwh
         return householder_bill(
             summary, basis_c_own_use_kwh, finance, summary.simulation_days
@@ -262,12 +249,10 @@ class TestGridChargeEnergyPaidOnce:
 
     @staticmethod
     def _cbs_revenue_at_age_0(
-        fleet: "FleetResults",  # type: ignore[name-defined]
-        scenario: "ScenarioConfig",  # type: ignore[name-defined]
-        finance: "FinanceConfig",  # type: ignore[name-defined]
+        fleet: FleetResults,
+        scenario: ScenarioConfig,
+        finance: FinanceConfig,
     ) -> float:
-        from solar_challenge.finance import project_multi_year
-
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
         return curve.points[0].fleet_revenue_gbp
 
@@ -277,8 +262,6 @@ class TestGridChargeEnergyPaidOnce:
         Pins which ledger bears the cost: the bill carries the full metered import cost,
         more than the builder's load-import-only £240 (800 kWh at 30p).
         """
-        from solar_challenge.home import calculate_summary
-
         _, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         load_import_only_gbp = 800.0 * 30.0 / 100.0
         for result in self._fleet().per_home_results:
@@ -293,8 +276,6 @@ class TestGridChargeEnergyPaidOnce:
         The fleet earns no SEG and no grid services, so year-0 revenue is exactly
         own_use_rate × Σ basis-C own-use (demand − import) / 100.
         """
-        from solar_challenge.home import calculate_summary
-
         scenario, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         fleet = self._fleet()
         summaries = [calculate_summary(r) for r in fleet.per_home_results]
@@ -316,8 +297,6 @@ class TestGridChargeEnergyPaidOnce:
         The CBS share is the revenue drop against a twin fleet with identical energy and
         import cost but no grid_charge_cost series.
         """
-        from solar_challenge.home import calculate_summary
-
         scenario, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         fleet = self._fleet()
         summaries = [calculate_summary(r) for r in fleet.per_home_results]
@@ -340,10 +319,8 @@ def _make_seg_summary(
     total_generation_kwh: float = 4000.0,
     total_grid_export_kwh: float = 800.0,
     total_export_revenue_gbp: float = 24.0,
-) -> "SummaryStatistics":  # type: ignore[name-defined]
+) -> SummaryStatistics:
     """Minimal SummaryStatistics for testing _seg_export_income_gbp."""
-    from solar_challenge.home import SummaryStatistics
-
     sc_kwh = total_generation_kwh - total_grid_export_kwh
     return SummaryStatistics(
         total_generation_kwh=total_generation_kwh,
@@ -376,10 +353,8 @@ class TestSegExportIncomeGbp:
 
     def _make_finance_seg(
         self,
-        self_consumption_override: "float | None" = None,
-    ) -> "FinanceConfig":  # type: ignore[name-defined]
-        from solar_challenge.config import FinanceConfig
-
+        self_consumption_override: float | None = None,
+    ) -> FinanceConfig:
         return FinanceConfig(
             standing_charge_pence_per_day=28.0,
             asset_life_years=5,
@@ -390,8 +365,6 @@ class TestSegExportIncomeGbp:
 
     def test_physics_path_returns_annualised_export_revenue(self) -> None:
         """Physics path (no override): returns total_export_revenue_gbp directly."""
-        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
-
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
             total_grid_export_kwh=800.0,
@@ -410,8 +383,6 @@ class TestSegExportIncomeGbp:
         derived from physics figures and falls back to 0.0 p/kWh.  The result
         must be exactly 0.0 regardless of the override fraction.
         """
-        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
-
         # Summary with no export at all (e.g. all generation self-consumed)
         summary_no_export = _make_seg_summary(
             total_generation_kwh=4000.0,
@@ -440,8 +411,6 @@ class TestSegExportIncomeGbp:
           effective_rate  = (24/800)×100 = 3 p/kWh
           result          = 1600×3/100 = 48 £
         """
-        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
-
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
             total_grid_export_kwh=800.0,   # physics: 20% of gen
@@ -457,11 +426,7 @@ class TestSegExportIncomeGbp:
 
     def test_short_period_annualises_physics_export_revenue(self) -> None:
         """Physics path: short simulation period is annualised to 365 days."""
-        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
-
         # Build a summary with a 182-day simulation (half year)
-        from solar_challenge.home import SummaryStatistics
-
         summary_182 = SummaryStatistics(
             total_generation_kwh=2000.0,
             total_demand_kwh=2600.0,

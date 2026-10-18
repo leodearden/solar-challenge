@@ -1,0 +1,303 @@
+# Machine-readable twin of simulation-window-and-cadence.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it. η is held for S29 (x_seam_wait).
+prd: docs/prds/simulation-window-and-cadence.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: 777
+    title: "timebase.SimulationWindow and SimulationResults.window"
+    capabilities:
+      - name: "simulation-window-type-defined"
+        binding: "producer:α — new in timebase.py; absent at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class SimulationWindow\\b"
+          paths: ["src/solar_challenge/timebase.py"]
+          expect: present
+      - name: "covered-days-rule-defined"
+        binding: "producer:α — the one calendar day-count rule"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def covered_days\\("
+          paths: ["src/solar_challenge/timebase.py"]
+          expect: present
+      - name: "results-window-derived-from-index"
+        binding: "producer:α — SimulationResults.window reads SimulationWindow.of_index"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "SimulationWindow\\.of_index\\("
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "results-amounts-read-window-cadence"
+        binding: "grep:home.py::_power builds _PerMinuteAmount(energy_column, HOURS_PER_MINUTE) today; α makes power amounts read window.step_hours"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_PerMinuteAmount\\(energy_column, HOURS_PER_MINUTE\\)"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "of-index-refusals-fire"
+        binding: "rejection-mechanism — authored in α; B2 observes each refusal (empty, one row without freq, uneven, non-DatetimeIndex)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal messages are asserted by B2's tests, not a grep"
+  - label: "β"
+    task_id: 778
+    title: "Summaries carry their window"
+    capabilities:
+      - name: "summary-day-count-not-timedelta"
+        binding: "grep:home.py::calculate_summary sim_days = (index[-1] - index[0]).days + 1 today; β derives it from results.window"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "sim_days = \\(results\\.generation\\.index\\[-1\\]"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "summary-window-field"
+        binding: "producer:β — SummaryStatistics.window (transitional Optional until η)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^    window: .*SimulationWindow"
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "storage-codec-round-trips-window"
+        binding: "grep:web/storage.py::_serialize_value lacks date/timedelta; β adds both; B5 round trip"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "round-trip fidelity is asserted by test_web_storage_roundtrip, not a grep"
+      - name: "summary-window-agreement-refusal"
+        binding: "rejection-mechanism — β adds the simulation_days == window.days check to SummaryStatistics.__post_init__; B5 observes it fire"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content (both values) is asserted by B5's test"
+  - label: "γ1"
+    task_id: 779
+    title: "The engine and integration sources read the window"
+    capabilities:
+      - name: "no-literal-engine-cadence"
+        binding: "grep:home.py::simulate_home timestep_minutes=1.0 (x2) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "timestep_minutes=1\\.0"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "no-fixed-minute-kw-conversion"
+        binding: "grep:home.py::simulate_home minute_kwh_to_kw = 1 / HOURS_PER_MINUTE today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "minute_kwh_to_kw = 1 / HOURS_PER_MINUTE"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "community-derives-window"
+        binding: "grep:community.py step_hours( in _price_grid_flows and simulate_community today; γ1 routes both through SimulationWindow.of_index"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "step_hours\\("
+          paths: ["src/solar_challenge/community.py"]
+          expect: absent
+      - name: "load-integration-reads-window"
+        binding: "grep:load.py::energy_kwh profile.sum() * HOURS_PER_MINUTE today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "profile\\.sum\\(\\) \\* HOURS_PER_MINUTE"
+          paths: ["src/solar_challenge/load.py"]
+          expect: absent
+      - name: "community-refuses-uneven-index"
+        binding: "rejection-mechanism — producer:α of_index; B10 observes simulate_community raise on a dropped middle row"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour asserted by B10's test"
+  - label: "γ2"
+    task_id: 780
+    title: "Readers read the window; step_hours goes"
+    capabilities:
+      - name: "no-inline-minute-integrations-in-output"
+        binding: "grep:output.py .sum() * HOURS_PER_MINUTE x10 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.sum\\(\\) \\* HOURS_PER_MINUTE"
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+      - name: "step-hours-retired"
+        binding: "grep:timebase.py::step_hours today; last callers move in γ1/γ2"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def step_hours\\("
+          paths: ["src/solar_challenge/timebase.py"]
+          expect: absent
+      - name: "chart-gates-read-window-days"
+        binding: "grep:web/charts.py (index[-1] - index[0]).days + 1 x2 today; B9"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.days \\+ 1"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "aggregate-annual-rule-removed"
+        binding: "grep:output.py::aggregate_annual, 0 src callers; deleted in γ2 by lead ruling L9"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def aggregate_annual\\("
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+  - label: "δ"
+    task_id: 781
+    title: "Validation scales by the window"
+    capabilities:
+      - name: "validation-derives-window"
+        binding: "producer:α; validation.py reads SimulationWindow.of_index for both annual checks"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "SimulationWindow\\.of_index\\("
+          paths: ["src/solar_challenge/validation.py"]
+          expect: present
+      - name: "no-own-day-count-in-validation"
+        binding: "grep:validation.py (index[-1] - index[0]).days + 1 x2 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.days \\+ 1"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: absent
+      - name: "no-own-annual-rule-in-validation"
+        binding: "grep:validation.py::validate_consumption 365 / duration_days today (task 749 may add a second)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "365 / duration_days"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: absent
+      - name: "validate-cli-reads-dst-csv"
+        binding: "probe: TypeError today on a DST-crossing export; B7"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI behaviour asserted by B7's CliRunner test"
+  - label: "ε"
+    task_id: 782
+    title: "Finance bills through the window"
+    capabilities:
+      - name: "threshold-rule-retired"
+        binding: "grep:finance.py _SHORT_PERIOD_THRESHOLD (3 uses) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_SHORT_PERIOD_THRESHOLD"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "finance-private-scale-retired"
+        binding: "grep:finance.py::_annualisation_scale today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _annualisation_scale\\("
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "bill-distribution-carries-window"
+        binding: "producer:ε — BillDistribution.annualised_from, MultiYearCurve.annualised_from"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^    annualised_from: "
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "optimize-no-365-fallback"
+        binding: "grep:optimize.py::_age0_baseline_outlay simulation_days if summaries else 365 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulation_days if summaries else 365"
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "inv8-day-count-refusal"
+        binding: "rejection-mechanism — ε adds it; B6 observes bill_distribution(<2-day>, f, 1) raise naming 1 and 2"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content asserted by INV-8's test (B6)"
+  - label: "ζ"
+    task_id: 783
+    title: "Board outputs and CLI counts read the window"
+    capabilities:
+      - name: "cli-has-no-timedelta-day-count"
+        binding: "grep:cli/finance.py, cli/fleet.py, cli/home.py, cli/optimize.py (end_date - start_date).days today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\(end_date - start_date\\)\\.days"
+          paths: ["src/solar_challenge/cli/"]
+          expect: absent
+      - name: "board-reports-render-notice"
+        binding: "producer:ε annualised_from; ζ renders it in output.generate_finance_report and generate_config_ranking_report"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "annualised_from"
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "finance-run-bills-summaries-days"
+        binding: "B8 — fake CliFleetSimulator over 2024-03-31..04-01: notice x183.000, bills equal bill_distribution(summaries, finance, 2)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI behaviour asserted by B8's CliRunner test (INV-8 CLI half)"
+  - label: "η"
+    task_id: 784
+    title: "Surface bump edits for the window (held for S29)"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning until S29 releases it. Includes D31: householder_bill and bill_distribution lose simulation_days."
+    capabilities:
+      - name: "householder-bill-parameter-renamed"
+        binding: "grep:finance.py::householder_bill annual_self_consumption_kwh today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "annual_self_consumption_kwh"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "engine-cadence-has-no-default"
+        binding: "grep:flow.py, dispatch.py timestep_minutes: float = 1.0 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "timestep_minutes: float = 1\\.0"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "per-minute-amounts-renamed"
+        binding: "grep:home.py::SimulationResults.per_minute_amounts today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def per_minute_amounts\\("
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "bill-signatures-drop-simulation-days"
+        binding: "grep:tests/unit/test_public_api_surface.py FROZEN_SURFACE pins householder_bill and bill_distribution with simulation_days: int today; D31 drops it at the bump"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '"(householder_bill|bill_distribution)": "\(.*simulation_days: int'
+          paths: ["tests/"]
+          expect: absent
+      - name: "surface-test-pins-new-forms"
+        binding: "tests/unit/test_public_api_surface.py FROZEN_SURFACE/FROZEN_MEMBERS updated in the S29 bump"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the surface lock test itself is the check"

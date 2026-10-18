@@ -1,6 +1,7 @@
 """Tests for the CLI module."""
 
 import io
+import sys
 import tempfile
 import types
 from collections.abc import Callable
@@ -13,24 +14,31 @@ import pytest
 import typer
 import yaml
 from rich.console import Console
+from rich.progress import Progress
 from rich.style import Style
+from rich.text import Text
 from typer.testing import CliRunner, Result
 
 import solar_challenge.cli.home as _cli_home_module
 import solar_challenge.home as _home_module
+from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
     console,
+    create_fleet_progress,
+    create_progress,
     create_summary_table,
     error_console,
     handle_errors,
     parse_location,
     print_error,
     print_info,
+    print_report,
     print_success,
     print_warning,
+    status_console,
 )
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
@@ -40,6 +48,8 @@ from tests._synthetic_weather import synthetic_june_weather
 runner = CliRunner()
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
+
+_TEXT_WIDER_THAN_ANY_CONSOLE = " ".join(["Bristol"] * 60)
 
 
 class TestMainCLI:
@@ -68,6 +78,26 @@ class TestMainCLI:
         assert result.exit_code in (0, 2)
         assert "Usage" in result.stdout or "Solar Challenge" in result.stdout
 
+    def test_verbose_is_refused_as_an_unknown_option(self) -> None:
+        """--verbose never changed any output, so the CLI has no such option. It refuses it with a usage error, exit 2, and runs no command: config locations would otherwise print its table on stdout."""
+        result = runner.invoke(app, ["--verbose", "config", "locations"])
+
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "No such option: --verbose" in " ".join(result.stderr.split())
+
+
+def _usage_line(result: Result) -> str:
+    """Return the line of a --help *result*'s stdout that holds "Usage:", failing the test with the whole stdout if none does.
+
+    The usage line names the command's positional arguments, which typer 0.26
+    renders upper-case (PV_KW) and typer 0.27 lower-case in braces ({pv_kw}).
+    """
+    for line in result.stdout.splitlines():
+        if "Usage:" in line:
+            return line
+    pytest.fail(f"the --help output has no Usage: line:\n{result.stdout}")
+
 
 class TestHomeCLI:
     """Tests for home subcommands."""
@@ -93,7 +123,7 @@ class TestHomeCLI:
         """Test home quick --help."""
         result = runner.invoke(app, ["home", "quick", "--help"])
         assert result.exit_code == 0
-        assert "PV_KW" in result.stdout
+        assert "pv_kw" in _usage_line(result).lower()
         assert "--days" in result.stdout
 
 
@@ -110,7 +140,7 @@ class TestFleetCLI:
         """Test fleet run --help."""
         result = runner.invoke(app, ["fleet", "run", "--help"])
         assert result.exit_code == 0
-        assert "CONFIG" in result.stdout
+        assert "config" in _usage_line(result).lower()
         assert "--start" in result.stdout
         assert "--output" in result.stdout
 
@@ -264,32 +294,33 @@ class TestConfigCLI:
     def test_config_template_reports_its_output_path_verbatim(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An output path Rich would read as markup ([draft]) or an emoji code (:sun:) is reported as the user typed it."""
+        """An output path Rich would read as markup ([draft]) or an emoji code (:sun:) is reported as the user typed it, on stderr. The template went to the file, so stdout stays empty."""
         monkeypatch.chdir(tmp_path)
         output = "[draft] :sun:.yaml"
 
         result = runner.invoke(app, ["config", "template", "home", "--output", output], catch_exceptions=False)
 
         assert result.exit_code == 0
-        assert " ".join(result.stdout.split()) == f"Template written to {output}"
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == f"Template written to {output}"
 
     def test_config_template_invalid_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An unknown template type exits 1, naming the type in red on stdout; recorded, because a test run is no colour terminal."""
-        monkeypatch.setattr(console, "record", True)
+        """An unknown template type exits 1, naming the type in red on stderr and printing nothing on stdout; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(error_console, "record", True)
 
         result = runner.invoke(app, ["config", "template", "invalid"])
-        recorded = console.export_text(styles=True)
+        recorded = error_console.export_text(styles=True)
 
         assert result.exit_code == 1
-        assert "Unknown template type" in result.stdout
+        assert result.stdout == ""
         assert Style.parse("red").render("Unknown template type: invalid") in recorded
 
     def test_an_unknown_template_type_is_reported_verbatim(self) -> None:
-        """A type Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, is reported as the user typed it."""
+        """A type Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, is reported on stderr as the user typed it."""
         result = runner.invoke(app, ["config", "template", _TEXT_RICH_WOULD_PARSE], catch_exceptions=False)
 
         assert result.exit_code == 1
-        assert " ".join(result.stdout.split()) == (
+        assert " ".join(result.stderr.split()) == (
             f"Unknown template type: {_TEXT_RICH_WOULD_PARSE} Available: home, fleet, scenario"
         )
 
@@ -458,13 +489,15 @@ home:
             assert result.exit_code == 0
             assert "WARNING" in result.stdout or "seems high" in result.stdout
 
-    def _validate_config(self, tmp_path: Path, document: str) -> Result:
-        """Write *document* as the config file and run `validate config` on it.
+    def _validate_config(
+        self, tmp_path: Path, document: str, file_name: str = "config.yaml"
+    ) -> Result:
+        """Write *document* to *file_name* in *tmp_path* and run `validate config` on it.
 
         catch_exceptions=False makes an exception that escapes the command fail the test,
         instead of passing as exit code 1.
         """
-        config_file = tmp_path / "config.yaml"
+        config_file = tmp_path / file_name
         config_file.write_text(document)
         return runner.invoke(
             app, ["validate", "config", str(config_file)], catch_exceptions=False
@@ -502,6 +535,11 @@ home:
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
                 "Max charge power must be positive and finite, got -1.0 kW",
                 id="fleet-sweep",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "tariff: {type: economy_8}\n",
+                "Unknown tariff type 'economy_8'",
+                id="fleet-sweep-tariff",
             ),
             pytest.param(
                 "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
@@ -570,6 +608,22 @@ home:
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
 
+    def test_the_title_names_the_file_verbatim_in_the_table_title_style(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file name Rich would read as markup ([draft]) or an emoji code (:sun:) titles the table as the user typed it, in Rich's table-title italics."""
+        monkeypatch.setattr(console, "record", True)
+
+        result = self._validate_config(
+            tmp_path, "home:\n  pv:\n    capacity_kw: 4.0\n", file_name="[draft] :sun:.yaml"
+        )
+        recorded = Text.from_ansi(console.export_text(styles=True))
+
+        assert result.exit_code == 0
+        assert "Config Validation: [draft] :sun:.yaml" in " ".join(result.stdout.split())
+        title_start = recorded.plain.index("Config Validation:")
+        assert recorded.get_style_at_offset(console, title_start).italic
+
     def test_an_errors_text_is_shown_verbatim(self, tmp_path: Path) -> None:
         result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
 
@@ -626,19 +680,28 @@ home:
         assert f"WARNING {warning}" in _table_text(result.stdout)
         assert _table_text(result.stdout).count("WARNING") == 1
 
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-distribution",
+            ),
+            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+        ],
+    )
     def test_a_loader_advisory_is_a_warning_row_not_a_python_warning(
-        self, tmp_path: Path, recwarn: pytest.WarningsRecorder
+        self, tmp_path: Path, recwarn: pytest.WarningsRecorder, document: str
     ) -> None:
-        result = self._validate_config(
-            tmp_path,
-            "fleet_distribution:\n"
-            "  n_homes: 2\n"
-            "  pv: {capacity_kw: 4.0}\n"
-            "  dispatch_strategy: tou_optimized\n",
-        )
+        """The advisory is one row for the whole file, however many sweep points it builds."""
+        result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 0
         assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
+        assert _table_text(result.stdout).count(_TOU_ADVISORY) == 1
         assert "OK Configuration is valid" not in _table_text(result.stdout)
         assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
@@ -676,7 +739,7 @@ class TestErrorHandling:
             assert result.exit_code != 0
 
     def test_a_pvgis_failure_is_reported_in_one_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A command whose weather PVGIS cannot supply exits 1 with one error line naming why, and raises nothing."""
+        """A command whose weather PVGIS cannot supply exits 1 and prints nothing on stdout. Its stderr ends, after the status line and spinner frame, with one error line naming why. It raises nothing."""
         monkeypatch.setattr(
             "solar_challenge.weather.get_pvgis_tmy", Mock(side_effect=ConnectionError("PVGIS is unreachable"))
         )
@@ -686,8 +749,47 @@ class TestErrorHandling:
         )
 
         assert result.exit_code == 1
-        assert " ".join(result.stderr.split()) == (
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()).endswith(
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(("finance", "run"), id="finance-run"),
+            pytest.param(("optimize", "configs"), id="optimize-configs"),
+        ],
+    )
+    def test_a_finance_command_reports_an_infinite_loan_term_as_one_configuration_error_line(
+        self, command: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finance command on a scenario whose loan term is YAML .inf exits 1, printing nothing on stdout and one configuration-error line on stderr. It raises nothing."""
+        monkeypatch.chdir(tmp_path)
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "Bristol",
+                    "homes": [
+                        {
+                            "pv": {"capacity_kw": 4.0},
+                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                        }
+                    ],
+                    "finance": {
+                        "standing_charge_pence_per_day": 28.0,
+                        "loan_term_years": float("inf"),
+                    },
+                }
+            )
+        )
+
+        result = runner.invoke(app, [*command, "scenario.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == (
+            "Configuration error: loan_term_years must be a finite whole number, got inf"
         )
 
     @pytest.mark.parametrize(
@@ -724,40 +826,96 @@ class TestPrintHelpers:
             pytest.param(print_success, id="print_success"),
             pytest.param(print_warning, id="print_warning"),
             pytest.param(print_info, id="print_info"),
+            pytest.param(print_error, id="print_error"),
         ],
     )
-    def test_a_message_is_printed_verbatim_on_stdout(
+    def test_a_message_is_printed_verbatim_on_stderr(
         self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
     ) -> None:
-        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
+        """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it."""
         print_message(_TEXT_RICH_WOULD_PARSE)
 
-        assert " ".join(capsys.readouterr().out.split()) == _TEXT_RICH_WOULD_PARSE
-
-    def test_an_error_message_is_printed_verbatim_on_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
-        print_error(_TEXT_RICH_WOULD_PARSE)
-
-        assert " ".join(capsys.readouterr().err.split()) == _TEXT_RICH_WOULD_PARSE
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
         ("print_message", "target", "colour"),
         [
-            pytest.param(print_success, console, "green", id="print_success"),
-            pytest.param(print_warning, console, "yellow", id="print_warning"),
-            pytest.param(print_info, console, "blue", id="print_info"),
+            pytest.param(print_success, status_console, "green", id="print_success"),
+            pytest.param(print_warning, error_console, "yellow", id="print_warning"),
+            pytest.param(print_info, status_console, "blue", id="print_info"),
             pytest.param(print_error, error_console, "red", id="print_error"),
         ],
     )
     def test_a_message_is_printed_in_its_colour_on_its_console(
         self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
     ) -> None:
-        """Success prints green, warning yellow, info blue (all on stdout) and error red (on stderr); recorded, because a test run is no colour terminal."""
+        """Success prints green and info blue on the status console, and warning yellow and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
         monkeypatch.setattr(target, "record", True)
 
         print_message("saved")
 
         assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+
+class TestProgress:
+    """Tests for the progress displays a command shows while it simulates."""
+
+    @pytest.mark.parametrize(
+        "create",
+        [
+            pytest.param(create_progress, id="create_progress"),
+            pytest.param(create_fleet_progress, id="create_fleet_progress"),
+        ],
+    )
+    def test_progress_is_printed_on_stderr(
+        self, capsys: pytest.CaptureFixture[str], create: Callable[[], Progress]
+    ) -> None:
+        """Progress prints on stderr, so stdout carries only a command's product."""
+        with create() as progress:
+            progress.add_task("Simulating 2 homes...", total=2)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Simulating 2 homes..." in captured.err
+
+    @pytest.mark.parametrize(
+        "create",
+        [
+            pytest.param(create_progress, id="create_progress"),
+            pytest.param(create_fleet_progress, id="create_fleet_progress"),
+        ],
+    )
+    def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
+    ) -> None:
+        """Text written on stderr while a display on the quiet status console runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
+        monkeypatch.setenv("TTY_COMPATIBLE", "1")
+        monkeypatch.setattr(status_console, "quiet", True)
+
+        with create() as progress:
+            progress.add_task("Simulating 2 homes...", total=2)
+            print("richardsonpy fell back to the Elexon profile", file=sys.stderr)
+
+        assert capsys.readouterr().err == "richardsonpy fell back to the Elexon profile\n"
+
+
+class TestPrintReport:
+    """Tests that print_report prints a report on stdout exactly as it is."""
+
+    def test_a_report_is_printed_on_stdout_exactly_as_it_is(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Every line prints whole, however much wider than the console: a spaced table row is not wrapped and a separator is not folded mid-word. Text Rich would read as markup or an emoji code prints verbatim, and print_report adds only the final newline."""
+        report = (
+            f"# {_TEXT_RICH_WOULD_PARSE}\n"
+            "\n"
+            f"| {_TEXT_WIDER_THAN_ANY_CONSOLE} |\n"
+            f"|{'-' * len(_TEXT_WIDER_THAN_ANY_CONSOLE)}|\n"
+        )
+
+        print_report(report)
+
+        assert capsys.readouterr().out == report + "\n"
 
 
 class TestCLIOutputFormats:
@@ -1085,66 +1243,410 @@ home:
         assert captured["home_config"].location == edinburgh
 
 
+@pytest.fixture
+def clear_june_in_tmp_path(
+    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
+    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    monkeypatch.chdir(tmp_path)
+
+
+def _run_home_named(home_name: str, *options: str) -> Result:
+    """Run `home run` with options for 21 June on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
+    Path("home.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "home": {
+                    "name": home_name,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                }
+            }
+        )
+    )
+
+    return runner.invoke(
+        app,
+        ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", *options],
+        catch_exceptions=False,
+    )
+
+
+def _write_scenario(scenario_name: str) -> None:
+    """Write scenario.yaml in the working directory: a scenario named scenario_name whose one home has 4 kW of PV, a 5 kWh battery and a deterministic 3400 kWh a year of load, with a finance block charging 28p a day."""
+    Path("scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": scenario_name,
+                "homes": [
+                    {
+                        "pv": {"capacity_kw": 4.0},
+                        "battery": {"capacity_kwh": 5.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    }
+                ],
+                "finance": {"standing_charge_pence_per_day": 28.0},
+            }
+        )
+    )
+
+
+def _run_finance(scenario_name: str) -> Result:
+    """Run `finance run` for 21 June on the scenario _write_scenario writes, named scenario_name."""
+    _write_scenario(scenario_name)
+
+    return runner.invoke(
+        app,
+        ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+        catch_exceptions=False,
+    )
+
+
+def _run_optimize_configs() -> Result:
+    """Run `optimize configs` for 21 June on the scenario _write_scenario writes, named Bristol: a sweep of the one config with 4 kW of PV, no battery and a 5 kW inverter, and no sensitivity panel."""
+    _write_scenario("Bristol")
+
+    return runner.invoke(
+        app,
+        [
+            "optimize", "configs", "scenario.yaml",
+            "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
+            "--start", "2024-06-21", "--end", "2024-06-21",
+        ],
+        catch_exceptions=False,
+    )
+
+
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestReportsPrintNamesVerbatim:
     """Tests that the report commands print the names a config gives exactly as written."""
 
-    @pytest.fixture
-    def clear_june_in_tmp_path(
-        self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
-        monkeypatch.chdir(tmp_path)
-
-    def test_home_run_prints_the_homes_name_verbatim(self) -> None:
-        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
-        Path("home.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "home": {
-                        "name": _TEXT_RICH_WOULD_PARSE,
-                        "pv": {"capacity_kw": 4.0},
-                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    }
-                }
-            )
-        )
-
-        result = runner.invoke(
-            app,
-            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
-            catch_exceptions=False,
-        )
+    @pytest.mark.parametrize(
+        ("options", "title"),
+        [
+            pytest.param((), "Simulation Results:", id="summary-table"),
+            pytest.param(("--report",), "# Simulation Report:", id="report"),
+        ],
+    )
+    def test_home_run_prints_the_homes_name_verbatim(self, options: tuple[str, ...], title: str) -> None:
+        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table, or with --report the report, as written."""
+        result = _run_home_named(_TEXT_RICH_WOULD_PARSE, *options)
 
         assert result.exit_code == 0
-        printed = " ".join(result.stdout.split())
-        assert f"Simulation Results: {_TEXT_RICH_WOULD_PARSE}" in printed
-        assert f"# Simulation Report: {_TEXT_RICH_WOULD_PARSE}" in printed
+        assert f"{title} {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
 
     def test_finance_run_prints_the_scenarios_name_verbatim(self) -> None:
         """A scenario name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the report as written."""
-        Path("scenario.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "name": _TEXT_RICH_WOULD_PARSE,
-                    "homes": [
-                        {
-                            "pv": {"capacity_kw": 4.0},
-                            "battery": {"capacity_kwh": 5.0},
-                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                        }
-                    ],
-                    "finance": {"standing_charge_pence_per_day": 28.0},
-                }
-            )
-        )
+        result = _run_finance(_TEXT_RICH_WOULD_PARSE)
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestReportsPrintEachLineWhole:
+    """Tests that the report commands print each line of their markdown report whole, however much wider than the console."""
+
+    def test_home_run_prints_a_report_title_wider_than_the_console_on_one_line(self) -> None:
+        """A home name wider than any console titles the report on one printed line, not wrapped across several."""
+        result = _run_home_named(_TEXT_WIDER_THAN_ANY_CONSOLE, "--report")
+
+        assert result.exit_code == 0
+        assert f"# Simulation Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
+
+    def test_finance_run_prints_a_report_title_wider_than_the_console_on_one_line(self) -> None:
+        """A scenario name wider than any console titles the report on one printed line, not wrapped across several."""
+        result = _run_finance(_TEXT_WIDER_THAN_ANY_CONSOLE)
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
+
+    def test_optimize_configs_prints_each_table_row_on_one_line(self) -> None:
+        """Each markdown table row closes on the line it opens on, the Cost-Recovery Rank rows included, though they are about twice as wide as the 80 columns Rich gives a console with no terminal."""
+        result = _run_optimize_configs()
+
+        assert result.exit_code == 0
+        table_rows = [line for line in result.stdout.splitlines() if line.startswith("|")]
+        assert [row for row in table_rows if not row.endswith("|")] == []
+        assert max(map(len, table_rows), default=0) > 80
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestCommandsPrintOnlyTheirProductOnStdout:
+    """Tests that a command prints its product alone on stdout, and its status lines and progress on stderr, so redirecting stdout to a file captures the product alone."""
+
+    def test_home_run_prints_its_summary_table_alone_on_stdout(self) -> None:
+        """The summary table, whose title Rich centres above it, opens stdout. The status line and the spinner print on stderr."""
+        result = _run_home_named("Bristol")
+
+        assert result.exit_code == 0
+        assert result.stdout.splitlines()[0].strip() == "Simulation Results: Bristol"
+        status = " ".join(result.stderr.split())
+        assert "Simulating 1 days from 2024-06-21 to 2024-06-21" in status
+        assert "Running simulation..." in status
+
+    def test_home_run_report_prints_the_report_in_place_of_the_summary_table(self) -> None:
+        """The report opens stdout, and the summary table is printed on neither stream, since the report carries every one of its figures."""
+        result = _run_home_named("Bristol", "--report")
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("# Simulation Report: Bristol\n")
+        assert "Simulation Results" not in result.output
+
+    def test_fleet_run_prints_its_results_table_alone_on_stdout(self) -> None:
+        """The fleet results table, whose title Rich centres above it, opens stdout. The status line and the progress bar print on stderr."""
+        _write_scenario("Bristol")
 
         result = runner.invoke(
             app,
-            ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            ["fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
             catch_exceptions=False,
         )
 
         assert result.exit_code == 0
-        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
+        assert result.stdout.splitlines()[0].strip() == "Fleet Results: Bristol"
+        status = " ".join(result.stderr.split())
+        assert "Simulating fleet of 1 homes for 1 days" in status
+        assert "Simulating 1 homes..." in status
+
+    def test_finance_run_prints_its_report_alone_on_stdout(self) -> None:
+        """The finance report opens stdout. The status lines print on stderr."""
+        result = _run_finance("Bristol")
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("# Finance Report: Bristol\n")
+        assert "Simulating fleet of 1 homes for 1 days…" in " ".join(result.stderr.split())
+
+    def test_optimize_configs_prints_its_report_alone_on_stdout(self) -> None:
+        """The ranking report opens stdout. The status lines print on stderr."""
+        result = _run_optimize_configs()
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("## Cost-Recovery Rank\n")
+        assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
+
+
+_ECONOMY_7_TARIFF = {
+    "type": "economy_7",
+    "off_peak_rate": 0.09,
+    "peak_rate": 0.25,
+    "off_peak_start": "00:30",
+    "off_peak_end": "07:30",
+}
+
+# Each way `fleet sweep` sweeps a fleet file's battery capacity: the file's capacity_kwh,
+# the options that sweep it, and the file its 5 kWh point is exported to.
+_SWEEP_PATHS = (
+    pytest.param(
+        {
+            "type": "proportional_to",
+            "source": "pv.capacity_kw",
+            "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
+        },
+        (),
+        "multiplier_1.2500.csv",
+        id="yaml-sweep",
+    ),
+    pytest.param(
+        "${CAP}",
+        ("--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+        "CAP_5.0000.csv",
+        id="param-sweep",
+    ),
+)
+
+
+def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    Path(file_name).write_text(
+        yaml.safe_dump(
+            {
+                "tariff": tariff,
+                "fleet_distribution": {
+                    "n_homes": 2,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    "dispatch_strategy": "tou_optimized",
+                    "battery": {
+                        "max_charge_kw": 2.5,
+                        "max_discharge_kw": 2.5,
+                        "grid_charging": {"target_soc_fraction": 0.9},
+                        "capacity_kwh": capacity_kwh,
+                    },
+                },
+            }
+        )
+    )
+
+
+def _run_fleet(*argv: str) -> Result:
+    """Run the `fleet` command argv for 21 June, simulating its homes one after another."""
+    return runner.invoke(
+        app,
+        ["fleet", *argv, "--start", "2024-06-21", "--end", "2024-06-21", "--sequential"],
+        catch_exceptions=False,
+    )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
+    """Tests that `fleet sweep`, on either sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
+
+    @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
+    def test_a_sweep_point_simulates_the_fleet_fleet_run_simulates(
+        self, capacity_kwh: object, options: tuple[str, ...], point_file: str
+    ) -> None:
+        """The CSV `fleet sweep` exports for its 5 kWh point holds exactly the values of the CSV `fleet run` exports for the same fleet file with a 5 kWh battery.
+
+        The frames are compared, not the texts: pytest's diff of two long CSV texts that differ takes minutes to report.
+        """
+        _write_fleet_file("run.yaml", 5.0, _ECONOMY_7_TARIFF)
+        _write_fleet_file("sweep.yaml", capacity_kwh, _ECONOMY_7_TARIFF)
+
+        fleet_run = _run_fleet("run", "run.yaml", "--output", "run.csv")
+        fleet_sweep = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
+
+        assert fleet_run.exit_code == 0, fleet_run.output
+        assert fleet_sweep.exit_code == 0, fleet_sweep.output
+        pd.testing.assert_frame_equal(
+            pd.read_csv(Path("sweep", point_file)), pd.read_csv("run.csv"), check_exact=True
+        )
+
+    @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
+    def test_a_sweep_of_a_file_whose_tariff_the_loader_refuses_is_refused(
+        self, capacity_kwh: object, options: tuple[str, ...], point_file: str
+    ) -> None:
+        """`fleet sweep` refuses a tariff: block `fleet run` refuses, with exit 1, before it simulates any point."""
+        _write_fleet_file("sweep.yaml", capacity_kwh, {"type": "economy_8"})
+
+        result = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
+
+        assert result.exit_code == 1
+        assert "Unknown tariff type 'economy_8'" in " ".join(result.stderr.split())
+        assert not Path("sweep", point_file).exists()
+        assert not Path("sweep", "sweep_summary.csv").exists()
+
+
+class TestFleetSweepRefusesAFileItCannotSweep:
+    """Tests that `fleet sweep` refuses a fleet file with nothing it can sweep, with exit 1 and the reason."""
+
+    @pytest.mark.parametrize(
+        ("document", "options", "refusal"),
+        [
+            pytest.param(
+                "homes:\n  - pv: {capacity_kw: 4.0}\n",
+                (),
+                "Sweep requires fleet_distribution config",
+                id="homes-yaml-sweep",
+            ),
+            pytest.param(
+                "homes:\n  - pv: {capacity_kw: 4.0}\n",
+                ("--param", "CAP", "--min", "5", "--max", "10", "--steps", "2"),
+                "Sweep requires fleet_distribution config",
+                id="homes-param-sweep",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                (),
+                "No sweep spec found in config. Use --param for CLI sweep or add type: sweep to multiplier.",
+                id="fleet-distribution-without-a-sweep",
+            ),
+        ],
+    )
+    def test_a_file_it_cannot_sweep_is_refused(
+        self, tmp_path: Path, document: str, options: tuple[str, ...], refusal: str
+    ) -> None:
+        fleet_file = tmp_path / "fleet.yaml"
+        fleet_file.write_text(document)
+
+        result = _run_fleet("sweep", str(fleet_file), *options)
+
+        assert result.exit_code == 1
+        assert refusal in " ".join(result.stderr.split())
+
+
+class TestQuietOption:
+    """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CliRunner runs every invocation in this process, on the one status_console, so a --quiet invocation here must not silence a later test."""
+        monkeypatch.setattr(status_console, "quiet", status_console.quiet)
+
+    def test_quiet_config_template_writes_its_file_and_prints_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The template still goes to its file, but the status line that reports where is not printed, so neither stream carries anything."""
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "x.yaml"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0
+        assert (result.stdout, result.stderr) == ("", "")
+        assert Path("x.yaml").read_text() == HOME_TEMPLATE
+
+    def test_quiet_leaves_an_error_on_stderr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A command whose weather PVGIS cannot supply still exits 1 with its one error line, and that line is all stderr carries: the status line and spinner frame that would come first are not printed."""
+        monkeypatch.setattr(
+            "solar_challenge.weather.get_pvgis_tmy", Mock(side_effect=ConnectionError("PVGIS is unreachable"))
+        )
+
+        result = runner.invoke(
+            app,
+            ["--quiet", "home", "run", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == (
+            "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
+        )
+
+    @pytest.mark.usefixtures("clear_june_in_tmp_path")
+    def test_quiet_leaves_a_warning_on_stderr(self) -> None:
+        """A fleet run asked for a community report its scenario has no community: block for still warns that it ignored the request, and that warning is all stderr carries."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            [
+                "--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21",
+                "--community-report", "community.md",
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert " ".join(result.stderr.split()) == "--community-report ignored: config has no community: block"
+
+    @pytest.mark.usefixtures("clear_june_in_tmp_path")
+    def test_quiet_leaves_the_product_on_stdout(self) -> None:
+        """The fleet results table still opens stdout, while the status line and the progress bar are not printed on stderr."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            ["--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert result.stdout.splitlines()[0].strip() == "Fleet Results: Bristol"
+        assert result.stderr == ""
+
+    def test_quiet_silences_only_its_own_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An invocation without --quiet after one with it, in the same process, prints its status line again."""
+        monkeypatch.chdir(tmp_path)
+
+        quiet = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "quiet.yaml"], catch_exceptions=False
+        )
+        loud = runner.invoke(app, ["config", "template", "home", "--output", "loud.yaml"], catch_exceptions=False)
+
+        assert quiet.stderr == ""
+        assert " ".join(loud.stderr.split()) == "Template written to loud.yaml"

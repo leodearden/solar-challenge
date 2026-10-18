@@ -16,7 +16,7 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
 @pytest.mark.slow
@@ -27,8 +27,6 @@ class TestEconomy7TariffIntegration:
     @pytest.fixture
     def flat_rate_config(self) -> HomeConfig:
         """4 kW PV with 5 kWh battery and flat-rate tariff."""
-        from solar_challenge.tariff import TariffPeriod
-
         # Create a proper 24-hour period that crosses midnight to cover all times
         flat_period = TariffPeriod(
             start_time="00:00",

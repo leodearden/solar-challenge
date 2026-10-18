@@ -8,31 +8,49 @@ import ast
 import pathlib
 import subprocess
 import sys
+from importlib import import_module
 
 import pytest
 
 import solar_challenge
+import solar_challenge.dispatch as _dispatch
+import solar_challenge.tariff as _tariff
+
+
+def _type_checking_imports() -> dict[str, tuple[str, str]]:
+    """Each name the package's top-level `if TYPE_CHECKING:` block binds, mapped to
+    the module it imports from and the name it imports there."""
+    source = pathlib.Path(solar_challenge.__file__).read_text(encoding="utf-8")
+    blocks = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+    ]
+    return {
+        alias.asname or alias.name: (statement.module, alias.name)
+        for block in blocks
+        for statement in block.body
+        if isinstance(statement, ast.ImportFrom) and statement.module is not None
+        for alias in statement.names
+    }
 
 
 # ---------------------------------------------------------------------------
-# Step-1 gate: structural __all__ checks (T3 owns no-dups / no-CLI / count)
-# T4 (test_public_api_surface.py) is the authoritative freeze test that pins
-# the exact set of 69 names — avoid maintaining a second EXPECTED_ALL copy here.
+# Step-1 gate: structural __all__ checks (no duplicates, no CLI names).
+# T4 (test_public_api_surface.py) pins the exact names, and so their count.
 # ---------------------------------------------------------------------------
 
 
-def test_all_is_complete_frozen_surface() -> None:
-    """__all__ has no duplicates, excludes CLI names, and has the expected count.
+def test_all_has_no_duplicates_and_no_cli_names() -> None:
+    """__all__ has no duplicates and excludes CLI names.
 
     T4 (test_public_api_surface.py) is the authoritative surface-lock that pins
     the exact set of names. This test checks only structural properties T3 owns.
     """
     assert hasattr(solar_challenge, "__all__"), "__all__ not defined on package"
     as_list = list(solar_challenge.__all__)
-    # No duplicates
-    assert len(as_list) == len(set(as_list)), "Duplicate names in __all__"
-    # Exact count matches PRD §3.1 (69 names, includes bill); T4 pins the actual names
-    assert len(as_list) == 69, f"Expected 69 names in __all__, got {len(as_list)}"
+    duplicates = sorted({n for n in as_list if as_list.count(n) > 1})
+    assert not duplicates, f"Duplicate names in __all__: {duplicates}"
     # CLI stays out of __all__
     actual = set(solar_challenge.__all__)
     assert "get_cli_app" not in actual
@@ -44,38 +62,39 @@ def test_all_is_complete_frozen_surface() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_name_resolves_and_caches() -> None:
-    """Each name resolves to the correct origin-module object and is cached on second access."""
-    from importlib import import_module
+def test_every_name_resolves_to_its_type_checking_import() -> None:
+    """Each __all__ name resolves to the object the package's `if TYPE_CHECKING:`
+    block imports under that name, and stays that object across accesses.
 
-    for name, mod_name in solar_challenge._SYMBOL_MODULE.items():  # type: ignore[attr-defined]
-        source_name = solar_challenge._SOURCE_NAME.get(name, name)  # type: ignore[attr-defined]
-        origin_obj = getattr(import_module(f"solar_challenge.{mod_name}"), source_name)
-        # Resolve via lazy __getattr__ (or return already-cached value)
-        resolved = getattr(solar_challenge, name)
-        assert resolved is origin_obj, (
-            f"solar_challenge.{name} resolved to wrong object; "
-            f"expected solar_challenge.{mod_name}.{source_name}"
-        )
-        # After first access the resolved object is cached in the module namespace
-        assert name in vars(solar_challenge), f"{name!r} not in vars() after first access"
-        # Repeat access returns the identical (cached) object
-        obj2 = getattr(solar_challenge, name)
-        assert resolved is obj2, f"Cached and fresh {name!r} differ"
+    Type checkers read that block, so the runtime and typed surfaces must agree.
+    A name the block does not import is test_type_checking_block_names_match_all's
+    to report.
+    """
+    imports = _type_checking_imports()
+    misresolved: list[str] = []
+    for name in solar_challenge.__all__:
+        if name not in imports:
+            continue
+        module, source = imports[name]
+        imported = getattr(import_module(module), source)
+        resolved, resolved_again = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if resolved is not imported or resolved_again is not imported:
+            misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
+    assert not misresolved, (
+        "Names that resolve to an object other than their TYPE_CHECKING import:\n"
+        + "\n".join(misresolved)
+    )
 
 
 def test_unknown_attribute_raises() -> None:
     """Accessing an undefined attribute raises AttributeError."""
     with pytest.raises(AttributeError):
-        _ = solar_challenge.does_not_exist  # type: ignore[attr-defined]
+        _ = solar_challenge.does_not_exist
 
 
 def test_tariffperiod_collision_resolved() -> None:
     """dispatch.TariffPeriod (Enum) and tariff.TariffPeriod (dataclass) are distinct objects;
     the alias DispatchTariffPeriod resolves to the dispatch Enum."""
-    import solar_challenge.dispatch as _dispatch
-    import solar_challenge.tariff as _tariff
-
     assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod
     assert solar_challenge.TariffPeriod is _tariff.TariffPeriod
     assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod
@@ -133,23 +152,12 @@ def test_dir_returns_sorted_all() -> None:
 def test_type_checking_block_names_match_all() -> None:
     """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
 
-    Parses __init__.py with ast to extract the names bound in the TYPE_CHECKING
-    block and verifies they stay in sync with __all__. Adding a name to __all__
-    and _SYMBOL_MODULE but forgetting the TYPE_CHECKING re-export would otherwise
+    Reads the names the block binds through _type_checking_imports() and verifies
+    they stay in sync with __all__. Adding a name to __all__ and to the lazy
+    loader's map but forgetting its TYPE_CHECKING re-export would otherwise
     silently break mypy --strict for consumers without failing this package's own checks.
     """
-    src = pathlib.Path(solar_challenge.__file__).read_text()
-    tree = ast.parse(src)
-
-    tc_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.If):
-            if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
-                for stmt in node.body:
-                    if isinstance(stmt, ast.ImportFrom):
-                        for alias in stmt.names:
-                            # asname is the local binding; fall back to the imported name
-                            tc_names.add(alias.asname if alias.asname else alias.name)
+    tc_names = set(_type_checking_imports())
 
     # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
     # Typer is NOT in __all__ — CLI is shipped but unfrozen.

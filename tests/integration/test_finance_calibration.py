@@ -24,7 +24,31 @@ test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
+from pathlib import Path
+
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import (
+    ScenarioConfig,
+    SimulationPeriod,
+    load_config,
+    load_fleet_config,
+    parse_finance_config,
+)
+from solar_challenge.finance import (
+    FinanceConfig,
+    MultiYearCurve,
+    ProjectEconomics,
+    project_economics,
+    project_multi_year,
+    spreadsheet_revenue_curve,
+)
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 
 
 # ---------------------------------------------------------------------------
@@ -78,13 +102,8 @@ _FIN_SCF = 0.70
 def _make_home_config_fin(
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "HomeConfig":  # type: ignore[name-defined]
+) -> HomeConfig:
     """Build a [FIN]-aligned HomeConfig (5.5 kWp + 5.0 kWh, Bristol defaults)."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.pv import PVConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.battery import BatteryConfig
-
     pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
     batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
@@ -95,9 +114,8 @@ def _make_scenario_fin(
     n_homes: int = 100,
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
+) -> ScenarioConfig:
     """Build a homogeneous [FIN]-aligned ScenarioConfig for calibration tests."""
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     homes = [_make_home_config_fin(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
              for _ in range(n_homes)]
@@ -107,9 +125,8 @@ def _make_scenario_fin(
 def _make_finance_fin(
     *,
     self_consumption_override: float = _FIN_SCF,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> FinanceConfig:
     """Build the [FIN]-aligned FinanceConfig with named-cell defaults."""
-    from solar_challenge.config import FinanceConfig
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
         pv_cost_per_kwp_gbp=1000.0,
@@ -138,10 +155,8 @@ class TestSpreadsheetRevenueCurve:
     MultiYearCurve without running the physics simulator.
     """
 
-    def _call(self, **kwargs: object) -> "MultiYearCurve":  # type: ignore[name-defined]
+    def _call(self, **kwargs: object) -> MultiYearCurve:
         """Call spreadsheet_revenue_curve with default [FIN] params unless overridden."""
-        from solar_challenge.finance import spreadsheet_revenue_curve
-
         defaults: dict = dict(
             n_homes=100,
             pv_kwp=5.5,
@@ -152,17 +167,14 @@ class TestSpreadsheetRevenueCurve:
             asset_life_years=25,
         )
         defaults.update(kwargs)
-        return spreadsheet_revenue_curve(**defaults)  # type: ignore[return-value]
+        return spreadsheet_revenue_curve(**defaults)
 
     def test_import(self) -> None:
         """spreadsheet_revenue_curve must be importable from solar_challenge.finance."""
-        from solar_challenge.finance import spreadsheet_revenue_curve  # noqa: F401
         assert callable(spreadsheet_revenue_curve)
 
     def test_returns_multiyear_curve(self) -> None:
         """spreadsheet_revenue_curve must return a MultiYearCurve."""
-        from solar_challenge.finance import MultiYearCurve
-
         result = self._call()
         assert isinstance(result, MultiYearCurve)
 
@@ -275,11 +287,8 @@ class TestFinCalibrationScenarioParses:
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
 
-    def _load_finance(self) -> "FinanceConfig":  # type: ignore[name-defined]
+    def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
-        from pathlib import Path
-        from solar_challenge.config import load_config, parse_finance_config
-
         path = Path(self._SCENARIO_PATH)
         if not path.exists():
             pytest.fail(
@@ -293,9 +302,6 @@ class TestFinCalibrationScenarioParses:
 
     def _load_homes(self) -> list:
         """Parse the fleet homes from the calibration scenario YAML."""
-        from pathlib import Path
-        from solar_challenge.config import load_fleet_config
-
         path = Path(self._SCENARIO_PATH)
         if not path.exists():
             pytest.fail(
@@ -307,7 +313,6 @@ class TestFinCalibrationScenarioParses:
 
     def test_scenario_file_exists(self) -> None:
         """scenarios/bristol-fin-calibration.yaml must exist on disk."""
-        from pathlib import Path
         assert Path(self._SCENARIO_PATH).exists(), (
             f"{self._SCENARIO_PATH} not found — create it in step-4"
         )
@@ -404,10 +409,8 @@ class TestCalibrationCapexMethodAgreement:
     - Delta = £125,000 = 100 × 5 kWh × £250 (pure battery-size, §2.3)
     """
 
-    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> "MultiYearCurve":  # type: ignore[name-defined]
+    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> MultiYearCurve:
         """Build the [FIN]-assumption spreadsheet revenue curve."""
-        from solar_challenge.finance import spreadsheet_revenue_curve
-
         return spreadsheet_revenue_curve(
             n_homes=100,
             pv_kwp=_FIN_GOLDEN["inp_kWp"],
@@ -424,8 +427,6 @@ class TestCalibrationCapexMethodAgreement:
         Arithmetic: 100 × (5.5×£1000 + £1000 + 5.0kWh×£250) = 100×£7,750 = £775,000
         Cell ref: Capital_Stack!B6 = £775,000
         """
-        from solar_challenge.finance import project_economics
-
         scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
         finance = _make_finance_fin()
         curve = self._make_spreadsheet_curve()
@@ -441,8 +442,6 @@ class TestCalibrationCapexMethodAgreement:
 
     def test_capex_5kwh_exact_arithmetic(self) -> None:
         """Exact arithmetic check: 100×(5.5×1000+1000+5×250)=775000 matches cell."""
-        from solar_challenge.finance import project_economics
-
         scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
         finance = _make_finance_fin()
         curve = self._make_spreadsheet_curve()
@@ -460,8 +459,6 @@ class TestCalibrationCapexMethodAgreement:
         Arithmetic: 100 × (5.5×£1000 + £1000 + 10kWh×£250) = 100×£9,000 = £900,000
         Cell ref: Workings!C94 = £900,000
         """
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
         # 10 kWh fleet (Workings build-up basis)
         scenario_10kwh = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=10.0)
         finance = _make_finance_fin()
@@ -490,8 +487,6 @@ class TestCalibrationCapexMethodAgreement:
         This is the §2.3 '£775k ↔ £900k' reconciliation:
         Pure battery-size difference (inp_Batt_kWh=5 vs Workings 10 kWh), NOT an error.
         """
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
             self_consumption_fraction=_FIN_SCF,
@@ -536,10 +531,8 @@ class TestCalibrationDscrIrrMethodAgreement:
     See docs/finance-spreadsheet-reconciliation.md for full rationale.
     """
 
-    def _build_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+    def _build_econ(self) -> ProjectEconomics:
         """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
         curve = spreadsheet_revenue_curve(
             n_homes=100,
             pv_kwp=_FIN_GOLDEN["inp_kWp"],
@@ -574,8 +567,6 @@ class TestCalibrationDscrIrrMethodAgreement:
         dividend deferral that substantially reduce the effective equity invested,
         inflating IRR well above our pure-layer value (~11%).
         """
-        import math
-
         econ = self._build_econ()
         assert not math.isnan(econ.equity_irr), "equity_irr must not be NaN"
         assert econ.equity_irr > _FIN_GOLDEN["equity_irr_floor"], (
@@ -606,10 +597,8 @@ class TestCalibrationG6Guards:
     (3) No assertion compares physics results to the named spreadsheet cells.
     """
 
-    def _build_spreadsheet_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+    def _build_spreadsheet_econ(self) -> ProjectEconomics:
         """Build spreadsheet-input ProjectEconomics."""
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
             self_consumption_fraction=_FIN_SCF,
@@ -624,8 +613,6 @@ class TestCalibrationG6Guards:
 
     def test_spreadsheet_column_produces_project_economics(self) -> None:
         """spreadsheet_revenue_curve → project_economics returns a ProjectEconomics."""
-        from solar_challenge.finance import ProjectEconomics
-
         econ = self._build_spreadsheet_econ()
         assert isinstance(econ, ProjectEconomics)
 
@@ -641,8 +628,6 @@ class TestCalibrationG6Guards:
         The delta (£125k) must NOT be asserted as zero. It is the reconciliation
         between the 5 kWh (Capital_Stack!B6) and 10 kWh (Workings!C94) bases.
         """
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
             self_consumption_fraction=_FIN_SCF,
@@ -717,15 +702,6 @@ class TestCalibrationPhysicsColumn:
         simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
         differ from 0.70, no physics==spreadsheet assertion.
         """
-        import dataclasses
-
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-        from solar_challenge.finance import (
-            project_economics,
-            project_multi_year,
-            spreadsheet_revenue_curve,
-        )
-
         # Small fleet, short window for speed
         homes = [_make_home_config_fin(pv_kwp=5.5, battery_kwh=5.0)] * 2
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")

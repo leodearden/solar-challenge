@@ -1,0 +1,257 @@
+# Machine-readable twin of component-defaults-one-home.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main ac1fdf1 (2026-10-17); checks are pattern-anchored and
+# path-scoped to src/ where S5's partition may move a symbol out of config.py.
+# task_id stays null until commit_planning stamps it.
+prd: docs/prds/component-defaults-one-home.md
+schema_version: 1
+signal_leaves: ["ε"]
+tasks:
+  - label: "α"
+    task_id: 911
+    title: "Heat-pump types as one per-type record: COP_CURVES and HEAT_PUMP_TYPES"
+    capabilities:
+      - name: "cop-curves-record-defined"
+        binding: "new in α; absent on main (grep COP_CURVES: 0 in src/)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^COP_CURVES: Mapping\\[HeatPumpType, CopCurve\\]"
+          paths: ["src/solar_challenge/heat_pump.py"]
+          expect: present
+      - name: "vocabulary-derived-from-the-literal"
+        binding: "probe: typing.get_args(Literal['ASHP','GSHP']) == ('ASHP', 'GSHP')"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^HEAT_PUMP_TYPES.*get_args\\(HeatPumpType\\)"
+          paths: ["src/solar_challenge/heat_pump.py"]
+          expect: present
+      - name: "loose-cop-constants-deleted"
+        binding: "grep: 8 ^(ASHP|GSHP)_COP_ assignments in heat_pump.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "(ASHP|GSHP)_COP_"
+          paths: ["src/", "tests/"]
+          expect: absent
+      - name: "config-spells-no-type"
+        binding: "grep: 6 'ASHP'/'GSHP' literals in config.py on main (the generator's tuple, message and cast, plus the docstring and comment)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "'ASHP'|'GSHP'|\"ASHP\"|\"GSHP\""
+          paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py", "src/solar_challenge/fleet_distribution.py"]
+          expect: absent
+      - name: "hand-kept-type-tuple-deleted"
+        binding: "grep: `valid_types = (` in HeatPumpConfig.__post_init__ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "valid_types = \\("
+          paths: ["src/solar_challenge/heat_pump.py"]
+          expect: absent
+      - name: "curves-reproduced"
+        binding: "probe values in PRD §3.3; the record holds the same floats and arithmetic"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "A1 is observed by α's parametrised test, not a grep"
+  - label: "β"
+    task_id: 914
+    title: "Component block tables shared by the home-block readers and scenario_writer"
+    capabilities:
+      - name: "system-losses-is-a-grammar-key"
+        binding: "P1: refused as unrecognised today; grep \"system_losses\" in config.py and scenario_writer.py: 0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"system_losses\""
+          paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "hand-kept-block-key-sets-deleted"
+        binding: "grep: six ^_(PV|BATTERY|LOAD|HEAT_PUMP|EV|LOCATION)_BLOCK_KEYS in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^_(PV|BATTERY|LOAD|HEAT_PUMP|EV|LOCATION)_BLOCK_KEYS"
+          paths: ["src/"]
+          expect: absent
+      - name: "writer-dict-literals-deleted"
+        binding: "grep: `\"tilt\": pv.tilt` in scenario_writer._pv_block on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"(tilt|capacity_kwh|household_occupants|thermal_capacity_kw|arrival_hour|latitude)\": [a-z_]+\\.[a-z_]+,"
+          paths: ["src/solar_challenge/scenario_writer.py"]
+          expect: absent
+      - name: "home-parser-restated-defaults-deleted"
+        binding: "grep: float(data.get(\"annual_heat_demand_kwh\", 8000.0)) and int(data.get(\"departure_hour\", 7)) in config.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "float\\(data\\.get\\(\"annual_heat_demand_kwh\", 8000\\.0\\)\\)|int\\(data\\.get\\(\"departure_hour\", 7\\)\\)"
+          paths: ["src/"]
+          expect: absent
+      - name: "thermal-capacity-default-on-the-dataclass"
+        binding: "HeatPumpConfig.thermal_capacity_kw has no default on main; additive under D29"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "thermal_capacity_kw: float = 8\\.0"
+          paths: ["src/solar_challenge/heat_pump.py"]
+          expect: present
+      - name: "arrival-hour-default-on-the-dataclass"
+        binding: "EVConfig.arrival_hour has no default on main; additive under D29"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "arrival_hour: int = 18"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: present
+      - name: "coverage-test-walks-the-dataclasses"
+        binding: "new test module in β"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "fields\\("
+          paths: ["tests/unit/config/test_component_blocks.py"]
+          expect: present
+      - name: "claude-md-rule-replaced"
+        binding: "grep: CLAUDE.md's scenario_writer line says 'change both together' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "change both together"
+          paths: ["CLAUDE.md"]
+          expect: absent
+      - name: "every-grammar-field-round-trips"
+        binding: "P2 RED observed; identity in the .md manifest"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B2 is observed by β's round-trip test over every table key"
+  - label: "γ"
+    task_id: 916
+    title: "Sampler state per field path; every pool shuffled in either order; reproducibility pins"
+    capabilities:
+      - name: "pools-not-keyed-by-object-identity"
+        binding: "grep: id(spec) ×3 in _DistributionSampler on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "id\\(spec\\)"
+          paths: ["src/"]
+          expect: absent
+      - name: "stateless-specs-draw-themselves"
+        binding: "grep: def _sample_from_distribution's isinstance chain on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _sample_from_distribution"
+          paths: ["src/"]
+          expect: absent
+      - name: "pins-committed"
+        binding: "new in γ; the six tracked fleets generate today (PRD §3.2)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "fleet_generation"
+          paths: ["tests/unit/config/test_fleet_generation_pins.py"]
+          expect: present
+      - name: "pool-sizes-refused-upstream"
+        binding: "producer:task-297 upstream (plan.json: counts == n_homes at FleetDistributionConfig.__post_init__ and at generation start)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "delivered and checked by task 297"
+      - name: "legacy-pool-and-shared-object-generate"
+        binding: "P6 KeyError and P7 IndexError observed today"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "C1 and C2 are observed by γ's tests"
+  - label: "δ"
+    task_id: 919
+    title: "The fleet grammar from the component tables: one ComponentDistribution, components built from drawn values"
+    capabilities:
+      - name: "five-distribution-classes-deleted"
+        binding: "grep: 5 ^class (PV|Battery|Load|HeatPump|EV)DistributionConfig in config.py on main; not on the frozen surface"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class (PV|Battery|Load|HeatPump|EV)DistributionConfig"
+          paths: ["src/"]
+          expect: absent
+      - name: "component-distribution-defined"
+        binding: "new in δ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class ComponentDistribution"
+          paths: ["src/solar_challenge/"]
+          expect: present
+      - name: "hand-collected-spec-list-deleted"
+        binding: "grep: all_specs ×5 in generate_homes_from_distribution on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "all_specs"
+          paths: ["src/"]
+          expect: absent
+      - name: "none-fallback-defaults-deleted"
+        binding: "grep: the generator's `x if x is not None else <default>` fallbacks for PV, battery, heat pump and EV on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if pv_azimuth is not None else|if charge_kw is not None else 2\\.5|if thermal_capacity is not None else|if household_occupants else 3"
+          paths: ["src/"]
+          expect: absent
+      - name: "categorical-values-typed"
+        binding: "grep: `# type: ignore[assignment]` on the heat-pump sample and `cast(Literal['ASHP', 'GSHP']` in config.py on main (the cast is α's)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "heat_pump_type\\)  # type: ignore\\[assignment\\]"
+          paths: ["src/"]
+          expect: absent
+      - name: "charger-vocabulary-named"
+        binding: "grep: `valid_charger_types = [` inside EVConfig.__post_init__ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^CHARGER_TYPES"
+          paths: ["src/solar_challenge/ev.py"]
+          expect: present
+      - name: "pins-still-equal"
+        binding: "producer: γ's pins upstream; identity argued in PRD §6 decision 8"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "D6 is the pin test itself"
+  - label: "ε"
+    task_id: 921
+    title: "The fleet invariants at read time: FleetDistributionConfig refuses by path what it cannot draw"
+    capabilities:
+      - name: "refusals-at-read-time"
+        binding: "P4, P8, P13 observed today (silent, mid-generation, or a message naming a class)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "D2 and D5 are observed through validate config and the Flask test client"
+      - name: "unknown-distribution-type-message-gone"
+        binding: "grep: `Unknown distribution type: {type(spec)}` raised by the sampler on main (P8)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Unknown distribution type: \\{type\\(spec\\)\\}"
+          paths: ["src/"]
+          expect: absent
+      - name: "mid-generation-type-check-gone"
+        binding: "grep: `Invalid heat pump type sampled` in generate_homes_from_distribution on main (P13)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Invalid heat pump type sampled"
+          paths: ["src/"]
+          expect: absent

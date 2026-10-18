@@ -1,6 +1,10 @@
 """Tests for weather data handling."""
 
 import json
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -75,6 +79,24 @@ def pvgis_requests(pvgis_tmy, pvgis_hourly_series):
         yield SimpleNamespace(tmy=tmy, hourly=hourly)
 
 
+class _Interrupted(BaseException):
+    """Raised part-way through a put, as Ctrl-C's KeyboardInterrupt would be."""
+
+
+class _InterruptsWhenWritten:
+    """A cell value that raises _Interrupted when the csv writer turns it into text, as it writes the cell's row."""
+
+    def __str__(self):
+        raise _Interrupted()
+
+
+def _interrupted_half_way(frame):
+    """frame, but putting it raises _Interrupted once about half of its rows have been written."""
+    temp_air = frame["temp_air"].astype(object)
+    temp_air.iloc[len(frame) // 2] = _InterruptsWhenWritten()
+    return frame.assign(temp_air=temp_air)
+
+
 class TestWeatherCache:
     """Test weather data caching (LOC-004)."""
 
@@ -132,6 +154,63 @@ class TestWeatherCache:
         assert result is not None
         pd.testing.assert_frame_equal(result, sample_weather_data)
 
+    def test_get_returns_a_scaled_tmy_bit_for_bit(self, cache, bristol, pvgis_tmy):
+        """get returns every value put stored exactly, so a TMY served from the cache is the TMY that was fetched."""
+        scaled = scale_tmy_to_annual_ghi(pvgis_tmy, 1069.5)
+        cache.put(scaled, "tmy", bristol)
+
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), scaled, check_exact=True)
+
+    @pytest.mark.parametrize(
+        ("start", "tz"),
+        [
+            pytest.param("2024-03-30", "UTC", id="UTC across the March clock change"),
+            pytest.param("2024-06-21", "Europe/London", id="Europe/London at one offset"),
+            pytest.param("2024-03-30", "Europe/London", id="Europe/London across the March clock change"),
+            pytest.param("2024-10-26", "Europe/London", id="Europe/London across the October clock change"),
+            pytest.param("2024-06-21", "UTC+01:00", id="a fixed UTC offset"),
+            pytest.param("2024-03-30", None, id="naive"),
+        ],
+    )
+    def test_get_returns_the_index_put_stored(self, cache, bristol, start, tz):
+        """get returns the frame on the index put stored: its instants, its timezone and its frequency."""
+        index = pd.date_range(start, periods=48, freq="h", tz=tz)
+        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
+        cache.put(frame, "tmy", bristol)
+
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
+
+    @pytest.mark.parametrize(
+        "tz",
+        [
+            pytest.param("dateutil/Europe/London", id="a dateutil zone"),
+            pytest.param(timezone(timedelta(hours=1), "BST"), id="a named fixed offset"),
+        ],
+    )
+    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
+        """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
+        ValueError names that str, and put leaves no file, so a get finds no entry."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz=tz)
+        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
+
+        with pytest.raises(ValueError, match=re.escape(str(index.tz))):
+            cache.put(frame, "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == []
+        assert cache.get("tmy", bristol) is None
+
+    def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
+        """get refuses an entry recording its timezone as a str that names none, a dateutil zone's say, which put
+        refuses to record: its ValueError names that str."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London")
+        cache.put(pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index), "tmy", bristol)
+        dateutil_london = "tzfile('/usr/share/zoneinfo/Europe/London')"
+        [meta_file] = cache.cache_dir.glob("*.meta.json")
+        meta_file.write_text(json.dumps({**json.loads(meta_file.read_text()), "timezone": dateutil_london}))
+
+        with pytest.raises(ValueError, match=re.escape(dateutil_london)):
+            cache.get("tmy", bristol)
+
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""
         loc1 = Location(latitude=51.45, longitude=-2.58)
@@ -139,6 +218,55 @@ class TestWeatherCache:
         cache.put(sample_weather_data, "tmy", loc1)
         result = cache.get("tmy", loc2)
         assert result is None
+
+    def test_a_get_racing_puts_finds_no_entry_or_the_whole_one(self, cache, bristol, pvgis_tmy):
+        """While two threads each put one TMY twice under one key of an empty cache, every get from a third
+        thread returns None or that whole TMY, its index's timezone and frequency included, and none raises."""
+        writers_done = threading.Event()
+
+        def put_twice():
+            for _ in range(2):
+                cache.put(pvgis_tmy, "tmy", bristol)
+
+        def get_until_writers_finish():
+            reads = []
+            while not writers_done.is_set():
+                reads.append(cache.get("tmy", bristol))
+            return reads
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            reader = pool.submit(get_until_writers_finish)
+            writers = [pool.submit(put_twice) for _ in range(2)]
+            try:
+                for writer in writers:
+                    writer.result()
+            finally:
+                writers_done.set()
+            reads = reader.result()
+
+        for read in reads:
+            if read is not None:
+                pd.testing.assert_frame_equal(read, pvgis_tmy)
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), pvgis_tmy)
+
+    def test_an_interrupted_put_leaves_the_entry_cached_before_it(self, cache, bristol, sample_weather_data):
+        """A put interrupted part-way through writing leaves the entry cached before it, and no other file."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        files_before = sorted(cache.cache_dir.iterdir())
+
+        with pytest.raises(_Interrupted):
+            cache.put(_interrupted_half_way(sample_weather_data), "tmy", bristol)
+
+        assert sorted(cache.cache_dir.iterdir()) == files_before
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
+
+    def test_an_interrupted_put_into_an_empty_cache_leaves_no_entry(self, cache, bristol, sample_weather_data):
+        """A put interrupted part-way through writing into an empty cache leaves no file, so a get finds no entry."""
+        with pytest.raises(_Interrupted):
+            cache.put(_interrupted_half_way(sample_weather_data), "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == []
+        assert cache.get("tmy", bristol) is None
 
     def test_clear_removes_all(self, cache, bristol, sample_weather_data):
         """Clear removes all cached data."""
@@ -235,14 +363,14 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         assert series_request["components"] is False
 
     def test_scaled_tmy_is_cached(self, weather_cache, pvgis_requests):
-        """Once fetched, the scaled TMY is served from the cache, with no further PVGIS request."""
+        """Once fetched, the scaled TMY is served from the cache exactly as fetched, with no further PVGIS request."""
         first = get_tmy_data(Location.bristol())
         pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
         pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
         second = get_tmy_data(Location.bristol())
 
         assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-        assert second["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_frame_equal(second, first, check_exact=True)
 
     def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
         """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""

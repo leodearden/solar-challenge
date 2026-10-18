@@ -20,6 +20,10 @@ Usage::
 A simulate that answers each aged fleet it is asked for pairs its results with
 those homes: ``simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, ...)``.
 
+A fleet of homes whose results differ is
+``make_fleet_results_of([make_sim_results(...), make_sim_results(...)])``, each
+result on a default home unless ``homes=`` is given.
+
 """
 from __future__ import annotations
 
@@ -120,17 +124,16 @@ def make_sim_results(
     revenue, the physics SEG income.  Generation is self + export, demand is
     self + import - discharge, and ``simulation_days`` is *days*.
 
-    Hourly steps suffice because ``calculate_summary`` integrates every step as
-    one minute and takes ``simulation_days`` from the index span: each total is
-    spread over the 24 * *days* steps as kW = kWh / (n_steps / 60).  Only the
-    totals are meaningful; the peak kW is an artefact of that scaling.
+    Hourly steps suffice because ``calculate_summary`` integrates each row over
+    the hour it lasts and takes ``simulation_days`` from the index span: each
+    total is spread over the 24 * *days* steps as kW = kWh / (24 * *days*).
     """
     n_steps = 24 * days
     idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_kw = import_kwh / (n_steps / 60.0)
-    dis_kw = discharge_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps
+    exp_kw = export_kwh / n_steps
+    imp_kw = import_kwh / n_steps
+    dis_kw = discharge_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw - dis_kw
 
@@ -151,6 +154,20 @@ def make_sim_results(
     )
 
 
+def make_fleet_results_of(
+    per_home_results: Sequence[SimulationResults],
+    *,
+    homes: Sequence[HomeConfig] | None = None,
+) -> FleetResults:
+    """A fleet of *per_home_results*, each paired in order with a home of *homes*.
+
+    Each home is a default make_home_config home unless *homes* is given.
+    """
+    if homes is None:
+        homes = [make_home_config() for _ in per_home_results]
+    return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
+
+
 def make_fleet_results(
     *,
     n_homes: int | None = None,
@@ -168,21 +185,22 @@ def make_fleet_results(
     simulate receives, or else *n_homes* default homes, one by default.
     """
     if homes is None:
-        homes = [make_home_config() for _ in range(1 if n_homes is None else n_homes)]
-    elif n_homes is not None:
+        n_results = 1 if n_homes is None else n_homes
+    elif n_homes is None:
+        n_results = len(homes)
+    else:
         raise TypeError("make_fleet_results takes homes or n_homes, not both")
-    per_home = [
-        make_sim_results(
-            self_kwh=self_kwh,
-            export_kwh=export_kwh,
-            import_kwh=import_kwh,
-            discharge_kwh=discharge_kwh,
-            export_revenue_gbp=export_revenue_gbp,
-            days=days,
-        )
-        for _ in homes
-    ]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=list(homes),
+    return make_fleet_results_of(
+        [
+            make_sim_results(
+                self_kwh=self_kwh,
+                export_kwh=export_kwh,
+                import_kwh=import_kwh,
+                discharge_kwh=discharge_kwh,
+                export_revenue_gbp=export_revenue_gbp,
+                days=days,
+            )
+            for _ in range(n_results)
+        ],
+        homes=homes,
     )

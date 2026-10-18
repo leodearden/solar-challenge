@@ -1,7 +1,11 @@
 """Tests for the web database and storage modules."""
 
+import dataclasses
 import json
+import re
+import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -14,8 +18,10 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db, init_db
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, get_db, init_db
+from solar_challenge.web.storage import RunRecord, RunStorage
+
+from tests._run_storage_layout import stored_run_dir
 
 
 @pytest.fixture
@@ -33,9 +39,11 @@ def db_path(temp_dir):
 
 @pytest.fixture
 def storage(db_path, temp_dir):
-    """Create a RunStorage instance for testing."""
+    """Create a RunStorage instance for testing, its run files in an empty directory beside its database."""
     init_db(db_path)
-    return RunStorage(db_path=db_path, data_dir=temp_dir)
+    data_dir = temp_dir / "data"
+    data_dir.mkdir()
+    return RunStorage(db_path=db_path, data_dir=data_dir)
 
 
 @pytest.fixture
@@ -92,6 +100,39 @@ def sample_summary():
         net_cost_gbp=1.0,
         strategy_name="greedy",
     )
+
+
+RUNS_COLUMN_VALUES = [
+    *(pytest.param("type", run_type, id=f"type-{run_type}") for run_type in RUN_TYPES),
+    pytest.param("type", None, id="type-null"),
+    *(pytest.param("status", run_status, id=f"status-{run_status}") for run_status in RUN_STATUSES),
+    pytest.param("status", None, id="status-null"),
+]
+
+VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS = [
+    pytest.param("type", "hom", id="type-typo"),
+    pytest.param("type", "Home", id="type-capitalised"),
+    pytest.param("status", "complete", id="status-typo"),
+    pytest.param("status", "queued", id="status-a-job-status"),
+]
+
+JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES = [
+    *(pytest.param("jobs", "status", job_status, id=f"jobs-status-{job_status}") for job_status in JOB_STATUSES),
+    pytest.param("jobs", "status", None, id="jobs-status-null"),
+    *(pytest.param("chat_messages", "role", chat_role, id=f"chat_messages-role-{chat_role}") for chat_role in CHAT_ROLES),
+    pytest.param("chat_messages", "role", None, id="chat_messages-role-null"),
+    *(pytest.param("config_presets", "type", preset_type, id=f"config_presets-type-{preset_type}") for preset_type in PRESET_TYPES),
+    pytest.param("config_presets", "type", None, id="config_presets-type-null"),
+]
+
+VALUES_OUTSIDE_THE_JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS = [
+    pytest.param("jobs", "status", "complete", id="jobs-status-typo"),
+    pytest.param("jobs", "status", "Queued", id="jobs-status-capitalised"),
+    pytest.param("chat_messages", "role", "system", id="chat_messages-role-system"),
+    pytest.param("chat_messages", "role", "User", id="chat_messages-role-capitalised"),
+    pytest.param("config_presets", "type", "sweep", id="config_presets-type-a-run-type"),
+    pytest.param("config_presets", "type", "Home", id="config_presets-type-capitalised"),
+]
 
 
 class TestDatabaseInitialization:
@@ -178,6 +219,68 @@ class TestDatabaseInitialization:
         assert nested_path.exists()
         assert nested_path.parent.exists()
 
+    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
+    def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
+        """The runs table stores each run type or NULL as a run's type, and each run status or NULL as its status."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
+            stored = conn.execute(f"SELECT {column} FROM runs WHERE id = 'probe'").fetchone()[0]
+
+        assert stored == value
+
+    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
+    def test_init_db_runs_table_refuses_a_type_or_status_outside_its_definition(self, db_path, column, value):
+        """The runs table refuses a type that is not a run type, and a status that is not a run status."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
+
+    def test_init_db_gives_a_run_inserted_without_a_status_the_status_running(self, db_path):
+        """A run inserted without a status has the status 'running'."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute("INSERT INTO runs (id) VALUES ('no-status')")
+            status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
+
+        assert status == "running"
+
+    def test_run_type_and_run_status_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
+        """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
+        assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet", "sweep"), ("running", "completed", "failed"))
+
+    @pytest.mark.parametrize(("table", "column", "value"), JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)
+    def test_init_db_jobs_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
+        """The jobs table stores each job status or NULL as a job's status, chat_messages each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            rowid = conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,)).lastrowid
+            stored = conn.execute(f"SELECT {column} FROM {table} WHERE rowid = ?", (rowid,)).fetchone()[0]
+
+        assert stored == value
+
+    @pytest.mark.parametrize(("table", "column", "value"), VALUES_OUTSIDE_THE_JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS)
+    def test_init_db_jobs_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
+        """The jobs table refuses a status that is not a job status, chat_messages a role that is not a chat role, and config_presets a type that is not a preset type."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,))
+
+    def test_init_db_gives_a_job_inserted_without_a_status_the_status_queued(self, db_path):
+        """A job inserted without a status has the status 'queued'."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute("INSERT INTO jobs (id) VALUES ('no-status')")
+            status = conn.execute("SELECT status FROM jobs WHERE id = 'no-status'").fetchone()[0]
+
+        assert status == "queued"
+
+    def test_job_status_chat_role_and_preset_type_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
+        """init_db creates each table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
+        assert (JOB_STATUSES, CHAT_ROLES, PRESET_TYPES) == (("queued", "running", "completed", "failed"), ("user", "assistant"), ("home", "fleet"))
+
 
 class TestDatabaseConnectionManagement:
     """Tests for database connection management."""
@@ -190,15 +293,6 @@ class TestDatabaseConnectionManagement:
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             assert cursor.fetchone()[0] == 1
-
-    def test_get_db_enables_row_factory(self, db_path):
-        """Test get_db enables dict-like row access."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 as value")
-            row = cursor.fetchone()
-            assert row["value"] == 1
 
     def test_get_db_commits_on_success(self, db_path):
         """Test get_db commits changes on success."""
@@ -301,64 +395,16 @@ class TestHomeRunRoundTrip:
             summary=sample_summary,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = stored_run_dir(storage, run_id)
         assert run_dir.exists()
         assert (run_dir / "config.json").exists()
         assert (run_dir / "summary.json").exists()
         assert (run_dir / "data.parquet").exists()
 
-    def test_save_home_run_creates_database_entry(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test save_home_run creates database entry."""
-        run_id = "test-run-003"
-
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            name="Test Database Entry",
-            status="completed",
-        )
-
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["id"] == run_id
-            assert row["name"] == "Test Database Entry"
-            assert row["type"] == "home"
-            assert row["status"] == "completed"
-            assert row["n_homes"] == 1
-
     def test_load_home_run_nonexistent_raises(self, storage):
         """Test loading nonexistent run raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             storage.load_home_run("nonexistent-run")
-
-    def test_save_home_run_with_error_status(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test saving a failed run with error message."""
-        run_id = "test-run-004"
-
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            status="failed",
-            error_message="Test error message",
-        )
-
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status, error_message FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row["status"] == "failed"
-            assert row["error_message"] == "Test error message"
 
 
 @pytest.fixture
@@ -408,6 +454,32 @@ def sample_fleet_data(sample_home_config, sample_simulation_results, sample_summ
     per_home_summaries = [sample_summary] * 3
 
     return fleet_results, fleet_summary, per_home_summaries
+
+
+@pytest.fixture
+def saves(storage, sample_home_config, sample_simulation_results, sample_summary, sample_fleet_data):
+    """Each save by the type of run it stores, called with a run id and the save's other row arguments."""
+    fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
+    def save_home(run_id, **row_arguments):
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            **row_arguments,
+        )
+
+    def save_fleet(run_id, **row_arguments):
+        storage.save_fleet_run(
+            run_id=run_id,
+            fleet_results=fleet_results,
+            fleet_summary=fleet_summary,
+            per_home_summaries=per_home_summaries,
+            **row_arguments,
+        )
+
+    return {"home": save_home, "fleet": save_fleet}
 
 
 class TestFleetRunRoundTrip:
@@ -480,7 +552,7 @@ class TestFleetRunRoundTrip:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = stored_run_dir(storage, run_id)
         homes_dir = run_dir / "homes"
         assert homes_dir.exists()
         assert (homes_dir / "home_0.parquet").exists()
@@ -490,28 +562,178 @@ class TestFleetRunRoundTrip:
         assert (homes_dir / "home_1_summary.json").exists()
         assert (homes_dir / "home_2_summary.json").exists()
 
-    def test_save_fleet_run_creates_database_entry(self, storage, sample_fleet_data):
-        """Test save_fleet_run creates database entry."""
-        run_id = "test-fleet-003"
-        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
 
-        storage.save_fleet_run(
-            run_id=run_id,
-            fleet_results=fleet_results,
-            fleet_summary=fleet_summary,
-            per_home_summaries=per_home_summaries,
-            name="Test Fleet Database Entry",
-            status="completed",
+class TestSavedRunRow:
+    """Tests for the runs row each save writes, home and fleet alike."""
+
+    @pytest.mark.parametrize(
+        ("kind", "n_homes"),
+        [pytest.param("home", 1, id="home"), pytest.param("fleet", 3, id="fleet")],
+    )
+    def test_a_save_writes_each_column_of_its_runs_row_from_its_arguments(
+        self, storage, saves, kind, n_homes
+    ):
+        """Each column of a run's row holds the save's argument for it, or the value the save gives it.
+
+        The config and summary texts are pinned by
+        tests/unit/test_web_storage_roundtrip.py::TestPersistedJson, so they are blanked here.
+        A failed run has no completed_at.
+        """
+        saves[kind](
+            "saved-run",
+            name="North Roof",
+            status="failed",
+            error_message="Simulation diverged",
+            duration_seconds=5.0,
+            created_at="2026-01-01T00:00:00+00:00",
         )
 
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["type"] == "fleet"
-            assert row["n_homes"] == 3
-            assert row["name"] == "Test Fleet Database Entry"
+        saved = dataclasses.replace(storage.run_record("saved-run"), config_json=None, summary_json=None)
+        assert saved == RunRecord(
+            id="saved-run",
+            name="North Roof",
+            type=kind,
+            config_json=None,
+            summary_json=None,
+            status="failed",
+            error_message="Simulation diverged",
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at=None,
+            duration_seconds=5.0,
+            n_homes=n_homes,
+            notes=None,
+        )
+
+    def test_a_home_save_given_no_name_names_its_run_after_its_home_or_else_unnamed_run(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A home run saved with no name takes its home's name, or 'Unnamed Run' when its home has none."""
+        for run_id, config in (
+            ("named-home", sample_home_config),
+            ("unnamed-home", dataclasses.replace(sample_home_config, name="")),
+        ):
+            storage.save_home_run(
+                run_id=run_id,
+                config=config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
+
+        assert [storage.run_name("named-home"), storage.run_name("unnamed-home")] == [
+            "Test Home",
+            "Unnamed Run",
+        ]
+
+    def test_a_fleet_save_given_no_name_names_its_run_unnamed_fleet_run(self, storage, saves):
+        """A fleet run saved with no name is named 'Unnamed Fleet Run'."""
+        saves["fleet"]("fleet-run")
+
+        assert storage.run_name("fleet-run") == "Unnamed Fleet Run"
+
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
+        """A run saved as completed has the time of the save as its completed_at."""
+        before = datetime.now(timezone.utc)
+        saves[kind]("completed-run", status="completed")
+        after = datetime.now(timezone.utc)
+
+        record = storage.run_record("completed-run")
+        assert record.status == "completed"
+        assert before <= datetime.fromisoformat(record.completed_at) <= after
+
+    @pytest.mark.parametrize("status", [status for status in RUN_STATUSES if status != "completed"])
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_of_a_run_that_is_not_completed_leaves_completed_at_null(
+        self, storage, saves, kind, status
+    ):
+        """A run saved with any status but completed has no completed_at.
+
+        The statuses come from RUN_STATUSES, so a new status is covered without editing the test.
+        """
+        saves[kind]("unfinished-run", status=status)
+
+        record = storage.run_record("unfinished-run")
+        assert (record.status, record.completed_at) == (status, None)
+
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_given_no_created_at_is_created_at_the_time_it_saves(self, storage, saves, kind):
+        """A run saved with no created_at has the time of the save as its created_at."""
+        before = datetime.now(timezone.utc)
+        saves[kind]("new-run")
+        after = datetime.now(timezone.utc)
+
+        record = storage.run_record("new-run")
+        assert before <= datetime.fromisoformat(record.created_at) <= after
+
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_of_a_completed_run_given_no_created_at_stamps_created_at_and_completed_at_with_the_one_time_it_saves(
+        self, storage, saves, kind
+    ):
+        """A run saved as completed with no created_at was created and completed at the one time of the save."""
+        saves[kind]("new-completed-run", status="completed")
+
+        record = storage.run_record("new-completed-run")
+        assert datetime.fromisoformat(record.created_at) == datetime.fromisoformat(record.completed_at)
+
+    @pytest.mark.parametrize(
+        ("first", "resave"),
+        [
+            pytest.param("fleet", "home", id="fleet-then-home"),
+            pytest.param("home", "fleet", id="home-then-fleet"),
+        ],
+    )
+    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_the_run_labels(
+        self, storage, saves, first, resave
+    ):
+        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at and its labels, name and notes.
+
+        The first save is of the other run type, was completed and created earlier, and its notes
+        and name are set, so it differs from the re-save in every column: each column of the re-saved row
+        shows which save wrote it.
+        """
+        saves[first](
+            "resaved",
+            name="First Name",
+            status="completed",
+            duration_seconds=120.0,
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        storage.update_run_labels("resaved", {"name": "Renamed", "notes": "Checked"})
+        first_record = storage.run_record("resaved")
+        resave_arguments = dict(
+            name="Second Name",
+            status="failed",
+            error_message="Simulation diverged",
+            duration_seconds=5.0,
+            created_at="2026-02-01T00:00:00+00:00",
+        )
+        saves[resave]("resaved", **resave_arguments)
+        saves[resave]("fresh", **resave_arguments)
+        fresh_record = storage.run_record("fresh")
+
+        columns_the_saves_share = [
+            field.name
+            for field in dataclasses.fields(RunRecord)
+            if getattr(first_record, field.name) == getattr(fresh_record, field.name)
+        ]
+        assert columns_the_saves_share == []
+        assert storage.run_record("resaved") == dataclasses.replace(
+            fresh_record, id="resaved", created_at="2026-01-01T00:00:00+00:00", name="Renamed", notes="Checked"
+        )
+
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_given_a_status_that_is_not_a_run_status_raises_value_error_naming_it_and_writes_nothing(
+        self, storage, saves, kind
+    ):
+        """A save given a status outside RUN_STATUSES raises ValueError naming the status and the run statuses.
+
+        The save writes no file and no runs row.
+        """
+        with pytest.raises(ValueError, match=re.escape(f"status is 'complete', not one of {list(RUN_STATUSES)}")):
+            saves[kind]("bad-status", status="complete")
+
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
 
 
 class TestListRuns:
@@ -691,7 +913,7 @@ class TestDeleteRun:
             summary=sample_summary,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = stored_run_dir(storage, run_id)
         assert run_dir.exists()
 
         # Delete it
@@ -712,7 +934,7 @@ class TestDeleteRun:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = stored_run_dir(storage, run_id)
         homes_dir = run_dir / "homes"
         assert run_dir.exists()
         assert homes_dir.exists()
@@ -728,6 +950,121 @@ class TestDeleteRun:
         """Test deleting nonexistent run doesn't raise error."""
         # Should not raise
         storage.delete_run("nonexistent-run-id")
+
+
+class TestRunRecord:
+    """Tests for RunStorage.run_record, one run's row read by its id."""
+
+    def test_run_record_reads_every_column_of_the_row_into_the_field_of_its_name(self, storage):
+        """Each column of the run's row is read into the RunRecord field of the same name.
+
+        No save writes notes, and a save stamps completed_at with the clock, so the test
+        inserts the row to give every column a fixed, distinct value.
+        """
+        with get_db(storage.db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, error_message,"
+                " created_at, completed_at, duration_seconds, n_homes, notes)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "fleet-row",
+                    "Community Fleet",
+                    "fleet",
+                    '{"homes": [], "n_homes": 3}',
+                    '{"n_homes": 3, "total_generation_kwh": 300.0}',
+                    "failed",
+                    "Simulation diverged",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:05:00+00:00",
+                    300.0,
+                    3,
+                    "Second attempt",
+                ),
+            )
+
+        assert storage.run_record("fleet-row") == RunRecord(
+            id="fleet-row",
+            name="Community Fleet",
+            type="fleet",
+            config_json='{"homes": [], "n_homes": 3}',
+            summary_json='{"n_homes": 3, "total_generation_kwh": 300.0}',
+            status="failed",
+            error_message="Simulation diverged",
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:05:00+00:00",
+            duration_seconds=300.0,
+            n_homes=3,
+            notes="Second attempt",
+        )
+
+    def test_run_record_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None."""
+        assert storage.run_record("no-such-run") is None
+
+
+@pytest.fixture
+def north_roof_record():
+    """A completed home run's record, with no config or summary text until a test gives it some."""
+    return RunRecord(
+        id="north-roof",
+        name="North Roof",
+        type="home",
+        config_json=None,
+        summary_json=None,
+        status="completed",
+        error_message=None,
+        created_at="2026-01-01T00:00:00+00:00",
+        completed_at="2026-01-01T00:01:00+00:00",
+        duration_seconds=60.0,
+        n_homes=1,
+        notes=None,
+    )
+
+
+class TestRunRecordDecoding:
+    """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
+
+    def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
+        """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
+        record = dataclasses.replace(
+            north_roof_record,
+            config_json='{"pv_config": {"capacity_kw": 4.0}}',
+            summary_json='{"total_generation_kwh": 100.0}',
+        )
+
+        assert (record.decoded_config(), record.decoded_summary()) == (
+            {"pv_config": {"capacity_kw": 4.0}},
+            {"total_generation_kwh": 100.0},
+        )
+
+    @pytest.mark.parametrize("text", [None, "", "{not json"], ids=["null", "empty", "not-json"])
+    def test_decoded_config_and_summary_are_empty_when_their_text_is_null_empty_or_not_json(
+        self, north_roof_record, text
+    ):
+        """A text that is NULL, empty or not JSON decodes as {}."""
+        record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
+
+        assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
+
+
+class TestRunRecordTypeAndStatus:
+    """Tests for RunRecord's type and status, each one of the runs table's definitions or None."""
+
+    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
+    def test_a_run_record_holds_each_run_type_and_run_status_and_none(self, north_roof_record, column, value):
+        """A record holds each run type or None as its type, and each run status or None as its status."""
+        record = dataclasses.replace(north_roof_record, **{column: value})
+
+        assert getattr(record, column) == value
+
+    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
+    def test_a_run_record_refuses_a_type_or_status_outside_its_definition(self, north_roof_record, column, value):
+        """A type that is not a run type, or a status that is not a run status, raises ValueError naming the field, the value and the values allowed."""
+        allowed = {"type": "['home', 'fleet', 'sweep']", "status": "['running', 'completed', 'failed']"}[column]
+        refusal = f"RunRecord.{column} is {value!r}, not one of {allowed} or None"
+
+        with pytest.raises(ValueError, match=re.escape(refusal)):
+            dataclasses.replace(north_roof_record, **{column: value})
 
 
 class TestRunName:
@@ -791,6 +1128,122 @@ class TestRunName:
         assert storage.run_name(run_id) is None
 
 
+class TestLatestRunNamed:
+    """Tests for RunStorage.latest_run_named, the most recently created run with a given name."""
+
+    def test_latest_run_named_is_the_most_recently_created_run_with_that_name(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """The run with the name that was created last answers, whichever order the runs were saved in.
+
+        The newest run is saved neither first nor last, so only its creation time singles it
+        out. The run created after it has another name, so it pins the name filter.
+        """
+        for run_id, name, created_at in (
+            ("middle", "Shared Name", "2026-02-01T00:00:00+00:00"),
+            ("newest", "Shared Name", "2026-03-01T00:00:00+00:00"),
+            ("oldest", "Shared Name", "2026-01-01T00:00:00+00:00"),
+            ("other-name", "Other Name", "2026-05-01T00:00:00+00:00"),
+        ):
+            storage.save_home_run(
+                run_id=run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+                name=name,
+                created_at=created_at,
+            )
+
+        assert storage.latest_run_named("Shared Name") == storage.run_record("newest")
+
+    def test_latest_run_named_of_a_name_no_run_has_is_none(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A name no run has answers None."""
+        storage.save_home_run(
+            run_id="north-roof",
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+
+        assert storage.latest_run_named("South Roof") is None
+
+
+class TestUpdateRunLabels:
+    """Tests for RunStorage.update_run_labels, which writes a run's name and notes as Run History edits them."""
+
+    @pytest.fixture
+    def north_roof_run_id(self, storage, sample_home_config, sample_simulation_results, sample_summary):
+        """The id of a home run saved under the name 'North Roof', its notes NULL as every save leaves them."""
+        run_id = "north-roof"
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        return run_id
+
+    def test_update_run_labels_writes_each_label_given_and_answers_the_updated_record(
+        self, storage, north_roof_run_id
+    ):
+        """Each label given is written, and the run's record as written is answered."""
+        updated = storage.update_run_labels(north_roof_run_id, {"name": "South Roof", "notes": "Checked"})
+
+        assert updated == storage.run_record(north_roof_run_id)
+        assert (updated.name, updated.notes) == ("South Roof", "Checked")
+
+    def test_update_run_labels_leaves_each_label_not_given_unchanged(self, storage, north_roof_run_id):
+        """A label absent from the labels keeps its value."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        after_notes = storage.run_record(north_roof_run_id)
+        storage.update_run_labels(north_roof_run_id, {"name": "South Roof"})
+        after_name = storage.run_record(north_roof_run_id)
+
+        assert [(after_notes.name, after_notes.notes), (after_name.name, after_name.notes)] == [
+            ("North Roof", "Checked"),
+            ("South Roof", "Checked"),
+        ]
+
+    def test_update_run_labels_writes_a_none_label_as_null(self, storage, north_roof_run_id):
+        """A label given as None is cleared to NULL."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        storage.update_run_labels(north_roof_run_id, {"notes": None})
+
+        assert storage.run_record(north_roof_run_id).notes is None
+
+    def test_update_run_labels_with_no_labels_answers_the_record_unchanged(self, storage, north_roof_run_id):
+        """No labels write nothing, and answer the run's record as it was."""
+        before = storage.run_record(north_roof_run_id)
+
+        assert storage.update_run_labels(north_roof_run_id, {}) == before
+
+    def test_update_run_labels_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None, and no run is written under it."""
+        assert storage.update_run_labels("no-such-run", {"name": "South Roof"}) is None
+        assert storage.run_record("no-such-run") is None
+
+    def test_update_run_labels_refuses_a_key_that_is_not_a_run_label_and_writes_nothing(
+        self, storage, north_roof_run_id
+    ):
+        """A key that is not a run label raises ValueError naming it, before any label is written.
+
+        The keys become column names in SQL, so the valid label beside the refused key is not
+        written either.
+        """
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(
+            ValueError, match=r"Not run labels: \['status'\]; the run labels are \['name', 'notes'\]"
+        ):
+            storage.update_run_labels(north_roof_run_id, {"status": "failed", "notes": "Checked"})
+
+        assert storage.run_record(north_roof_run_id) == before
+
+
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
 
@@ -803,80 +1256,172 @@ class TestDatabasePragmas:
             mode = cursor.fetchone()[0]
             assert mode == "wal"
 
-    def test_foreign_keys_enabled_in_connection(self, db_path):
-        """Test that foreign keys are enforced in get_db connections."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA foreign_keys")
-            fk_status = cursor.fetchone()[0]
-            assert fk_status == 1
 
-    def test_foreign_key_enforcement_rejects_invalid_reference(self, db_path):
-        """Test that FK enforcement actually rejects invalid references."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            # Try to insert a job referencing a non-existent run
-            import pytest
-            with pytest.raises(Exception):
-                cursor.execute(
-                    "INSERT INTO jobs (id, run_id, status) VALUES (?, ?, ?)",
-                    ("job-1", "nonexistent-run", "queued"),
-                )
+REFUSED_RUN_IDS = [
+    pytest.param("../", id="parent-directory"),
+    pytest.param("../../etc", id="two-directories-up"),
+    pytest.param("/absolute/path", id="absolute-path"),
+    pytest.param("/etc/passwd", id="absolute-path-of-a-file"),
+    pytest.param("run\x00id", id="null-byte"),
+    pytest.param("", id="empty"),
+    pytest.param("run.id", id="dot"),
+    pytest.param("run id", id="space"),
+    pytest.param("abc\n", id="trailing-newline"),
+]
+
+ACCEPTED_RUN_IDS = [
+    pytest.param("abc", id="letters"),
+    pytest.param("test-run-001", id="hyphens"),
+    pytest.param("my_run_123", id="underscores"),
+    pytest.param("valid-run_123", id="hyphen-and-underscore"),
+    pytest.param("550e8400-e29b-41d4-a716-446655440000", id="uuid"),
+]
+
+RUN_LOADERS = [
+    pytest.param(RunStorage.load_home_run, id="home"),
+    pytest.param(RunStorage.load_fleet_run, id="fleet"),
+]
 
 
 class TestRunIdValidation:
-    """Tests for run_id validation to prevent path traversal attacks."""
+    """The run ids the store refuses and accepts, as its saves, loads and deletes see them."""
 
-    def test_traversal_parent_directory(self, storage):
-        """Test that ../ in run_id raises ValueError."""
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_home_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary, run_id
+    ):
+        """A home save under an id the store refuses raises ValueError, and writes no file and no runs row."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("../")
+            storage.save_home_run(
+                run_id=run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
 
-    def test_traversal_deep_parent(self, storage):
-        """Test that ../../etc in run_id raises ValueError."""
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
+
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_fleet_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
+        self, storage, sample_fleet_data, run_id
+    ):
+        """A fleet save under an id the store refuses raises ValueError, and writes no file and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("../../etc")
+            storage.save_fleet_run(
+                run_id=run_id,
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=per_home_summaries,
+            )
 
-    def test_absolute_path(self, storage):
-        """Test that absolute path in run_id raises ValueError."""
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
+
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    @pytest.mark.parametrize("load", RUN_LOADERS)
+    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(
+        self, storage, load, run_id
+    ):
+        """A load of an id the store refuses raises FileNotFoundError, as a load of an id no run has does, and carries the refusal."""
+        with pytest.raises(FileNotFoundError, match="Invalid run_id"):
+            load(storage, run_id)
+
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_delete_of_an_id_the_store_refuses_raises_value_error(self, storage, run_id):
+        """A delete of an id the store refuses raises ValueError: no run can be saved under the id, so the caller has a bug."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("/absolute/path")
+            storage.delete_run(run_id)
 
-    def test_null_byte(self, storage):
-        """Test that null byte in run_id raises ValueError."""
+    @pytest.fixture
+    def outside(self, temp_dir):
+        """An empty directory beside the store's data directory, beyond its runs directory."""
+        outside = temp_dir / "outside"
+        outside.mkdir()
+        return outside
+
+    @pytest.fixture
+    def linked_run_id(self, storage, outside):
+        """An id whose run directory links to *outside*, so that it resolves beyond the runs directory."""
+        run_id = "linked"
+        run_dir = stored_run_dir(storage, run_id)
+        run_dir.parent.mkdir()
+        run_dir.symlink_to(outside, target_is_directory=True)
+        return run_id
+
+    def test_a_home_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_writes_nothing(
+        self,
+        storage,
+        outside,
+        linked_run_id,
+        sample_home_config,
+        sample_simulation_results,
+        sample_summary,
+    ):
+        """A home save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link and no runs row."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run\x00id")
+            storage.save_home_run(
+                run_id=linked_run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
 
-    def test_empty_string(self, storage):
-        """Test that empty string raises ValueError."""
+        assert list(outside.iterdir()) == []
+        assert storage.list_runs() == []
+
+    def test_a_fleet_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_writes_nothing(
+        self, storage, outside, linked_run_id, sample_fleet_data
+    ):
+        """A fleet save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("")
+            storage.save_fleet_run(
+                run_id=linked_run_id,
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=per_home_summaries,
+            )
 
-    def test_valid_id_with_hyphens(self, storage):
-        """Test that valid run_id with hyphens passes validation."""
-        storage._validate_run_id("test-run-001")  # Should not raise
+        assert list(outside.iterdir()) == []
+        assert storage.list_runs() == []
 
-    def test_valid_id_with_underscores(self, storage):
-        """Test that valid run_id with underscores passes validation."""
-        storage._validate_run_id("my_run_123")  # Should not raise
+    @pytest.mark.parametrize("load", RUN_LOADERS)
+    def test_a_load_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_file_not_found_error(
+        self, storage, linked_run_id, load
+    ):
+        """A load of an id whose run directory links outside the runs directory raises FileNotFoundError, and carries the refusal rather than a missing file's error."""
+        with pytest.raises(FileNotFoundError, match="Invalid run_id"):
+            load(storage, linked_run_id)
 
-    def test_valid_simple_id(self, storage):
-        """Test that simple alphanumeric run_id passes validation."""
-        storage._validate_run_id("abc")  # Should not raise
+    def test_a_delete_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_removes_nothing(
+        self, storage, outside, linked_run_id
+    ):
+        """A delete of an id whose run directory links outside the runs directory raises ValueError, and removes neither what the link leads to nor the link."""
+        (outside / "kept.txt").write_text("kept")
 
-    def test_dot_in_run_id(self, storage):
-        """Test that dots in run_id raise ValueError."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run.id")
+            storage.delete_run(linked_run_id)
 
-    def test_space_in_run_id(self, storage):
-        """Test that spaces in run_id raise ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run id")
+        assert (outside / "kept.txt").read_text() == "kept"
+        assert stored_run_dir(storage, linked_run_id).is_symlink()
 
-    def test_get_run_dir_calls_validation(self, storage):
-        """Test that _get_run_dir calls _validate_run_id and rejects traversal."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._get_run_dir("../../etc")
+    @pytest.mark.parametrize("run_id", ACCEPTED_RUN_IDS)
+    def test_a_home_run_saved_under_an_accepted_id_loads_back_from_the_directory_the_id_names(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary, run_id
+    ):
+        """A home run saved under an accepted id loads back equal, from the run directory the id names."""
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+        )
+
+        loaded_config, _, loaded_summary = storage.load_home_run(run_id)
+
+        assert (loaded_config, loaded_summary) == (sample_home_config, sample_summary)
+        assert stored_run_dir(storage, run_id).is_dir()

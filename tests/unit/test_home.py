@@ -1,7 +1,9 @@
-"""Tests for HomeConfig, SimulationResults, calculate_summary and SEG export pricing in simulate_home."""
+"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing."""
 
 import dataclasses
 import typing
+import warnings
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -19,6 +21,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -53,6 +56,15 @@ class TestHomeConfigBasics:
             load_config=LoadConfig(),
         )
         assert config.battery_config is None
+
+    def test_name_and_dispatch_strategy_take_the_declared_defaults(self):
+        """An unnamed home has an empty name and the greedy dispatch strategy."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        assert config.name == ""
+        assert config.dispatch_strategy == "greedy"
 
     def test_default_location_is_bristol(self):
         """Default location is Bristol."""
@@ -170,6 +182,22 @@ class TestSimulationResults:
         assert list(df.columns) == [*sample_results.to_dataframe().columns, "grid_charge_cost_gbp"]
         pd.testing.assert_series_equal(df["grid_charge_cost_gbp"], grid_charge_cost, check_names=False)
 
+    def test_to_dataframe_appends_a_set_grid_charge_as_grid_charge_kw(self, sample_results):
+        """A set grid_charge is the last column, grid_charge_kw, after the grid_charge_cost_gbp a tariffed run also has."""
+        index = sample_results.generation.index
+        grid_charge = pd.Series(0.25, index=index)
+
+        df = dataclasses.replace(
+            sample_results, grid_charge_cost=pd.Series(0.01, index=index), grid_charge=grid_charge
+        ).to_dataframe()
+
+        assert list(df.columns) == [
+            *sample_results.to_dataframe().columns,
+            "grid_charge_cost_gbp",
+            "grid_charge_kw",
+        ]
+        pd.testing.assert_series_equal(df["grid_charge_kw"], grid_charge, check_names=False)
+
     def test_from_dataframe_restores_every_series_to_dataframe_wrote(self):
         """from_dataframe gives back every series to_dataframe wrote, under the same name, optional ones included."""
         original = _results_with_every_series_set()
@@ -180,6 +208,7 @@ class TestSimulationResults:
 
         assert restored.heat_pump_load is not None
         assert restored.grid_charge_cost is not None
+        assert restored.grid_charge is not None
         for name in _series_field_names():
             pd.testing.assert_series_equal(getattr(restored, name), getattr(original, name), obj=name)
         assert restored.strategy_name == "tou_optimized"
@@ -209,6 +238,22 @@ class TestSimulationResults:
 
         assert {name: series.name for name, series in given.items()} == dict.fromkeys(given, "temp_air")
 
+    @pytest.mark.parametrize("name", _series_field_names())
+    def test_a_series_field_cannot_be_reassigned_after_construction(self, name):
+        """Reassigning a series field after construction raises FrozenInstanceError, leaving the series named its column."""
+        results = _results_with_every_series_set()
+        column = getattr(results, name).name
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(results, name, getattr(results, name).rename("temp_air"))
+
+        assert getattr(results, name).name == column
+
+    def test_results_stay_unhashable_though_frozen(self):
+        """hash(results) raises TypeError: freezing SimulationResults does not make it hashable."""
+        with pytest.raises(TypeError):
+            hash(_results_with_every_series_set())
+
     def test_optional_series_left_unset_come_back_none(self, sample_results):
         """An optional series left unset is written as no column, and comes back None rather than NaN or zero."""
         restored = SimulationResults.from_dataframe(
@@ -217,6 +262,7 @@ class TestSimulationResults:
 
         assert restored.heat_pump_load is None
         assert restored.grid_charge_cost is None
+        assert restored.grid_charge is None
 
     def test_frame_lacking_required_series_columns_is_refused_naming_them(self, sample_results):
         """A frame lacking required series' columns is refused with a ValueError naming each, and no absent optional one."""
@@ -250,6 +296,7 @@ class TestPerMinuteAmounts:
                 "grid_import_kwh": results.grid_import / 60,
                 "grid_export_kwh": results.grid_export / 60,
                 "heat_pump_load_kwh": results.heat_pump_load / 60,
+                "grid_charge_kwh": results.grid_charge / 60,
                 "import_cost_gbp": results.import_cost,
                 "export_revenue_gbp": results.export_revenue,
                 "grid_charge_cost_gbp": results.grid_charge_cost,
@@ -260,7 +307,7 @@ class TestPerMinuteAmounts:
     def test_an_unset_optional_series_has_no_amount_column(self):
         """An optional series left unset has no amount column."""
         amounts = dataclasses.replace(
-            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None
+            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None, grid_charge=None
         ).per_minute_amounts()
 
         assert sorted(amounts.columns) == sorted(
@@ -279,7 +326,7 @@ class TestPerMinuteAmounts:
 
     @pytest.mark.parametrize(
         "unset",
-        [{}, {"heat_pump_load": None, "grid_charge_cost": None}],
+        [{}, {"heat_pump_load": None, "grid_charge_cost": None, "grid_charge": None}],
         ids=["every_series_set", "optional_series_unset"],
     )
     def test_total_amounts_are_the_per_minute_amounts_summed_over_the_run(self, unset):
@@ -287,6 +334,119 @@ class TestPerMinuteAmounts:
         results = dataclasses.replace(_results_with_every_series_set(), **unset)
 
         assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+
+
+def _steady_week(freq: str) -> SimulationResults:
+    """A steady June week of results whose rows are freq apart: 1 kW of generation meets 0.4 kW of demand and exports 0.6 kW at 5p/kWh."""
+    index = pd.date_range("2023-06-01", "2023-06-07 23:59", freq=freq, tz="Europe/London")
+    row_hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
+    frame = pd.DataFrame(
+        {
+            "generation_kw": 1.0,
+            "demand_kw": 0.4,
+            "self_consumption_kw": 0.4,
+            "battery_charge_kw": 0.0,
+            "battery_discharge_kw": 0.0,
+            "battery_soc_kwh": 0.0,
+            "grid_import_kw": 0.0,
+            "grid_export_kw": 0.6,
+            "import_cost_gbp": 0.0,
+            "export_revenue_gbp": 0.6 * row_hours * 0.05,
+            "tariff_rate_per_kwh": 0.0,
+        },
+        index=index,
+    )
+    return SimulationResults.from_dataframe(frame, strategy_name="self_consumption")
+
+
+class TestResultsWindow:
+    """Test SimulationResults.window, the window its index describes, and the amounts that read its cadence."""
+
+    def test_window_is_the_window_of_the_results_index(self):
+        """window holds the calendar days, cadence and zone of the results' index."""
+        assert _results_with_every_series_set().window == SimulationWindow(
+            date(2024, 6, 21), date(2024, 6, 21), timedelta(minutes=1), "Europe/London"
+        )
+
+    def test_a_half_hourly_twin_of_a_minute_run_has_its_total_amounts(self):
+        """A half-hourly twin of a steady minute run, built with from_dataframe, totals the same kWh and £."""
+        minute = _steady_week("1min")
+        twin = _steady_week("30min")
+
+        assert minute.window.cadence == timedelta(minutes=1)
+        assert twin.window.cadence == timedelta(minutes=30)
+        assert twin.total_amounts() == pytest.approx(minute.total_amounts(), rel=1e-9)
+        assert minute.total_amounts()["demand_kwh"] == pytest.approx(67.2, rel=1e-9)
+
+    @pytest.mark.parametrize("freq", ["1min", "30min", "1h"])
+    def test_each_kw_row_counts_for_the_hours_its_row_lasts(self, freq):
+        """Each kW row's amount is its kW times the hours its row lasts; each £ row is already its amount."""
+        results = _steady_week(freq)
+        hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
+
+        amounts = results.per_minute_amounts()
+
+        pd.testing.assert_series_equal(amounts["demand_kwh"], results.demand * hours, check_names=False)
+        pd.testing.assert_series_equal(
+            amounts["export_revenue_gbp"], results.export_revenue, check_names=False
+        )
+
+    def test_a_kw_series_amounts_are_the_windows_energy_of_it(self):
+        """A kW series' amounts equal the window's energy of it, row by row (row_energy_kwh) and in total (energy_kwh)."""
+        twin = _steady_week("30min")
+
+        pd.testing.assert_series_equal(
+            twin.per_minute_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
+        )
+        assert twin.window.energy_kwh(twin.demand) == pytest.approx(
+            twin.total_amounts()["demand_kwh"], rel=1e-12
+        )
+
+    def test_amounts_of_results_on_an_unevenly_spaced_index_are_refused_naming_where(self):
+        """Results whose rows are not evenly spaced have no amounts: a ValueError names where the spacing changes."""
+        index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London").delete(30)
+        results = SimulationResults(
+            strategy_name="self_consumption",
+            **{name: pd.Series(1.0, index=index) for name in _series_field_names()},
+        )
+
+        with pytest.raises(ValueError, match="position 30"):
+            results.total_amounts()
+
+
+class TestSimulateHomeImportPricing:
+    """simulate_home prices each minute's import at that minute's tariff rate, and an untariffed run's at nothing."""
+
+    def test_a_tariffed_run_prices_each_minutes_import_at_that_minutes_rate(self, june21_weather_data):
+        """A PV-only home on Economy 7 imports overnight at both of its rates, each minute at its own."""
+        tariff = TariffConfig.economy_7()
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            tariff_config=tariff,
+            seg_tariff=SEG_PRESETS["Octopus"],
+        )
+        day = pd.Timestamp("2024-06-21")
+
+        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.tariff_rate.tolist() == [tariff.get_rate(minute) for minute in results.tariff_rate.index]
+        assert results.import_cost.sum() > 0
+        assert results.tariff_rate[results.grid_import > 0].nunique() > 1
+        np.testing.assert_allclose(
+            results.import_cost, results.grid_import * HOURS_PER_MINUTE * results.tariff_rate, rtol=1e-12, atol=0.0
+        )
+
+    def test_an_untariffed_run_has_no_import_rate_or_cost(self, june21_weather_data):
+        """A home with no tariff imports, but at a rate of 0.0 and for nothing."""
+        home = HomeConfig(PVConfig(capacity_kw=4.0), LoadConfig(annual_consumption_kwh=3000.0, seed=42))
+        day = pd.Timestamp("2024-06-21")
+
+        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.grid_import.sum() > 0
+        assert (results.tariff_rate == 0.0).all()
+        assert (results.import_cost == 0.0).all()
 
 
 class TestSimulateHomeSEGPricing:
@@ -407,6 +567,17 @@ class TestSimulateHomeSEGNonRegression:
         assert (results.export_revenue == 0).all(), "export_revenue must be zero when seg_tariff is None"
         assert calculate_summary(results).total_export_revenue_gbp == 0
 
+    def test_the_missing_seg_tariff_warning_is_raised_once_naming_the_code_that_called_simulate_home(
+        self, no_seg_config, june21_weather_data
+    ):
+        """The run warns once, not once a minute, and the warning's file is the caller's, not home.py."""
+        day = pd.Timestamp("2024-06-21")
+
+        with pytest.warns(UserWarning, match="seg_tariff") as caught:
+            simulate_home(no_seg_config, day, day, weather_data=june21_weather_data)
+
+        assert [warning.filename for warning in caught if "seg_tariff" in str(warning.message)] == [__file__]
+
     def test_named_preset_end_to_end(self, june21_weather_data):
         """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
         flat_period = TariffPeriod(
@@ -433,6 +604,42 @@ class TestSimulateHomeSEGNonRegression:
         total_export_kwh = results.grid_export.sum() / 60.0
         expected_revenue = calculate_seg_revenue(total_export_kwh, SEG_PRESETS["Octopus"])
         assert summary.total_export_revenue_gbp == pytest.approx(expected_revenue, rel=1e-3)
+
+
+class TestSimulateHomeExportValuationWithoutATariff:
+    """An untariffed home's export is valued at its SEG rate alone, and it warns of nothing."""
+
+    @pytest.mark.parametrize(
+        "seg_tariff",
+        [
+            pytest.param(None, id="no-seg"),
+            pytest.param(SEG_PRESETS["Octopus"], id="octopus-seg"),
+        ],
+    )
+    def test_an_untariffed_run_values_export_at_its_seg_rate_alone_and_warns_of_nothing(
+        self, seg_tariff, june21_weather_data
+    ):
+        """Each minute's export earns its SEG revenue, or nothing without an SEG, and no tariff means no warning."""
+        home = HomeConfig(
+            PVConfig(capacity_kw=4.0), LoadConfig(annual_consumption_kwh=3000.0, seed=42), seg_tariff=seg_tariff
+        )
+        day = pd.Timestamp("2024-06-21")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.grid_export.sum() > 0
+        np.testing.assert_allclose(
+            results.export_revenue,
+            [
+                0.0 if seg_tariff is None else calculate_seg_revenue(kw * HOURS_PER_MINUTE, seg_tariff)
+                for kw in results.grid_export
+            ],
+            rtol=1e-12,
+            atol=0.0,
+        )
+        assert not [warning for warning in caught if "seg_tariff" in str(warning.message)]
 
 
 class TestCalculateSummary:

@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
+import dataclasses
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
+from rich.table import Table
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -13,7 +15,6 @@ if TYPE_CHECKING:
 from solar_challenge.cli.utils import (
     console,
     create_fleet_progress,
-    create_progress,
     create_summary_table,
     handle_errors,
     print_info,
@@ -22,18 +23,17 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    ConfigurationError,
     SweepSpec,
-    detect_sweep_spec,
-    expand_sweep_configs,
-    generate_homes_from_distribution,
+    detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
-    parse_fleet_distribution_config,
+    parse_fleet_config,
     parse_location_block,
+    parse_sweep_fleet_configs,
     substitute_config_variables,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
@@ -54,13 +54,8 @@ def _export_fleet_results(results: FleetResults, output: Path) -> None:
     df.to_csv(output)
 
 
-def _print_community_section(
-    fleet_results: FleetResults,
-    community_results: "CommunityResults",
-) -> None:
+def _print_community_section(community_results: "CommunityResults") -> None:
     """Print a community sharing summary after the fleet summary table."""
-    from rich.table import Table
-
     m = compute_community_metrics(community_results)
 
     table = Table(title="Community Sharing Results")
@@ -244,7 +239,7 @@ def run(
     community_config = load_community_config(config)
     if community_config is not None:
         community_results = simulate_community(results, community_config)
-        _print_community_section(results, community_results)
+        _print_community_section(community_results)
         if community_report is not None:
             community_report.write_text(generate_community_report(community_results))
             print_success(f"Community report saved to {community_report}")
@@ -372,11 +367,13 @@ def sweep(
     # Parse dates
     start_date = pd.Timestamp(start, tz=location.timezone)
     end_date = pd.Timestamp(end, tz=location.timezone)
-    days = (end_date - start_date).days + 1
 
     # Create output directory if needed
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
+
+    if "fleet_distribution" not in raw_config:
+        raise ConfigurationError("Sweep requires fleet_distribution config")
 
     # Build sweep configs upfront
     sweep_configs: list[tuple[float, FleetConfig]] = []
@@ -398,43 +395,25 @@ def sweep(
 
         for val in sweep_values:
             substituted = substitute_config_variables(raw_config, {param: val})
-            if "fleet_distribution" not in substituted:
-                raise ConfigurationError(
-                    "Sweep requires fleet_distribution config"
-                )
-            dist_config = parse_fleet_distribution_config(
-                substituted["fleet_distribution"]
+            fleet_config = dataclasses.replace(
+                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
             )
-            homes = generate_homes_from_distribution(dist_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"{param}={val:.4f}")
             sweep_configs.append((val, fleet_config))
 
     else:
         # YAML-defined sweep
-        if "fleet_distribution" not in raw_config:
-            raise ConfigurationError(
-                "Sweep requires fleet_distribution config"
-            )
-        dist_config = parse_fleet_distribution_config(
-            raw_config["fleet_distribution"]
-        )
-        sweep_spec = detect_sweep_spec(dist_config)  # type: ignore[assignment]
+        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
         if sweep_spec is None:
             raise ConfigurationError(
                 "No sweep spec found in config. "
                 "Use --param for CLI sweep or add type: sweep to multiplier."
             )
 
-        sweep_values = sweep_spec.get_values()
         print_info(
             f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
             f"({sweep_spec.steps} steps, {sweep_spec.mode})"
         )
-
-        for val, expanded_config in expand_sweep_configs(dist_config):
-            homes = generate_homes_from_distribution(expanded_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"multiplier={val:.4f}")
-            sweep_configs.append((val, fleet_config))
+        sweep_configs = parse_sweep_fleet_configs(raw_config)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)
@@ -505,8 +484,6 @@ def sweep(
 
 def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     """Print sweep summary table."""
-    from rich.table import Table
-
     table = Table(title="Sweep Results Summary")
     table.add_column("Value", justify="right")
     table.add_column("Self-Consumption", justify="right")

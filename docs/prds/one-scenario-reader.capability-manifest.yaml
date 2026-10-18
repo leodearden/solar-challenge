@@ -1,0 +1,344 @@
+# Machine-readable twin of one-scenario-reader.capability-manifest.md (review-all stream S6).
+# Code anchors verified against main dfcbde8 (2026-10-17); checks are pattern-anchored.
+# Every grep/path check fails on main dfcbde8 and passes once its leaf lands; re-run against main
+# at decompose. task_id values stay null until commit_planning stamps them.
+prd: docs/prds/one-scenario-reader.md
+schema_version: 1
+signal_leaves: ["θ"]
+tasks:
+  - label: "α"
+    task_id: 955
+    title: "ScenarioConfig answers which homes it simulates: one read, fill-and-refuse SEG, a frozen value"
+    note: "Intermediate with its own signal: unlocks β and (proposed) 928. Prereq out of batch: 774. Supersedes 485 and 296. If 928 has moved _resolve_homes/_reconcile_seg_homes into projection.py first, the absent checks cover it (paths are src-wide)."
+    capabilities:
+      - name: "simulated-homes-defined"
+        binding: "absent at dfcbde8: ScenarioConfig has only is_fleet and get_location (FROZEN_MEMBERS); a method named homes() cannot coexist with the homes field (probe P7)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def simulated_homes\\(self"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "map-homes-defined"
+        binding: "absent at dfcbde8; consumers optimize.iter_configs, apply_knob, S26"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def map_homes\\(self"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "finance-home-resolver-deleted"
+        binding: "grep: def _resolve_homes in finance.py at dfcbde8; 3 finance callers and optimize's private import"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _resolve_homes"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "finance-seg-reconciler-deleted"
+        binding: "grep: _reconcile_seg_homes defined and called twice in finance.py at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_reconcile_seg_homes"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "validate-home-resolver-deleted"
+        binding: "grep: def _scenario_homes in cli/validate.py at dfcbde8 (opposite precedence)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _scenario_homes"
+          paths: ["src/solar_challenge/cli/validate.py"]
+          expect: absent
+      - name: "optimize-seg-overwrite-deleted"
+        binding: "grep: _repriced_at_seg_rate overwrites every home's SEG at dfcbde8; D10 makes the knob replace(scenario, seg_tariff_pence_per_kwh=v), refused by construction"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_repriced_at_seg_rate"
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "scenario-config-frozen"
+        binding: "FROZEN_SURFACE pins ScenarioConfig as 'dataclass[eq] (…homes: list[HomeConfig] = <factory>…)' at dfcbde8; P11 mutation accepted; L30 reading (910 freezes FleetConfig in-leaf)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"ScenarioConfig\": \"dataclass\\[eq, frozen\\]"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: present
+      - name: "construction-refusals"
+        binding: "probes Q2 (contradicting SEG constructed) and Q3 (tariff_config accepted) at dfcbde8; the refusals are built and observed by α's own tests (P2)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the refusal messages (home index and name, both rates; tariff_config and HomeConfig.tariff_config) are asserted by α's tests, not by a pattern"
+  - label: "β"
+    task_id: 956
+    title: "ScenarioConfig answers which window it simulates: the period as S10's window, D11's default tier"
+    note: "Intermediate with its own signal: unlocks γ and 928 (L41). Prereqs out of batch: 893 (timebase.ONE_MINUTE), 778 (SimulationWindow in FROZEN_CLOSURE). DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY live in timebase.py (L42)."
+    capabilities:
+      - name: "window-accessor-defined"
+        binding: "absent at dfcbde8; SimulationWindow exists in timebase.py (777 done)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def window\\(self"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "flag-tier-defined"
+        binding: "absent at dfcbde8; consumers δ, ε, ζ through the cli option pair"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def with_window\\(self"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "bounds-accessor-defined"
+        binding: "absent at dfcbde8; replaces three zone-then-period copies (finance x2, optimize x1)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def simulation_bounds\\(self"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "default-window-constants"
+        binding: "absent at dfcbde8: the 2024-01-01/2024-12-31 default is a literal in four CLI commands; L42 puts the constants in timebase.py beside SimulationWindow (S18 α repoints the CLI and web to them)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^DEFAULT_(FIRST|LAST)_DAY"
+          paths: ["src/solar_challenge/timebase.py"]
+          expect: present
+      - name: "time-axis-copies-deleted"
+        binding: "grep: scenario.period.get_start_timestamp at finance.py (2 sites) and optimize.py (1) at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "period\\.get_(start|end)_timestamp"
+          paths: ["src/solar_challenge/finance.py", "src/solar_challenge/optimize.py", "src/solar_challenge/projection.py"]
+          expect: absent
+      - name: "one-minute-cadence-producer"
+        binding: "producer: 893 (S12 α) adds timebase.ONE_MINUTE, upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "an out-of-batch producer; 893's own sidecar checks timebase.py"
+  - label: "γ"
+    task_id: 957
+    title: "One reader for every scenario document: the blocks that reach the homes"
+    note: "Leaf; unlocks δ, ε, ζ, η. Prereqs out of batch: S5 γ and S5 ε (ids at decompose), 803. Supersedes 185, 542, 325."
+    capabilities:
+      - name: "public-reader-defined"
+        binding: "only the private _parse_scenario exists at dfcbde8, and it refuses a fleet_distribution document (P9)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def parse_scenario\\("
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "one-scenario-loader-defined"
+        binding: "absent at dfcbde8 (load_scenarios exists; the pattern needs '(' after the singular name)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def load_scenario\\("
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "flat-home-form-retired"
+        binding: "grep: _FLAT_HOME_FILE_KEYS in config.py at dfcbde8 (flat form: P4)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_FLAT_HOME_FILE_KEYS"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "second-block-decider-deleted"
+        binding: "grep: class _FleetFileSettings in config.py at dfcbde8, the distribution-only decider of top-level blocks"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class _FleetFileSettings"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "flex-band-field"
+        binding: "absent at dfcbde8; producer of GridServicesBand: 803 (S9 γ), upstream"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "flex_band:.*GridServicesBand"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "writer-round-trip-concession-gone"
+        binding: "grep: test_scenario_writer.py says 'load_fleet_config does not read seg: yet (pending task 185)' at dfcbde8; probe P3"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "does not read seg"
+          paths: ["tests/unit/test_scenario_writer.py"]
+          expect: absent
+      - name: "false-scenario-comment-gone"
+        binding: "grep: bristol-arbitrage.yaml claims the CLI home/fleet run paths thread SEG automatically (fleet run never did)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "seg_tariff automatically"
+          paths: ["scenarios/bristol-arbitrage.yaml"]
+          expect: absent
+      - name: "fleet-run-books-seg"
+        binding: "probe P1 (homes seg_tariff None) at dfcbde8; simulate_home prices each export minute at the home's flat SEG rate, so R4's revenue = export x rate"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "R4 runs fleet run on synthetic weather; asserted by γ's CLI test"
+  - label: "δ"
+    task_id: 958
+    title: "home run reads its file through the one reader; overrides apply to the typed home"
+    note: "Leaf. Prereqs out of batch: 931 (location.parse_location). Supersedes 422 and 681 (fk-e756dab8077e's mechanical row)."
+    capabilities:
+      - name: "dict-override-layer-deleted"
+        binding: "grep: def load_config_with_overrides in cli/utils.py at dfcbde8 (P4, P5, Q4-Q6)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def load_config_with_overrides"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "whole-battery-replace-deleted"
+        binding: "grep: config['home']['battery'] = {'capacity_kwh': battery_kwh} at dfcbde8 (P5)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\[\"battery\"\\] = \\{\"capacity_kwh\""
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "home-run-honours-period"
+        binding: "home run never reads period: at dfcbde8 (its --start/--end default to 2024-01-01/12-31); H1 is asserted by δ's CLI test"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "H1's bounds and refusals are behavioural; asserted by δ's tests"
+  - label: "ε"
+    task_id: 959
+    title: "finance run and optimize configs read the one scenario"
+    note: "Leaf. Prereq out of batch: 738 (in progress; finance run's body split). Supersedes 186, 287, 541."
+    capabilities:
+      - name: "no-hand-built-scenario-in-cli"
+        binding: "grep: ScenarioConfig( at cli/finance.py and cli/optimize.py at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "ScenarioConfig\\("
+          paths: ["src/solar_challenge/cli"]
+          expect: absent
+      - name: "no-raw-document-reads"
+        binding: "grep: raw.get( reads of finance, flex_band, seg, period and name in both commands at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "raw\\.get\\("
+          paths: ["src/solar_challenge/cli/finance.py", "src/solar_challenge/cli/optimize.py"]
+          expect: absent
+      - name: "cli-seg-loops-deleted"
+        binding: "grep: dataclasses.replace(home, seg_tariff=seg_tariff) in cli/finance.py and cli/optimize.py at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "replace\\(home, seg_tariff="
+          paths: ["src/solar_challenge/cli"]
+          expect: absent
+      - name: "inert-carve-out-deleted"
+        binding: "grep: the inert --cost-recovery branch sets seg_tariff_pence_per_kwh=seg_rate on the econ scenario at dfcbde8 (task 287 measured it inert); task/738 drops the 'pre-CR5 behaviour' comment but keeps the branch as 'seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None', so the check matches the assignment, which only ε deletes (the scenario's rate comes from load_scenario)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "seg_tariff_pence_per_kwh="
+          paths: ["src/solar_challenge/cli/finance.py"]
+          expect: absent
+  - label: "ζ"
+    task_id: 960
+    title: "fleet run and fleet sweep honour the file's period"
+    capabilities:
+      - name: "fleet-start-default-gone"
+        binding: "grep: '] = \"2024-01-01\"' option defaults in cli/fleet.py (run and sweep) at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\] = \"2024-(01-01|12-31)\""
+          paths: ["src/solar_challenge/cli/fleet.py"]
+          expect: absent
+      - name: "fleet-run-period"
+        binding: "fleet run reads only load_fleet_config at dfcbde8; L1 asserted by ζ's CLI test"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "L1's day count and bounds are behavioural"
+  - label: "η"
+    task_id: 961
+    title: "The dashboard reads its scenario documents through the one reader"
+    capabilities:
+      - name: "web-overlay-deleted"
+        binding: "grep: def apply_fleet_overlay in web/fleet_config.py at dfcbde8 (export reads back without SEG)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def apply_fleet_overlay"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "restated-loader-order-deleted"
+        binding: "grep: _refuse_what_the_loaders_refuse in web/fleet_scenario.py at dfcbde8 (Q7)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_refuse_what_the_loaders_refuse"
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "builder-validation-in-memory"
+        binding: "grep: tempfile in web/builder_form.py at dfcbde8 (_scenario_reader_errors writes scenario.yaml)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tempfile"
+          paths: ["src/solar_challenge/web/builder_form.py"]
+          expect: absent
+  - label: "θ"
+    task_id: 962
+    title: "Integration gate: every entry point simulates what the reader reads"
+    note: "Signal leaf. Prereq out of batch: 882 (every command reads its runner from the invocation)."
+    capabilities:
+      - name: "gate-module-exists"
+        binding: "absent at dfcbde8; delivered by θ"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/integration/test_one_scenario_reader.py"]
+          expect: present
+      - name: "briefing-convention"
+        binding: "review/briefing.yaml has a conventions: list at dfcbde8 and names no scenario reader"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "config\\.load_scenario"
+          paths: ["review/briefing.yaml"]
+          expect: present
+  - label: "ι"
+    task_id: 963
+    title: "ScenarioConfig.period becomes a SimulationWindow; SimulationPeriod is retired at the surface bump"
+    note: "Held: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from commit_planning."
+    capabilities:
+      - name: "period-is-a-window"
+        binding: "FROZEN_SURFACE pins period: SimulationPeriod at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "period: SimulationWindow"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "simulation-period-retired"
+        binding: "grep: class SimulationPeriod in config.py and the config.SimulationPeriod closure entry at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class SimulationPeriod"
+          paths: ["src/solar_challenge"]
+          expect: absent

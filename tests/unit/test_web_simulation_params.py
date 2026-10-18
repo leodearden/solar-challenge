@@ -1,22 +1,34 @@
 """Tests for solar_challenge.web.simulation_params, called directly with parameter dicts."""
 
+import math
 import re
 from collections.abc import Callable
+from datetime import date, timedelta
 from operator import attrgetter
 
 import pytest
 pytest.importorskip("flask")
 
-from solar_challenge.config import ConfigurationError
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
-from solar_challenge.web.shared import NotAJsonObject
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, resolve_location
 from solar_challenge.web.simulation_params import (
+    DAYS_WINDOW_START,
+    FULL_YEAR_END,
+    FULL_YEAR_START,
+    MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
     parse_seg_tariff,
+    with_default_days,
 )
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 
 VALID_HOME_PAYLOAD: dict = {
@@ -101,15 +113,257 @@ class TestParseDateRange:
         assert start == "2024-01-01"
         assert end == "2024-12-31"
 
-    def test_days_zero_raises_value_error(self) -> None:
-        """days=0 is not a valid window; must raise ValueError."""
-        with pytest.raises(ValueError, match="positive"):
-            parse_date_range({"days": 0})
+    def test_days_max_window_days_is_the_longest_window(self) -> None:
+        """days=MAX_WINDOW_DAYS is the longest window, a year of days from 2024-06-01."""
+        assert parse_date_range({"days": MAX_WINDOW_DAYS}) == ("2024-06-01", "2025-06-01")
 
-    def test_days_negative_raises_value_error(self) -> None:
-        """Negative days must raise ValueError."""
-        with pytest.raises(ValueError, match="positive"):
-            parse_date_range({"days": -7})
+    def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
+        """The full 2024 leap year, 366 days, is the longest start/end window, and is accepted."""
+        assert parse_date_range({"start": "2024-01-01", "end": "2024-12-31"}) == (
+            "2024-01-01",
+            "2024-12-31",
+        )
+
+    def test_single_day_window_is_accepted(self) -> None:
+        """A start/end window that starts and ends on the same day is accepted."""
+        assert parse_date_range({"start": "2024-06-01", "end": "2024-06-01"}) == (
+            "2024-06-01",
+            "2024-06-01",
+        )
+
+    @pytest.mark.parametrize(
+        ("data", "window"),
+        [
+            pytest.param(
+                {"days": 30},
+                (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
+                id="days",
+            ),
+            pytest.param(
+                {"end": "2024-03-01"}, (FULL_YEAR_START, date(2024, 3, 1)), id="end-only"
+            ),
+            pytest.param(
+                {"start": "2024-03-01"}, (date(2024, 3, 1), FULL_YEAR_END), id="start-only"
+            ),
+        ],
+    )
+    def test_published_anchors_match_the_windows_parse_date_range_returns(
+        self, data: dict, window: tuple[date, date]
+    ) -> None:
+        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from DAYS_WINDOW_START, a lone end starts at FULL_YEAR_START and a lone start ends at FULL_YEAR_END."""
+        assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
+
+    @pytest.mark.parametrize(
+        ("data", "message"),
+        [
+            pytest.param(
+                {"start": "2024-06-02", "end": "2024-06-01"},
+                "end must not be before start, got start '2024-06-02' and end '2024-06-01'",
+                id="one-day-reversed",
+            ),
+            pytest.param(
+                {"end": "2023-12-31"},
+                "end must not be before start, got start '2024-01-01' and end '2023-12-31'",
+                id="end-before-the-default-start",
+            ),
+            pytest.param(
+                {"start": "2024-01-01", "end": "2025-01-01"},
+                f"start to end must span at most {MAX_WINDOW_DAYS} days, "
+                "got start '2024-01-01' and end '2025-01-01', 367 days",
+                id="one-day-past-the-longest-window",
+            ),
+        ],
+    )
+    def test_window_it_cannot_run_is_refused_naming_start_and_end(
+        self, data: dict, message: str
+    ) -> None:
+        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming start and end as read."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range(data)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        ("data", "message"),
+        [
+            pytest.param(
+                {"days": 7, "start": "2024-01-01", "end": "2024-03-31"},
+                "days must not be sent with start or end, "
+                "got days 7 with start '2024-01-01' and end '2024-03-31'",
+                id="days-with-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": "2024-03-01"},
+                "days must not be sent with start or end, got days 7 with start '2024-03-01'",
+                id="days-with-start",
+            ),
+            pytest.param(
+                {"days": 365, "end": "2024-03-31"},
+                "days must not be sent with start or end, got days 365 with end '2024-03-31'",
+                id="full-year-days-with-end",
+            ),
+        ],
+    )
+    def test_days_sent_with_start_or_end_is_refused_naming_each_value_sent(
+        self, data: dict, message: str
+    ) -> None:
+        """A body that sets its window by days and by a start or end is refused with a ValueError naming days and each date as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range(data)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        ("data", "window"),
+        [
+            pytest.param(
+                {"days": None, "start": "2024-03-01", "end": "2024-03-05"},
+                ("2024-03-01", "2024-03-05"),
+                id="null-days-with-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": "", "end": ""},
+                ("2024-06-01", "2024-06-07"),
+                id="days-with-empty-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": None, "end": None},
+                ("2024-06-01", "2024-06-07"),
+                id="days-with-null-start-and-end",
+            ),
+        ],
+    )
+    def test_null_days_and_empty_or_null_start_and_end_read_as_not_sent(
+        self, data: dict, window: tuple[str, str]
+    ) -> None:
+        """A null days, and an empty or null start or end, read as not sent, so the body runs the window it does send."""
+        assert parse_date_range(data) == window
+
+    @pytest.mark.parametrize("days", WHOLE_NUMBER_FORMS)
+    def test_days_that_is_a_whole_number_in_another_form_runs_the_window_of_the_int_it_equals(
+        self, days: object
+    ) -> None:
+        """A days that is a whole number sent as a float or a numeric string runs the window of the int it equals."""
+        assert parse_date_range({"days": days}) == parse_date_range({"days": WHOLE_NUMBER})
+
+    @pytest.mark.parametrize(
+        "days", [*UNUSABLE_NUMBERS, pytest.param("seven", id="non-numeric-string")]
+    )
+    def test_days_that_is_not_a_finite_number_is_refused_naming_it(self, days: object) -> None:
+        """A days that is not a finite number, a boolean included, is refused with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a finite number, got {days!r}"
+
+    @pytest.mark.parametrize(
+        "days",
+        [
+            pytest.param(2.5, id="in-range"),
+            pytest.param(0.5, id="a-fraction-int-reads-as-zero"),
+        ],
+    )
+    def test_days_with_a_fractional_part_is_refused_naming_it(self, days: float) -> None:
+        """A days with a fractional part is refused, not truncated, with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a whole number, got {days!r}"
+
+    @pytest.mark.parametrize(
+        ("days", "message"),
+        [
+            pytest.param(0, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 0", id="zero"),
+            pytest.param(
+                -7, f"days must be between 1 and {MAX_WINDOW_DAYS}, got -7", id="negative"
+            ),
+            pytest.param(
+                MAX_WINDOW_DAYS + 1,
+                f"days must be between 1 and {MAX_WINDOW_DAYS}, got {MAX_WINDOW_DAYS + 1}",
+                id="one-past-the-longest-window",
+            ),
+            pytest.param(
+                200000,
+                f"days must be between 1 and {MAX_WINDOW_DAYS}, got 200000",
+                id="past-pandas-timedelta-range",
+            ),
+            pytest.param(
+                1e300, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 1e+300", id="huge-float"
+            ),
+        ],
+    )
+    def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
+        self, days: object, message: str
+    ) -> None:
+        """A days outside 1 to MAX_WINDOW_DAYS is refused with a ValueError naming days, the range and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize("field", ["start", "end"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/06/01", id="slashes"),
+            pytest.param("2024-06-01T12:00", id="time-of-day"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("NaT", id="pandas-not-a-time"),
+            pytest.param(20240601, id="number"),
+            pytest.param(0, id="zero"),
+            pytest.param(False, id="false"),
+            pytest.param([], id="empty-array"),
+        ],
+    )
+    def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
+        self, field: str, value: object
+    ) -> None:
+        """A start or end that is not an ISO 8601 date is refused with a ValueError naming the field and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({field: value})
+        assert str(exc_info.value) == f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
+
+class TestWithDefaultDays:
+    """with_default_days adds a consumer's default days only to a body that sends no window, as parse_date_range reads one."""
+
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            pytest.param({}, {"days": 7}, id="nothing"),
+            pytest.param({"pv_kw": 4.0}, {"pv_kw": 4.0, "days": 7}, id="other-keys-only"),
+            pytest.param({"days": None}, {"days": 7}, id="null-days"),
+            pytest.param({"start": None}, {"start": None, "days": 7}, id="null-start"),
+            pytest.param({"end": ""}, {"end": "", "days": 7}, id="empty-end"),
+            pytest.param(
+                {"start": "", "end": None},
+                {"start": "", "end": None, "days": 7},
+                id="empty-and-null-dates",
+            ),
+        ],
+    )
+    def test_a_body_that_sends_no_window_gets_the_default_days(
+        self, data: dict, expected: dict
+    ) -> None:
+        """A body parse_date_range reads as sending no window, as it reads {}, gets the default days, and the body itself is unchanged."""
+        sent = dict(data)
+        assert parse_date_range(data) == parse_date_range({})
+        assert with_default_days(data, 7) == expected
+        assert data == sent
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            pytest.param({"days": 30}, id="days"),
+            pytest.param({"days": ""}, id="empty-days"),
+            pytest.param({"start": "2024-03-01"}, id="start"),
+            pytest.param({"end": "2024-03-05"}, id="end"),
+            pytest.param(
+                {"days": None, "start": "2024-03-01", "end": "2024-03-05"},
+                id="null-days-with-start-and-end",
+            ),
+            pytest.param({"days": 30, "start": "2024-03-01"}, id="days-with-start"),
+            pytest.param({"start": False}, id="false-start"),
+        ],
+    )
+    def test_a_body_that_sends_a_window_is_returned_as_sent(self, data: dict) -> None:
+        """A body that sends a days, or a start or end, is returned as sent, so parse_date_range reads or refuses the window it sends, never the default days."""
+        assert with_default_days(data, 7) == data
 
 
 class TestParseHomeConfigKeys:
@@ -248,8 +502,8 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy is not None
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
-    def test_dispatch_strategy_ignored_without_battery(self) -> None:
-        """dispatch_strategy is silently ignored when no battery is enabled."""
+    def test_valid_dispatch_strategy_without_battery_makes_no_battery(self) -> None:
+        """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
             **VALID_HOME_PAYLOAD,
             "battery_kwh": 0,
@@ -304,9 +558,7 @@ NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
 class TestParseHomeConfigNestedBlockPresence:
     """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads.
 
-    The rule governs a block whenever parse_home_config reads it. It reads dispatch_strategy only
-    when battery_kwh is positive, as in VALID_HOME_PAYLOAD; without a battery, even a malformed
-    dispatch_strategy is ignored.
+    The rule governs all four blocks whatever battery_kwh is.
     """
 
     @pytest.mark.parametrize(
@@ -320,15 +572,7 @@ class TestParseHomeConfigNestedBlockPresence:
         home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
         assert parsed_block(home_config) is None
 
-    @pytest.mark.parametrize(
-        ("value", "type_name"),
-        [
-            pytest.param("", "str", id="empty-string"),
-            pytest.param(False, "bool", id="false"),
-            pytest.param(0, "int", id="zero"),
-            pytest.param([], "list", id="empty-array"),
-        ],
-    )
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
     @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
@@ -373,6 +617,146 @@ class TestParseHomeConfigBatteryEfficiency:
         """An out-of-range percentage is reported as sent (150), not as BatteryConfig's 1.5."""
         with pytest.raises(ValueError, match="got 150"):
             parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": 150})
+
+
+# One value each battery-setting reader refuses; each grammar's full refusal matrix is tested where that grammar lives.
+MALFORMED_BATTERY_SETTINGS = [
+    pytest.param("dispatch_strategy", "", id="dispatch_strategy-empty-string"),
+    pytest.param(
+        "dispatch_strategy", {"strategy_type": "bogus"}, id="dispatch_strategy-unknown-type"
+    ),
+    pytest.param("efficiency_pct", 150, id="efficiency_pct-above-100"),
+    pytest.param("max_charge_kw", "abc", id="max_charge_kw-not-a-number"),
+    pytest.param("max_charge_kw", -1, id="max_charge_kw-negative"),
+    pytest.param("max_discharge_kw", float("nan"), id="max_discharge_kw-nan"),
+]
+
+
+class TestParseHomeConfigBatterySettings:
+    """max_charge_kw, max_discharge_kw, efficiency_pct and dispatch_strategy are read whatever battery_kwh is, and applied only to a battery."""
+
+    @pytest.mark.parametrize(("key", "value"), MALFORMED_BATTERY_SETTINGS)
+    def test_setting_a_battery_refuses_is_refused_without_one(
+        self, key: str, value: object
+    ) -> None:
+        """A battery setting refused with a battery is refused, with the same message, without one."""
+        with pytest.raises(ValueError) as with_battery:
+            parse_home_config({**VALID_HOME_PAYLOAD, key: value})
+        with pytest.raises(ValueError) as without_battery:
+            parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 0, key: value})
+        assert str(without_battery.value) == str(with_battery.value)
+
+    def test_settings_without_a_battery_make_no_battery(self) -> None:
+        """Valid battery settings sent without a battery are accepted, and make no battery."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**FORM_PAYLOAD_BATTERY_ON, "battery_kwh": 0}
+        )
+        assert home_config.battery_config is None
+
+    def test_power_limits_reach_their_own_battery_fields(self) -> None:
+        """With a battery, max_charge_kw and max_discharge_kw each set their own BatteryConfig field."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "max_charge_kw": 3.0, "max_discharge_kw": 4.0}
+        )
+        assert home_config.battery_config == BatteryConfig(
+            capacity_kwh=VALID_HOME_PAYLOAD["battery_kwh"], max_charge_kw=3.0, max_discharge_kw=4.0
+        )
+
+    def test_null_settings_leave_the_battery_defaults(self) -> None:
+        """A null battery setting, like an absent one, is unset, leaving BatteryConfig's default."""
+        home_config, _start, _end, _name = parse_home_config(
+            {
+                **VALID_HOME_PAYLOAD,
+                "max_charge_kw": None,
+                "max_discharge_kw": None,
+                "efficiency_pct": None,
+                "dispatch_strategy": None,
+            }
+        )
+        assert home_config.battery_config == BatteryConfig(
+            capacity_kwh=VALID_HOME_PAYLOAD["battery_kwh"]
+        )
+
+
+class TestParseHomeConfigNumberFields:
+    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold; occupants reads a whole float or a numeric string as the int it equals."""
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "pv_kw",
+            "azimuth",
+            "tilt",
+            "system_age_years",
+            "degradation_rate_per_year",
+            "battery_kwh",
+            "max_charge_kw",
+            "max_discharge_kw",
+            "efficiency_pct",
+            "consumption_kwh",
+            "occupants",
+        ],
+    )
+    def test_top_level_field_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        """A top-level number field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("key", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
+    def test_heat_pump_field_that_is_not_a_finite_number_is_refused_naming_it_in_its_block(
+        self, key: str, value: object
+    ) -> None:
+        """A heat_pump number too large for a float, an infinity, NaN or a boolean is refused naming it as heat_pump.<key>."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
+        assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
+
+    def test_occupants_with_a_fractional_part_is_refused_naming_it(self) -> None:
+        """An occupants value with a fractional part is refused, not truncated, naming occupants and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": 2.5})
+        assert str(exc_info.value) == "occupants must be a whole number, got 2.5"
+
+    @pytest.mark.parametrize("occupants", WHOLE_NUMBER_FORMS)
+    def test_occupants_that_is_a_whole_number_in_another_form_builds_the_home_of_the_int_it_equals(
+        self, occupants: object
+    ) -> None:
+        """An occupants value that is a whole number sent as a float or a numeric string builds the home the int it equals builds."""
+        assert parse_home_config({**VALID_HOME_PAYLOAD, "occupants": occupants}) == (
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": WHOLE_NUMBER})
+        )
+
+
+class TestParseHomeConfigConsumptionRange:
+    """A sent consumption_kwh is refused outside the fleet load component's fixed range, either end included."""
+
+    @pytest.mark.parametrize("beyond", ["below", "above"])
+    def test_consumption_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, beyond: str
+    ) -> None:
+        """One float step beyond either end is refused."""
+        low, high = FLEET_COMPONENTS["load"].fixed_range
+        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "consumption_kwh": value})
+        assert str(exc_info.value) == f"consumption_kwh must be between {low} and {high}, got {value!r}"
+
+    @pytest.mark.parametrize("end", ["low", "high"])
+    def test_consumption_at_either_end_of_the_range_is_the_homes_annual_consumption(
+        self, end: str
+    ) -> None:
+        """Either end is accepted as the home's annual consumption."""
+        low, high = FLEET_COMPONENTS["load"].fixed_range
+        value = low if end == "low" else high
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "consumption_kwh": value}
+        )
+        assert home_config.load_config.annual_consumption_kwh == value
 
 
 class TestParseHomeConfigPVAge:
@@ -428,3 +812,49 @@ class TestParseHomeConfigSEG:
         """A malformed seg is refused with the ValueError every web caller answers with HTTP 400."""
         with pytest.raises(ValueError, match="seg"):
             parse_home_config({**VALID_HOME_PAYLOAD, "seg": [1, 2]})
+
+
+class TestParseHomeConfigLocation:
+    """parse_home_config's location is the value sent as resolve_location reads it, 'bristol' when absent."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("london", id="preset"),
+            pytest.param("51.5,-0.1", id="coordinates"),
+            pytest.param(" Edinburgh ", id="padded-title-case-preset"),
+        ],
+    )
+    def test_a_location_it_resolves_is_the_homes_location(self, value: str) -> None:
+        """A location resolve_location resolves is the home's location, the string read as sent."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "location": value}
+        )
+        assert home_config.location == resolve_location(value)
+
+    def test_absent_location_is_bristol(self) -> None:
+        """A home config without a location is a home at the Bristol preset."""
+        without_location = {
+            key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "location"
+        }
+        home_config, _start, _end, _name = parse_home_config(without_location)
+        assert home_config.location == LOCATION_PRESETS["bristol"]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param(5, id="number"),
+            pytest.param([51.5, -0.1], id="array"),
+            pytest.param("Paris", id="unknown-place"),
+        ],
+    )
+    def test_a_location_it_cannot_resolve_is_refused_naming_the_value_as_sent(
+        self, value: object
+    ) -> None:
+        """A location resolve_location refuses is refused with its refusal, which names the value as sent: null as None, not as the string 'None'."""
+        with pytest.raises(ValueError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "location": value})
+        with pytest.raises(ValueError) as resolver_refusal:
+            resolve_location(value)
+        assert str(refusal.value) == str(resolver_refusal.value)

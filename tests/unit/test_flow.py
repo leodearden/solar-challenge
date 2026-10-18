@@ -1,6 +1,9 @@
 """Tests for energy flow calculations."""
 
 import dataclasses
+import functools
+import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Optional
 
@@ -23,6 +26,7 @@ from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
     GridChargeContext,
+    TOUOptimizedStrategy,
 )
 
 
@@ -543,13 +547,13 @@ class _RecordingStrategy(DispatchStrategy):
 
 
 # ---------------------------------------------------------------------------
-# step-1: RED tests for simulate_timestep_tou grid-charge split accounting
+# simulate_timestep_tou grid-charge split accounting
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepTouGridCharge:
     """Function-path grid-charge tests using real Economy 7 + GridChargeConfig.
 
-    Tests (a) and (b) fail on current code (which ignores grid_charging).
+    Tests (a) and (b) cover grid charging itself.
     Tests (c)-(e) are forward-/backward-compat guards.
     """
 
@@ -663,15 +667,15 @@ class TestSimulateTimestepTouGridCharge:
 
 
 # ---------------------------------------------------------------------------
-# step-3: RED tests for simulate_timestep grid-charge strategy path
+# simulate_timestep grid-charge strategy path
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepGridCharge:
     """Strategy-path grid-charge tests using _RecordingStrategy stub.
 
-    Tests (a)-(f) all fail on current code because simulate_timestep lacks
-    the tariff keyword argument.  Test (c-i) is the exception — it passes on
-    current code (no tariff given, ctx stays None).
+    Tests (a)-(f) cover the tariff keyword argument of simulate_timestep.
+    Test (c-i) covers the case where no tariff is given, so the grid-charge
+    context stays None.
     """
 
     def test_accepts_tariff_kwarg(
@@ -851,14 +855,11 @@ class TestSimulateTimestepGridCharge:
 
 
 # ---------------------------------------------------------------------------
-# CR2 step-1: RED tests for EnergyFlowResult.grid_charge field
+# EnergyFlowResult.grid_charge field
 # ---------------------------------------------------------------------------
 
 class TestEnergyFlowResultGridCharge:
-    """RED tests for the new EnergyFlowResult.grid_charge field (CR2 step-1).
-
-    All tests below fail until step-2 adds grid_charge to EnergyFlowResult.
-    """
+    """EnergyFlowResult.grid_charge: defaults to zero and is carried by the result."""
 
     def test_grid_charge_field_defaults_to_zero(self) -> None:
         """(a) EnergyFlowResult exposes grid_charge defaulting to 0.0."""
@@ -1153,3 +1154,228 @@ class TestTouDispatchOnTieredTariff:
     ) -> None:
         result = _tou_shortfall_step(tariff, pd.Timestamp(f"2024-01-01 {time_of_day}"))
         assert result.battery_discharge > 0.0
+
+
+# ---------------------------------------------------------------------------
+# A battery whose SOC an assigned limit has moved past
+# ---------------------------------------------------------------------------
+
+# Both entries discharge for a shortfall and charge from a surplus.
+SELF_CONSUMING_STEPS = [
+    pytest.param(simulate_timestep, id="simulate_timestep"),
+    pytest.param(
+        functools.partial(
+            simulate_timestep_tou,
+            timestamp=pd.Timestamp("2024-01-01 18:00"),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep_tou-peak",
+    ),
+]
+
+# Both entries top a grid-charging battery up from the grid at Economy 7's 03:00 off-peak rate.
+GRID_CHARGING_STEPS = [
+    pytest.param(
+        functools.partial(
+            simulate_timestep,
+            timestamp=datetime(2024, 1, 1, 3),
+            strategy=TOUOptimizedStrategy(peak_hours=[(7, 24)]),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep-tou_optimized",
+    ),
+    pytest.param(
+        functools.partial(
+            simulate_timestep_tou,
+            timestamp=pd.Timestamp("2024-01-01 03:00"),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep_tou-off_peak",
+    ),
+]
+
+
+class TestStepAgainstABatteryPastAnAssignedSocLimit:
+    """A battery whose SOC an assigned limit has moved past takes no part in a step's flows
+    further past it: the grid meets the whole shortfall or takes the whole surplus.
+    """
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_below_an_assigned_floor_the_grid_meets_the_whole_shortfall(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
+        battery.min_soc_fraction = 0.4
+        result = step(generation_kw=0.0, demand_kw=2.0, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 0.0,
+            "demand": 2.0,
+            "self_consumption": 0.0,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 0.0,
+            "grid_import": 2.0,
+            "battery_soc": 1.0,
+            "grid_charge": 0.0,
+        }
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_above_an_assigned_ceiling_the_grid_takes_the_whole_surplus(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        result = step(generation_kw=3.0, demand_kw=0.5, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 3.0,
+            "demand": 0.5,
+            "self_consumption": 0.5,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 2.5,
+            "grid_import": 0.0,
+            "battery_soc": 4.0,
+            "grid_charge": 0.0,
+        }
+
+    @pytest.mark.parametrize("step", GRID_CHARGING_STEPS)
+    def test_above_an_assigned_ceiling_the_grid_meets_only_the_demand(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        config = dataclasses.replace(
+            BatteryConfig.default_5kwh(), grid_charging=GridChargeConfig(target_soc_fraction=0.9)
+        )
+        within_its_ceiling = step(
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery=Battery(config, initial_soc_kwh=4.0),
+            timestep_minutes=60,
+        )
+        assert within_its_ceiling.grid_charge > 0.0
+        battery = Battery(config, initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        result = step(generation_kw=0.0, demand_kw=1.0, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 0.0,
+            "demand": 1.0,
+            "self_consumption": 0.0,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 0.0,
+            "grid_import": 1.0,
+            "battery_soc": 4.0,
+            "grid_charge": 0.0,
+        }
+
+
+# ---------------------------------------------------------------------------
+# A flow is an energy a step moved, so never negative
+# ---------------------------------------------------------------------------
+
+# EnergyFlowResult's flows, in field order; battery_soc is a level, not a flow.
+FLOWS = (
+    "generation",
+    "demand",
+    "self_consumption",
+    "battery_charge",
+    "battery_discharge",
+    "grid_export",
+    "grid_import",
+    "grid_charge",
+)
+
+NEGATIVE_OR_NAN = [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
+
+
+class TestEnergyFlowResultRefusesANegativeFlow:
+    """Each flow is an energy the timestep moved, so construction refuses one below 0 or NaN."""
+
+    def test_every_field_but_battery_soc_is_a_flow(self) -> None:
+        names = tuple(field.name for field in dataclasses.fields(EnergyFlowResult))
+        assert tuple(name for name in names if name != "battery_soc") == FLOWS
+
+    @pytest.mark.parametrize("flow", FLOWS)
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
+    def test_a_negative_or_nan_flow_is_refused_naming_it_and_its_value(
+        self, flow: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
+            EnergyFlowResult(**{**dict.fromkeys(FLOWS, 0.0), "battery_soc": 0.0, flow: value})
+
+    @pytest.mark.parametrize("soc", NEGATIVE_OR_NAN)
+    def test_battery_soc_is_a_level_not_a_flow_so_one_below_0_or_nan_is_accepted(
+        self, soc: float
+    ) -> None:
+        result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=soc)
+        assert result.battery_soc == pytest.approx(soc, nan_ok=True)
+
+
+class _BatteryReportingANegativeDischarge(Battery):
+    """Test double: a Battery whose discharge() reports -0.975 kWh whatever it is asked, leaving its SOC alone."""
+
+    def discharge(self, power_kw: float, duration_minutes: float) -> float:
+        """Report a discharge of -0.975 kWh."""
+        return -0.975
+
+
+class TestStepRefusesANegativeFlow:
+    """A step raises rather than return a flow below 0 or NaN, whether a battery reports it or a power brings it."""
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_battery_reporting_a_negative_discharge_makes_the_step_raise(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = _BatteryReportingANegativeDischarge(BatteryConfig.default_5kwh())
+        with pytest.raises(ValueError) as refused:
+            step(generation_kw=0.0, demand_kw=2.0, battery=battery, timestep_minutes=60)
+        message = str(refused.value)
+        assert "self_consumption=-0.975" in message
+        assert "battery_discharge=-0.975" in message
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    @pytest.mark.parametrize(
+        ("power", "flow"), [("generation_kw", "generation"), ("demand_kw", "demand")]
+    )
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
+    def test_a_negative_or_nan_power_makes_the_step_raise_naming_its_flow(
+        self, step: Callable[..., EnergyFlowResult], power: str, flow: str, value: float
+    ) -> None:
+        """With no battery, no dispatch strategy checks the power first."""
+        powers = {"generation_kw": 0.0, "demand_kw": 0.0, power: value}
+        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
+            step(**powers, battery=None, timestep_minutes=60)
+
+
+# ---------------------------------------------------------------------------
+# A timestep that is not finite
+# ---------------------------------------------------------------------------
+
+
+class TestStepWithATimestepThatIsNotFinite:
+    """A step refuses a NaN or infinite timestep, naming it, before its battery moves any energy."""
+
+    @pytest.mark.parametrize(
+        "timestep_minutes",
+        [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
+    )
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(2.0, 1.0, id="surplus-charges"),
+            pytest.param(1.0, 2.0, id="shortfall-discharges"),
+        ],
+    )
+    def test_the_step_refuses_the_timestep_and_leaves_the_battery_s_soc_unchanged(
+        self, generation_kw: float, demand_kw: float, timestep_minutes: float
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        refusal = f"must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=re.escape(refusal)):
+            simulate_timestep(
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery=battery,
+                timestep_minutes=timestep_minutes,
+            )
+        assert battery.soc_kwh == soc_kwh

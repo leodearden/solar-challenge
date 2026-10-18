@@ -1,25 +1,44 @@
 """Shared fixtures for Playwright e2e tests.
 
-Provides a live Flask server running in a background thread and
-configures Playwright's base_url so tests can use relative paths.
+Provides a live Flask server running in a background thread,
+configures Playwright's base_url so tests can use relative paths, and
+gives tests the server's dashboard macros, to compare a page with
+what a macro draws.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
-simulation runs (results pages, history interactions, compare page).
+simulation runs (dashboard, results pages, history interactions,
+compare page), and home_preset_saved_under_a_builtin_name, which writes
+a saved home preset under a built-in preset's name straight into the
+live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
-empty or unanswered, and collects the errors a page reports.
+empty, unanswered or listing a run of each badge, and collects the
+errors a page reports. release_held_simulations holds the live server's
+jobs inside their simulations until the test releases them.
 
-It imports nothing from playwright: tests/unit/test_e2e_job_wait.py runs
-a copy of this module in the verify environment, which lacks the e2e extra.
+A test that fails after Chromium failed one of its requests with
+net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
+says why.
+
+It imports nothing from playwright: tests/unit/test_e2e_job_wait.py and
+tests/unit/test_e2e_network_change_reruns.py run copies of this module in
+the verify environment, which lacks the e2e extra.
 """
 
+import functools
+import json
 import socket
+import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
+import pandas as pd
 import pytest
 pytest.importorskip("werkzeug")
 from flask import Flask
@@ -27,12 +46,14 @@ from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
 
+from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
 
 
@@ -116,10 +137,48 @@ def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[Non
         )
 
 
+@pytest.fixture
+def release_held_simulations(_e2e_app: Flask) -> Iterator[Callable[[], None]]:
+    """Hold each job the live server runs during the test inside its simulation until the test calls the function this yields.
+
+    The jobs run on a JobManager of their own, two at a time as on the session's.
+    Once released, each simulates a day in which its home self-consumes 24 kWh,
+    exports 48 kWh and imports 12 kWh. Teardown releases them, waits for them
+    and puts the session's JobManager back.
+    """
+    released = threading.Event()
+
+    def held_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        released.wait()
+        return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
+
+    session_job_manager = _e2e_app.extensions["job_manager"]
+    held_job_manager = JobManager(simulate_home=held_simulation)
+    _e2e_app.extensions["job_manager"] = held_job_manager
+    yield released.set
+    released.set()
+    finished = held_job_manager.wait_until_idle(timeout=_JOBS_FINISH_TIMEOUT_S)
+    _e2e_app.extensions["job_manager"] = session_job_manager
+    if not finished:
+        pytest.fail(
+            f"jobs held by release_held_simulations were still running on the live server "
+            f"{_JOBS_FINISH_TIMEOUT_S} s after it released them"
+        )
+
+
 @pytest.fixture(scope="session")
 def base_url(live_server):
     """Override pytest-playwright's base_url with our live server."""
     return live_server
+
+
+@pytest.fixture(scope="session")
+def dashboard_macros(_e2e_app: Flask) -> Any:
+    """The public macros of the live server's components/macros.html, as callables that return their markup.
+
+    A test compares what a page shows with what a macro draws for the same value.
+    """
+    return dashboard_macros_of(_e2e_app)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +266,36 @@ def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     return run_id, run_name
 
 
+@pytest.fixture
+def newest_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
+    """Save a completed 1-day home run as the test starts, so the run heads the dashboard's Recent Runs. Returns (run_id, run_name).
+
+    The dashboard lists only the 10 newest runs, and the session's other tests save runs of their own.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    return _save_seeded_home_run(
+        _e2e_storage,
+        f"seed-newest-{suffix}",
+        f"Newest Home {suffix}",
+        make_sim_results(self_kwh=60.0, export_kwh=40.0, import_kwh=20.0, days=1),
+    )
+
+
+@pytest.fixture
+def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str, object]]:
+    """Write a saved home preset named 'Small Urban', a built-in preset's name, into the live server's database. Yields its config.
+
+    Its values are unlike the built-in one's, so applying the wrong preset shows. The session's
+    tests share the database, so the row is deleted at teardown.
+    """
+    config: dict[str, object] = {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000}
+    preset_id = insert_saved_home_preset(_e2e_app.config["DATABASE"], "Small Urban", json.dumps(config))
+    yield config
+    with closing(sqlite3.connect(_e2e_app.config["DATABASE"])) as conn:
+        with conn:
+            conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
+
+
 # ---------------------------------------------------------------------------
 # Run History API stubs
 # ---------------------------------------------------------------------------
@@ -228,6 +317,37 @@ def runs_api_returns_no_runs(page, live_server: str) -> None:
         _is_runs_list_request,
         lambda route: route.fulfill(json=no_runs_response),
     )
+
+
+@pytest.fixture
+def runs_api_returns_a_run_of_each_badge(
+    page, live_server: str, seeded_home_run: tuple[str, str]
+) -> list[tuple[str, str]]:
+    """Answer the Run History page's runs-list requests with one run per (type, status) pair it returns, each a copy of the seeded home run as the live API lists it.
+
+    The pairs name every run type and every status a run is stored with, and 'queued', a status with no badge colours of its own.
+    """
+    badges = [("home", "running"), ("fleet", "completed"), ("sweep", "failed"), ("home", "queued")]
+    listed = page.request.get(
+        live_server + "/api/history/runs",
+        params={"q": seeded_home_run[1]},
+        fail_on_status_code=True,
+    ).json()
+    runs = [
+        {
+            **listed["runs"][0],
+            "id": f"badge-run-{n}",
+            "name": f"Badge Run {n}",
+            "type": run_type,
+            "status": status,
+        }
+        for n, (run_type, status) in enumerate(badges, start=1)
+    ]
+    page.route(
+        _is_runs_list_request,
+        lambda route: route.fulfill(json={**listed, "runs": runs}),
+    )
+    return badges
 
 
 @pytest.fixture
@@ -261,3 +381,66 @@ def page_errors(page) -> list[str]:
     page.on("console", _collect_console_error)
     page.on("pageerror", lambda error: errors.append(str(error)))
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Requests lost to host network changes
+# ---------------------------------------------------------------------------
+
+_NETWORK_CHANGED = "net::ERR_NETWORK_CHANGED"
+_RERUNS_AFTER_A_NETWORK_CHANGE = 1
+_REQUESTS_LOST_TO_NETWORK_CHANGES = pytest.StashKey[list[str]]()
+
+
+@pytest.fixture(autouse=True)
+def _record_requests_lost_to_network_changes(request: pytest.FixtureRequest) -> None:
+    """Record, as "METHOD URL", each request the test's browser context fails with net::ERR_NETWORK_CHANGED during this attempt.
+
+    Each attempt's record starts empty before its context starts, so an attempt
+    whose context fails to start has lost nothing. It starts no context for a test that uses none.
+    """
+    lost: list[str] = []
+    request.node.stash[_REQUESTS_LOST_TO_NETWORK_CHANGES] = lost
+    if "context" not in request.fixturenames:
+        return
+
+    def _record_if_lost_to_a_network_change(failed_request: Any) -> None:
+        if failed_request.failure == _NETWORK_CHANGED:
+            lost.append(f"{failed_request.method} {failed_request.url}")
+
+    request.getfixturevalue("context").on("requestfailed", _record_if_lost_to_a_network_change)
+
+
+def _lost_a_request_to_a_network_change(item: pytest.Item) -> bool:
+    """Whether the test's browser context failed a request with net::ERR_NETWORK_CHANGED during its latest attempt."""
+    return bool(item.stash.get(_REQUESTS_LOST_TO_NETWORK_CHANGES, []))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Run each test under this directory once more if it fails after its browser lost a request to a network change.
+
+    The hook is given every test in the session, so it leaves the tests outside this directory alone.
+    """
+    for item in items:
+        if item.path.is_relative_to(Path(__file__).parent):
+            item.add_marker(
+                pytest.mark.flaky(
+                    reruns=_RERUNS_AFTER_A_NETWORK_CHANGE,
+                    condition=functools.partial(_lost_a_request_to_a_network_change, item),
+                )
+            )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Add to the report of a failure a section that lists the requests this attempt lost to network changes, if any."""
+    report = yield
+    lost = item.stash.get(_REQUESTS_LOST_TO_NETWORK_CHANGES, [])
+    if report.failed and lost:
+        report.sections.append(
+            (
+                f"requests Chromium failed with {_NETWORK_CHANGED}",
+                "\n".join([*lost, "docs/e2e-network-change-reruns.md says how a host network change fails a request"]),
+            )
+        )
+    return report

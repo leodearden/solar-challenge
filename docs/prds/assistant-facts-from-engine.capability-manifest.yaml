@@ -1,0 +1,136 @@
+# Machine-readable twin of assistant-facts-from-engine.capability-manifest.md
+# (review-all stream S22). α's task_id stays null until commit_planning stamps it.
+# β is the pre-existing task 751 (fk-93d3bd7aa219), re-scoped in place by update_task at decompose.
+# Code anchors verified against main ac1fdf1 (2026-10-17); checks are pattern-anchored.
+prd: docs/prds/assistant-facts-from-engine.md
+schema_version: 1
+signal_leaves: ["α", "β"]
+tasks:
+  - label: "α"
+    task_id: 907
+    title: "The assistant's facts are read from the engine"
+    capabilities:
+      - name: "contradicting-tdcv-literals-deleted"
+        binding: "grep: web/assistant.py holds 2,900/3,100/4,200, 1,900/2,700/4,100 and 1,900/2,900/4,200 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "2,900|3,100 kWh|4,200|1,900|4,100"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "contradicting-bands-deleted"
+        binding: "grep: web/assistant.py holds 30–40 %, 55–70 %, 850–950 and 900–970 on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "30–40|55–70|850–950|900–970"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "rule-of-thumb-yield-deleted"
+        binding: "grep: _UK_YIELD_KWH_PER_KWP = 950.0 in web/assistant.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_UK_YIELD_KWH_PER_KWP"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "no-ofgem-attribution"
+        binding: "grep: 'Ofgem' x5 in web/assistant.py on main; S14 δ corrects the table's comment (not Ofgem's low/medium/high)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Ofgem"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "reads-load-table"
+        binding: "grep: load.OFGEM_TDCV_BY_OCCUPANTS exists (frozen, read only); not referenced by web/assistant.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "OFGEM_TDCV_BY_OCCUPANTS"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: present
+      - name: "reads-validation-bands"
+        binding: "producer: task 818 (S14 δ), upstream; creates UK_PV_ONLY_/UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT and the public UK_YIELD_BENCHMARK_KWH_PER_KWP"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: present
+      - name: "bristol-yield-constant-defined"
+        binding: "delivered by α; value from docs/pv-cell-temperature.md, produced by task 823 (S14 ε), upstream"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP"
+          paths: ["src/solar_challenge/validation.py"]
+          expect: present
+      - name: "suggest-config-sizes-with-the-constant"
+        binding: "delivered by α; suggest_config divides by _UK_YIELD_KWH_PER_KWP on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: present
+      - name: "slow-guard-binds-constant-to-measurement"
+        binding: "grep: tests/integration/test_pv_performance_ratio.py measures site.with_losses for Bristol (slow); rel=0.01 basis in the .md manifest"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP"
+          paths: ["tests/integration/test_pv_performance_ratio.py"]
+          expect: present
+      - name: "document-names-the-constant"
+        binding: "producer: task 823 writes docs/pv-cell-temperature.md; α adds one line naming the constant"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP"
+          paths: ["docs/pv-cell-temperature.md"]
+          expect: present
+      - name: "model-receives-engine-facts"
+        binding: "wired: _tool_results JSON-dumps explain_metric's dict into the tool_result; FakeAnthropic.calls records the second stream call (B1)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B1 asserted by α's own chat-route test against the constants; strings are formatted from values only known after 818 and 823"
+  - label: "β"
+    task_id: 751
+    title: "One record per assistant tool; dispatch is a lookup; malformed inputs come back as errors"
+    capabilities:
+      - name: "if-chain-deleted"
+        binding: "grep: dispatch_tool's six 'if name == \"…\"' branches on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if name == \""
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "tool-context-defined"
+        binding: "delivered by β; dispatch_tool takes db_path/job_manager/data_dir keywords on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class ToolContext"
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: present
+      - name: "test-name-list-deleted"
+        binding: "grep: the literal six-name list in test_tools_fixed_order_for_cache_stability on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B5's structural checks replace the literal list; the six names also appear as tool calls elsewhere in the module, so no anchored grep isolates the list"
+      - name: "overflow-refused-as-tool-error"
+        binding: "rejection-check: dispatch_tool raises OverflowError for 10**400 / inf in suggest_config, list_recent_runs, run_fleet_simulation on main (absence observed); web/number_fields.as_finite_float catches OverflowError and names the field"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B4 asserted by β's own chat-route test (second stream call carries the {'error'} tool_result; stream ends done)"
+      - name: "silent-defaults-refused"
+        binding: "rejection-check: suggest_config with absent / -5 / true consumption returns 0.0 or -0.01 sizing on main (absence observed); as_finite_float_within(…, 500, 20000) refuses each"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B4 asserted by β's own tests; supersedes task 506"

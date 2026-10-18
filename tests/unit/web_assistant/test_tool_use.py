@@ -9,7 +9,6 @@ tool calls.
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,14 +16,29 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.assistant import (
+    MAX_TOOL_ITERATIONS,
+    METRIC_TABLE,
+    TOOL_CALL_LIMIT_NOTICE,
+    TOOLS,
+    dispatch_tool,
+    explain_metric,
+    get_run_results,
+    list_recent_runs,
+    run_fleet_simulation,
+    run_home_simulation,
+    suggest_config,
+)
+from solar_challenge.web.storage import RunStorage
 
-from tests._sse import parse_sse_events
+from tests._job_manager_double import autospecced_job_manager
+from tests._sse import SseFrame, parse_sse_events
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
     make_end_turn_stream,
     make_fake_stream,
+    make_stopped_stream,
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
@@ -43,7 +57,7 @@ def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     """
     return {
         "db_path": tmp_path / "assistant.db",
-        "job_manager": MagicMock(spec=JobManager),
+        "job_manager": autospecced_job_manager(),
         "data_dir": tmp_path,
         **overrides,
     }
@@ -60,8 +74,6 @@ class TestToolSurface:
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
         """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
-        from solar_challenge.web.assistant import TOOLS
-
         names = [t["name"] for t in TOOLS]
         assert names == [
             "explain_metric",
@@ -76,8 +88,6 @@ class TestToolSurface:
 
     def test_every_tool_entry_has_required_keys(self) -> None:
         """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
-        from solar_challenge.web.assistant import TOOLS
-
         for tool in TOOLS:
             assert "name" in tool, f"Missing 'name' in tool: {tool}"
             assert "description" in tool, f"Missing 'description' in tool: {tool}"
@@ -85,8 +95,6 @@ class TestToolSurface:
 
     def test_every_tool_input_schema_is_object_with_required(self) -> None:
         """Every input_schema has type=='object' and a non-empty 'required' list."""
-        from solar_challenge.web.assistant import TOOLS
-
         for tool in TOOLS:
             schema = tool["input_schema"]
             assert isinstance(schema, dict), f"input_schema must be dict for {tool['name']!r}"
@@ -100,8 +108,6 @@ class TestToolSurface:
 
     def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
         """dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
-        from solar_challenge.web.assistant import dispatch_tool, explain_metric
-
         result = dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
@@ -114,8 +120,6 @@ class TestToolSurface:
 
     def test_dispatch_suggest_config(self, tmp_path: Path) -> None:
         """dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
-        from solar_challenge.web.assistant import dispatch_tool, suggest_config
-
         result = dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
@@ -128,8 +132,6 @@ class TestToolSurface:
 
     def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
         """dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
-        from solar_challenge.web.assistant import dispatch_tool
-
         try:
             result = dispatch_tool(
                 "nonexistent_tool",
@@ -171,13 +173,35 @@ class TestToolUseLoop:
             f"Expected tool frame with name='explain_metric', got: {tool_events[0].data}"
         )
 
+    def test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """The reply the model streams after a tool call reaches the client as it streams, one
+        delta frame per chunk, as a reply without a tool call does. A loop that only sees each
+        model call's whole message would send it as one frame."""
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_stream_001", "explain_metric", {"metric": "self_sufficiency"}),
+            make_end_turn_stream(["Self-sufficiency is", " the share of demand", " met on site."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-sufficiency?"})
+
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame(event="tool", data={"name": "explain_metric"}),
+            SseFrame(event="delta", data={"text": "Self-sufficiency is"}),
+            SseFrame(event="delta", data={"text": " the share of demand"}),
+            SseFrame(event="delta", data={"text": " met on site."}),
+            SseFrame(event="done", data={}),
+        ]
+
     def test_stream_called_twice_and_tool_result_has_canonical_band(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
         """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
-        from solar_challenge.web.assistant import METRIC_TABLE
         TOOL_ID = "toolu_explain_002"
         CANONICAL_BAND = METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
 
@@ -228,8 +252,6 @@ class TestToolUseLoop:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """stream() receives TOOLS as its 'tools' kwarg; TestToolSurface pins TOOLS' order."""
-        from solar_challenge.web.assistant import TOOLS
-
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
         ])
@@ -270,10 +292,11 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A model that always returns tool_use is bounded by MAX_TOOL_ITERATIONS."""
-        from solar_challenge.web.assistant import MAX_TOOL_ITERATIONS
-
-        # Build an infinite sequence of tool_use streams
+        """A model that calls a tool on every reply is called MAX_TOOL_ITERATIONS times.
+        The turn then streams TOOL_CALL_LIMIT_NOTICE as its whole reply, stores it as
+        the reply and ends with a done frame."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-sid"
         TOOL_ID_PREFIX = "toolu_inf_"
         infinite_streams = [
             make_tool_use_stream(
@@ -289,19 +312,46 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        # stream() should be called exactly MAX_TOOL_ITERATIONS times
         call_count = len(anthropic_api.calls)
         assert call_count == MAX_TOOL_ITERATIONS, (
             f"Expected exactly {MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
             f"got {call_count}"
         )
 
-        # Stream must still terminate cleanly (done or error frame, no hang)
         events = parse_sse_events(body)
-        event_types = [e.event for e in events]
-        assert "done" in event_types or "error" in event_types, (
-            f"Expected stream to terminate with done or error frame; got: {event_types}"
+        assert [e.data["text"] for e in events if e.event == "delta"] == [TOOL_CALL_LIMIT_NOTICE], (
+            f"Expected the notice to be the reply's only text; events: {events}"
         )
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "explain forever"),
+            ("assistant", TOOL_CALL_LIMIT_NOTICE),
+        ]
+
+    @pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens", "stop_sequence", "refusal", None])
+    def test_a_reply_that_stops_for_any_reason_but_tool_use_ends_the_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        stop_reason: str | None,
+    ) -> None:
+        """A reply that stops for any reason but tool_use is the turn's last model call, and
+        the turn ends with done. pause_turn is left out: only server tools, which TOOLS does
+        not offer, pause a turn."""
+        anthropic_api.set_streams([
+            make_stopped_stream(stop_reason, ["Partial", " answer"]),
+            make_end_turn_stream(["A call the turn must not make."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        assert len(anthropic_api.calls) == 1, (
+            f"Expected one model call; got {len(anthropic_api.calls)}"
+        )
+        assert "".join(e.data["text"] for e in events if e.event == "delta") == "Partial answer"
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
 
     def test_final_message_without_stop_reason_streams_reply(
         self,
@@ -430,8 +480,6 @@ class TestRunLookupToolSurface:
 
     def test_run_lookup_tools_required_fields(self) -> None:
         """get_run_results requires 'run_id_or_name' and list_recent_runs requires 'limit'."""
-        from solar_challenge.web.assistant import TOOLS
-
         run_lookup_tools = {t["name"]: t for t in TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
         assert "get_run_results" in run_lookup_tools, "get_run_results missing from TOOLS"
         assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from TOOLS"
@@ -447,8 +495,6 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
         """dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import dispatch_tool, get_run_results
-
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
             db_path,
@@ -464,14 +510,12 @@ class TestRunLookupToolSurface:
             {"run_id_or_name": "disp-run-001"},
             **dispatch_dependencies(tmp_path, db_path=str(db_path)),
         )
-        expected = get_run_results("disp-run-001", db_path)
+        expected = get_run_results("disp-run-001", RunStorage(db_path=db_path, data_dir=tmp_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
     def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
         """dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import dispatch_tool, list_recent_runs
-
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
             db_path,
@@ -559,8 +603,6 @@ class TestSimulationToolSurface:
 
     def test_run_home_simulation_requires_pv_kw(self) -> None:
         """run_home_simulation's input_schema requires 'pv_kw'."""
-        from solar_challenge.web.assistant import TOOLS
-
         tool = next((t for t in TOOLS if t["name"] == "run_home_simulation"), None)
         assert tool is not None, "run_home_simulation missing from TOOLS"
         schema = tool["input_schema"]
@@ -571,8 +613,6 @@ class TestSimulationToolSurface:
 
     def test_run_fleet_simulation_requires_n_homes(self) -> None:
         """run_fleet_simulation's input_schema requires 'n_homes'."""
-        from solar_challenge.web.assistant import TOOLS
-
         tool = next((t for t in TOOLS if t["name"] == "run_fleet_simulation"), None)
         assert tool is not None, "run_fleet_simulation missing from TOOLS"
         schema = tool["input_schema"]
@@ -581,17 +621,42 @@ class TestSimulationToolSurface:
             f"run_fleet_simulation must require 'n_homes'; got {required}"
         )
 
+    @pytest.mark.parametrize("tool_name", ["run_home_simulation", "run_fleet_simulation"])
+    def test_trigger_tool_offers_start_and_end_as_optional_iso_dates(self, tool_name: str) -> None:
+        """A trigger tool lists start and end as ISO 8601 date strings and requires no window field, so a call that sends none keeps the default window."""
+        tool = next((t for t in TOOLS if t["name"] == tool_name), None)
+        assert tool is not None, f"{tool_name} missing from TOOLS"
+        schema = tool["input_schema"]
+        properties = schema["properties"]
+        for field in ("start", "end"):
+            assert field in properties, (
+                f"{tool_name} must list {field!r}; got {sorted(properties)}"
+            )
+            assert (properties[field]["type"], properties[field].get("format")) == (
+                "string",
+                "date",
+            )
+        assert not ({"days", "start", "end"} & set(schema["required"])), (
+            f"{tool_name} must require no window field; got {schema['required']}"
+        )
+
+    def test_trigger_tools_list_their_window_identically(self) -> None:
+        """Both trigger tools read their window with the same parse_date_range, so the model must be told one window grammar."""
+        props = {t["name"]: t["input_schema"]["properties"] for t in TOOLS}
+        window_fields = ("days", "start", "end")
+        assert [props["run_home_simulation"][f] for f in window_fields] == [
+            props["run_fleet_simulation"][f] for f in window_fields
+        ]
+
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import dispatch_tool, run_home_simulation
-
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
         direct = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
-        jm2 = MagicMock()
+        jm2 = autospecced_job_manager()
         jm2.submit_home_job.return_value = ("job-h", "run-h")
         via_dispatch = dispatch_tool(
             "run_home_simulation",
@@ -607,15 +672,13 @@ class TestSimulationToolSurface:
 
     def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import dispatch_tool, run_fleet_simulation
-
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
         direct = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
-        jm2 = MagicMock()
+        jm2 = autospecced_job_manager()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
         via_dispatch = dispatch_tool(
             "run_fleet_simulation",
@@ -646,7 +709,7 @@ class TestSimulationToolUseSignal:
         TOOL_ID = "toolu_rhs_e2e_001"
 
         # Install mock JobManager with submit_home_job return value
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
@@ -723,7 +786,7 @@ class TestSimulationToolUseSignal:
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
 
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
@@ -799,7 +862,7 @@ class TestSimulationToolUseSignal:
     ) -> None:
         """A heat_pump the model sends as a non-object reaches it as a tool_result error naming
         the block, and the turn goes on to its reply; nothing is submitted."""
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         app.extensions["job_manager"] = jm
 
         anthropic_api.set_streams([

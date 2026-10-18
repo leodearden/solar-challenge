@@ -12,10 +12,15 @@ import dataclasses
 import math
 import random
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
+from solar_challenge.web.number_fields import (
+    as_finite_float,
+    as_whole_number,
+    as_whole_number_within,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig
@@ -25,6 +30,51 @@ if TYPE_CHECKING:
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
 #: shuffled pool that holds values for more homes, and a preview that draws more values.
 MAX_FLEET_HOMES = 10_000
+
+
+def read_fleet_size(value: Any, field: str) -> int:
+    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming *field* and the value sent.
+    """
+    return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
+
+
+#: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
+#: past which the JavaScript number the fleet page holds its seed in rounds some whole numbers.
+MAX_FLEET_SEED = 2**53 - 1
+
+
+def read_fleet_seed(value: Any, field: str) -> int:
+    """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming *field* and the value sent.
+    """
+    return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
+
+
+def read_pool_counts(counts: Iterable[tuple[str, Any]], entries_field: str) -> list[int]:
+    """Read *counts*, each count of the *entries_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming a count's field and the value sent; or, when the counts total more than
+            MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
+            *entries_field* and the total.
+    """
+    read_counts = [
+        as_whole_number_within(value, field, 0, MAX_FLEET_HOMES) for field, value in counts
+    ]
+    total = sum(read_counts)
+    if total > MAX_FLEET_HOMES:
+        raise ValueError(
+            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
+        )
+    return read_counts
 
 
 def apply_fleet_overlay(
@@ -81,28 +131,44 @@ def sample_distribution(
         dist_type: Distribution type. One of ``'weighted_discrete'``,
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
         params: Distribution parameters (varies by type), read the way
-            :func:`_build_distribution_dict` reads a fleet form's spec; must be
-            a dict.
-        n_samples: Number of samples to generate, read as int() reads it; from 1
-            to :data:`MAX_FLEET_HOMES`.
+            :func:`_build_distribution_dict` reads a fleet form's spec, as the
+            distribution named ``params``; must be a dict.
+        n_samples: Number of samples to generate, a whole number from 1 to
+            :data:`MAX_FLEET_HOMES`.
 
     Returns:
-        List of sampled float values.
+        List of sampled values, each a finite float.
 
     Raises:
-        ValueError: If dist_type is unknown or params are invalid, params are
-            not a dict (see :func:`_require_dict`), a
-            weighted_discrete/shuffled_pool row list is malformed (see
-            :func:`_dict_list`), n_samples is one int() cannot read or outside
-            1 to MAX_FLEET_HOMES (see :func:`_as_int_within`), or a shuffled_pool
-            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`).
+        ValueError: If dist_type or params are ones :func:`_draw_samples` cannot draw
+            from, n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`~solar_challenge.web.number_fields.as_whole_number_within`), params are
+            not a dict (see :func:`_require_dict`), :func:`_build_distribution_dict`
+            refuses them, naming the field under ``params``, or params draw a sample that
+            is not a finite number, as finite params whose draws overflow a float can; that
+            error names params and the sample.
     """
-    n_samples = _as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
+    n_samples = as_whole_number_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
-    spec = _build_distribution_dict({**params, "type": dist_type})
+    spec = _build_distribution_dict({**params, "type": dist_type}, "params")
+    samples = _draw_samples(spec, n_samples)
+    for sample in samples:
+        if not math.isfinite(sample):
+            raise ValueError(
+                f"params must draw samples that are finite numbers, got a sample of {sample!r}"
+            )
+    return samples
 
+
+def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
+    """Draw *n_samples* values from *spec*, a distribution :func:`_build_distribution_dict` built, with a fixed seed.
+
+    Raises:
+        ValueError: If the type of *spec* is unknown, or its parameters are ones it cannot
+            draw from, such as a negative std or a min above max.
+    """
     rng = random.Random(42)
+    dist_type = spec["type"]
 
     if dist_type == "normal":
         if spec["std"] < 0:
@@ -153,6 +219,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     section in scenario YAML files and can be used with
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
+    Its pv/battery/load blocks follow the fleet form's presence rule (see
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
+    no dispatch strategy: every battery takes the form's dispatch_strategy.
+
     Args:
         form_data: A fleet form, of which only the FLEET_DISTRIBUTION_FORM_KEYS are read.
 
@@ -160,47 +230,75 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid, n_homes is one
-            int() cannot read or outside 1 to MAX_FLEET_HOMES (see
-            :func:`_as_int_within`), seed is one int() cannot read (see
-            :func:`_as_int`), a pv/battery/load block is not a dict (see
-            :func:`_component_block`), a weighted_discrete/shuffled_pool
-            row list is malformed (see :func:`_dict_list`), or a shuffled_pool
-            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`).
+        ValueError: If n_homes is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`read_fleet_size`), seed is not a whole number from -MAX_FLEET_SEED to
+            MAX_FLEET_SEED (see :func:`read_fleet_seed`), a pv/battery/load block is
+            neither null nor a dict (see :func:`_component_block`),
+            a battery block sets a dispatch strategy (see
+            :func:`_refuse_battery_dispatch_strategy`), or
+            :func:`_parse_component_distribution` refuses a block; each refusal names its
+            field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": _as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
-        "seed": _as_int(form_data.get("seed", 42), "seed"),
+        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
+        "seed": read_fleet_seed(form_data.get("seed", 42), "seed"),
     }
 
     # Process PV distribution
-    pv_data = _component_block(form_data, "pv")
-    config["pv"] = _parse_component_distribution(pv_data, "capacity_kw", default_field="capacity_kw")
+    pv_data = _component_block_or_empty(form_data, "pv")
+    config["pv"] = _parse_component_distribution(pv_data, "pv", "capacity_kw")
 
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
-    if battery_data and battery_data.get("enabled", True):
-        config["battery"] = _parse_component_distribution(
-            battery_data, "capacity_kwh", default_field="capacity_kwh"
-        )
+    if battery_data is not None:
+        _refuse_battery_dispatch_strategy(battery_data)
+        config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
 
     # Process Load distribution
-    load_data = _component_block(form_data, "load")
-    config["load"] = _parse_component_distribution(
-        load_data, "annual_consumption_kwh", default_field="annual_consumption_kwh"
-    )
+    load_data = _component_block_or_empty(form_data, "load")
+    config["load"] = _parse_component_distribution(load_data, "load", "annual_consumption_kwh")
 
     return config
 
 
-def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
-    """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
+def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Return the *key* component block of *form_data*: None when it is absent or null.
 
     Raises:
-        ValueError: If the block is truthy but not a dict (see :func:`_require_dict`).
+        ValueError: If the block is neither null nor a dict (see :func:`_require_dict`).
     """
-    return _require_dict(form_data.get(key) or {}, key)
+    block = form_data.get(key)
+    return None if block is None else _require_dict(block, key)
+
+
+def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return the *key* component block of *form_data*, reading an absent or null block as empty.
+
+    Raises:
+        ValueError: If the block is neither null nor a dict (see :func:`_component_block`).
+    """
+    block = _component_block(form_data, key)
+    return {} if block is None else block
+
+
+def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
+    """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
+
+    config.py's grammar reads a battery block's dispatch_strategy, but the fleet form
+    spells the setting once, at its root:
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
+    dispatch_strategy to every battery, over any the block sets.
+
+    Raises:
+        ValueError: If the block's dispatch_strategy is present and not null; the error
+            names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
+    """
+    strategy = battery.get("dispatch_strategy")
+    if strategy is not None:
+        raise ValueError(
+            "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        )
 
 
 def _require_dict(value: object, field: str) -> dict[str, Any]:
@@ -214,147 +312,209 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
     return value
 
 
-def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    """Return the *key* row list of *spec*, reading an absent list as empty.
+def _named_rows(
+    spec: dict[str, Any], key: str, path: str
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return each row of the *key* row list of the *path* distribution *spec* with its field, reading an absent list as empty.
+
+    A row's field is ``path.key[index]``.
 
     Raises:
-        ValueError: If the value is not a list (the error names *key* and the type sent),
-            or a row is not a dict (see :func:`_require_dict`; the row is named ``key[index]``).
+        ValueError: If the value is not a list (the error names ``path.key`` and the type
+            sent), or a row is not a dict (see :func:`_require_dict`; the error names the
+            row's field).
     """
+    rows_field = f"{path}.{key}"
     rows = spec.get(key, [])
     if not isinstance(rows, list):
-        raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
-    return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
-
-
-def _as_int(value: Any, field: str) -> int:
-    """Return *value* read as int() reads it.
-
-    Raises:
-        ValueError: If int() cannot read *value* (not a number or numeric string, NaN,
-            or infinite); the error names *field* and the value sent.
-    """
-    try:
-        return int(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ValueError(f"{field} must be an integer, got {value!r}") from exc
-
-
-def _as_int_within(value: Any, field: str, low: int, high: int) -> int:
-    """Return *value* read by :func:`_as_int`, refusing one outside *low* to *high* inclusive.
-
-    Raises:
-        ValueError: If :func:`_as_int` refuses *value*, or it is outside *low* to *high*;
-            the range error names *field*, the range and the value sent.
-    """
-    number = _as_int(value, field)
-    if not low <= number <= high:
-        raise ValueError(f"{field} must be between {low} and {high}, got {value!r}")
-    return number
+        raise ValueError(f"{rows_field} must be a list, got {type(rows).__name__}")
+    named_rows: list[tuple[str, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        field = f"{rows_field}[{index}]"
+        named_rows.append((field, _require_dict(row, field)))
+    return named_rows
 
 
 def _parse_component_distribution(
-    data: dict[str, Any], primary_field: str, default_field: str = ""
+    data: dict[str, Any], block: str, primary_field: str
 ) -> dict[str, Any]:
-    """Parse a component distribution section from form data.
+    """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
+
+    Its distribution is what *data* holds at *primary_field*: a distribution (see
+    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value
+    (see :func:`_is_fixed_value`), read by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
+    passes as given, and an absent or null field as an empty mapping, for config.py's
+    grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
 
     Args:
         data: Component form data dict.
+        block: The block's name in the form, ``pv``, ``battery`` or ``load``.
         primary_field: Name of the primary distribution field.
-        default_field: Unused (kept for API consistency).
 
     Returns:
         Component distribution config dict.
+
+    Raises:
+        ValueError: If *data* is itself a distribution (see
+            :func:`_refuse_block_that_is_a_distribution`), or one of those readers refuses
+            what it reads; the error names its field as a dot path under *block*.
     """
+    _refuse_block_that_is_a_distribution(data, block, primary_field)
     result: dict[str, Any] = {}
-    dist_data = data.get(primary_field, data)
+    spec = data.get(primary_field)
 
-    if isinstance(dist_data, dict) and "type" in dist_data:
-        result[primary_field] = _build_distribution_dict(dist_data)
-    elif isinstance(dist_data, (int, float)):
-        result[primary_field] = float(dist_data)
+    if _is_distribution(spec):
+        result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
+    elif _is_fixed_value(spec):
+        result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
     else:
-        # Try to treat the whole data dict as the distribution
-        if "type" in data:
-            result[primary_field] = _build_distribution_dict(data)
-        else:
-            result[primary_field] = data
+        result[primary_field] = {} if spec is None else spec
 
-    # Copy through extra scalar fields (azimuth, tilt, etc.)
     for key, value in data.items():
-        if key not in (primary_field, "type", "enabled") and not isinstance(value, dict):
-            try:
-                result[key] = float(value)
-            except (ValueError, TypeError):
-                result[key] = value
+        if key != primary_field:
+            result[key] = _other_setting(value, f"{block}.{key}")
 
     return result
 
 
-def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
+def _refuse_block_that_is_a_distribution(
+    data: dict[str, Any], block: str, primary_field: str
+) -> None:
+    """Refuse *data*, the fleet form's *block* component block, when it is itself a distribution: a block holds its distribution in *primary_field*.
+
+    Raises:
+        ValueError: If *data* is a distribution (see :func:`_is_distribution`), whatever
+            else it holds; the error names ``block.type``, ``block.primary_field`` and the
+            type sent.
+    """
+    if _is_distribution(data):
+        raise ValueError(
+            f"{block}.type must be absent: the {block} block's distribution goes in "
+            f"{block}.{primary_field}, got {data['type']!r}"
+        )
+
+
+def _other_setting(value: object, field: str) -> object:
+    """Return *value*, a block setting other than its distribution, as it is passed to config.py's grammar.
+
+    A distribution (see :func:`_is_distribution`) is read as the block's own is, by
+    :func:`_build_distribution_dict`.  Null, booleans (flags such as load.use_stochastic)
+    and any other mapping (a block such as battery.grid_charging) pass as given, for
+    config.py's grammar to read or refuse; any other value is read as a number, named
+    *field*.
+
+    Raises:
+        ValueError: If :func:`_build_distribution_dict` or
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses *value*; the
+            error names its field under *field* and what was sent.
+    """
+    if _is_distribution(value):
+        return _build_distribution_dict(value, field)
+    if value is None or isinstance(value, (bool, dict)):
+        return value
+    return as_finite_float(value, field)
+
+
+def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
+    """Whether *value* is a fleet form distribution: a mapping with a type."""
+    return isinstance(value, dict) and "type" in value
+
+
+def _is_fixed_value(value: object) -> bool:
+    """Whether *value* is a fleet form block's fixed value: any value but null or a mapping."""
+    return value is not None and not isinstance(value, dict)
+
+
+def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
     """Build a standardised distribution dict from form input.
 
     Args:
         data: Dict with at least a ``type`` key.
+        path: The distribution's field, a dot path from the request body's root, such
+            as ``pv.capacity_kw`` or ``params``.
 
     Returns:
         Distribution specification dict.
 
     Raises:
-        ValueError: If a weighted_discrete/shuffled_pool row list is malformed
-            (see :func:`_dict_list`), or a shuffled_pool count is one int() cannot
-            read or outside 0 to MAX_FLEET_HOMES, or the counts total more than
-            that (see :func:`_pool_counts`).
+        ValueError: If a weighted_discrete/shuffled_pool row list or row is malformed
+            (see :func:`_named_rows`), a shuffled_pool count is refused (see
+            :func:`read_pool_counts`), or a number is one
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses; the error
+            names its field under *path*.
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
 
     if dist_type == "normal":
-        result["mean"] = float(data.get("mean", 0))
-        result["std"] = float(data.get("std", 1))
+        result["mean"] = _spec_number(data, "mean", 0, path)
+        result["std"] = _spec_number(data, "std", 1, path)
         if data.get("min") is not None:
-            result["min"] = float(data["min"])
+            result["min"] = as_finite_float(data["min"], f"{path}.min")
         if data.get("max") is not None:
-            result["max"] = float(data["max"])
+            result["max"] = as_finite_float(data["max"], f"{path}.max")
 
     elif dist_type == "uniform":
-        result["min"] = float(data.get("min", 0))
-        result["max"] = float(data.get("max", 1))
+        result["min"] = _spec_number(data, "min", 0, path)
+        result["max"] = _spec_number(data, "max", 1, path)
 
     elif dist_type == "weighted_discrete":
-        values_raw = _dict_list(data, "values")
-        result["values"] = [float(v.get("value", 0)) for v in values_raw]
-        result["weights"] = [float(v.get("weight", 1)) for v in values_raw]
+        rows = _named_rows(data, "values", path)
+        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
+        result["weights"] = [_spec_number(row, "weight", 1, field) for field, row in rows]
 
     elif dist_type == "shuffled_pool":
-        entries = _dict_list(data, "entries")
-        result["values"] = [float(e.get("value", 0)) for e in entries]
-        result["counts"] = _pool_counts(entries)
+        rows = _named_rows(data, "entries", path)
+        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
+        result["counts"] = read_pool_counts(
+            [(f"{field}.count", row.get("count", 1)) for field, row in rows], f"{path}.entries"
+        )
 
     return result
 
 
-#: The distribution types the fleet page's distribution editor holds.
+def _spec_number(spec: dict[str, Any], key: str, default: float, path: str) -> float:
+    """Return the *key* number of *spec*, the distribution or row at *path*, *default* when absent.
+
+    Raises:
+        ValueError: If :func:`~solar_challenge.web.number_fields.as_finite_float` refuses
+            it; the error names ``path.key`` and the value sent.
+    """
+    return as_finite_float(spec.get(key, default), f"{path}.{key}")
+
+
+#: The distribution types the fleet page's distribution editor holds besides a fixed value.
 _EDITOR_DISTRIBUTION_TYPES: tuple[str, ...] = (
     "normal", "uniform", "weighted_discrete", "shuffled_pool",
 )
 
 
-def distribution_form_spec(spec: object, path: str) -> dict[str, Any]:
-    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of :func:`_build_distribution_dict`.
+def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
+    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
 
-    *spec* is one the grammar accepts.  The form's distribution is the editor's: a normal
-    with both clamps, a uniform, or weighted_discrete or shuffled_pool rows, its numbers
-    read as _build_distribution_dict reads them.
+    *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
+    value, which the grammar spells as a number or as a fixed distribution, and which the
+    form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
+    or shuffled_pool rows.  A shuffled_pool count is read by
+    :func:`~solar_challenge.web.number_fields.as_whole_number`, and any other number by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`, as the form's conversion
+    reads them, except that only the conversion bounds the counts: it refuses a pool too
+    large for a dashboard fleet (see :func:`read_pool_counts`).
 
     Raises:
-        ValueError: For a *spec* the editor cannot hold, naming *path*: a fixed value, a type
-            the editor has no form for, a normal without both clamps, or a value that is not
-            a finite number.
+        ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
+            distribution, a type the editor has no form for, a normal without both clamps,
+            a value that is not a finite number, a boolean included, or a shuffled_pool
+            count that is not a whole number.
     """
-    if not isinstance(spec, Mapping) or spec.get("type") not in _EDITOR_DISTRIBUTION_TYPES:
+    if _is_fixed_value(spec):
+        return as_finite_float(spec, path)
+    if _is_distribution(spec) and spec["type"] == "fixed":
+        return as_finite_float(spec.get("value"), f"{path}.value")
+    if not _is_distribution(spec) or spec["type"] not in _EDITOR_DISTRIBUTION_TYPES:
         raise ValueError(
-            f"{path} must be one of the fleet page's distributions "
+            f"{path} must be a fixed value or one of the fleet page's distributions "
             f"({', '.join(_EDITOR_DISTRIBUTION_TYPES)}), got {spec!r}"
         )
     dist_type = spec["type"]
@@ -369,48 +529,23 @@ def distribution_form_spec(spec: object, path: str) -> dict[str, Any]:
             "type": dist_type,
             "values": [{"value": value, "weight": weight} for value, weight in zip(values, weights)],
         }
-    counts = _form_number_list(spec["counts"], f"{path}.counts")
+    counts = _form_count_list(spec["counts"], f"{path}.counts")
     return {
         "type": dist_type,
-        "entries": [{"value": value, "count": int(count)} for value, count in zip(values, counts)],
+        "entries": [{"value": value, "count": count} for value, count in zip(values, counts)],
     }
 
 
 def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
-    """The *keys* of the *path* distribution *spec*, each read by :func:`_form_number`."""
-    return {key: _form_number(spec.get(key), f"{path}.{key}") for key in keys}
+    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.web.number_fields.as_finite_float`, a missing one as None."""
+    return {key: as_finite_float(spec.get(key), f"{path}.{key}") for key in keys}
 
 
 def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
-    """Each of *numbers*, the *path* list, read by :func:`_form_number`."""
-    return [_form_number(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
+    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.web.number_fields.as_finite_float`."""
+    return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
 
 
-def _form_number(value: object, path: str) -> float:
-    """*value*, a finite number, as the float a form field holds.
-
-    Raises:
-        ValueError: For any other value, a missing one read as None; the error names *path*
-            and the value.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f"{path} must be a finite number, got {value!r}")
-    return float(value)
-
-
-def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
-    """Return the count of each shuffled_pool row in *entries*, an absent count reading as 1.
-
-    Raises:
-        ValueError: If a count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
-            (see :func:`_as_int_within`), or the counts total more than MAX_FLEET_HOMES,
-            more values than a dashboard fleet has homes to take; that error names the total.
-    """
-    counts = [
-        _as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
-        for index, entry in enumerate(entries)
-    ]
-    total = sum(counts)
-    if total > MAX_FLEET_HOMES:
-        raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
-    return counts
+def _form_count_list(counts: Iterable[Any], path: str) -> list[int]:
+    """Each of *counts*, the *path* list of shuffled_pool counts, read by :func:`~solar_challenge.web.number_fields.as_whole_number`."""
+    return [as_whole_number(count, f"{path}[{index}]") for index, count in enumerate(counts)]

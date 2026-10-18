@@ -24,6 +24,10 @@ pytest tests/unit/test_battery.py::TestBatteryConfig::test_default_config -v
 # Type checking
 mypy src/solar_challenge
 
+# Lint: ruff with the rules pyproject.toml's [tool.ruff.lint] selects; the
+# verify runs it through tests/unit/test_lint.py
+uv run --locked --extra dev ruff check src/solar_challenge
+
 # Test coverage
 pytest --cov=src/solar_challenge
 
@@ -40,6 +44,22 @@ uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slo
 # verify never runs them
 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
 
+# Tailwind rebuild: after editing tailwind.config.js, static/src/input.css, a
+# template or a script, rebuild static/dist/style.css and commit it; in a sandbox
+# that cannot write ~/.npm, give npm ci `--cache /tmp/<dir>`
+cd src/solar_challenge/web && npm ci && npm run build:css
+
+# Stylesheet build check: what the offline lane's css-build job runs after every
+# merge; it rebuilds the stylesheet with npm and compares the Tailwind license
+# texts beside it with the locked tailwindcss package's, so it needs npm and
+# network access, and the per-task verify never runs it
+uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+
+# Newest-releases check: what the offline lane's newest-releases job runs after
+# every merge (~15-20 min); it upgrades a scratch copy's uv.lock from PyPI, so it
+# needs network access, and the per-task verify never runs it
+uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -54,7 +74,7 @@ The simulation flows through these core modules:
 
 1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W)
 2. **`weather.py`** — Fetches PVGIS's TMY (v5_3) via pvlib and scales its irradiance to PVGIS's 2005-2020 mean annual GHI (`docs/tmy-irradiation-scaling.md`); caches the result to disk (MD5-keyed by location)
-3. **`pv.py`** — Models PV generation using pvlib; interpolates hourly output to 1-minute resolution
+3. **`pv.py`** — Models PV generation using pvlib, less PVWatts v5's default system losses on each array's DC power (`docs/pv-system-losses.md`); interpolates hourly output to 1-minute resolution
 4. **`load.py`** — Generates household consumption profiles scaled to an annual total (Ofgem TDCV by household size, unless set explicitly); stochastic mode via richardsonpy (UK CREST model, a core dependency), with a defensive fallback to the deterministic Elexon Profile Class 1 shape
 5. **`battery.py`** — Tracks state of charge with configurable power limits, efficiency, and SOC constraints
 6. **`flow.py`** — Per-timestep energy dispatch: self-consumption → battery charge → grid export; grid import for shortfalls
@@ -94,9 +114,10 @@ Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-chall
 - **Frozen dataclasses** throughout for immutability (config objects, Location, etc.)
 - **Validation in `__post_init__`** — Domain constraints enforced at construction time
 - **mypy strict mode** enabled; pvlib/pandas/numpy/yaml have `ignore_missing_imports`
+- **pytest deprecations are errors** — `filterwarnings` in `pyproject.toml` turns every `PytestDeprecationWarning` into an error in every run, so the suite keeps running on the pytest releases the `dev` extra's range admits (`tests/unit/test_pytest_deprecations_are_errors.py` says why). Fix the use the message names, e.g. parametrize over a list or tuple, not an iterator; if the use is in a plugin's code, raise that plugin's floor to a release without it. Do not filter the warning out. A pytest newer than `uv.lock`'s can flag a use the locked one passes.
 - **Reproducible simulations** via per-home seeding (seed parameter in configs)
 - **Scenario files** in `scenarios/` (YAML) — e.g., `bristol-phase1.yaml` defines a 100-home fleet
-- **Offline fast tests** — `tests/conftest.py` runs every test not marked `slow` or `e2e` offline, with every fixture it sets up or tears down, whatever its scope: a lookup or connection off the machine fails the test, naming the destination. So does an HTTP(S) request from a child process the test starts: the guard points the child's proxy variables at a refusing proxy on this machine and leaves only this machine in `NO_PROXY`, and uv, curl, and Python's requests and urllib honour those variables. `get_tmy_data` reads the test's own empty `weather_cache` fixture; seed it with `weather_cache.put(synthetic_june_weather(day), "tmy", location)`, or pass `weather_data`. Mark a test `slow` only if it needs a live service: PVGIS, or PyPI, from which each interpreter-matrix case provisions its interpreter's environment. Run a uv command that resolves from the package index with `UV_OFFLINE=1`, reading the index from uv's cache, as `tests/unit/test_stale_uv_lock.py` and `tests/integration/test_external_install.py` do. When that cache is cold, newly cleaned or behind a dependency change, run `uv lock --dry-run --refresh` once with network access for the stale-lock probes; for the external install, or for a uv probe that needs a wheel the cache lacks (e.g. a dependency new to the `e2e` extra), run the failing uv command once with network access.
+- **Offline fast tests** — `tests/conftest.py` runs every test not marked `slow` or `e2e` offline, with every fixture it sets up or tears down, whatever its scope: a lookup or connection off the machine fails the test, naming the destination. So does an HTTP(S) request from a child process the test starts: the guard points the child's proxy variables at a refusing proxy on this machine and leaves only this machine in `NO_PROXY`, and uv, curl, and Python's requests and urllib honour those variables. `get_tmy_data` reads the test's own empty `weather_cache` fixture; seed it with `weather_cache.put(synthetic_june_weather(day), "tmy", location)`, or pass `weather_data`. Mark a test `slow` only if it needs a live service: PVGIS; PyPI, from which each interpreter-matrix case provisions its interpreter's environment; or the npm registry, from which the css-build check installs Tailwind. Run a uv command that resolves from the package index with `UV_OFFLINE=1`, reading the index from uv's cache, as `tests/unit/test_stale_uv_lock.py` and the wheel build in `tests/integration/test_external_install.py` do. A test that needs third-party packages installed takes them from `uv.lock`, with `uv sync --locked` into a temporary `UV_PROJECT_ENVIRONMENT`, as `test_external_install.py`'s consumer environment does: the verify's own locked sync has already cached every wheel the lock pins, while an offline resolution of requirement ranges reads only the index pages some earlier online resolution left in uv's cache. When that cache is cold, newly cleaned or behind a dependency change, run `uv lock --dry-run --refresh` once with network access for the stale-lock probes; for the external install's wheel build, or for a uv probe that needs a wheel the cache lacks (e.g. a dependency new to the `e2e` extra), run the failing uv command once with network access.
 
 ## Optional Dependencies
 
@@ -134,6 +155,9 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the red run printed no failing node-id (it hit the job's `timeout`, or pytest
   could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
   `uv run --locked --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  An e2e test that fails after Chromium failed one of its requests with
+  `net::ERR_NETWORK_CHANGED` runs once more and shows as `RERUN`;
+  `docs/e2e-network-change-reruns.md` says why.
   The browser comes from `~/.cache/ms-playwright`, which the sandbox cannot
   write, so the playwright locked in `uv.lock` must match an installed
   chromium-headless-shell. This shows the revision it needs:
@@ -152,3 +176,42 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `bristol_tmy` and the cause is a connection error, a timeout or an HTTP 5xx,
   PVGIS is still out of reach: retry later before changing code. Any other
   failure means PVGIS's response, or pvlib's mapping of it, has changed.
+- The lane's `css-build` job rebuilds the web package's `static/dist/style.css`
+  from the committed sources and `package-lock.json` in a scratch copy, and
+  fails when the committed file differs. Tailwind scans the raw text of
+  templates and `static/js`, so an edit there can change the build too. A fix
+  task it files names
+  `tests/css_build/test_dist_style_css.py::test_dist_style_css_matches_a_fresh_build_of_its_sources`,
+  or `css-build::nonzero-exit` when the red run printed no failing node-id (it
+  hit the job's `timeout`, or pytest could not start). The fix is the Tailwind
+  rebuild in Commands, then a commit of the stylesheet. The job also fails when
+  a license text beside it in `static/dist` is not byte for byte the file of
+  the locked tailwindcss package that `tests/_tailwindcss_license_copies.py`
+  names for it. A fix task for that names
+  `tests/css_build/test_dist_style_css.py::test_dist_license_text_matches_the_locked_tailwindcss_package[<file>]`,
+  `<file>` being the stale copy. The fix is the `cp` its failure message gives,
+  from `node_modules/tailwindcss` after `npm ci` in `src/solar_challenge/web`,
+  then a commit of the copy. Reproduce with
+  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
+  the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
+  `package-lock.json`, then rebuild and copy each license text from the new
+  `node_modules/tailwindcss`.
+- The lane's `newest-releases` job re-runs the verify suite in a scratch copy
+  of the tree whose `uv.lock` is upgraded to the newest releases
+  `pyproject.toml`'s ranges admit, the releases a consumer that re-locks
+  installs. A red there usually comes from an upstream release, not from the
+  merged commit in the fix task's suspect range. A fix task it files names
+  `tests/newest_releases/test_verify_suite_on_newest_releases.py::test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit`,
+  or `newest-releases::nonzero-exit` when the red run printed no failing
+  node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its
+  failure message lists the releases `uv lock --upgrade` moved, then the
+  failing tests. If it moved none, the message says so: the red then comes
+  from the tree, not from an upstream release. Make the code or the test work
+  on both the locked and the new release; bound that dependency's range in
+  `pyproject.toml`, committing the `uv lock` re-lock with it, only when the
+  release itself is broken. Fix a pytest deprecation error as the "pytest
+  deprecations are errors" bullet in Key Patterns says. If uv could not reach
+  PyPI, retry later before changing code. Reproduce with the newest-releases
+  check in Commands; to iterate on one failing test, overlay its one new
+  release on the locked environment:
+  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest <node-id> -p no:cacheprovider`.

@@ -6,7 +6,8 @@ returns it. The per-task verify never runs it, because its tests are slow.
 The orchestrator offline lane's pvgis job runs it after every merge instead,
 so a change in PVGIS's or pvlib's response files a fix task rather than going
 unseen. That holds only while each of its tests checks PVGIS itself, never a
-cached copy.
+cached copy. The contracts the pvgis job shares with every lane job are
+checked in tests/unit/test_offline_lane_contracts.py.
 """
 
 from pathlib import Path
@@ -17,45 +18,9 @@ import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.weather import DEFAULT_CACHE_DIR, TMY_HOURS, WeatherCache
-from tests._collect_only import requires_uv
-from tests._lane_collection import collect_lane_job
-from tests._orchestrator_config import lane_job_enabled, sole_offline_lane_job
 
-_PVGIS_JOB = "pvgis"
 _PVGIS_CONTRACT_TESTS = "tests/integration/test_pvgis.py"
 _DEAD_PROXY = "http://127.0.0.1:9"
-
-
-def test_offline_lane_runs_one_enabled_pvgis_job(project_root: Path) -> None:
-    """The offline lane runs exactly one pvgis job, and it is enabled."""
-    job = sole_offline_lane_job(project_root, _PVGIS_JOB)
-
-    assert lane_job_enabled(job), (
-        f"the {_PVGIS_JOB!r} lane job is disabled, so a change in PVGIS's or pvlib's response goes unseen again"
-    )
-
-
-@requires_uv
-@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
-def test_pvgis_job_collects_the_pvgis_contract_tests_and_nothing_else(
-    project_root: Path, uv_probe_environment: dict[str, str]
-) -> None:
-    """Run as the lane runs it, the pvgis job collects at least one test, every one in tests/integration/test_pvgis.py.
-
-    The job's uv environment is fresh, as the lane's is, so it holds only the
-    extras the job names.
-    """
-    collection = collect_lane_job(project_root, _PVGIS_JOB, env=uv_probe_environment)
-
-    assert collection.node_ids, (
-        f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected no tests, so the lane stays green "
-        f"while the PVGIS contract tests go unrun\n{collection.outcome}"
-    )
-    outside_contract_tests = collection.node_ids_outside(_PVGIS_CONTRACT_TESTS)
-    assert not outside_contract_tests, (
-        f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected tests outside {_PVGIS_CONTRACT_TESTS}, "
-        f"which either the per-task verify already runs or hit PVGIS for other reasons: {outside_contract_tests}"
-    )
 
 
 def _clear_sky_tmy(location: Location) -> pd.DataFrame:

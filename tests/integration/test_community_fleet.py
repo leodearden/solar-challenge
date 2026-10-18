@@ -22,6 +22,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.community import (
     CommunityBillingConfig,
     CommunityConfig,
+    CommunityResults,
     simulate_community,
     validate_community_balance,
 )
@@ -137,9 +138,9 @@ def _build_injected_fleet(
 def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
     """Invoke `fleet run` on *scenario* with *options*, simulating in this process.
 
-    A worker process sees neither this process's weather cache nor its offline
-    guard: one started with forkserver, Python 3.14's default, reads the working
-    directory's cache and can fetch PVGIS unguarded.
+    That keeps the whole run under the offline guard's socket patch, which a worker
+    process does not inherit, as it gets only the guard's proxy variables, and it
+    spares each run a worker pool's start-up.
     """
     return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
 
@@ -149,7 +150,6 @@ def clear_june_tmy(weather_cache: WeatherCache) -> None:
     """Serve a clear 21 June as Bristol's TMY, the location of every fleet these tests run.
 
     get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
-    Only this process holds that cache: run `fleet run` through _fleet_run_in_process.
     """
     weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
@@ -159,7 +159,7 @@ def clear_june_tmy(weather_cache: WeatherCache) -> None:
 # ---------------------------------------------------------------------------
 
 class TestGenerateCommunityReport:
-    """RED/GREEN tests for output.generate_community_report.
+    """Tests for output.generate_community_report.
 
     Uses a hand-built synthetic FleetResults to avoid any PVGIS calls.
     """
@@ -180,13 +180,11 @@ class TestGenerateCommunityReport:
         )
 
     @pytest.fixture
-    def cr_p2p(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
-        from solar_challenge.community import CommunityResults
+    def cr_p2p(self, small_fleet: FleetResults) -> CommunityResults:
         return simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
 
     @pytest.fixture
-    def cr_batt(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
-        from solar_challenge.community import CommunityResults
+    def cr_batt(self, small_fleet: FleetResults) -> CommunityResults:
         return simulate_community(
             small_fleet,
             CommunityConfig(
@@ -343,7 +341,6 @@ class TestFleetRunCommunityCLI:
         report_text = tmp_report.read_text()
         # Parse the Grid Import row from the markdown table
         # | Grid Import | <unshared> | <community> | <reduction> |
-        import re
         import_match = re.search(
             r"\|\s*Grid Import\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", report_text
         )
@@ -581,14 +578,11 @@ class TestCommunityPipelineAB:
 
 
 # ---------------------------------------------------------------------------
-# Task-34 step-5: TestCommunityBillingReport (RED)
+# TestCommunityBillingReport
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingReport:
-    """RED tests for the markdown billing section in generate_community_report.
-
-    Implementation arrives in step-6 (output.py).
-    """
+    """Markdown billing section in generate_community_report."""
 
     @pytest.fixture
     def billing_idx(self) -> pd.DatetimeIndex:
@@ -606,7 +600,7 @@ class TestCommunityBillingReport:
         )
 
     @pytest.fixture
-    def cr_with_billing(self, billing_fleet: FleetResults) -> "object":
+    def cr_with_billing(self, billing_fleet: FleetResults) -> object:
         """CommunityResults with billing fields set (p2p, flat 0.30, SEG 4.1)."""
         cfg = CommunityConfig(
             sharing_mode="p2p",
@@ -618,35 +612,31 @@ class TestCommunityBillingReport:
         return simulate_community(billing_fleet, cfg)
 
     @pytest.fixture
-    def cr_no_billing(self, billing_fleet: FleetResults) -> "object":
+    def cr_no_billing(self, billing_fleet: FleetResults) -> object:
         """CommunityResults with no billing config (fields are None)."""
         cfg = CommunityConfig(sharing_mode="p2p")
         return simulate_community(billing_fleet, cfg)
 
     def test_report_contains_billing_section_header(self, cr_with_billing: object) -> None:
         """Report contains a billing section heading when savings are populated."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Community Billing" in report
 
     def test_report_contains_baseline_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Baseline' net cost line."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Baseline" in report
 
     def test_report_contains_community_net_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Community Net Cost' row in the billing table."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Community Net Cost" in report
 
     def test_report_contains_savings_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Community Savings' row with the exact formatted value."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Savings" in report
@@ -667,16 +657,15 @@ class TestCommunityBillingReport:
 
     def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
         """Report does NOT contain billing section when savings fields are None."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_no_billing, CommunityResults)
-        assert cr_no_billing.community_savings_gbp is None  # type: ignore[attr-defined]
+        assert cr_no_billing.community_savings_gbp is None
         report = generate_community_report(cr_no_billing)
         assert "Community Billing" not in report
         assert "Savings" not in report
 
 
 # ---------------------------------------------------------------------------
-# Task-34 step-7: TestCommunityBillingAB + TestFleetRunCommunityBillingCLI (RED)
+# TestCommunityBillingAB + TestFleetRunCommunityBillingCLI
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingAB:
@@ -720,7 +709,7 @@ class TestCommunityBillingAB:
     def test_p2p_savings_equals_baseline_minus_community(self, synth_fleet: FleetResults) -> None:
         """P2P: savings == baseline_net - community_net exactly."""
         cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
-        assert cr.community_savings_gbp == pytest.approx(  # type: ignore[operator]
+        assert cr.community_savings_gbp == pytest.approx(
             cr.baseline_net_cost_gbp - cr.community_net_cost_gbp, abs=1e-10  # type: ignore[operator]
         )
 
@@ -747,9 +736,8 @@ class TestCommunityBillingAB:
 class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
-    Weather comes from clear_june_tmy.  Step-7 RED for the
-    _print_community_section billing rows (implemented in step-8) and the
-    --community-report billing section (implemented in step-6).
+    Weather comes from clear_june_tmy.  Covers the _print_community_section
+    billing rows and the --community-report billing section.
     """
 
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
@@ -793,19 +781,19 @@ class TestFleetRunCommunityBillingCLI:
         )
 
     def test_cli_stdout_has_billing_rows(self) -> None:
-        """CLI stdout community table includes billing rows (step-8 drives this)."""
+        """CLI stdout community table includes billing rows."""
         result = _fleet_run_in_process(
             SCENARIO, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert result.exit_code == 0, result.output
-        # Billing rows in the Rich table — implemented in step-8
+        # Billing rows in the Rich table
         assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
             f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Task-86 Step-3: TestComputeCommunityMetricsSharingMode
+# TestComputeCommunityMetricsSharingMode
 # ---------------------------------------------------------------------------
 
 class TestComputeCommunityMetricsSharingMode:
@@ -864,10 +852,11 @@ class TestComputeCommunityMetricsSharingMode:
         The old heuristic (battery_charge.abs().sum() > 0 → 'community_battery') would
         wrongly report 'community_battery' here.  The authoritative field must win.
         """
+        assert isinstance(cr_p2p, CommunityResults)
         # Inject a non-zero battery_charge series to fool the heuristic.
         non_zero_charge = pd.Series(
             [1.0, 0.5, 0.5, 0.0],
-            index=cr_p2p.grid_import.index,  # type: ignore[union-attr]
+            index=cr_p2p.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_p2p, battery_charge=non_zero_charge)
@@ -884,10 +873,11 @@ class TestComputeCommunityMetricsSharingMode:
         'p2p' for a community_battery run whose battery never cycled during the window.
         The authoritative field must win.
         """
+        assert isinstance(cr_batt, CommunityResults)
         # Inject an all-zero battery_charge series to fool the heuristic in the other direction.
         zero_charge = pd.Series(
             [0.0, 0.0, 0.0, 0.0],
-            index=cr_batt.grid_import.index,  # type: ignore[union-attr]
+            index=cr_batt.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_batt, battery_charge=zero_charge)

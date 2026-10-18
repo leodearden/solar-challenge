@@ -1,17 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for grid charging a home battery on a time-of-use tariff."""
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-from tests._synthetic_weather import sunless_weather
+from solar_challenge.timebase import HOURS_PER_MINUTE
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._finance_builders import make_sim_results
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
 @pytest.fixture
@@ -25,10 +30,9 @@ class TestSimulateHomeStrategyPathGridCharging:
 
     The Strategy path (else branch in home.simulate_home) is taken when
     BatteryConfig.dispatch_strategy is set, making use_tariff_tou False.
-    Before the fix, simulate_timestep on this path never receives tariff=…,
-    so grid_charge_ctx is always None and grid-charging is dead.
-    After the fix (adding tariff=config.tariff_config), the full grid-charge
-    chain fires: is_cheap + spread gates pass → battery charged from grid.
+    simulate_timestep on this path receives tariff=config.tariff_config, so
+    the full grid-charge chain fires: is_cheap + spread gates pass → battery
+    charged from grid.
     """
 
     @pytest.fixture
@@ -67,8 +71,8 @@ class TestSimulateHomeStrategyPathGridCharging:
     ):
         """Strategy path: zero-PV + tariff threaded → battery_charge > 0 (grid charging active).
 
-        RED before fix: home.py Strategy else-branch omits tariff= → grid_charge_ctx is
-        None → no grid charging → battery_charge.sum() == 0. GREEN after fix.
+        Without tariff= on the Strategy branch, grid_charge_ctx would be None and
+        battery_charge.sum() would be 0.
 
         Also verifies the §3.1 split-accounting energy balance closes on the Strategy path:
         generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge).
@@ -104,9 +108,8 @@ class TestSimulateHomeStrategyPathGridCharging:
     ):
         """SOC climbs above the observed starting SOC during the cheap overnight window.
 
-        RED before fix: with tariff absent from the call, grid_charge_ctx is None,
-        no charging occurs, SOC stays at whatever the battery initialises to.
-        GREEN after fix: overnight charging raises SOC toward target 0.9 × capacity.
+        Overnight charging raises SOC toward target 0.9 × capacity; with the tariff
+        absent, no charging would occur and SOC would stay at its initial value.
 
         Uses results.battery_soc.iloc[0] rather than a re-derived constant so the
         test stays decoupled from Battery's internal initial-SOC formula.
@@ -128,7 +131,7 @@ class TestSimulateHomeStrategyPathGridCharging:
         """Without tariff_config, grid-charging stays inert (battery_charge == 0 with zero PV).
 
         Guard/non-regression: pins the 'tariff_config=None → no behaviour change' contract.
-        Green before and after the fix (the impl threads config.tariff_config which is None here).
+        The Strategy path threads config.tariff_config, which is None here.
         """
         config_no_tariff = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
@@ -162,7 +165,7 @@ class TestSimulateHomeStrategyPathGridCharging:
 
 
 # ---------------------------------------------------------------------------
-# CR2 step-3: RED tests for per-home grid-charge cost channel
+# Per-home grid-charge cost channel
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -207,7 +210,7 @@ def flat_tariff_no_gc_home_config() -> HomeConfig:
 
 
 class TestSimulationResultsGridChargeCost:
-    """RED tests for the new SimulationResults.grid_charge_cost field (CR2 step-3a)."""
+    """SimulationResults.grid_charge_cost field: defaults and construction."""
 
     def test_grid_charge_cost_field_defaults_to_none(self) -> None:
         """(a-i) SimulationResults.grid_charge_cost defaults to None (back-compat)."""
@@ -250,10 +253,10 @@ class TestSimulationResultsGridChargeCost:
 
 
 class TestCalculateSummaryGridChargeCost:
-    """RED tests for SummaryStatistics.total_grid_charge_cost_gbp (CR2 step-3b)."""
+    """calculate_summary_statistics aggregates SummaryStatistics.total_grid_charge_cost_gbp."""
 
     def _make_results(
-        self, grid_charge_cost: "pd.Series | None" = None
+        self, grid_charge_cost: pd.Series | None = None
     ) -> SimulationResults:
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         return SimulationResults(
@@ -286,8 +289,92 @@ class TestCalculateSummaryGridChargeCost:
         assert summary.total_grid_charge_cost_gbp == pytest.approx(gc_cost.sum())
 
 
+class TestCalculateSummaryGridCharge:
+    """calculate_summary totals the energy the battery stored from the grid as SummaryStatistics.total_grid_charge_kwh."""
+
+    def _make_results(self, grid_charge: pd.Series | None = None) -> SimulationResults:
+        """Three minutes in which the battery charges only from the grid, so its charge and the grid import each carry grid_charge."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1min")
+        charged_from_grid = grid_charge if grid_charge is not None else pd.Series([0.0, 0.0, 0.0], index=idx)
+        return SimulationResults(
+            generation=pd.Series([1.0, 1.0, 1.0], index=idx),
+            demand=pd.Series([0.5, 0.5, 0.5], index=idx),
+            self_consumption=pd.Series([0.5, 0.5, 0.5], index=idx),
+            battery_charge=charged_from_grid,
+            battery_discharge=pd.Series([0.0, 0.0, 0.0], index=idx),
+            battery_soc=pd.Series([2.5, 2.5, 2.5], index=idx),
+            grid_import=charged_from_grid,
+            grid_export=pd.Series([0.5, 0.5, 0.5], index=idx),
+            import_cost=pd.Series([0.0, 0.0, 0.0], index=idx),
+            export_revenue=pd.Series([0.0, 0.0, 0.0], index=idx),
+            tariff_rate=pd.Series([0.0, 0.0, 0.0], index=idx),
+            grid_charge=grid_charge,
+        )
+
+    def test_total_grid_charge_kwh_is_zero_when_grid_charge_is_none(self) -> None:
+        """A run without a grid_charge series, as every untariffed run is, stored nothing from the grid."""
+        summary = calculate_summary(self._make_results(grid_charge=None))
+
+        assert summary.total_grid_charge_kwh == 0.0
+
+    def test_total_grid_charge_kwh_is_the_grid_charges_per_minute_kwh_summed(self) -> None:
+        """1.2 kW, then 0.6 kW, then nothing, each for a minute: 0.02 + 0.01 kWh."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1min")
+        grid_charge = pd.Series([1.2, 0.6, 0.0], index=idx)
+
+        summary = calculate_summary(self._make_results(grid_charge=grid_charge))
+
+        assert summary.total_grid_charge_kwh == pytest.approx(0.03)
+
+
+class TestSummaryStatisticsGridCharge:
+    """SummaryStatistics refuses a total_grid_charge_kwh that is not a part of both its battery charge and its grid import."""
+
+    @pytest.fixture
+    def summary(self) -> SummaryStatistics:
+        """A one-day run's summary, which a test gives the grid charge, battery charge and grid import it checks."""
+        return calculate_summary(make_sim_results(days=1))
+
+    @pytest.mark.parametrize(
+        ("grid_charge_kwh", "battery_charge_kwh", "grid_import_kwh"),
+        [
+            pytest.param(2.5, 2.0, 9.75, id="more-than-the-battery-stored"),
+            pytest.param(2.0, 2.0, 1.5, id="more-than-the-grid-supplied"),
+            pytest.param(-0.5, 2.0, 9.75, id="negative"),
+            pytest.param(float("nan"), 2.0, 9.75, id="not-a-number"),
+        ],
+    )
+    def test_a_grid_charge_outside_the_charge_or_the_import_raises_naming_the_three_totals(
+        self, summary: SummaryStatistics, grid_charge_kwh: float, battery_charge_kwh: float, grid_import_kwh: float
+    ) -> None:
+        """The error states the invariant and the totals that break it."""
+        with pytest.raises(ValueError) as refused:
+            dataclasses.replace(
+                summary,
+                total_grid_charge_kwh=grid_charge_kwh,
+                total_battery_charge_kwh=battery_charge_kwh,
+                total_grid_import_kwh=grid_import_kwh,
+            )
+
+        message = str(refused.value)
+        assert "a part of both total_battery_charge_kwh and total_grid_import_kwh" in message
+        assert f"total_grid_charge_kwh={grid_charge_kwh!r}" in message
+        assert f"total_battery_charge_kwh={battery_charge_kwh!r}" in message
+        assert f"total_grid_import_kwh={grid_import_kwh!r}" in message
+
+    def test_a_grid_charge_that_is_all_of_the_charge_and_all_of_the_import_is_accepted(
+        self, summary: SummaryStatistics
+    ) -> None:
+        """A sunless night on which the grid supplied only the battery: its grid charge is the whole of both."""
+        night = dataclasses.replace(
+            summary, total_grid_charge_kwh=2.0, total_battery_charge_kwh=2.0, total_grid_import_kwh=2.0
+        )
+
+        assert night.total_grid_charge_kwh == 2.0
+
+
 class TestSimulateHomeGridChargeCost:
-    """RED tests for simulate_home producing grid_charge_cost (CR2 step-3c/d)."""
+    """simulate_home produces grid_charge_cost for time-of-use grid-charging homes."""
 
     def test_tou_grid_charging_home_produces_nonzero_cost(
         self,
@@ -417,3 +504,53 @@ class TestSimulateHomeGridChargeCost:
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0), (
             "Without grid_charging, the grid-charge cost must be 0.0 (H5 invariant)"
         )
+
+
+class TestSimulateHomeGridCharge:
+    """simulate_home records the power the battery stores from the grid as grid_charge on every tariffed run."""
+
+    @pytest.fixture
+    def arbitrage_home_grid_charging_to_70_percent(self) -> HomeConfig:
+        """The arbitrage home, grid charging to 70% instead of the scenario's 90%, so a sunny day leaves room for PV."""
+        home = bristol_arbitrage_home()
+        battery = home.battery_config
+        assert battery is not None and battery.grid_charging is not None
+        grid_charging = dataclasses.replace(battery.grid_charging, target_soc_fraction=0.7)
+        return dataclasses.replace(home, battery_config=dataclasses.replace(battery, grid_charging=grid_charging))
+
+    def test_grid_charge_is_only_the_part_of_the_battery_charge_drawn_from_the_grid(
+        self, arbitrage_home_grid_charging_to_70_percent: HomeConfig
+    ) -> None:
+        """On a sunny Economy 7 day the battery charges from the grid and from PV, and grid_charge is the grid's part.
+
+        It is the power the grid-charge cost is priced on, and is part of both the battery charge and the grid import.
+        """
+        results = simulate_home(
+            arbitrage_home_grid_charging_to_70_percent,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=synthetic_june_weather("2024-06-21"),
+        )
+
+        assert results.grid_charge is not None
+        assert results.grid_charge_cost is not None
+        assert 0 < results.grid_charge.sum() < results.battery_charge.sum()
+        pd.testing.assert_series_equal(
+            results.grid_charge * HOURS_PER_MINUTE * results.tariff_rate,
+            results.grid_charge_cost,
+            check_names=False,
+        )
+        assert (results.grid_charge <= results.battery_charge).all()
+        assert (results.grid_charge <= results.grid_import).all()
+
+    def test_an_untariffed_run_has_no_grid_charge_series(self, night_weather_data: pd.DataFrame) -> None:
+        """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost."""
+        results = simulate_home(
+            dataclasses.replace(bristol_arbitrage_home(), tariff_config=None),
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=night_weather_data,
+        )
+
+        assert results.grid_charge_cost is None
+        assert results.grid_charge is None

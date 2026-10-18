@@ -43,8 +43,8 @@
             {% endif %}
         </div>
         {% if icon %}
-        <div class="flex-shrink-0 ml-3 p-3 bg-amber-50 dark:bg-amber-900/30 rounded-full">
-            <span class="text-xl text-amber-600 dark:text-amber-400">{{ icon | safe }}</span>
+        <div class="flex-shrink-0 ml-3 p-3 bg-primary-50 dark:bg-primary-900/30 rounded-full">
+            <span class="text-xl text-primary-600 dark:text-primary-400">{{ icon | safe }}</span>
         </div>
         {% endif %}
     </div>
@@ -61,8 +61,8 @@
         role="switch"
         :aria-checked="{{ state }}"
         @click="{{ state }} = !{{ state }}"
-        class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
-        :class="{{ state }} ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
+        class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+        :class="{{ state }} ? 'bg-primary-500' : 'bg-slate-300 dark:bg-slate-600'"
     >
         <span
             class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
@@ -74,16 +74,20 @@
 {% endmacro %}
 
 
-{# Chart wrapper div for Plotly charts #}
-{% macro chart_container(id, title='', height='400px') %}
+{# The titled card of the chart static/js/chart-renderer.js draws from figure; a figure with nothing to draw (none or '{}') gets the card of empty_message instead, or no card, and an undefined figure, read under a name the page's route never set, fails the render, naming that name #}
+{% macro chart_panel(id, title, figure, min_height, empty_message='') %}
+{% if figure is undefined %}
+{{ figure() }}{# calling an undefined raises the UndefinedError that names it #}
+{% elif figure and figure != '{}' %}
 <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-    {% if title %}
     <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
         <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ title }}</h3>
     </div>
-    {% endif %}
-    <div id="{{ id }}" class="w-full" style="min-height: {{ height }};"></div>
+    <div id="{{ id }}" class="w-full" style="min-height: {{ min_height }};" data-chart-figure="{{ figure }}"></div>
 </div>
+{% elif empty_message %}
+{% call card() %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>{% endcall %}
+{% endif %}
 {% endmacro %}
 
 
@@ -99,4 +103,44 @@
     x-model.number="{{ model }}"
     class="{{ width_class }} h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-primary-500 [&::-webkit-slider-thumb]:bg-primary-500 dark:[&::-webkit-slider-thumb]:bg-primary-400 [&::-moz-range-thumb]:bg-primary-500 dark:[&::-moz-range-thumb]:bg-primary-400"
 >
+{% endmacro %}
+
+
+{# Run badges: a pill naming a run's status or type in that value's colours; a value with none of its own is drawn neutral #}
+{% set _badge_shape_classes = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium' %}
+{% set _neutral_badge_classes = 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300' %}
+{% set _run_status_badge_classes = {
+    'pending': _neutral_badge_classes,
+    'running': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+    'completed': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    'failed': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+} %}
+{% set _run_type_badge_classes = {
+    'home': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    'fleet': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    'sweep': 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
+} %}
+
+
+{# A run's status as a badge #}
+{% macro run_status_badge(status) %}
+<span class="{{ _badge_shape_classes }} {{ _run_status_badge_classes.get(status, _neutral_badge_classes) }}">{{ status }}</span>
+{% endmacro %}
+
+
+{# A badge showing the run status the Alpine expression status_expression holds, recoloured as it changes #}
+{% macro bound_run_status_badge(status_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_status_badge_classes | tojson }}[{{ status_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ status_expression }}"></span>
+{% endmacro %}
+
+
+{# A run's type as a badge #}
+{% macro run_type_badge(type) %}
+<span class="{{ _badge_shape_classes }} {{ _run_type_badge_classes.get(type, _neutral_badge_classes) }}">{{ type }}</span>
+{% endmacro %}
+
+
+{# A badge showing the run type the Alpine expression type_expression holds, recoloured as it changes #}
+{% macro bound_run_type_badge(type_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_type_badge_classes | tojson }}[{{ type_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ type_expression }}"></span>
 {% endmacro %}

@@ -10,10 +10,10 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     ParsedFleetForm,
@@ -22,6 +22,8 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
     "name": "Round Trip Fleet",
@@ -115,6 +117,10 @@ _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY: dict[str, Any] = {
 }
 
 
+#: _FLEET_FORM with its window set by days rather than by start and end: a form may send one or the other, not both.
+_FLEET_FORM_BY_DAYS: dict[str, Any] = {**_without(_FLEET_FORM, "start", "end"), "days": 10}
+
+
 def _run(fleet: ParsedFleetForm) -> tuple[Any, ...]:
     """The run of the parsed *fleet*: the name, homes and dates the simulate endpoint submits."""
     return (fleet.name, fleet.homes, fleet.start_date, fleet.end_date)
@@ -144,18 +150,18 @@ class TestParseFleetForm:
         )
 
     @pytest.mark.parametrize(
-        ("key", "value"),
+        ("form", "key", "value"),
         [
-            pytest.param(key, value, id=key)
+            pytest.param(_FLEET_FORM_BY_DAYS if key == "days" else _FLEET_FORM, key, value, id=key)
             for key, value in _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY.items()
         ],
     )
     def test_each_key_of_the_fleet_form_changes_both_the_run_and_its_scenario(
-        self, key: str, value: Any
+        self, form: dict[str, Any], key: str, value: Any
     ) -> None:
-        """Changing any key the fleet form has changes what the simulate endpoint runs and the scenario the export writes, so neither accepts a key it then drops."""
-        given = parse_fleet_form(_FLEET_FORM)
-        changed = parse_fleet_form({**_FLEET_FORM, key: value})
+        """Changing any key a fleet *form* has changes what the simulate endpoint runs and the scenario the export writes, so neither accepts a key it then drops."""
+        given = parse_fleet_form(form)
+        changed = parse_fleet_form({**form, key: value})
 
         assert _run(changed) != _run(given)
         assert changed.scenario != given.scenario
@@ -304,6 +310,15 @@ class TestFleetFormFromScenario:
                 },
                 id="uniform-normal-and-pool-editors",
             ),
+            pytest.param(
+                {
+                    **_FLEET_FORM,
+                    "pv": {"capacity_kw": 5.5},
+                    "battery": {"capacity_kwh": 5.0},
+                    "load": {"annual_consumption_kwh": 3400.0},
+                },
+                id="fixed-values",
+            ),
         ],
     )
     def test_an_exported_fleet_form_imports_back_to_the_same_scenario(
@@ -384,6 +399,152 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=()
         )
 
+    @pytest.mark.parametrize("key", ["start_date", "end_date"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/07/01", id="slashes"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("", id="empty-string"),
+            pytest.param(20240701, id="number"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_period_date_that_is_not_an_iso_date_is_refused_naming_it(
+        self, key: str, value: object
+    ) -> None:
+        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ValueError naming it as period.<key> and the value as written; the other date is the round trip's."""
+        period = {**_FLEET_SCENARIO["period"], key: value}
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
+        assert str(exc_info.value) == f"period.{key} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("period", "message"),
+        [
+            pytest.param(
+                {"start_date": "2024-06-10", "end_date": "2024-06-01"},
+                "period.end_date must not be before period.start_date, "
+                "got period.start_date '2024-06-10' and period.end_date '2024-06-01'",
+                id="end-before-start",
+            ),
+            pytest.param(
+                yaml.safe_load("start_date: 2024-06-10\nend_date: 2024-06-01\n"),
+                "period.end_date must not be before period.start_date, "
+                "got period.start_date '2024-06-10' and period.end_date '2024-06-01'",
+                id="yaml-dates-end-before-start",
+            ),
+            pytest.param(
+                {"start_date": "2024-01-01", "end_date": "2025-12-31"},
+                f"period.start_date to period.end_date must span at most {MAX_WINDOW_DAYS} days, "
+                "got period.start_date '2024-01-01' and period.end_date '2025-12-31', 731 days",
+                id="longer-than-the-page-runs",
+            ),
+        ],
+    )
+    def test_a_period_the_page_cannot_run_is_refused_naming_start_date_and_end_date(
+        self, period: dict[str, Any], message: str
+    ) -> None:
+        """A period that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming the scenario's period.start_date and period.end_date as read."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="non-numeric-string")]
+    )
+    def test_a_fleet_size_or_seed_that_is_not_a_finite_number_is_refused_naming_it(
+        self, key: str, value: object
+    ) -> None:
+        """An n_homes or seed that is not a finite number, a boolean included, is refused with a ValueError naming it as fleet_distribution.<key> and the value as written."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(**{key: value}))
+        assert str(exc_info.value) == f"fleet_distribution.{key} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    def test_a_fleet_size_or_seed_with_a_fractional_part_is_refused_naming_it(self, key: str) -> None:
+        """An n_homes or seed with a fractional part is refused with a ValueError naming it as fleet_distribution.<key> and the value as written.
+
+        Loading it would run a different fleet: the page runs a whole number of homes, and a seed
+        of 2.5 samples another fleet than a seed of 2, since random.Random(2.5) is not
+        random.Random(2), while the page has no seed field to show it.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(**{key: 2.5}))
+        assert str(exc_info.value) == f"fleet_distribution.{key} must be a whole number, got 2.5"
+
+    def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
+        """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
+
+        The fleet page holds the seed as a JavaScript number, which reads 2**53 + 1 as 2**53, so
+        loading it would run another fleet than the scenario's.
+        """
+        seed = MAX_FLEET_SEED + 2
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(seed=seed))
+        assert str(exc_info.value) == (
+            f"fleet_distribution.seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, "
+            f"got {seed!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "n_homes",
+        [
+            pytest.param(0, id="no-homes"),
+            pytest.param(MAX_FLEET_HOMES + 1, id="more-homes-than-the-page-runs"),
+        ],
+    )
+    def test_a_fleet_size_outside_1_to_max_fleet_homes_is_refused_naming_it(self, n_homes: int) -> None:
+        """An n_homes outside 1 to the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes))
+        assert str(exc_info.value) == (
+            f"fleet_distribution.n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                {
+                    **_FLEET_SCENARIO,
+                    "fleet_distribution": _without(_FLEET_SCENARIO["fleet_distribution"], "n_homes"),
+                },
+                id="absent",
+            ),
+            pytest.param(_with_fleet_distribution(n_homes=None), id="null"),
+        ],
+    )
+    def test_a_fleet_without_a_size_is_refused_naming_fleet_distribution_n_homes(
+        self, document: dict[str, Any]
+    ) -> None:
+        """A fleet_distribution that leaves n_homes out or sets it null is refused with a ValueError naming fleet_distribution.n_homes: a missing size reads as None, as a missing period date does."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(document)
+        assert str(exc_info.value) == "fleet_distribution.n_homes must be a finite number, got None"
+
+    def test_a_fleet_size_and_seed_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
+        """An n_homes of 3.0 and a seed of 7.0 load as the ints 3 and 7, the fleet they run: random.Random(7.0) draws as random.Random(7) does."""
+        imported = fleet_form_from_scenario(_with_fleet_distribution(n_homes=3.0, seed=7.0))
+
+        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        assert type(imported.form["n_homes"]) is int
+        assert type(imported.form["seed"]) is int
+
+    def test_a_pools_counts_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
+        """A battery pool's counts of 1.0 and 2.0 load as the ints 1 and 2, the counts the loaders read them as."""
+        battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+        pool = {**battery["capacity_kwh"], "counts": [1.0, 2.0]}
+
+        imported = fleet_form_from_scenario(
+            _with_fleet_distribution(battery={**battery, "capacity_kwh": pool})
+        )
+
+        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        entries = imported.form["battery"]["capacity_kwh"]["entries"]
+        assert [type(entry["count"]) for entry in entries] == [int, int]
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
@@ -402,9 +563,14 @@ class TestFleetFormFromScenario:
                 id="home-scenario",
             ),
             pytest.param(
-                _with_fleet_distribution(pv={"capacity_kw": 5.5}),
-                "fleet_distribution.pv.capacity_kw",
-                id="fixed-pv-capacity",
+                {**_FLEET_SCENARIO, "fleet_distribution": [_FLEET_SCENARIO["fleet_distribution"]]},
+                "fleet_distribution must be a mapping, got list",
+                id="list-fleet-distribution",
+            ),
+            pytest.param(
+                {**_FLEET_SCENARIO, "fleet_distribution": None},
+                "fleet_distribution must be a mapping, got NoneType",
+                id="null-fleet-distribution",
             ),
             pytest.param(
                 _with_fleet_distribution(
@@ -425,6 +591,20 @@ class TestFleetFormFromScenario:
                 ),
                 "fleet_distribution.pv.capacity_kw",
                 id="null-in-a-pv-pool",
+            ),
+            pytest.param(
+                _with_fleet_distribution(
+                    battery={
+                        **_FLEET_SCENARIO["fleet_distribution"]["battery"],
+                        "capacity_kwh": {
+                            "type": "shuffled_pool",
+                            "values": [0.0, 5.0],
+                            "counts": [1, 2.5],
+                        },
+                    }
+                ),
+                "fleet_distribution.battery.capacity_kwh.counts[1] must be a whole number, got 2.5",
+                id="fractional-count-in-a-battery-pool",
             ),
             pytest.param(
                 {
@@ -454,11 +634,6 @@ class TestFleetFormFromScenario:
                 ),
                 "fleet_distribution.battery.dispatch_strategy.peak_hours",
                 id="two-peak-windows",
-            ),
-            pytest.param(
-                _with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1),
-                f"n_homes must be between 1 and {MAX_FLEET_HOMES}",
-                id="more-homes-than-the-page-runs",
             ),
             pytest.param(
                 {

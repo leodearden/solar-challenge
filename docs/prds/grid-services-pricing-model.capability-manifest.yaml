@@ -1,0 +1,520 @@
+# Machine-readable twin of grid-services-pricing-model.capability-manifest.md
+# (review-all stream S9). task_id values stay null until commit_planning stamps them.
+# Code anchors verified against main 9d7b67e (2026-10-14); checks are pattern-anchored.
+# Every grep check fails on main 9d7b67e and passes once its leaf lands, except ε's
+# transitional-rule-deleted, which is vacuous until α introduces grid_services_model_of.
+# The FROZEN_* checks search tests/ because S23 may move the surface tables to a new module.
+# β's constructor-applies-the-one-rule stops holding when ε deletes the rule (by design).
+prd: docs/prds/grid-services-pricing-model.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: 801
+    title: "Grid-services income per simulated age, through one pricing method"
+    capabilities:
+      - name: "memo-deleted"
+        binding: "grep: `_event_gs_memo` in finance.project_multi_year on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_event_gs_memo"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "finance-has-no-indented-gridservices-import"
+        binding: "grep: indented `from solar_challenge.gridservices import` in finance.py on main (the TYPE_CHECKING one and _simulate_age's function-local one)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^\\s+from solar_challenge\\.gridservices import"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "finance-imports-gridservices-at-module-top"
+        binding: "grep: no unindented gridservices import in finance.py on main; probe: gridservices' import closure is battery and timebase, no pvlib"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^from solar_challenge\\.gridservices import"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "selector-assert-deleted"
+        binding: "grep: `assert finance.grid_services_events is not None` in _simulate_age on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "assert finance\\.grid_services_events is not None"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "no-gridservices-value-exists"
+        binding: "delivered by α; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class NoGridServices"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "flat-gridservices-value-exists"
+        binding: "delivered by α; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class FlatGridServices"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "values-price-a-fleet"
+        binding: "delivered by α; gridservices.py defines no `annual_income_gbp` method on main (only the GridServicesAtEvents field)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def annual_income_gbp"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "events-config-member-pinned"
+        binding: "grep: FROZEN_MEMBERS has no GridServicesEventsConfig entry on main; the members test requires one once the method exists"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"annual_income_gbp\": \"\\(self"
+          paths: ["tests/"]
+          expect: present
+      - name: "monkeypatching-compute-once-tests-deleted"
+        binding: "grep: two `monkeypatch.setattr(gs_module, ...)` tests in tests/integration/test_grid_services_events.py on main (D13: compute-once tests become per-age tests)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "monkeypatch\\.setattr\\(gs_module"
+          paths: ["tests/"]
+          expect: absent
+      - name: "income-booked-per-age"
+        binding: "grep: _simulate_age simulates each aged fleet; compute_soh gives SOH(24) <= 0.52; the fixture makes event income proportional to SOH; PCHIP of the flat no-income curve is exact; C2's bisection premise computed (0.656 vs 0.716 at age 6)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "per-age equality and age-24 < age-0 judged through the public curve by α's own tests (PRD §9 C1, C2); not greppable"
+      - name: "board-measurement-recorded"
+        binding: "probe at 9d7b67e: board scenario event income £0 at SOH 1.0 and 0.8 (3 homes, 2024-01-08..21)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a measurement recorded on the task, not an assertion"
+      - name: "unobserved-window-warns"
+        binding: "grep: compute_fleet_spare_capacity_kw skips an absent window silently on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "warning text and the no-battery exemption judged by α's own test (PRD §9 P3)"
+      - name: "income-is-cbs-revenue-in-docstring"
+        binding: "grep: GridServicesAtEvents docstring says 'householder-side' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "householder-side"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "model-doc-states-the-events-term"
+        binding: "grep: `capacity_at_events` absent from docs/cost-recovery-finance-model.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "capacity_at_events"
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          expect: present
+      - name: "model-doc-carries-the-worked-figure"
+        binding: "arithmetic: (1.00 x 12 + 0.6 x 3 x 0.060 x 12) x 0.75 = 9.972; `9.97` absent from the model doc on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "9\\.97"
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          expect: present
+      - name: "consumer-guide-names-the-new-member"
+        binding: "grep: `annual_income_gbp` absent from docs/domain-library-consumption.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "annual_income_gbp"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+  - label: "α′"
+    task_id: 837
+    title: "Firm spare capacity per event day, with a named delivery baseline and the displaced self-use beside it"
+    note: "Added 2026-10-16 by a follow-up decompose pass (ruling D41, lead ruling L24): depends on α and S1-β (774); β depends on it. Anchors re-verified at main 1fa8f79."
+    capabilities:
+      - name: "events-config-names-its-baseline"
+        binding: "delivered by α′; `delivery_baseline` absent from gridservices.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "grammar-reads-the-baseline"
+        binding: "grep: config._GRID_SERVICES_EVENTS_SCALAR_COERCIONS and the derived key set have no `delivery_baseline` on main, so the key is refused as unrecognised today; scenario_blocks.py is listed for S5's move"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "breakdown-carries-the-reliability-capacities"
+        binding: "delivered by α′; GridServicesAtEvents has three fields on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_avail_p90_kw"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "breakdown-carries-the-displaced-import-value"
+        binding: "delivered by α′; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_displaced_import_gbp_per_year"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "breakdown-form-pinned"
+        binding: "grep: FROZEN_SURFACE pins GridServicesAtEvents' three-field form on main; the surface test requires the edit"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_avail_p50_kw: tuple\\[float, \\.\\.\\.\\] = \\(\\)"
+          paths: ["tests/"]
+          expect: present
+      - name: "events-config-form-pinned"
+        binding: "grep: FROZEN_SURFACE pins GridServicesEventsConfig's form, last field utilisation_gbp_per_mwh, on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline: str = 'operational'"
+          paths: ["tests/"]
+          expect: present
+      - name: "report-renders-the-reliability-rows"
+        binding: "grep: output.generate_finance_report's capacity-at-events table has two rows (income, capacity) on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "90% of event days"
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "report-renders-the-displaced-self-use"
+        binding: "delivered by α′; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Evening self-use displaced"
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "model-doc-states-the-baselines"
+        binding: "grep: `delivery_baseline` absent from docs/cost-recovery-finance-model.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          expect: present
+      - name: "consumer-guide-names-the-model-change"
+        binding: "grep: `delivery_baseline` absent from docs/domain-library-consumption.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "delivery_baseline"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "june-prd-points-here"
+        binding: "grep: docs/prds/enhanced-grid-services-capacity-at-events.md never names this PRD on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid-services-pricing-model"
+          paths: ["docs/prds/enhanced-grid-services-capacity-at-events.md"]
+          expect: present
+      - name: "firm-per-event-day"
+        binding: "grep: compute_fleet_spare_capacity_kw reduces over every in-window minute of the season on main (P6 RED: 1.0, not 1.5); SimulationResults carries 1-minute battery_soc and battery_discharge"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "per-day avails, the mean and the reliability ordering judged by α′'s own test (PRD §9 P6); the reliability quantile is pinned on the task (p50 = 2.0, p90 = 1.0 on P6)"
+      - name: "baseline-refusal-names-both-values"
+        binding: "rejection is new code in GridServicesEventsConfig.__post_init__, constructed outside config's coercion try, so not relabelled; today the key is refused as unrecognised"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "capacity-baseline figure and the `metered` refusal judged by α′'s own tests (PRD §9 P7)"
+      - name: "displaced-self-use-reported-not-netted"
+        binding: "SimulationResults carries 1-minute battery_charge, battery_discharge and tariff_rate (home.py); the §2.2 scripts computed it from them at 0a5ab70"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "displaced kWh, its value and annual_income_gbp unchanged by it judged by α′'s own test (PRD §9 P8; the task corrects P8's figure on the P6 fixture)"
+      - name: "board-measurement-recorded"
+        binding: "measured 2026-10-16 on all 100 board homes, full 2024: £296 operational and £919 capacity at SOH 1.0, £143 at SOH 0.8, £242 displaced; scripts live outside the repo (untracked symlink), path on the task"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a measurement recorded on the task, not an assertion"
+  - label: "β"
+    task_id: 802
+    title: "FinanceConfig refuses an inconsistent grid-services choice; no CLI ignores one"
+    capabilities:
+      - name: "local-selector-vocabulary-deleted"
+        binding: "grep: `_VALID_GS_MODELS` in FinanceConfig.__post_init__ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_VALID_GS_MODELS"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "constructor-applies-the-one-rule"
+        binding: "producer: α (grid_services_model_of) upstream; β calls it from __post_init__"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_model_of\\(self\\)"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "projection-guard-block-deleted"
+        binding: "grep: 'Fail-fast: validate grid_services_model prerequisites' in project_multi_year on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Fail-fast: validate grid_services_model prerequisites"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "cli-finance-silent-none-deleted"
+        binding: "grep: `finance.grid_services_events is not None` in cli/finance.run on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "finance\\.grid_services_events is not None"
+          paths: ["src/solar_challenge/cli/finance.py"]
+          expect: absent
+      - name: "cli-finance-has-no-indented-gridservices-import"
+        binding: "grep: two function-local gridservices imports in cli/finance.run on main (S1 §7 allow-list entry cli.finance -> gridservices)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^\\s+from solar_challenge\\.gridservices import"
+          paths: ["src/solar_challenge/cli/finance.py"]
+          expect: absent
+      - name: "admitted-inconsistent-state-test-flipped"
+        binding: "grep: test_capacity_at_events_without_config_ok in tests/unit/config/test_finance_block.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_capacity_at_events_without_config_ok"
+          paths: ["tests/"]
+          expect: absent
+      - name: "board-scenario-has-no-inert-flat-rate"
+        binding: "grep: bristol-phase1-flex.yaml carries grid_services_income_per_kw_per_year_gbp: 12.0 under capacity_at_events on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_income_per_kw_per_year_gbp"
+          paths: ["scenarios/bristol-phase1-flex.yaml"]
+          expect: absent
+      - name: "consumer-guide-names-the-refusals"
+        binding: "grep: `capacity_at_events` absent from docs/domain-library-consumption.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "capacity_at_events"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "construction-refusals-fire"
+        binding: "silent accept observed: the finding measured FinanceConfig(..., grid_services_model='capacity_at_events') constructs; rejection is new code in β"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the three refusals and their messages judged by β's own tests (PRD §9 C5)"
+      - name: "cli-refusals-fire-before-simulating"
+        binding: "silent paths observed in cli/finance.run, cli/optimize.configs and optimize._build_axis_configs; invoke_cli takes an injectable simulator"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "exit codes, stderr and the omission line judged by β's own CLI tests (PRD §9 C6-C8)"
+  - label: "γ"
+    task_id: 803
+    title: "One band vocabulary and one grid-services rate table"
+    capabilities:
+      - name: "band-vocabulary-exists"
+        binding: "delivered by γ; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class GridServicesBand\\(str, Enum\\)"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "events-local-band-set-deleted"
+        binding: "grep: `_VALID_BANDS` in GridServicesEventsConfig.__post_init__ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_VALID_BANDS"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "resolve-if-chain-deleted"
+        binding: "grep: `if band == \"low\"` in GridServicesRateBands.resolve on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "if band == \"low\""
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "cli-flex-band-enum-deleted"
+        binding: "grep: `class FlexBand` in cli/finance.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class FlexBand"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "flex-bands-immutable"
+        binding: "grep: `FLEX_VALUE_BANDS: dict[str, FlexibilityValueBand] = {` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "FLEX_VALUE_BANDS: dict"
+          paths: ["src/solar_challenge/flex.py"]
+          expect: absent
+      - name: "flex-holds-no-flat-rate-literal"
+        binding: "grep: grid_services_per_kw_gbp=1.5 / 12.0 / 48.0 in FLEX_VALUE_BANDS on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_per_kw_gbp=(1\\.5|12\\.0|48\\.0)"
+          paths: ["src/solar_challenge/flex.py"]
+          expect: absent
+      - name: "rate-table-holds-the-flat-rates"
+        binding: "delivered by γ; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "flat_gbp_per_kw_per_year"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "rate-band-form-pinned"
+        binding: "grep: FROZEN_SURFACE pins GridServicesRateBand's form without the field on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "flat_gbp_per_kw_per_year: float = 0\\.0"
+          paths: ["tests/"]
+          expect: present
+      - name: "second-flat-rate-accessor-deleted"
+        binding: "grep: `def resolve_grid_services_band` in flex.py on main (0 src callers before task 704; γ repoints 704's SENSITIVITY_BANDS)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def resolve_grid_services_band"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "sensitivity-bands-read-the-table"
+        binding: "producer: task 704 (optimize.SENSITIVITY_BANDS) upstream; γ repoints its grid entry"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "GRID_SERVICES_RATE_BANDS"
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: present
+      - name: "stale-line-pointer-deleted"
+        binding: "grep: 'config.py:264' twice in flex.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "config\\.py:264"
+          paths: ["src/solar_challenge/flex.py"]
+          expect: absent
+      - name: "model-doc-declares-independent-calibrations"
+        binding: "grep: absent from docs/cost-recovery-finance-model.md on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "independent calibrations"
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          expect: present
+      - name: "band-refusals-share-one-message"
+        binding: "divergence observed: resolve_flex_band raises ValueError 'Unknown flexibility band' (CLI 'Invalid value:'); GridServicesEventsConfig raises ConfigurationError 'band must be one of [...]'"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message text across entry points judged by γ's own tests (PRD §9 P4, C10)"
+  - label: "ε"
+    task_id: 804
+    title: "FinanceConfig.grid_services_model holds the pricing model; the scenario names it once"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; depends on β and γ; excluded from the batch's commit_planning."
+    capabilities:
+      - name: "field-holds-the-model"
+        binding: "grep: `grid_services_model: str = \"flat\"` on main; producer α supplies the values"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_model: GridServicesModel"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "flat-rate-field-retired"
+        binding: "grep: `grid_services_income_per_kw_per_year_gbp: float = 0.0` on FinanceConfig on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_income_per_kw_per_year_gbp"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "events-field-retired"
+        binding: "grep: `grid_services_events: Optional[` on FinanceConfig on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_events:"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "transitional-rule-deleted"
+        binding: "producer: α creates grid_services_model_of; ε deletes it (D4: no transitional name survives the bump)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def grid_services_model_of"
+          paths: ["src/solar_challenge/"]
+          expect: absent
+      - name: "values-exported"
+        binding: "grep: NoGridServices absent from __init__.py on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"NoGridServices\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "band-annotation-typed"
+        binding: "grep: `band: str = \"central\"` on GridServicesEventsConfig on main; producer γ supplies GridServicesBand"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "band: GridServicesBand"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "scenario-files-migrated"
+        binding: "grep: `grid_services_events:` block in scenarios/bristol-phase1-flex.yaml on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "grid_services_events:"
+          paths: ["scenarios/"]
+          expect: absent
+      - name: "board-scenario-names-its-model-once"
+        binding: "delivered by ε; absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "type: capacity_at_events"
+          paths: ["scenarios/bristol-phase1-flex.yaml"]
+          expect: present
+      - name: "legacy-keys-refused-naming-the-new-location"
+        binding: "grep: config._FINANCE_SCALAR_COERCIONS reads the legacy keys on main; the refusal is new code in ε"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal messages and the migrated files' unchanged projections judged by ε's own tests (PRD §9 C11)"
+      - name: "surface-form-updated"
+        binding: "FROZEN_SURFACE pins FinanceConfig's three-field form on main; surface_form's spelling of the union is fixed by the tool at ε's base"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "exact surface_form spelling of the union default is produced by tests/_surface_forms.py at ε's base (PRD §9 C12)"

@@ -1,17 +1,35 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Utility functions for the CLI."""
+"""Utility functions for the CLI.
 
-import sys
+A command prints its product (a results table, a template or a report) on
+stdout, through console and print_report, and nothing else there. Status
+messages and progress print on stderr through status_console, and warnings
+and errors through error_console, so redirecting stdout captures the product
+alone. Print the product after any progress display stops: while one runs on
+a terminal, Rich routes sys.stdout writes through it to stderr.
+
+--quiet calls set_status_quiet, which silences status_console: status
+messages go unprinted and progress displays stay off, while products,
+warnings and errors print as ever.
+
+A command that simulates a fleet reads its simulator from Click's context
+object, ctx.ensure_object(CliFleetSimulator).simulate: fleet.simulate_fleet,
+unless whoever invokes the CLI passes another CliFleetSimulator as obj.
+"""
+
+import dataclasses
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
+import pandas as pd
 import typer
 from rich.console import Console
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
@@ -21,11 +39,15 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.battery import has_battery
+from solar_challenge.config import load_config
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
+status_console = Console(stderr=True)
 error_console = Console(stderr=True)
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -65,6 +87,13 @@ def _print_error_verbatim(label: str, error: Exception) -> None:
 def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
     """Print parts on target exactly as they are, never read as Rich markup or emoji codes; a (text, style) part is printed in that style."""
     target.print(Text.assemble(*parts))
+
+
+@dataclasses.dataclass(frozen=True)
+class CliFleetSimulator:
+    """Fleet simulator for the CLI's commands, read from Click's context object."""
+
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
 
 def parse_location(location_str: str) -> Location:
@@ -131,6 +160,10 @@ def load_config_with_overrides(
 
     Returns:
         Config dict with overrides applied
+
+    Raises:
+        ValueError: From has_battery, naming --battery-kwh, if battery_kwh is
+            negative or not finite
     """
     if config_path is not None:
         config = load_config(config_path)
@@ -150,7 +183,7 @@ def load_config_with_overrides(
         config["home"]["pv"]["capacity_kw"] = pv_kw
 
     if battery_kwh is not None:
-        if battery_kwh > 0:
+        if has_battery(battery_kwh, "--battery-kwh"):
             config["home"]["battery"] = {"capacity_kwh": battery_kwh}
         else:
             config["home"].pop("battery", None)
@@ -171,6 +204,11 @@ def load_config_with_overrides(
     return config
 
 
+def verbatim_table_title(title: str) -> Text:
+    """*title* for a Rich Table, printed exactly as it is, never read as Rich markup or emoji codes, in Rich's table-title style."""
+    return Text(title, style="table.title")
+
+
 def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Table:
     """Create a Rich table from summary statistics.
 
@@ -181,7 +219,7 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     Returns:
         Rich Table object
     """
-    table = Table(title=Text(title, style="table.title"))
+    table = Table(title=verbatim_table_title(title))
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="green")
 
@@ -226,19 +264,28 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     return table
 
 
+def set_status_quiet(quiet: bool) -> None:
+    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products, warnings and errors print either way."""
+    status_console.quiet = quiet
+
+
+def _status_progress(*columns: str | ProgressColumn) -> Progress:
+    """A progress display of columns on status_console, off while that console is quiet, so it never captures what else a command writes to stdout or stderr."""
+    return Progress(*columns, console=status_console, disable=status_console.quiet)
+
+
 def create_progress() -> Progress:
-    """Create a Rich progress bar for simulations."""
-    return Progress(
+    """Create a Rich progress bar for simulations, printed on stderr."""
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
-        console=console,
     )
 
 
 def create_fleet_progress() -> Progress:
-    """Progress bar with ETA for fleet simulations."""
-    return Progress(
+    """Progress bar with ETA for fleet simulations, printed on stderr."""
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -247,18 +294,17 @@ def create_fleet_progress() -> Progress:
         TimeElapsedColumn(),
         TextColumn("ETA"),
         TimeRemainingColumn(),
-        console=console,
     )
 
 
 def print_success(message: str) -> None:
-    """Print message in green, exactly as it is."""
-    _print_verbatim(console, (message, "green"))
+    """Print message in green on stderr, exactly as it is."""
+    _print_verbatim(status_console, (message, "green"))
 
 
 def print_warning(message: str) -> None:
-    """Print message in yellow, exactly as it is."""
-    _print_verbatim(console, (message, "yellow"))
+    """Print message in yellow on stderr, exactly as it is."""
+    _print_verbatim(error_console, (message, "yellow"))
 
 
 def print_error(message: str) -> None:
@@ -267,5 +313,10 @@ def print_error(message: str) -> None:
 
 
 def print_info(message: str) -> None:
-    """Print message in blue, exactly as it is."""
-    _print_verbatim(console, (message, "blue"))
+    """Print message in blue on stderr, exactly as it is."""
+    _print_verbatim(status_console, (message, "blue"))
+
+
+def print_report(report: str) -> None:
+    """Print report on stdout exactly as it is, each line whole however wide the console: never read as Rich markup or emoji codes, wrapped or cropped."""
+    console.print(Text(report), soft_wrap=True)

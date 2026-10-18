@@ -3,32 +3,11 @@ document.addEventListener('alpine:init', () => {
     const DEFAULT_PERIOD_DAYS = 30;
     const DEFAULT_SEED = 42;
 
-    // The scope of one distribution_editor call (templates/simulate/partials/distribution-editor.html). dist calls getDist on
-    // every read because applyConfig replaces the form's distributions (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
-    Alpine.data('distributionEditor', (getDist, newRowValue) => ({
-        get dist() { return getDist(); },
-        addRow() {
-            if (this.dist.type === 'weighted_discrete') {
-                this.dist.values.push({ value: newRowValue, weight: 10 });
-            } else if (this.dist.type === 'shuffled_pool') {
-                this.dist.entries.push({ value: newRowValue, count: 10 });
-            }
-        },
-        removeRow(idx) {
-            if (this.dist.type === 'weighted_discrete' && this.dist.values.length > 1) {
-                this.dist.values.splice(idx, 1);
-            } else if (this.dist.type === 'shuffled_pool' && this.dist.entries.length > 1) {
-                this.dist.entries.splice(idx, 1);
-            }
-        },
-    }));
-
     Alpine.data('fleetSimulator', () => ({
         n_homes: 100,
         seed: DEFAULT_SEED,
         submitting: false,
         jobId: null,
-        runId: null,
         errorMsg: '',
         importNotice: '',
         simName: '',
@@ -39,21 +18,10 @@ document.addEventListener('alpine:init', () => {
         startDate: '2024-06-01',
         endDate: '2024-06-30',
 
-        /* ---- Progress tracking state ---- */
-        progress: 0,
-        step: 'Queued',
-        message: 'Waiting to start...',
-        status: 'idle',
-        elapsed: 0,
-        startTime: null,
-        timer: null,
-        evtSource: null,
-        error: '',
-        completedRunId: '',
-
         /* ---- PV distribution state ---- */
         pvDist: {
             type: 'shuffled_pool',
+            fixed: 4.0,
             mean: 4.0, std: 1.0, min: 2.0, max: 8.0,
             values: [
                 { value: 3.0, weight: 20 },
@@ -87,6 +55,7 @@ document.addEventListener('alpine:init', () => {
         batteryEnabled: true,
         batteryDist: {
             type: 'shuffled_pool',
+            fixed: 5.0,
             mean: 5.0, std: 2.0, min: 0.0, max: 15.0,
             values: [
                 { value: 0, weight: 40 },
@@ -103,6 +72,7 @@ document.addEventListener('alpine:init', () => {
         /* ---- Load distribution state ---- */
         loadDist: {
             type: 'normal',
+            fixed: 3500,
             mean: 3400, std: 800, min: 2000, max: 6000,
             values: [
                 { value: 2900, weight: 30 },
@@ -116,22 +86,20 @@ document.addEventListener('alpine:init', () => {
             ]
         },
 
-        /* ---- Form validation ---- */
-        validationErrors: {},
-        validate() {
-            const errors = {};
+        /* ---- Form validation: why Run refuses the form, none when it runs it ---- */
+        formErrors() {
+            const errors = [];
             const n = parseInt(this.n_homes);
-            if (isNaN(n) || n < 1) errors.n_homes = 'Fleet size must be at least 1';
-            if (n > 1000) errors.n_homes = 'Fleet size must be at most 1000';
-            // Validate PV distribution
-            if (this.pvDist.type === 'normal') {
-                if (parseFloat(this.pvDist.std) <= 0) errors.pv_std = 'PV std deviation must be positive';
+            if (isNaN(n) || n < 1) errors.push('Fleet size must be at least 1');
+            if (n > 1000) errors.push('Fleet size must be at most 1000');
+            if (this.pvDist.type === 'normal' && parseFloat(this.pvDist.std) <= 0) {
+                errors.push('PV std deviation must be positive');
             }
-            if (this.pvDist.type === 'uniform' || this.pvDist.type === 'normal') {
-                if (parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) errors.pv_range = 'PV min must be less than max';
+            if ((this.pvDist.type === 'uniform' || this.pvDist.type === 'normal')
+                && parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) {
+                errors.push('PV min must be less than max');
             }
-            this.validationErrors = errors;
-            return Object.keys(errors).length === 0;
+            return errors;
         },
 
         /* ---- Build payload from current state ---- */
@@ -186,6 +154,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _buildDistPayload(dist) {
+            if (!dist.type) return dist.fixed;
             const d = { type: dist.type };
             if (dist.type === 'normal') {
                 d.mean = dist.mean;
@@ -205,15 +174,14 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Simulation submission ---- */
         async submitFleet() {
-            if (!this.validate()) return;
+            const errors = this.formErrors();
+            if (errors.length > 0) {
+                this.errorMsg = errors.join('; ');
+                return;
+            }
             this.submitting = true;
             this.errorMsg = '';
             this.jobId = null;
-            this.runId = null;
-            this.status = 'idle';
-            this.progress = 0;
-            this.error = '';
-            this.completedRunId = '';
             try {
                 const resp = await fetch('/api/simulate/fleet-from-distribution', {
                     method: 'POST',
@@ -223,8 +191,6 @@ document.addEventListener('alpine:init', () => {
                 const data = await resp.json();
                 if (resp.ok) {
                     this.jobId = data.job_id;
-                    this.runId = data.run_id;
-                    this.startProgressTracking();
                 } else {
                     this.errorMsg = data.error || 'Submission failed';
                 }
@@ -233,80 +199,6 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.submitting = false;
             }
-        },
-
-        /* ---- SSE Progress tracking ---- */
-        startProgressTracking() {
-            this.status = 'queued';
-            this.step = 'Queued';
-            this.message = 'Waiting to start...';
-            this.startTime = Date.now();
-            this.timer = setInterval(() => {
-                this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-            }, 1000);
-
-            this.evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
-
-            this.evtSource.addEventListener('progress', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (data.progress !== undefined) this.progress = data.progress * 100;
-                    if (data.progress_pct !== undefined) this.progress = data.progress_pct;
-                    if (data.current_step) this.step = data.current_step;
-                    if (data.message) this.message = data.message;
-                    if (data.homes_completed !== undefined && data.total_homes) {
-                        this.message = 'Processing home ' + data.homes_completed + '/' + data.total_homes;
-                    }
-                    if (data.status) this.status = data.status;
-                } catch(err) {}
-            });
-
-            this.evtSource.addEventListener('complete', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    this.status = 'completed';
-                    this.progress = 100;
-                    this.step = 'Done';
-                    this.message = data.message || 'Fleet simulation completed successfully';
-                    if (data.run_id) this.completedRunId = data.run_id;
-                } catch(err) {}
-                this.stopProgressTracking();
-            });
-
-            this.evtSource.addEventListener('error', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    this.status = 'failed';
-                    this.error = data.message || data.error || 'An unexpected error occurred';
-                } catch(err) {
-                    if (this.status !== 'completed') {
-                        this.status = 'failed';
-                        this.error = 'Lost connection to server';
-                    }
-                }
-                this.stopProgressTracking();
-            });
-        },
-
-        stopProgressTracking() {
-            if (this.evtSource) {
-                this.evtSource.close();
-                this.evtSource = null;
-            }
-            if (this.timer) {
-                clearInterval(this.timer);
-                this.timer = null;
-            }
-        },
-
-        destroy() {
-            this.stopProgressTracking();
-        },
-
-        formatTime(seconds) {
-            const m = Math.floor(seconds / 60);
-            const s = seconds % 60;
-            return m > 0 ? m + 'm ' + s + 's' : s + 's';
         },
 
         /* ---- YAML Export ---- */
@@ -392,8 +284,9 @@ document.addEventListener('alpine:init', () => {
             this._applyDispatch(form.dispatch_strategy);
         },
 
-        /* The inverse of _buildDistPayload: the spec's fields over the card's current distribution. */
+        /* The inverse of _buildDistPayload: a fixed value, a number, as the card's Fixed Value (type ''), and a distribution's fields over the card's current distribution. */
         _distFromConfig(spec, current) {
+            if (typeof spec === 'number') return { ...current, type: '', fixed: spec };
             return { ...current, ...spec };
         },
 

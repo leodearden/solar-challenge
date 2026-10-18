@@ -60,16 +60,11 @@ Thumbs.db
 logs/
 *.log
 
-# Auto Claude data directory
-.auto-claude/
-.auto-claude-status
-
 # Git worktrees
 .worktrees/
 
 # Node.js (Tailwind CSS build)
 node_modules/
-package-lock.json
 
 # dark-factory orchestrator scratch — must never reach main
 # .task/ in particular: if committed, it contaminates every future worktree.

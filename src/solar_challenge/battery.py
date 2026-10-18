@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery storage configuration and modelling."""
 
+import dataclasses
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
+from solar_challenge.timebase import HOURS_PER_MINUTE
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
@@ -17,8 +20,7 @@ def _validate_soc_and_efficiency(
 ) -> None:
     """Validate SOC limits and per-direction efficiency values.
 
-    This is the single source of truth for these bounds; called from both
-    BatteryConfig.__post_init__ and Battery.__init__ so the checks stay in sync.
+    This is the single source of truth for these bounds.
 
     Args:
         min_soc: Minimum SOC fraction (must satisfy 0 <= min_soc < max_soc <= 1)
@@ -35,6 +37,41 @@ def _validate_soc_and_efficiency(
         raise ValueError(f"Charge efficiency must be (0, 1], got {charge_eff}")
     if not 0 < discharge_eff <= 1:
         raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
+
+
+def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> None:
+    """Refuse a battery's maximum *direction* power *kw* unless it is positive and finite."""
+    if not 0 < kw < math.inf:
+        raise ValueError(f"Max {direction} power must be positive and finite, got {kw} kW")
+
+
+def _require_valid_request(
+    direction: Literal["charge", "discharge"], power_kw: float, duration_minutes: float
+) -> None:
+    """Refuse a *direction* request unless its power is >= 0 and its duration is positive and finite."""
+    if not power_kw >= 0:
+        raise ValueError(
+            f"{direction.capitalize()} power must be non-negative, got {power_kw} kW"
+        )
+    if not 0 < duration_minutes < math.inf:
+        raise ValueError(
+            f"{direction.capitalize()} duration must be positive and finite, "
+            f"got {duration_minutes} minutes"
+        )
+
+
+def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
+    """Refuse a battery capacity setting unless it is >= 0 and finite; 0 means no battery."""
+    if not 0 <= capacity_kwh < math.inf:
+        raise ValueError(
+            f"{setting} must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+
+def has_battery(capacity_kwh: float, setting: str) -> bool:
+    """Whether a battery capacity setting asks for a battery (> 0); an invalid one is refused."""
+    require_valid_capacity_setting(capacity_kwh, setting)
+    return capacity_kwh > 0
 
 
 def compute_soh(
@@ -113,6 +150,9 @@ class BatteryConfig:
             (≥ 0; default 0.02/yr ≈ 70 % SOH at 15-yr warranty horizon).
         cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
             cycle (≥ 0; default 5e-5/EFC ≈ 30 % fade over ~6 000 EFC).
+            ``Battery`` computes calendar fade only (throughput 0); cycle
+            fade takes effect only through an ``soh`` computed by
+            :func:`compute_soh` from accrued throughput.
         soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
             default 0.5, reflecting end-of-useful-life convention).
         soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
@@ -143,14 +183,8 @@ class BatteryConfig:
             raise ValueError(
                 f"Capacity must be positive and finite, got {self.capacity_kwh} kWh"
             )
-        if not 0 < self.max_charge_kw < math.inf:
-            raise ValueError(
-                f"Max charge power must be positive and finite, got {self.max_charge_kw} kW"
-            )
-        if not 0 < self.max_discharge_kw < math.inf:
-            raise ValueError(
-                f"Max discharge power must be positive and finite, got {self.max_discharge_kw} kW"
-            )
+        require_valid_power_limit(self.max_charge_kw, "charge")
+        require_valid_power_limit(self.max_discharge_kw, "discharge")
         if self.efficiency is not None:
             if not 0 < self.efficiency <= 1:
                 raise ValueError(
@@ -209,19 +243,40 @@ class BatteryConfig:
         )
 
 
+@dataclass(frozen=True)
+class _SocLimitsAndEfficiencies:
+    """A Battery's SOC limits and per-direction efficiencies, refused at construction unless valid."""
+
+    min_soc_fraction: float
+    max_soc_fraction: float
+    charge_efficiency: float
+    discharge_efficiency: float
+
+    def __post_init__(self) -> None:
+        _validate_soc_and_efficiency(
+            self.min_soc_fraction,
+            self.max_soc_fraction,
+            self.charge_efficiency,
+            self.discharge_efficiency,
+        )
+
+
 class Battery:
     """Battery with state of charge tracking.
 
-    Tracks current SOC and enforces charge/discharge limits.
+    Tracks current SOC and enforces charge/discharge limits. Its SOC limits and
+    efficiencies can be reassigned after construction, as a device's settings can.
+    An assignment is checked against the bounds construction checks for these four
+    values: one that breaks them raises ValueError and leaves the battery unchanged.
+    A new SOC limit is not checked against the current SOC and may move past it.
+    While the SOC is below min_soc_kwh, discharge() moves no energy and returns
+    0.0; while it is above max_soc_kwh, charge() does the same.
 
     Attributes:
         config: BatteryConfig defining capacity and power limits
-        soc_kwh: Current state of charge in kWh
-        min_soc_fraction: Minimum SOC as fraction of capacity (default 0.1)
-        max_soc_fraction: Maximum SOC as fraction of capacity (default 0.9)
-        charge_efficiency: Efficiency of charging (default 0.975)
-        discharge_efficiency: Efficiency of discharging (default 0.975)
     """
+
+    config: BatteryConfig
 
     def __init__(
         self,
@@ -243,30 +298,14 @@ class Battery:
             discharge_efficiency: Discharging efficiency (0-1); defaults to config.discharge_efficiency
         """
         self.config = config
-
-        # Resolve optional params from config when not explicitly supplied
-        resolved_min_soc: float = config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction
-        resolved_max_soc: float = config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction
-        resolved_charge_eff: float = config.charge_efficiency if charge_efficiency is None else charge_efficiency
-        resolved_discharge_eff: float = config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency
-
-        _validate_soc_and_efficiency(
-            resolved_min_soc, resolved_max_soc, resolved_charge_eff, resolved_discharge_eff
+        self._soc_limits_and_efficiencies = _SocLimitsAndEfficiencies(
+            min_soc_fraction=config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction,
+            max_soc_fraction=config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction,
+            charge_efficiency=config.charge_efficiency if charge_efficiency is None else charge_efficiency,
+            discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
         )
-        self.min_soc_fraction = resolved_min_soc
-        self.max_soc_fraction = resolved_max_soc
-        self.charge_efficiency = resolved_charge_eff
-        self.discharge_efficiency = resolved_discharge_eff
 
         # Resolve SOH once: override wins; else calendar-only (throughput=0).
-        # NOTE: cumulative_throughput_kwh is hard-coded to 0.0 here — this is
-        # the correct single-run approximation (calendar fade only).  The cycle
-        # term in compute_soh is structurally complete and directly unit-tested;
-        # real multi-year cumulative throughput is injected by task ζ
-        # (project_multi_year), which calls compute_soh with the accrued
-        # discharge total.  Users setting cycle_fade_per_equivalent_full_cycle
-        # in YAML will see its effect in ζ multi-year projections; single-run
-        # simulations capture calendar fade only.
         if config.soh is not None:
             self._soh: float = config.soh
         else:
@@ -285,6 +324,50 @@ class Battery:
                     f"[{self.min_soc_kwh}, {self.max_soc_kwh}]"
                 )
             self._soc_kwh = initial_soc_kwh
+
+    @property
+    def min_soc_fraction(self) -> float:
+        """Minimum SOC as a fraction of effective capacity."""
+        return self._soc_limits_and_efficiencies.min_soc_fraction
+
+    @min_soc_fraction.setter
+    def min_soc_fraction(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, min_soc_fraction=value
+        )
+
+    @property
+    def max_soc_fraction(self) -> float:
+        """Maximum SOC as a fraction of effective capacity."""
+        return self._soc_limits_and_efficiencies.max_soc_fraction
+
+    @max_soc_fraction.setter
+    def max_soc_fraction(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, max_soc_fraction=value
+        )
+
+    @property
+    def charge_efficiency(self) -> float:
+        """Fraction of the energy charged that is stored."""
+        return self._soc_limits_and_efficiencies.charge_efficiency
+
+    @charge_efficiency.setter
+    def charge_efficiency(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, charge_efficiency=value
+        )
+
+    @property
+    def discharge_efficiency(self) -> float:
+        """Fraction of the energy drawn from storage that is output."""
+        return self._soc_limits_and_efficiencies.discharge_efficiency
+
+    @discharge_efficiency.setter
+    def discharge_efficiency(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, discharge_efficiency=value
+        )
 
     @property
     def soh(self) -> float:
@@ -331,32 +414,36 @@ class Battery:
 
     @property
     def available_charge_capacity_kwh(self) -> float:
-        """Energy that can still be stored in kWh."""
-        return self.max_soc_kwh - self._soc_kwh
+        """Energy that can still be stored in kWh: 0.0 while the SOC is at or above max_soc_kwh."""
+        return max(0.0, self.max_soc_kwh - self._soc_kwh)
 
     @property
     def available_discharge_capacity_kwh(self) -> float:
-        """Energy that can still be discharged in kWh."""
-        return self._soc_kwh - self.min_soc_kwh
+        """Energy that can still be discharged in kWh: 0.0 while the SOC is at or below min_soc_kwh."""
+        return max(0.0, self._soc_kwh - self.min_soc_kwh)
 
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.
 
         Args:
-            power_kw: Charging power in kW (before efficiency losses)
-            duration_minutes: Duration of charging in minutes
+            power_kw: Charging power in kW (before efficiency losses), at least 0;
+                inf asks for the maximum charge rate
+            duration_minutes: Duration of charging in minutes, positive and finite
 
         Returns:
             Actual energy charged in kWh (after efficiency losses)
+
+        Raises:
+            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
+                positive and finite; the battery is left unchanged.
         """
-        if power_kw < 0:
-            raise ValueError(f"Charge power must be non-negative, got {power_kw}")
+        _require_valid_request("charge", power_kw, duration_minutes)
 
         # Limit to max charge rate
         actual_power = min(power_kw, self.config.max_charge_kw)
 
         # Calculate energy input and stored (with efficiency)
-        duration_hours = duration_minutes / 60
+        duration_hours = duration_minutes * HOURS_PER_MINUTE
         energy_input_kwh = actual_power * duration_hours
         energy_stored_kwh = energy_input_kwh * self.charge_efficiency
 
@@ -374,20 +461,24 @@ class Battery:
         """Discharge the battery.
 
         Args:
-            power_kw: Requested discharge power in kW
-            duration_minutes: Duration of discharging in minutes
+            power_kw: Requested discharge power in kW, at least 0; inf asks for the
+                maximum discharge rate
+            duration_minutes: Duration of discharging in minutes, positive and finite
 
         Returns:
             Actual energy output in kWh (after efficiency losses)
+
+        Raises:
+            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
+                positive and finite; the battery is left unchanged.
         """
-        if power_kw < 0:
-            raise ValueError(f"Discharge power must be non-negative, got {power_kw}")
+        _require_valid_request("discharge", power_kw, duration_minutes)
 
         # Limit to max discharge rate
         actual_power = min(power_kw, self.config.max_discharge_kw)
 
         # Calculate energy requested
-        duration_hours = duration_minutes / 60
+        duration_hours = duration_minutes * HOURS_PER_MINUTE
         energy_requested_kwh = actual_power * duration_hours
 
         # Calculate energy needed from battery (before efficiency)

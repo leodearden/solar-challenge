@@ -8,19 +8,21 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
+import math
+from typing import Callable
+
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
 from tests._finance_builders import make_fleet_results, make_home_config
 
 
-def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignore[name-defined]
+def _make_curved_simulate(curvature: float = 0.35) -> Callable:
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
     fleet_self_consumption_kwh declines as base * exp(-curvature * age).
     With only 3 seed nodes, PCHIP will have large midpoint errors for high
     curvature values (the function is far from piecewise-cubic on wide intervals).
     """
-    import math
-    from typing import Callable
-
     BASE_SC = 12_000.0
     BASE_EXP = 3_000.0
 
@@ -40,8 +42,6 @@ def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignor
 
 def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     """Build a scenario+finance pair for adaptive refinement tests."""
-    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-
     homes = [make_home_config()]
     finance = FinanceConfig(
         standing_charge_pence_per_day=28.0,
@@ -71,8 +71,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_adaptive_adds_nodes_beyond_seeds_with_tight_target(self) -> None:
         """With a curved simulate and tight error target, more than 3 nodes are sampled."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)  # steep exponential — large PCHIP error
         n_seeds = len({0, self._ASSET_LIFE // 2, self._ASSET_LIFE - 1})  # == 3
@@ -86,8 +84,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_tighter_target_yields_strictly_more_nodes(self) -> None:
         """A tighter error_target_pct produces strictly more sampled_ages than a loose target."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)
 
@@ -107,8 +103,6 @@ class TestProjectMultiYearAdaptive:
         An impossibly tight target causes the adaptive loop to run until capped.
         MAX_NODES is the hard bound.
         """
-        from solar_challenge.finance import MAX_NODES, project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)
 
@@ -120,8 +114,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_interp_error_estimate_non_negative(self) -> None:
         """interp_error_estimate is always >= 0 (convergence invariant)."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.3)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)
@@ -133,8 +125,6 @@ class TestProjectMultiYearAdaptive:
         A loose enough target (50%) lets adaptive bisection converge quickly;
         the surfaced error estimate must be <= that target.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.3)
         curve = project_multi_year(scenario, finance, error_target_pct=50.0, simulate=sim)
@@ -144,8 +134,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_per_year_curves_monotone_after_adaptive(self) -> None:
         """Per-year curves remain monotone non-increasing after adaptive refinement."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.4)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)

@@ -1,0 +1,206 @@
+# Machine-readable twin of job-events-and-sse-framing.capability-manifest.md (stream S20).
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it at decompose.
+# Every mechanical delivered_check was polarity-checked on main 1fa8f79 (2026-10-16):
+# each 'present' pattern is absent today and each 'absent' pattern is present today.
+prd: docs/prds/job-events-and-sse-framing.md
+schema_version: 1
+signal_leaves: ["δ"]
+tasks:
+  - label: "α"
+    task_id: 880
+    title: "One SSE module frames both streams; the chat's failure event is failed"
+    capabilities:
+      - name: "one-encoder"
+        binding: "own-task — web/sse.py sse_frame(event: SseEvent[P], payload: P, *, event_id, retry_ms); probe 2026-10-16: mypy --strict rejects a mismatched payload"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def sse_frame"
+          paths: ["src/solar_challenge/web/sse.py"]
+          expect: present
+      - name: "one-response-policy"
+        binding: "own-task — web/sse.py event_stream(frames); today two copies (assistant._event_stream, api.get_job_progress's Response)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "X-Accel-Buffering"
+          paths: ["src/solar_challenge/web/assistant.py", "src/solar_challenge/web/api.py"]
+          expect: absent
+      - name: "assistant-writes-no-frame"
+        binding: "producer: 713 upstream (assistant._sse_frame); own-task moves it into sse.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "[\"']event: "
+          paths: ["src/solar_challenge/web/assistant.py"]
+          expect: absent
+      - name: "assistant-page-reads-failed"
+        binding: "own-task — assistant.js handles the failed event; e2e test with a chat answer faked by sse_frame(CHAT_FAILED, ...)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "'failed'"
+          paths: ["src/solar_challenge/web/static/js/assistant.js"]
+          expect: present
+  - label: "β"
+    task_id: 883
+    title: "One job state table and writer; every job ends; run status follows the job"
+    capabilities:
+      - name: "job-transition-table"
+        binding: "own-task — LEGAL_JOB_TRANSITIONS, TERMINAL_JOB_STATUSES derived, keys == get_args(JobStatus) (JobStatus with 'cancelled' from 819 upstream)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "LEGAL_JOB_TRANSITIONS"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: present
+      - name: "illegal-transition-refused"
+        binding: "own-task — check_job_transition raises IllegalJobTransition naming job, run, from and to; B6 authors (completed, failed)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def check_job_transition"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: present
+      - name: "run-completion-written-by-the-lifecycle"
+        binding: "own-task — RunStorage.mark_run_completed; producer: 806 upstream (create_run, mark_run_failed, fail_interrupted_runs)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def mark_run_completed"
+          paths: ["src/solar_challenge/web/storage.py"]
+          expect: present
+      - name: "save-writes-no-status"
+        binding: "own-task — save_home_run/save_fleet_run lose their status parameter"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "status: RunStatus = \"completed\""
+          paths: ["src/solar_challenge/web/storage.py"]
+          expect: absent
+      - name: "runner-passes-no-status"
+        binding: "own-task — the runners stop passing status to save_*"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "status=\"completed\""
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+      - name: "every-finished-job-is-terminal"
+        binding: "own-task — done-callback order (PRD §3.4); stdlib shutdown(cancel_futures=True) runs callbacks; cancel_run sets the flag before Future.cancel()"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a lifecycle property observed by B4 and B5 through JobManager's public methods and the HTTP API"
+  - label: "γ"
+    task_id: 886
+    title: "Versioned job snapshots replace the drained queue; every stream sees every state"
+    capabilities:
+      - name: "snapshot-read"
+        binding: "own-task — JobManager.job_snapshot; producer: β upstream (the writer bumps the version)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def job_snapshot"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: present
+      - name: "event-queue-gone"
+        binding: "own-task — deletes _TrackedJob.events, get_events (or 680's take_events), JobEvent, JobEventType"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def get_events|def take_events|class JobEvent\\b|JobEventType"
+          paths: ["src/solar_challenge/web"]
+          expect: absent
+      - name: "late-subscriber-branch-gone"
+        binding: "own-task — deletes api._FINAL_EVENT_TYPE_BY_STATUS and the compensating terminal branch"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_FINAL_EVENT_TYPE_BY_STATUS"
+          paths: ["src/solar_challenge/web"]
+          expect: absent
+      - name: "stream-resumes-from-last-event-id"
+        binding: "own-task server side; probe 2026-10-16: Chromium sends Last-Event-ID on reopen"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Last-Event-ID"
+          paths: ["src/solar_challenge/web"]
+          expect: present
+      - name: "api-frames-nothing"
+        binding: "own-task — the route returns event_stream(job_progress_frames(...)); producer: α upstream"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "[\"']event: |:heartbeat"
+          paths: ["src/solar_challenge/web/api.py"]
+          expect: absent
+  - label: "δ"
+    task_id: 888
+    title: "The job stream's vocabulary, the limit as timeout, and one browser reader"
+    note: "Integration gate: every row of PRD §10 green on main together."
+    capabilities:
+      - name: "timeout-event"
+        binding: "own-task — JOB_STREAM_TIMED_OUT ends a stream at JobStreamPolicy.limit_seconds (D21); probe 2026-10-16: Chromium reopens after retry"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "JOB_STREAM_TIMED_OUT"
+          paths: ["src/solar_challenge/web/sse.py"]
+          expect: present
+      - name: "untracked-event"
+        binding: "own-task — JOB_UNTRACKED for an id no manager tracks"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "JOB_UNTRACKED"
+          paths: ["src/solar_challenge/web/sse.py"]
+          expect: present
+      - name: "error-payloads-gone"
+        binding: "own-task — the {error} timeout and not-found frames (moved into sse.py unchanged by γ) are replaced by typed events. The check names the timeout text only: 'Job not found' also answers GET /api/jobs/<id>'s 404 JSON, which stays"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "SSE stream timed out"
+          paths: ["src/solar_challenge/web/sse.py", "src/solar_challenge/web/api.py"]
+          expect: absent
+      - name: "one-browser-reader"
+        binding: "own-task — job-progress-stream.js followJobProgress opens the EventSource; the two pages pass callbacks"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "new EventSource"
+          paths: ["src/solar_challenge/web/static/js/progress-tracker.js", "src/solar_challenge/web/static/js/parameter-sweep.js"]
+          expect: absent
+      - name: "reader-handles-timeout"
+        binding: "own-task — the break after timeout reopens without the reconnecting indicator; task 648's give-up timer stays armed"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "'timeout'"
+          paths: ["src/solar_challenge/web/static/js/job-progress-stream.js"]
+          expect: present
+      - name: "tracker-reads-one-payload-shape"
+        binding: "own-task — deletes progress-tracker.js's data.message || data.error"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "data\\.message \\|\\| data\\.error"
+          paths: ["src/solar_challenge/web/static/js/progress-tracker.js"]
+          expect: absent
+      - name: "sweep-parses-no-frame"
+        binding: "own-task — parameter-sweep.js takes JobState from the reader's callbacks"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "JSON\\.parse"
+          paths: ["src/solar_challenge/web/static/js/parameter-sweep.js"]
+          expect: absent
+      - name: "browser-follows-through-timeouts"
+        binding: "probe 2026-10-16 (reopen + Last-Event-ID); producers α, γ upstream; 814 and 819 upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "observed by the e2e test B14 against the live server with a one-second stream limit"

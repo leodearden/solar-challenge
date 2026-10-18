@@ -1,0 +1,377 @@
+# Machine-readable twin of finance-partition.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it. ι and κ are held for S29 (x_seam_wait).
+prd: docs/prds/finance-partition.md
+schema_version: 1
+signal_leaves: ["ζ", "η", "θ"]
+tasks:
+  - label: "α"
+    task_id: 917
+    title: "finance.py's prose says what the code does; history and reviewer answers leave it"
+    capabilities:
+      - name: "codenames-gone-from-finance"
+        binding: "probe: 40 codename hits in finance.py at c06d12b (21 match this pattern); α rehomes or deletes them"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'CR[0-9]|Suggestion [0-9]|§12-Q4|step-[0-9]+ skeleton|W1-delta|relocated from config\.py'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "no-side-effects-claim-gone"
+        binding: "grep:finance.py:: module docstring claims no side-effects today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'no side-effects'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "pchip-linearity-claim-gone"
+        binding: "grep:finance.py::solve_cost_recovery_rate and the model doc's §5 claim PCHIP is linear"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'linear operator on node values|PCHIP interpolation and .project_economics. are both linear'
+          paths: ["src/solar_challenge/finance.py", "docs/cost-recovery-finance-model.md"]
+          expect: absent
+      - name: "bill-distribution-docstrings-say-outlay"
+        binding: "grep:finance.py::BillDistribution says net annual bill and median-net-bill today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'net annual bill|median-net-bill'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "provides-list-complete"
+        binding: "the Provides list names all 14 public classes and functions (today 7); a reading judgement"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the Provides list's completeness is checked by review against the module's public names"
+  - label: "β"
+    task_id: 922
+    title: "How a run was priced travels as data; finance stops inferring it"
+    capabilities:
+      - name: "run-pricing-type"
+        binding: "producer:β — new in home.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^class RunPricing\b'
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "pricing-fields-on-results-and-summary"
+        binding: "producer:β — SimulationResults.pricing and SummaryStatistics.pricing, last defaulted fields"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^    pricing: Optional\[RunPricing\]'
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "zero-cost-inference-gone"
+        binding: "grep:finance.py::_physics_import_cost_gbp infers unpriced from cost == 0.0 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'import_cost_physics == 0\.0 and'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "rate-ratio-reconstructions-gone"
+        binding: "grep:finance.py::householder_bill and _seg_export_income_gbp derive rates by ratio today (6 hits)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'effective_export_rate_pence|effective_import_rate_pence'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "pricing-less-summary-refused"
+        binding: "rejection mechanism authored in β; B2 observes it fire, naming pricing and calculate_summary"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the refusal's message is asserted by B2's test"
+      - name: "zero-tariff-bills-zero-and-override-seg-at-home-rate"
+        binding: "identity: 1,200 kWh × 4.1 p = £49.20; task 690's probe for the £0 tariff's RED"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "figures are asserted by B2 and B3's tests"
+  - label: "γ"
+    task_id: 925
+    title: "One ledger per home, read by the bill and the projection; the lower interface is public"
+    capabilities:
+      - name: "home-ledger-type"
+        binding: "producer:γ — new in finance.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^class HomeLedger\b'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "home-ledger-producer"
+        binding: "producer:γ — the one path from a summary to the billed year"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def home_ledger\('
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "cash-flow-maths-public"
+        binding: "producer:γ — annuity_payment, npv, irr replace the privates"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def irr\('
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "billing-privates-gone"
+        binding: "grep: 66 hits in src and tests at c06d12b; γ deletes the helpers and repoints the tests"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '_billed_energy|_cbs_own_use_kwh|_seg_export_income_gbp|_physics_import_cost_gbp|_annualise_physics'
+          paths: ["src", "tests"]
+          expect: absent
+      - name: "maths-privates-gone"
+        binding: "grep: 27 hits in src and tests at c06d12b"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '_annuity_payment|_irr_bisection|\b_npv\b'
+          paths: ["src", "tests"]
+          expect: absent
+      - name: "ledger-invariants-fire"
+        binding: "rejection mechanism authored in γ; B4 observes L2, L3 and L4 refuse with the values named"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal messages are asserted by B4's tests"
+      - name: "one-ledger-read-twice"
+        binding: "producer:γ; B5 compares each home's bill own-use with its age-0 ledger own-use in the projection"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the equality is asserted by B5's test"
+  - label: "δ"
+    task_id: 928
+    title: "projection.py: the projection, economics and solve move above finance"
+    capabilities:
+      - name: "projection-module-holds-the-projection"
+        binding: "producer:δ — new module"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def project_multi_year\('
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "finance-holds-no-projection"
+        binding: "grep:finance.py::project_multi_year today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def project_multi_year\(|^def project_economics\(|^class MultiYearCurve\b'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "one-scenario-resolution"
+        binding: "producer:δ — scenario_fleet replaces three resolutions"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def scenario_fleet\('
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "optimize-imports-no-private"
+        binding: "grep:optimize.py imports finance._resolve_homes today (3 hits)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '_resolve_homes'
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "finance-has-no-simulator-local-imports"
+        binding: "grep: 10 function-local battery/fleet/home/pv import lines in finance.py today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^[[:space:]]+from solar_challenge\.(battery|fleet|home|pv) import'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "allow-list-finance-entries-gone"
+        binding: "producer:task-775 lists them under _FINANCE_PARTITION; δ deletes them"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the allow-list file exists only on unmerged task/775, so an absent grep passes vacuously on main; B7's test_import_structure run asserts the four entries gone"
+      - name: "finance-stays-pvlib-free"
+        binding: "S16 I10 probe; B7 asserts sys.modules after import solar_challenge.finance"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a fresh-interpreter probe in B7's test, not a grep"
+  - label: "ε"
+    task_id: 929
+    title: "The projection as a node function, one metric tuple and a pure assembler; revenue affine by construction"
+    capabilities:
+      - name: "fleet-projection-producer"
+        binding: "producer:ε"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def project_fleet\('
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "no-age-closure"
+        binding: "grep:finance.py::project_multi_year._simulate_age today; δ moves it, ε replaces it with a module-level node"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^[[:space:]]+def _simulate_age\('
+          paths: ["src/solar_challenge/projection.py", "src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "solve-exact-and-rate-free"
+        binding: "identity: revenue_y = r·OU_y/100 + C_y, nodes chosen without the rate; B8"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "exactness and r0-independence are asserted by B8's test"
+      - name: "deviation-scale-robust"
+        binding: "producer:ε; B9's zero-age-0-income fixture converges below MAX_NODES"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "convergence is asserted by B9's test"
+  - label: "ζ"
+    task_id: 930
+    title: "One projection per run serves the solve, the economics and the age-0 outlays"
+    capabilities:
+      - name: "cost-recovery-run-producer"
+        binding: "producer:ζ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def run_cost_recovery\('
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "baseline-outlay-copy-gone"
+        binding: "grep:optimize.py::_age0_baseline_outlay today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'def _age0_baseline_outlay'
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "solve-second-age0-sim-gone"
+        binding: "grep:finance.py::solve_cost_recovery_rate names its separate age-0 fleet cr4-solve-age0 today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'cr4-solve-age0'
+          paths: ["src"]
+          expect: absent
+      - name: "configured-rate-not-a-literal"
+        binding: "probe: 17 '15p' literals across optimize.py, output.py and cli/optimize.py today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'Fixed-15p|15 ?p/kWh|\b15p\b'
+          paths: ["src/solar_challenge/optimize.py", "src/solar_challenge/output.py", "src/solar_challenge/board_report.py", "src/solar_challenge/cli/optimize.py"]
+          expect: absent
+      - name: "simulation-counts"
+        binding: "probe: _evaluate_config 12 and finance run 12 calls today with a counting constant simulate; B10 asserts 5 and 6"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "call counts are asserted by B10's tests"
+  - label: "η"
+    task_id: 934
+    title: "CostRecoverySolution refuses copies that disagree with their source"
+    capabilities:
+      - name: "config-result-copies-become-properties"
+        binding: "grep:optimize.py::ConfigResult declares representative_outlay_gbp as a field today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^    representative_outlay_gbp: float'
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "solution-copies-refused"
+        binding: "rejection mechanism authored in η; B13 observes it fire (today the inconsistent solution constructs)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "refusal messages are asserted by B13's tests"
+  - label: "θ"
+    task_id: 936
+    title: "Capex prices the PV DC the curve's generation came from"
+    capabilities:
+      - name: "curve-carries-its-pv-basis"
+        binding: "producer:θ — MultiYearCurve.fleet_pv_dc_kw"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'fleet_pv_dc_kw'
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "physics-curve-sums-wired-dc"
+        binding: "grep:pv.py::wired_dc_capacity_kw; producer:task-812"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'wired_dc_capacity_kw'
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "nameplate-capex-read-gone"
+        binding: "grep:finance.py::project_economics reads pv_config.capacity_kw for capex today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'pv_kwp = home\.pv_config\.capacity_kw'
+          paths: ["src/solar_challenge/projection.py", "src/solar_challenge/finance.py"]
+          expect: absent
+      - name: "board-and-gate-figures"
+        binding: "probe: 420.449 wired against 430.0 nameplate kWp; identity: the £775,000 gate on 550 kWp"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "figures are asserted by B14's tests and recorded on the task after 812"
+  - label: "ι"
+    task_id: 939
+    title: "Held for S29: solve_cost_recovery_rate is defined in projection"
+    note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
+    capabilities:
+      - name: "symbol-module-repointed"
+        binding: "grep:__init__.py::_SYMBOL_MODULE maps the solve to finance today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '"solve_cost_recovery_rate": "projection"'
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "finance-wrapper-gone"
+        binding: "producer:δ adds the transitional wrapper; ι deletes it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def solve_cost_recovery_rate\('
+          paths: ["src/solar_challenge/finance.py"]
+          expect: absent
+  - label: "κ"
+    task_id: 941
+    title: "Held for S29: BillDistribution.per_home_total_outlay_gbp"
+    note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
+    capabilities:
+      - name: "misnamed-field-gone"
+        binding: "grep: 27 hits of per_home_net_bill_gbp in src and tests today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'per_home_net_bill_gbp'
+          paths: ["src", "tests"]
+          expect: absent
+      - name: "renamed-field-present"
+        binding: "producer:κ — the field declaration (today the name appears only in deprecation prose)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^    per_home_total_outlay_gbp: tuple'
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present

@@ -17,11 +17,15 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pytest
 
+from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
+from solar_challenge.flex import resolve_flex_band
+from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather
 
 pytestmark = pytest.mark.integration
@@ -43,8 +47,6 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
     grid_charging:` → every battery home; `fleet_distribution.dispatch_strategy:` →
     every home.
     """
-    from solar_challenge.config import load_fleet_config
-
     fleet = load_fleet_config(SCENARIO)
     battery_homes = [h for h in fleet.homes if h.battery_config is not None]
     assert battery_homes, "Expected at least some homes with a battery in the flex scenario"
@@ -103,28 +105,26 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     - import_cost_gbp(ON) < import_cost_gbp(OFF)
     - annualised delta ∈ [£100, £330]  (PRD §9.1 Seam 3 / §11 PASS gate)
     """
-    from solar_challenge.config import FinanceConfig, load_config, load_fleet_config
-    from solar_challenge.finance import householder_bill
-    from solar_challenge.home import calculate_summary, simulate_home
-
     fleet = load_fleet_config(SCENARIO)
 
     # Pick the first battery home deterministically
-    home_on: Optional[object] = None
-    for h in fleet.homes:
-        if h.battery_config is not None:
-            home_on = h
-            break
-    assert home_on is not None, "Expected at least one battery home in the flex scenario"
+    first_battery_home = next(
+        ((h, h.battery_config) for h in fleet.homes if h.battery_config is not None),
+        None,
+    )
+    assert first_battery_home is not None, (
+        "Expected at least one battery home in the flex scenario"
+    )
+    home_on, battery_on = first_battery_home
 
     # Derive OFF variant — same as ON but with grid_charging removed
-    off_batt = dataclasses.replace(home_on.battery_config, grid_charging=None)  # type: ignore[union-attr]
-    home_off = dataclasses.replace(home_on, battery_config=off_batt)
+    battery_off = dataclasses.replace(battery_on, grid_charging=None)
+    home_off = dataclasses.replace(home_on, battery_config=battery_off)
 
     start = end = pd.Timestamp("2024-01-15")
     weather = sunless_weather("2024-01-15", temp_air=8.0)
 
-    res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)  # type: ignore[arg-type]
+    res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)
     res_off = simulate_home(home_off, start, end, weather_data=weather, validate_balance=True)
 
     # ---- Corroborating assertions (mechanism must fire) -----------------------
@@ -185,12 +185,6 @@ def test_finance_report_renders_flex_value_block() -> None:
 
     Additive: default None → output bit-identical (no flex block).
     """
-    from solar_challenge.config import FinanceConfig
-    from solar_challenge.finance import bill_distribution
-    from solar_challenge.flex import resolve_flex_band
-    from solar_challenge.home import SummaryStatistics
-    from solar_challenge.output import generate_finance_report
-
     # Build a minimal synthetic summary (mirrors _make_summary in test_finance_bill.py)
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0

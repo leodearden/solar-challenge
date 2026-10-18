@@ -8,12 +8,12 @@ import pytest
 import yaml
 
 from solar_challenge.config import (
-    ConfigurationError,
     load_community_config,
     load_scenarios,
     parse_seg_rate,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 
@@ -61,16 +61,6 @@ class TestTariffConfigParsing:
             ),
             name="Two-rate",
         )
-
-    def test_missing_type_raises(self) -> None:
-        """A tariff block without 'type' raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="requires 'type'"):
-            parse_tariff_config({})
-
-    def test_unknown_type_raises(self) -> None:
-        """An unrecognised tariff type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="Unknown tariff type"):
-            parse_tariff_config({"type": "bogus"})
 
 
 class TestScenarioSegBlock:

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_css_classes.py, the reader of the CSS names the dashboard
-uses and its stylesheets define: classes, custom properties, @keyframes, and the
-properties class rules declare and inline styles set.
+uses and its stylesheets define: classes, custom properties, @keyframes, the
+properties class rules declare and inline styles set, and the colour palettes
+classes name.
 
 Each test pins one extraction rule, so an edit that weakens a reader fails here
 instead of letting a repository guard that uses it pass vacuously.
@@ -20,6 +21,7 @@ from tests._css_classes import (
     inline_styled_elements,
     keyframes_names,
     linked_stylesheets,
+    names_palette,
     selector_classes,
 )
 
@@ -88,6 +90,28 @@ def test_jinja_class_parameters_count_macro_defaults_and_call_keywords_in_both_b
         "w-6",
         "bg-red-600",
         "hover:bg-red-700",
+    }
+
+
+def test_jinja_set_variables_naming_classes_count_their_strings_and_their_dicts_values_not_keys() -> None:
+    """A ``{% set %}`` variable named ``classes`` or ending ``_class`` or ``_classes`` carries
+    classes, as a parameter does; ``title`` does not. A dict's keys pick a class list, so only
+    its values count: none of 'running', 'failed' or 'pending' is a class."""
+    source = (
+        "{% set _badge_classes = 'inline-flex rounded-full' %}"
+        "{% set status_classes = {'running': 'bg-amber-100',"
+        " 'failed': 'bg-red-100' if loud else 'bg-red-50', 'pending': _badge_classes} %}"
+        "{% set active_class = 'font-bold' %}"
+        "{% set title = 'Recent Runs' %}"
+    )
+
+    assert applied_classes_in_template(source) == {
+        "inline-flex",
+        "rounded-full",
+        "bg-amber-100",
+        "bg-red-100",
+        "bg-red-50",
+        "font-bold",
     }
 
 
@@ -319,3 +343,21 @@ def test_declared_and_inline_property_names_are_lower_cased_except_custom_proper
             inline_properties=frozenset({"-webkit-line-clamp", "--Bar-Color"}),
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("css_class", "named"),
+    [
+        pytest.param("bg-primary-500", True, id="plain shade"),
+        pytest.param("dark:[&::-webkit-slider-thumb]:bg-primary-400", True, id="arbitrary variant"),
+        pytest.param("dark:bg-primary-900/20", True, id="opacity modifier"),
+        pytest.param("focus:ring-offset-primary-500", True, id="multi-part utility"),
+        pytest.param("bg-primary", False, id="DEFAULT shade"),
+        pytest.param("btn--primary", False, id="hand-written modifier"),
+        pytest.param("bg-notprimary-500", False, id="palette name inside another word"),
+    ],
+)
+def test_names_palette_reads_a_shade_suffix_whatever_the_variants(
+    css_class: str, named: bool
+) -> None:
+    assert names_palette(css_class, "primary") is named

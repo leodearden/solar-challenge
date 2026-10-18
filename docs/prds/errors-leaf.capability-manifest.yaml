@@ -1,0 +1,139 @@
+# Machine-readable twin of errors-leaf.capability-manifest.md
+# Code anchors verified against main 1251be0e621a (2026-10-14); checks are pattern-anchored.
+prd: docs/prds/errors-leaf.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: 773
+    title: "Errors leaf: ConfigurationError lives in solar_challenge/errors.py, imported at module top everywhere"
+    capabilities:
+      - name: "errors-module-exists"
+        binding: "delivered by α (new file); absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["src/solar_challenge/errors.py"]
+          expect: present
+      - name: "config-no-longer-defines-the-class"
+        binding: "grep: config.py defines `class ConfigurationError(Exception)` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class ConfigurationError"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "cycle-break-imports-deleted"
+        binding: "grep: 11 indented `from solar_challenge.config import ConfigurationError` in finance.py (2) and gridservices.py (9) on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^\\s+from solar_challenge\\.config import ConfigurationError"
+          paths: ["src/solar_challenge/finance.py", "src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "cycle-prose-deleted"
+        binding: "grep: gridservices module docstring's 'Import cycle note' on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Import cycle note"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "importers-repointed-to-errors"
+        binding: "grep: single-line `from solar_challenge.config import ConfigurationError` in cli/utils, web/api, finance, gridservices and 7 test files on main; mypy --strict refuses the src ones after the move (probed)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "from solar_challenge\\.config import ConfigurationError"
+          paths: ["src/", "tests/"]
+          expect: absent
+      - name: "errors-module-named-in-src-and-consumer-guide"
+        binding: "grep: `solar_challenge.errors` appears nowhere in src or the consumption guide on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "solar_challenge\\.errors"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "finance-construction-loads-no-config-or-pvlib"
+        binding: "probe on main: FinanceConfig(...) and GridServicesEventsConfig() load solar_challenge.config and pvlib (RED); α's fresh-interpreter test asserts both absent"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a sys.modules property observed in a subprocess by α's own test, not greppable"
+  - label: "β"
+    task_id: 774
+    title: "ConfigurationError subclasses ValueError; uniform raises; no refusal relabelled"
+    capabilities:
+      - name: "configuration-error-is-a-value-error"
+        binding: "producer: α upstream supplies errors.py; base class changed by β"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class ConfigurationError\\(ValueError\\)"
+          paths: ["src/solar_challenge/"]
+          expect: present
+      - name: "rate-band-cycle-justification-deleted"
+        binding: "grep: GridServicesRateBand.__post_init__ '.. note::' on main says it 'intentionally raises ``ValueError``' because of the cycle"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "intentionally raises ``ValueError``"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: absent
+      - name: "consumer-guide-names-the-base-class"
+        binding: "grep: the consumption guide does not state the subclass relation on main; β's Unreleased line does"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "ConfigurationError` subclasses `ValueError`"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "event-window-refusal-not-relabelled"
+        binding: "ran on main: finance run on months [13] prints the EventWindow message; naive subclass relabels it 'contains a non-numeric value' (probed); β's CliRunner test pins it"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "CLI output judged by β's own test (C2); the fix's form is tactical"
+      - name: "sensitivity-panel-refusal-not-skipped"
+        binding: "grep: cli/optimize.configs wraps sensitivity_panel in `except ValueError`; injectable simulator via tests/_cli_fleet_simulator.invoke_cli"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "exit code and stderr judged by β's own test (C3)"
+      - name: "cli-labels-keep-their-order"
+        binding: "grep: cli/utils.handle_errors catches ConfigurationError before ValueError; both commands verified at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "label order judged by β's own CliRunner test (C1); a grep cannot see clause order"
+      - name: "rate-band-and-flex-band-raise-configuration-error"
+        binding: "grep: plain `raise ValueError` in GridServicesRateBand (2) and FlexibilityValueBand (6) __post_init__ on main; flex's resolve_flex_band keeps ValueError, so no module-wide pattern"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "per-class raise type judged by β's tightened pytest.raises(ConfigurationError) cases"
+  - label: "γ"
+    task_id: 775
+    title: "Import-structure guard (INV-5): function-local package imports only by an owned allow-list"
+    capabilities:
+      - name: "guard-test-module-exists"
+        binding: "delivered by γ (new file); absent on main"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_import_structure.py"]
+          expect: present
+      - name: "briefing-points-at-the-guard"
+        binding: "grep: review/briefing.yaml has a `conventions:` list; no entry names the guard on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_import_structure"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "allow-list-entries-owned-or-ratified"
+        binding: "PRD §7 table: every post-α entry is Permanent(contract) or Transitional(owner); producer α upstream removes the 11"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "entry classification is a judgment the reviewer checks against PRD §7"

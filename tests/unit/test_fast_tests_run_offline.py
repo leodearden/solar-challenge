@@ -6,7 +6,7 @@ separate pytest session under a copy of tests/conftest.py, in a directory of its
 own, as in tests/unit/test_web_jobs_drain_scope.py.
 """
 
-import numpy as np
+import pandas as pd
 import pytest
 
 from solar_challenge.location import Location
@@ -24,8 +24,7 @@ def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache(weather_cach
     seeded = synthetic_june_weather("2024-06-21")
     weather_cache.put(seeded, "tmy", Location.bristol())
 
-    # The cache's CSV round trip keeps the instants but turns the zone into a fixed offset.
-    np.testing.assert_array_equal(get_tmy_data(Location.bristol()).to_numpy(), seeded.to_numpy())
+    pd.testing.assert_frame_equal(get_tmy_data(Location.bristol()), seeded, check_exact=True)
 
 
 def test_a_fast_test_that_fetches_a_tmy_fails_and_leaves_no_weather_cache_behind(suite: pytest.Pytester) -> None:

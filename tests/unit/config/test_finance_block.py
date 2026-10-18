@@ -3,23 +3,40 @@
 
 import dataclasses
 import itertools
+import math
 import pickle
+import re
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import pytest
 
 from solar_challenge.config import (
-    ConfigurationError,
-    FinanceConfig,
     ScenarioConfig,
     SimulationPeriod,
     load_scenarios,
     parse_finance_config,
 )
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+
+_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
+_FLOAT_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
+)
+_NUMERIC_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
+)
+_TOO_LARGE_FOR_A_FLOAT = 10**400
 
 
 class TestFinanceConfig:
@@ -237,6 +254,33 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, asset_life_years=15, loan_term_years=15)
         assert fc.asset_life_years == 15
 
+    # ---- year counts (whole numbers) ----
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    @pytest.mark.parametrize("value", [20.5, True, pytest.param(np.True_, id="numpy-bool")])
+    def test_a_year_count_that_is_not_a_whole_number_is_refused(
+        self, field: str, value: object
+    ) -> None:
+        """A fractional or boolean year count is refused, naming the field and the value."""
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(f"{field} must be a finite whole number, got {value}"),
+        ):
+            FinanceConfig(**self._BASE, **{field: value})
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    @pytest.mark.parametrize(
+        "value", [pytest.param(20.0, id="float"), pytest.param(np.int64(20), id="numpy-int64")]
+    )
+    def test_a_whole_number_year_count_of_another_numeric_type_is_held_as_an_int(
+        self, field: str, value: object
+    ) -> None:
+        """A whole-number float or numpy integer year count is held as the int it equals."""
+        config = FinanceConfig(**self._BASE, **{field: value})
+
+        assert getattr(config, field) == 20
+        assert type(getattr(config, field)) is int
+
     # ---- cost fields (must be > 0) ----
 
     def test_standing_charge_zero_raises(self) -> None:
@@ -329,18 +373,26 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=0.0)
         assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
 
+    # ---- every number (finite) ----
 
-_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
-_FLOAT_FIELDS = tuple(
-    f.name
-    for f in dataclasses.fields(FinanceConfig)
-    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
-)
-_NUMERIC_FIELDS = tuple(
-    f.name
-    for f in dataclasses.fields(FinanceConfig)
-    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
-)
+    @pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(math.nan, id="nan"),
+            pytest.param(math.inf, id="inf"),
+            pytest.param(-math.inf, id="-inf"),
+        ],
+    )
+    def test_a_number_that_is_not_finite_is_refused_naming_its_field(
+        self, field: str, value: float
+    ) -> None:
+        """A NaN or infinite value for any numeric field is refused, naming the field and the value."""
+        with pytest.raises(
+            ConfigurationError,
+            match=rf"^{re.escape(field)} must be .+, got {re.escape(str(value))}$",
+        ):
+            FinanceConfig(**{**self._BASE, field: value})
 
 
 class TestFinanceConfigParsing:
@@ -508,7 +560,7 @@ class TestFinanceConfigParsing:
                 {"standing_charge_pence_per_day": 60.0, "grid_services_model": None}
             )
 
-    @pytest.mark.parametrize(("first", "second"), itertools.pairwise(_NUMERIC_FIELDS))
+    @pytest.mark.parametrize(("first", "second"), list(itertools.pairwise(_NUMERIC_FIELDS)))
     def test_first_declared_of_two_non_numeric_values_is_reported(
         self, first: str, second: str
     ) -> None:
@@ -523,6 +575,33 @@ class TestFinanceConfigParsing:
         block.setdefault("standing_charge_pence_per_day", 60.0)
         with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
             parse_finance_config(block)
+
+    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_numeric_value_is_refused(self, key: str, value: bool) -> None:
+        """A boolean for a numeric key is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    def test_a_fractional_year_count_is_refused_not_truncated(self, field: str) -> None:
+        """A fractional year count reaches FinanceConfig, which refuses it, rather than being truncated to a whole year."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{field} must be a finite whole number, got 20.7")
+        ):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, field: 20.7})
+
+    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
+    def test_a_number_too_large_for_a_float_is_refused_as_a_configuration_error(
+        self, key: str
+    ) -> None:
+        """An integer too large for a float, as YAML can hold, is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
+            parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, key: _TOO_LARGE_FOR_A_FLOAT}
+            )
 
 
 class TestScenarioFinance:
@@ -628,6 +707,31 @@ class TestScenarioFinance:
             grid_services_income_per_kw_per_year_gbp=8.0,
         )
 
+    def test_load_scenarios_refuses_a_nan_finance_cost_naming_its_key(self, tmp_path: Path) -> None:
+        """A YAML .nan finance cost is refused, naming its key and the value, rather than read as NaN."""
+        yaml_content = (
+            "name: NaN Cost Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+            "finance:\n"
+            "  standing_charge_pence_per_day: 65.0\n"
+            "  pv_cost_per_kwp_gbp: .nan\n"
+        )
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
+
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape("pv_cost_per_kwp_gbp must be > 0 and finite, got nan"),
+        ):
+            load_scenarios(path)
+
 
 class TestFinanceConfigGridServicesModel:
     """FinanceConfig.grid_services_model + grid_services_events fields."""
@@ -658,10 +762,41 @@ class TestFinanceConfigGridServicesModel:
         assert fc.grid_services_events is None
 
 
+_EVENTS_NUMERIC_KEYS = tuple(
+    f.name
+    for f in dataclasses.fields(GridServicesEventsConfig)
+    if f.name not in {"band", "event_windows"}
+)
+
+
 class TestFinanceConfigParsingGridServices:
     """Tests for parse_finance_config with grid_services_model + grid_services_events."""
 
     _BASE = {"standing_charge_pence_per_day": 60.0}
+    _WINDOW: dict[str, object] = {
+        "months": [12],
+        "weekdays": [0],
+        "hours": [17],
+        "events_per_year": 1,
+        "event_hours": 1.0,
+    }
+    _EVENTS_BLOCK: dict[str, object] = {
+        "band": "high",
+        "event_windows": [_WINDOW],
+        "aggregator_share": 0.1,
+        "utilisation_factor": 0.8,
+        "availability_gbp_per_kw_per_event": 2.5,
+        "utilisation_gbp_per_mwh": 80.0,
+    }
+    _EVENTS_FIELDS: dict[str, object] = {
+        **_EVENTS_BLOCK,
+        "event_windows": (
+            EventWindow(months=(12,), weekdays=(0,), hours=(17,), events_per_year=1, event_hours=1.0),
+        ),
+    }
+
+    def _parse_events_block(self, block: object) -> Optional[FinanceConfig]:
+        return parse_finance_config({**self._BASE, "grid_services_events": block})
 
     def test_capacity_at_events_with_nested_events_block(self) -> None:
         """grid_services_model='capacity_at_events' + events block parses fully."""
@@ -840,3 +975,172 @@ class TestFinanceConfigParsingGridServices:
         assert parse_finance_config(
             {**self._BASE, "grid_services_events": None}
         ) == FinanceConfig(**self._BASE)
+
+    @pytest.mark.parametrize(
+        ("key", "refusal"),
+        [
+            pytest.param("band", "band must be one of", id="band"),
+            pytest.param(
+                "event_windows", "event_windows must be a list of window dicts", id="event_windows"
+            ),
+            pytest.param("aggregator_share", "non-numeric", id="aggregator_share"),
+            pytest.param("utilisation_factor", "non-numeric", id="utilisation_factor"),
+        ],
+    )
+    def test_null_events_value_is_refused(self, key: str, refusal: str) -> None:
+        """A null for an events key whose declared default is not None is refused for that key, not read as that default."""
+        with pytest.raises(ConfigurationError, match=refusal):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: None})
+
+    @pytest.mark.parametrize(
+        "key", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"]
+    )
+    def test_null_rate_override_parses_to_no_override(self, key: str) -> None:
+        """A null rate override parses to a GridServicesEventsConfig with no override."""
+        assert self._parse_events_block({**self._EVENTS_BLOCK, key: None}) == FinanceConfig(
+            **self._BASE,
+            grid_services_events=GridServicesEventsConfig(**{**self._EVENTS_FIELDS, key: None}),
+        )
+
+    @pytest.mark.parametrize(
+        "band",
+        [pytest.param(["high"], id="list"), pytest.param({"name": "high"}, id="mapping")],
+    )
+    def test_unhashable_band_is_refused_as_an_unknown_band(self, band: object) -> None:
+        """A list or mapping band, as malformed YAML can give, is refused by the band check, not as a raw TypeError or a non-numeric value."""
+        with pytest.raises(ConfigurationError, match="band must be one of"):
+            self._parse_events_block({**self._EVENTS_BLOCK, "band": band})
+
+    @pytest.mark.parametrize(
+        ("first", "second"), list(itertools.pairwise(_EVENTS_NUMERIC_KEYS))
+    )
+    def test_first_declared_of_two_non_numeric_events_values_is_reported(
+        self, first: str, second: str
+    ) -> None:
+        """Of two non-numeric events values, the error names the field GridServicesEventsConfig declares first.
+
+        The block lists the later-declared field first, so the block's key order cannot decide it.
+        """
+        block = {
+            second: f"not-a-number:{second}",
+            first: f"not-a-number:{first}",
+            "event_windows": [self._WINDOW],
+        }
+        with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
+            self._parse_events_block(block)
+
+    def test_malformed_event_window_is_reported_before_a_non_numeric_events_value(self) -> None:
+        """A malformed event window is reported before a non-numeric scalar of the events block."""
+        block = {
+            "aggregator_share": "not-a-number:aggregator_share",
+            "event_windows": [{**self._WINDOW, "event_hours": "not-a-number:event_hours"}],
+        }
+        with pytest.raises(ConfigurationError, match="'not-a-number:event_hours'"):
+            self._parse_events_block(block)
+
+    @pytest.mark.parametrize(
+        ("windows", "message"),
+        [
+            pytest.param(
+                "winter",
+                "scenario.finance.grid_services_events.event_windows"
+                " must be a list of window dicts",
+                id="not-a-list",
+            ),
+            pytest.param(
+                [{"months": [12], "weekdays": [0], "events_per_year": 1, "event_hours": 1.0}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " requires 'hours' field",
+                id="missing-key",
+            ),
+            pytest.param(
+                [{**_WINDOW, "event_hours": "abc"}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " contains a non-numeric value",
+                id="non-numeric",
+            ),
+        ],
+    )
+    def test_malformed_event_windows_are_refused_naming_their_path_in_the_file(
+        self, windows: object, message: str
+    ) -> None:
+        """An event_windows refusal names the list's path, taken from the finance block's own path."""
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
+            parse_finance_config(
+                {**self._BASE, "grid_services_events": {"event_windows": windows}},
+                block_path="scenario.finance",
+            )
+
+    @pytest.mark.parametrize("omitted", list(_EVENTS_BLOCK))
+    def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
+        """A key the grid_services_events block omits takes GridServicesEventsConfig's declared default.
+
+        An omitted event_windows is the default schedule, DEFAULT_EVENT_WINDOWS, not an error.
+        """
+        block = {key: value for key, value in self._EVENTS_BLOCK.items() if key != omitted}
+        fields = {key: value for key, value in self._EVENTS_FIELDS.items() if key != omitted}
+        assert self._parse_events_block(block) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig(**fields)
+        )
+
+    def test_empty_events_block_parses_to_the_declared_defaults(self) -> None:
+        """An empty grid_services_events block parses to the default events config, where a null block parses to none."""
+        assert self._parse_events_block({}) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig()
+        )
+
+    @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_events_value_is_refused(self, key: str, value: bool) -> None:
+        """A boolean for a numeric events key is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: value})
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_event_hours_is_refused(self, value: bool) -> None:
+        """A boolean event_hours is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            self._parse_events_block(
+                {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, "event_hours": value}]}
+            )
+
+    @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
+    def test_an_events_value_too_large_for_a_float_is_refused_as_a_configuration_error(
+        self, key: str
+    ) -> None:
+        """An events value too large for a float is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: _TOO_LARGE_FOR_A_FLOAT})
+
+    @pytest.mark.parametrize(
+        ("window_values", "overflow"),
+        [
+            pytest.param(
+                {"event_hours": _TOO_LARGE_FOR_A_FLOAT},
+                "int too large to convert to float",
+                id="event_hours-too-large-for-a-float",
+            ),
+            pytest.param(
+                {"events_per_year": math.inf},
+                "cannot convert float infinity to integer",
+                id="infinite-events_per_year",
+            ),
+            pytest.param(
+                {"hours": [math.inf]},
+                "cannot convert float infinity to integer",
+                id="infinite-hour",
+            ),
+        ],
+    )
+    def test_an_event_window_number_too_large_for_its_type_is_refused_as_a_configuration_error(
+        self, window_values: dict[str, object], overflow: str
+    ) -> None:
+        """An event-window number too large for its type is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match=overflow):
+            self._parse_events_block(
+                {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, **window_values}]}
+            )

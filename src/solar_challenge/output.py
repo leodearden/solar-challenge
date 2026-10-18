@@ -4,18 +4,30 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
-from solar_challenge.home import HOURS_PER_MINUTE, SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
     from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
-    from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityPanel
+    from solar_challenge.optimize import RankedSweep, SensitivityPanel
+
+
+_WINTER_MONTHS = (12, 1, 2)
+_SUMMER_MONTHS = (6, 7, 8)
+
+_TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
+
+
+def _in_months(rows: _TimeIndexed, months: tuple[int, ...]) -> _TimeIndexed:
+    """The rows of *rows* whose timestamps fall in *months*."""
+    return rows[rows.index.month.isin(months)]
 
 
 def export_to_csv(
@@ -95,20 +107,16 @@ def generate_summary_report(
 
         # Add seasonal breakdown if we have heat pump load data
         if results.heat_pump_load is not None:
-            # Calculate seasonal heat pump metrics
-            months = results.heat_pump_load.index.month
-            winter_mask = months.isin([12, 1, 2])
-            summer_mask = months.isin([6, 7, 8])
+            amounts = results.per_minute_amounts()
+            winter_totals = _in_months(amounts, _WINTER_MONTHS).sum()
+            summer_totals = _in_months(amounts, _SUMMER_MONTHS).sum()
+            winter_hp_load = _in_months(results.heat_pump_load, _WINTER_MONTHS)
+            summer_hp_load = _in_months(results.heat_pump_load, _SUMMER_MONTHS)
 
-            winter_hp_load = results.heat_pump_load[winter_mask]
-            summer_hp_load = results.heat_pump_load[summer_mask]
-            winter_demand = results.demand[winter_mask]
-            summer_demand = results.demand[summer_mask]
-
-            winter_hp_kwh = float(winter_hp_load.sum() * HOURS_PER_MINUTE) if len(winter_hp_load) > 0 else 0.0
-            summer_hp_kwh = float(summer_hp_load.sum() * HOURS_PER_MINUTE) if len(summer_hp_load) > 0 else 0.0
-            winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE) if len(winter_demand) > 0 else 0.0
-            summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE) if len(summer_demand) > 0 else 0.0
+            winter_hp_kwh = float(winter_totals["heat_pump_load_kwh"])
+            summer_hp_kwh = float(summer_totals["heat_pump_load_kwh"])
+            winter_demand_kwh = float(winter_totals["demand_kwh"])
+            summer_demand_kwh = float(summer_totals["demand_kwh"])
 
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
@@ -117,8 +125,8 @@ def generate_summary_report(
             summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
 
             # Calculate average daily values
-            winter_days = len(winter_hp_load) / (60 * 24) if len(winter_hp_load) > 0 else 1
-            summer_days = len(summer_hp_load) / (60 * 24) if len(summer_hp_load) > 0 else 1
+            winter_days = len(winter_hp_load) * HOURS_PER_MINUTE / 24 if len(winter_hp_load) > 0 else 1
+            summer_days = len(summer_hp_load) * HOURS_PER_MINUTE / 24 if len(summer_hp_load) > 0 else 1
             winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
             summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
 
@@ -229,94 +237,58 @@ def calculate_export_ratio(results: SimulationResults) -> float:
     return summary.export_ratio
 
 
-def calculate_seasonal_metrics(
-    demand: pd.Series,
-    generation: pd.Series,
-) -> dict[str, float]:
-    """Calculate seasonal breakdown of energy metrics (winter vs summer).
+def _share(part: float, whole: float) -> float:
+    """part / whole, or 0.0 when whole is not positive, the rule of calculate_summary's ratios."""
+    return float(part / whole) if whole > 0 else 0.0
 
-    Winter is defined as December, January, February.
-    Summer is defined as June, July, August.
 
-    Args:
-        demand: Demand time series with datetime index (kW)
-        generation: Generation time series with datetime index (kW)
+@dataclass(frozen=True, kw_only=True)
+class SeasonSummary:
+    """One season of a run: its energy totals in kWh, and calculate_summary's two ratios of them.
 
-    Returns:
-        Dictionary containing seasonal metrics including:
-        - winter_generation_kwh: Total winter generation
-        - winter_demand_kwh: Total winter demand
-        - winter_self_consumption_kwh: Winter self-consumption
-        - winter_self_consumption_ratio: Winter self-consumption / generation
-        - winter_grid_dependency_ratio: Winter grid dependency
-        - summer_generation_kwh: Total summer generation
-        - summer_demand_kwh: Total summer demand
-        - summer_self_consumption_kwh: Summer self-consumption
-        - summer_self_consumption_ratio: Summer self-consumption / generation
-        - summer_grid_dependency_ratio: Summer grid dependency
+    self_consumption_ratio is self-consumption / generation and grid_dependency_ratio is grid
+    import / demand, each 0.0 when its denominator is not positive.
     """
-    # Extract month from index
-    months = demand.index.month
 
-    # Define seasons (Northern Hemisphere)
-    winter_mask = months.isin([12, 1, 2])
-    summer_mask = months.isin([6, 7, 8])
+    generation_kwh: float
+    demand_kwh: float
+    self_consumption_kwh: float
+    self_consumption_ratio: float
+    grid_dependency_ratio: float
 
-    # Filter data by season
-    winter_demand = demand[winter_mask]
-    winter_generation = generation[winter_mask]
-    summer_demand = demand[summer_mask]
-    summer_generation = generation[summer_mask]
 
-    # Calculate self-consumption (minimum of generation and demand at each timestep)
-    winter_self_consumption = pd.Series(
-        [min(g, d) for g, d in zip(winter_generation, winter_demand)],
-        index=winter_generation.index,
-    )
-    summer_self_consumption = pd.Series(
-        [min(g, d) for g, d in zip(summer_generation, summer_demand)],
-        index=summer_generation.index,
-    )
+@dataclass(frozen=True, kw_only=True)
+class SeasonalMetrics:
+    """A run's winter (Dec-Feb) and summer (Jun-Aug) summaries."""
 
-    winter_generation_kwh = float(winter_generation.sum() * HOURS_PER_MINUTE)
-    winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE)
-    winter_self_consumption_kwh = float(winter_self_consumption.sum() * HOURS_PER_MINUTE)
+    winter: SeasonSummary
+    summer: SeasonSummary
 
-    summer_generation_kwh = float(summer_generation.sum() * HOURS_PER_MINUTE)
-    summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE)
-    summer_self_consumption_kwh = float(summer_self_consumption.sum() * HOURS_PER_MINUTE)
 
-    # Calculate ratios with safety checks
-    winter_self_consumption_ratio = (
-        winter_self_consumption_kwh / winter_generation_kwh if winter_generation_kwh > 0 else 0.0
-    )
-    summer_self_consumption_ratio = (
-        summer_self_consumption_kwh / summer_generation_kwh if summer_generation_kwh > 0 else 0.0
+def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSummary:
+    """The summary of the rows in *months* of *amounts*, a run's per_minute_amounts()."""
+    totals = _in_months(amounts, months).sum()
+    return SeasonSummary(
+        generation_kwh=float(totals["generation_kwh"]),
+        demand_kwh=float(totals["demand_kwh"]),
+        self_consumption_kwh=float(totals["self_consumption_kwh"]),
+        self_consumption_ratio=_share(totals["self_consumption_kwh"], totals["generation_kwh"]),
+        grid_dependency_ratio=_share(totals["grid_import_kwh"], totals["demand_kwh"]),
     )
 
-    # Grid dependency = (demand - self_consumption) / demand
-    winter_grid_import_kwh = max(0.0, winter_demand_kwh - winter_self_consumption_kwh)
-    winter_grid_dependency_ratio = (
-        winter_grid_import_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
-    )
 
-    summer_grid_import_kwh = max(0.0, summer_demand_kwh - summer_self_consumption_kwh)
-    summer_grid_dependency_ratio = (
-        summer_grid_import_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
-    )
+def calculate_seasonal_metrics(results: SimulationResults) -> SeasonalMetrics:
+    """The run's winter (Dec-Feb) and summer (Jun-Aug) totals and ratios.
 
-    return {
-        "winter_generation_kwh": winter_generation_kwh,
-        "winter_demand_kwh": winter_demand_kwh,
-        "winter_self_consumption_kwh": winter_self_consumption_kwh,
-        "winter_self_consumption_ratio": winter_self_consumption_ratio,
-        "winter_grid_dependency_ratio": winter_grid_dependency_ratio,
-        "summer_generation_kwh": summer_generation_kwh,
-        "summer_demand_kwh": summer_demand_kwh,
-        "summer_self_consumption_kwh": summer_self_consumption_kwh,
-        "summer_self_consumption_ratio": summer_self_consumption_ratio,
-        "summer_grid_dependency_ratio": summer_grid_dependency_ratio,
-    }
+    Each total is the season's sum of the run's own per-minute amounts, so self-consumption
+    counts battery discharge as calculate_summary's does. The ratios are calculate_summary's,
+    of the season's totals. A season with none of the run's rows has 0.0 for every figure.
+    """
+    amounts = results.per_minute_amounts()
+    return SeasonalMetrics(
+        winter=_season_summary(amounts, _WINTER_MONTHS),
+        summer=_season_summary(amounts, _SUMMER_MONTHS),
+    )
 
 
 def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
@@ -342,8 +314,9 @@ def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
     Returns:
         DataFrame with a daily DatetimeIndex holding each day's energy totals in
         kWh, money totals in £ (sums of the per-minute £ amounts) and peak
-        generation and demand in kW. ``heat_pump_load_kwh`` and
-        ``grid_charge_cost_gbp`` appear only when the run has those series.
+        generation and demand in kW. ``heat_pump_load_kwh``,
+        ``grid_charge_cost_gbp`` and ``grid_charge_kwh`` appear only when the
+        run has those series.
     """
     return _aggregate_by_period(results, "D")
 
@@ -434,19 +407,14 @@ class CommunityMetrics:
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:
     """Derive kWh aggregates from a :class:`~solar_challenge.community.CommunityResults`.
 
-    Infers the timestep duration from the series index so the conversion is
-    correct for any cadence (1-minute operational or hourly TMY), mirroring
-    :func:`~solar_challenge.community.simulate_community`'s own derivation.
+    Each row's kWh is its kW times :func:`~solar_challenge.timebase.step_hours`
+    of the series index, so the figures hold at any cadence (1-minute
+    operational or hourly TMY).
     """
     cr = community_results
     fleet = cr.fleet_results
 
-    # Derive timestep from index so kW→kWh conversion is cadence-agnostic
-    index = cr.grid_import.index
-    if len(index) >= 2:
-        dt_h = (index[1] - index[0]).total_seconds() / 3600.0
-    else:
-        dt_h = 1.0 / 60.0  # assume 1-minute for degenerate single-step index
+    dt_h = step_hours(cr.grid_import.index)
 
     community_import_kwh = float(cr.grid_import.sum()) * dt_h
     community_export_kwh = float(cr.grid_export.sum()) * dt_h
@@ -522,7 +490,7 @@ def generate_community_report(
 | Discharged | {m.battery_discharge_kwh:.2f} |
 """
 
-    # Community Billing section — only when VNM billing was computed (task ε / #34)
+    # Community Billing section — only when simulate_community priced the grid flows
     if community_results.community_savings_gbp is not None:
         report += f"""
 ## Community Billing (£)
@@ -562,8 +530,6 @@ def generate_finance_report(
 
     When ``bill_spreadsheet`` is provided the report includes side-by-side
     Physics vs Spreadsheet columns (the ``--assumptions both`` surface).
-    The δ-owned scaffold; η extends it additively with a project-economics
-    block.
 
     Args:
         bill_physics: BillDistribution from the physics self-consumption path.
@@ -573,17 +539,16 @@ def generate_finance_report(
         economics: Optional :class:`~solar_challenge.finance.ProjectEconomics`
             from :func:`~solar_challenge.finance.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
-            bill block.  ``None`` (default) reproduces the δ output exactly.
+            bill block; ``None`` (default) omits it.
         cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
             from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
-            provided, a ``## Cost-Recovery Analysis`` block is appended (CR5).
-            ``None`` (default) reproduces the existing output exactly.
+            provided, a ``## Cost-Recovery Analysis`` block is appended;
+            ``None`` (default) omits it.
         flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`
             from :func:`~solar_challenge.flex.resolve_flex_band`; when provided,
             a ``## Flexibility Value (per battery home)`` block is appended
             showing the per-battery-home time-shift saving and grid-services
-            figures for the named band (W1 γ).  ``None`` (default) reproduces
-            the existing output exactly (additive; bit-identical default).
+            figures for the named band; ``None`` (default) omits it.
         flex_band_name: Optional human-readable label for the flexibility band
             (e.g. ``"central"``); used in the report header.  Ignored when
             ``flex_band`` is ``None``.
@@ -593,9 +558,8 @@ def generate_finance_report(
             when provided (and ``flex_band`` is also set), renders a
             "Grid services (capacity-at-events)" sub-section inside the
             flexibility-value block showing the event-derived annual fleet
-            income and per-event available capacity.  ``None`` (default)
-            reproduces the existing output exactly (additive; bit-identical
-            default).
+            income and per-event available capacity; ``None`` (default)
+            omits it.
 
     Returns:
         A markdown-formatted finance report string.
@@ -609,7 +573,7 @@ def generate_finance_report(
     rep = bill_physics.representative
 
     if bill_spreadsheet is None:
-        # ---- Physics-only path (CR3: own-use payment + total outlay; no SEG) --
+        # ---- Physics-only path (own-use payment + total outlay; no SEG) --
         report = f"""{title}
 
 ## Householder Bill (Physics Assumptions)
@@ -636,7 +600,7 @@ def generate_finance_report(
 | Max | £{bill_physics.max_gbp:.2f} |
 """
     else:
-        # ---- Physics vs Spreadsheet side-by-side (CR3) --------------------
+        # ---- Physics vs Spreadsheet side-by-side --------------------
         rep_s = bill_spreadsheet.representative
         report = f"""{title}
 
@@ -664,7 +628,7 @@ def generate_finance_report(
 | Max | £{bill_physics.max_gbp:.2f} | £{bill_spreadsheet.max_gbp:.2f} |
 """
 
-    # ---- Optional project-economics block (η) --------------------------------
+    # ---- Optional project-economics block --------------------------------
     if economics is not None:
         # Format IRR: NaN → "n/a"
         if math.isnan(economics.equity_irr):
@@ -702,7 +666,7 @@ def generate_finance_report(
 | Payback | {payback_str} |
 """
 
-    # ---- Optional cost-recovery block (CR5) ----------------------------------
+    # ---- Optional cost-recovery block ----------------------------------
     if cost_recovery is not None:
         # Human-readable binding/feasibility label
         if cost_recovery.binding == "floor":
@@ -734,7 +698,7 @@ def generate_finance_report(
 | Max | £{cr.outlay.max_gbp:.2f} |
 """
 
-    # ---- Optional flexibility-value block (W1 γ) ----------------------------
+    # ---- Optional flexibility-value block ----------------------------
     if flex_band is not None:
         band_label = flex_band_name if flex_band_name else "—"
         report += f"""
@@ -753,7 +717,7 @@ Time-shift basis: net import-cost reduction (off-peak charge cost captured in
 grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
 (PRD §6).*
 """
-        # ε: optional capacity-at-events sub-section (additive; None → bit-identical)
+        # Optional capacity-at-events sub-section
         if grid_services_at_events is not None:
             _avail_kw = sum(grid_services_at_events.per_window_avail_kw)
             report += f"""
@@ -769,7 +733,7 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
 
 
 # ---------------------------------------------------------------------------
-# generate_config_ranking_report  (W3 task E, PRD §3.6 / §10-E)
+# generate_config_ranking_report
 # ---------------------------------------------------------------------------
 
 # Human-readable binding/feasibility label map (reused from generate_finance_report).
@@ -799,7 +763,7 @@ def generate_config_ranking_report(
     ranked: "RankedSweep",
     panel: "Optional[SensitivityPanel]" = None,
 ) -> str:
-    """Generate the W3 board-readable config-ranking report.
+    """Generate the board-readable config-ranking report.
 
     Renders two markdown tables and an optional sensitivity section:
 
@@ -816,9 +780,7 @@ def generate_config_ranking_report(
       :class:`~solar_challenge.optimize.ConfigPoint` objects without baseline
       economics; they remain visible in Table 1's infeasible list.
     - **Sensitivity section** (rendered only when ``panel`` is not ``None``):
-      per-axis sub-tables and the panel-level ``rank_stability``.  When
-      ``panel`` is ``None`` the output is bit-identical to the two-table form,
-      mirroring :func:`generate_finance_report`'s additive-optional idiom.
+      per-axis sub-tables and the panel-level ``rank_stability``.
 
     Args:
         ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
@@ -902,13 +864,10 @@ def generate_config_ranking_report(
             )
 
     # ---- Optional sensitivity section ----------------------------------------
-    # Rendered only when panel is not None.  When panel is None the output is
-    # bit-identical to the two-table form, mirroring generate_finance_report's
-    # additive-optional idiom (economics/cost_recovery/flex_band=None behaviour).
     if panel is not None:
         report += "\n## Sensitivity Analysis\n\n"
         report += f"Rank stability: **{panel.rank_stability:.1%}** "
-        report += f"(fraction of swept values where cheapest config == baseline top)\n\n"
+        report += "(fraction of swept values where cheapest config == baseline top)\n\n"
         report += f"Baseline top config: {panel.baseline_top.pv_kwp:.1f} kWp / "
         report += f"{panel.baseline_top.battery_kwh:.1f} kWh / "
         report += f"{panel.baseline_top.inverter_kw:.1f} kW\n"

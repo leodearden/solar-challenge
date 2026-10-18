@@ -2,13 +2,27 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests for task-70: --flex-band CLI flag wiring into finance run.
 
-All tests are offline (simulate_fleet is patched) and run without @pytest.mark.slow
-so they execute in the offline verify loop.  This file must NOT be added to
-tests/unit/test_marker_registration.py's INTEGRATION_FILES allow-list.
+All tests are offline (the fleet simulator is injected through Click's context
+object) and run without @pytest.mark.slow so they execute in the offline verify
+loop.  This file must NOT be added to tests/unit/test_marker_registration.py's
+INTEGRATION_FILES allow-list.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+import pandas as pd
 import pytest
+import yaml
+from typer.testing import CliRunner
+
+from solar_challenge.cli.main import app
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig
+from tests._cli_fleet_simulator import invoke_finance_run
 
 
 # ---------------------------------------------------------------------------
@@ -16,13 +30,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
+def _make_home_config() -> HomeConfig:
     """Build a minimal HomeConfig for fixture use."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
         load_config=LoadConfig(annual_consumption_kwh=3500.0),
@@ -35,11 +44,8 @@ def _make_sim_results(
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> SimulationResults:
     """Build a minimal SimulationResults series."""
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -63,29 +69,25 @@ def _make_sim_results(
     )
 
 
-def _make_fleet_results(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
+def _make_fleet_results(n_homes: int = 5) -> FleetResults:
     """Build a minimal FleetResults for offline testing."""
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [_make_sim_results() for _ in range(n_homes)]
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _write_scenario(
-    tmp_path: "Path",  # type: ignore[name-defined]
+    tmp_path: Path,
     *,
     name: str = "Flex CLI Test",
-    flex_band: "str | None" = None,
+    flex_band: str | None = None,
     n_homes: int = 5,
-) -> "Path":  # type: ignore[name-defined]
+) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.
 
     When flex_band is not None, the top-level ``flex_band`` key is written so
     the CLI can pick it up as the scenario-level default.
     """
-    import yaml
-
     scenario: dict = {  # type: ignore[type-arg]
         "name": name,
         "location": {
@@ -119,7 +121,7 @@ def _write_scenario(
 
 
 @pytest.fixture(scope="module")
-def flex_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
+def flex_fleet_results() -> FleetResults:
     """Module-scoped: build FleetResults once per module."""
     return _make_fleet_results()
 
@@ -134,9 +136,6 @@ class TestFinanceFlexCLIHelp:
 
     def test_help_lists_flex_band_option(self) -> None:
         """finance run --help must mention --flex-band."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
 
@@ -154,28 +153,19 @@ class TestFinanceFlexCLIHelp:
 
 
 class TestFinanceFlexCLIBehaviour:
-    """CLI-level behaviour tests for --flex-band wiring (offline, patched fleet)."""
+    """CLI-level behaviour tests for --flex-band wiring (offline, injected fleet simulator)."""
 
     def test_flex_band_central_renders_block(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """--flex-band central must render the Flexibility Value block with central figures.
 
         (a) Checks heading token, band name, and a central-specific monetary amount.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_scenario(tmp_path / "a")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                ["finance", "run", "--flex-band", "central", str(scenario_file)],
-            )
+        result = invoke_finance_run(["--flex-band", "central", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -192,26 +182,17 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_flex_band_cli_flag_overrides_scenario_key(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """CLI --flex-band flag must take precedence over scenario-level flex_band key.
 
         (b) Scenario says 'low'; CLI says 'high' → high wins.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: low
         scenario_file = _write_scenario(tmp_path / "b", flex_band="low")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                ["finance", "run", "--flex-band", "high", str(scenario_file)],
-            )
+        result = invoke_finance_run(["--flex-band", "high", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -226,23 +207,17 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_no_flex_band_omits_block(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Default (no --flex-band, no scenario flex_band key) must omit the flex block.
 
         (c) Additive default: the block is absent when neither source provides a band.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # No flex_band key in scenario, no CLI flag
         scenario_file = _write_scenario(tmp_path / "c")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -252,15 +227,12 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_invalid_flex_band_exits_nonzero(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """--flex-band bogus must exit with a non-zero code.
 
         (d) FlexBand enum gives typer-native rejection; CliRunner must report exit != 0.
         """
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_scenario(tmp_path / "d")
 
         runner = CliRunner()
@@ -274,7 +246,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_invalid_scenario_flex_band_exits_nonzero(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """A scenario-level flex_band with an unknown value must exit non-zero.
 
@@ -282,17 +254,11 @@ class TestFinanceFlexCLIBehaviour:
         ValueError → handle_errors → Exit(1)), which is distinct from the typer-enum
         rejection of an invalid CLI flag.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: bogus (not low/central/high)
         scenario_file = _write_scenario(tmp_path / "e_bad", flex_band="bogus")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code != 0, (
             f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
@@ -300,24 +266,18 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_scenario_flex_band_case_insensitive(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Scenario-level flex_band with mixed case (e.g. 'Central') must work.
 
         The YAML value is normalised to lowercase before being passed to
         resolve_flex_band, matching the CLI's case-insensitive FlexBand enum.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: Central (capital C)
         scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Expected exit 0 for scenario flex_band='Central' (case-normalised), "
@@ -345,20 +305,13 @@ class TestFinanceFlexNamedScenario:
     """
 
     def test_bristol_flex_scenario_renders_central_block(
-        self, tmp_path: "Path"  # type: ignore[name-defined]
+        self, tmp_path: Path
     ) -> None:
         """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
-        from pathlib import Path
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
         fr = _make_fleet_results()
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+        result = invoke_finance_run([str(scenario_path)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"

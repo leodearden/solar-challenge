@@ -17,7 +17,47 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Literal, get_args
+
+RunType = Literal["home", "fleet", "sweep"]  # the type of a run, held by the runs table's type column
+RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
+
+RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
+RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
+_DEFAULT_RUN_STATUS: RunStatus = "running"
+
+JobStatus = Literal["queued", "running", "completed", "failed"]  # the status of a background job, held by the jobs table's status column
+JOB_STATUSES: tuple[JobStatus, ...] = get_args(JobStatus)
+DEFAULT_JOB_STATUS: JobStatus = "queued"
+
+ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
+CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
+
+PresetType = Literal["home", "fleet"]  # the type of a saved preset, held by the config_presets table's type column
+PRESET_TYPES: tuple[PresetType, ...] = get_args(PresetType)
+
+
+def _sql_string_literal(text: str) -> str:
+    """*text* as an SQL string literal, each single quote in it doubled."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _check_one_of(column: str, values: tuple[str, ...]) -> str:
+    """The CHECK constraint that refuses a value of *column* other than one of *values*; NULL passes, as in any CHECK."""
+    return f"CHECK({column} IN ({', '.join(_sql_string_literal(value) for value in values)}))"
+
+
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    """Open the dashboard database at *db_path* under the policy every dashboard connection applies.
+
+    Rows are read by column name and the schema's foreign keys are enforced. Opening reads
+    nothing from the file, so an unreadable database raises at the first statement. The
+    caller closes the connection.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
 
 def init_db(db_path: str | Path) -> None:
@@ -33,21 +73,20 @@ def init_db(db_path: str | Path) -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row  # Enable dict-like row access
 
     cursor = conn.cursor()
 
     # Runs table - stores metadata for home/fleet/sweep simulations
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
             name TEXT,
-            type TEXT CHECK(type IN ('home', 'fleet', 'sweep')),
+            type TEXT {_check_one_of("type", RUN_TYPES)},
             config_json TEXT,
             summary_json TEXT,
-            status TEXT DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+            status TEXT DEFAULT {_sql_string_literal(_DEFAULT_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
             error_message TEXT,
             created_at TEXT,
             completed_at TEXT,
@@ -58,11 +97,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Jobs table - tracks background processing jobs
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
             run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
-            status TEXT DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+            status TEXT DEFAULT {_sql_string_literal(DEFAULT_JOB_STATUS)} {_check_one_of("status", JOB_STATUSES)},
             progress_pct REAL DEFAULT 0,
             current_step TEXT,
             message TEXT,
@@ -74,11 +113,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Chat messages table - stores AI assistant conversation history
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT,
-            role TEXT CHECK(role IN ('user', 'assistant')),
+            role TEXT {_check_one_of("role", CHAT_ROLES)},
             content TEXT,
             created_at TEXT,
             metadata_json TEXT
@@ -86,11 +125,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Config presets table - stores saved configuration templates
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS config_presets (
             id TEXT PRIMARY KEY,
             name TEXT UNIQUE,
-            type TEXT CHECK(type IN ('home', 'fleet')),
+            type TEXT {_check_one_of("type", PRESET_TYPES)},
             config_json TEXT,
             created_at TEXT
         )
@@ -121,7 +160,7 @@ def init_db(db_path: str | Path) -> None:
 def save_chat_message(
     db_path: str | Path,
     session_id: str,
-    role: str,
+    role: ChatRole,
     content: str,
     metadata: dict[str, Any] | None = None,
 ) -> int:
@@ -130,7 +169,7 @@ def save_chat_message(
     Args:
         db_path: Path to the SQLite database file.
         session_id: Browser-session identifier scoping the conversation.
-        role: Either ``'user'`` or ``'assistant'``.
+        role: Who wrote the message, one of CHAT_ROLES.
         content: Message text.
         metadata: Optional dict serialised as JSON (e.g. usage/cache stats).
 
@@ -194,17 +233,16 @@ def get_chat_history(
 
 @contextmanager
 def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
-    """Get a database connection as a context manager.
+    """Open a connection through connect() for one block of work.
 
-    Provides a connection with row_factory set to sqlite3.Row for
-    dict-like access. Automatically commits on success and closes
-    the connection when the context exits.
+    Commits when the block succeeds, rolls back when the block raises, and
+    closes the connection either way.
 
     Args:
         db_path: Path to the SQLite database file.
 
     Yields:
-        sqlite3.Connection: Database connection with Row factory enabled.
+        sqlite3.Connection: A connection from connect().
 
     Example:
         with get_db("/path/to/db.sqlite") as conn:
@@ -212,10 +250,7 @@ def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
             cursor.execute("SELECT * FROM runs")
             rows = cursor.fetchall()
     """
-    db_path = Path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn = connect(db_path)
 
     try:
         yield conn

@@ -10,6 +10,9 @@ from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.whole_numbers import whole_number
+
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
 
@@ -64,11 +67,8 @@ class LoadConfig:
             raise ValueError(
                 f"Household occupants seems unrealistic: {self.household_occupants}"
             )
-        whole_occupants = int(self.household_occupants)
-        if (
-            isinstance(self.household_occupants, (bool, np.bool_))
-            or whole_occupants != self.household_occupants
-        ):
+        whole_occupants = whole_number(self.household_occupants)
+        if whole_occupants is None:
             raise ValueError(
                 f"Household occupants must be a whole number, got {self.household_occupants}"
             )
@@ -238,12 +238,14 @@ def _try_richardsonpy_profile(
     power_sim directly.  Exactly one day is simulated per requested window day:
     a 1-day request runs 1 simulation cycle, a 7-day request runs 7 — not 365.
 
-    Normalization is performed by scaling the raw stochastic shape to the same
-    seasonal daily energy target used by the Elexon path:
+    Normalization is performed by scaling the raw stochastic shape, with
+    scale_profile_to_energy, to the same seasonal daily energy target used by
+    the Elexon path:
     target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[month]).
 
-    The Elexon path is a defensive fallback in case richardsonpy raises a
-    runtime error (any exception → return None → Elexon fallback).
+    The Elexon path is a defensive fallback: any exception returns None,
+    including a richardsonpy runtime error and a window with no energy, which
+    scale_profile_to_energy refuses to scale.
 
     Args:
         config: Load configuration
@@ -281,11 +283,8 @@ def _try_richardsonpy_profile(
         if end_norm.tz is None:
             end_norm = end_norm.tz_localize(timezone)
 
-        # Use calendar-date arithmetic, not timedelta.days, so that a DST
-        # transition (spring-forward: only 23 h in the day → timedelta.days==0
-        # for that span) does not cause an off-by-one.  E.g. Mar 30–Apr 1
-        # across the UK spring-forward: abs delta = 47 h → timedelta.days=1
-        # → int+1=2 (wrong); date subtraction gives 2 + 1 = 3 (correct).
+        # Calendar dates, not timedelta.days, which undercounts a window
+        # across the 23-hour spring-forward day.
         window_days = (end_norm.date() - start_norm.date()).days + 1
 
         # richardsonpy initial_day:  1=Monday … 5=Friday, 6=Saturday, 7=Sunday
@@ -375,19 +374,9 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
-        # calculate_annual_consumption integrates whatever Series is passed
-        # (profile.sum() / 60.0); here it measures the raw *window* energy in
-        # kWh — not a full-year figure — to compute the scale factor to the
-        # seasonal target.
-        raw_kwh = calculate_annual_consumption(profile)
-        if raw_kwh > 0.0:
-            profile = profile * (target_window_kwh / raw_kwh)
-
-        profile.name = "demand_kw"
-        return profile
+        return scale_profile_to_energy(profile, target_window_kwh)
 
     except Exception as exc:  # noqa: BLE001
-        # Defensive fallback: any richardsonpy runtime error → Elexon profile.
         # Log a warning so the fallback is observable; a silent fallback would
         # hide API-mismatch regressions in production (only unit tests, via the
         # call-count assertions, would catch the silent degradation).
@@ -412,8 +401,9 @@ def generate_load_profile(
     Uses the windowed richardsonpy stochastic model when config.use_stochastic
     is True (the default).  richardsonpy is a hard dependency so this path is
     always available.  Falls back to the deterministic Elexon Profile Class 1
-    shape only when use_stochastic=False, or defensively if richardsonpy raises
-    a runtime error.
+    shape only when use_stochastic=False, or defensively if the stochastic
+    profile cannot be built: richardsonpy raises a runtime error, or its window
+    has no energy to scale.
 
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption using seasonal factors.
@@ -522,40 +512,38 @@ def _generate_elexon_profile(
     return pd.Series(power_values, index=minute_index, name="demand_kw")
 
 
-def calculate_annual_consumption(profile: pd.Series) -> float:
+def energy_kwh(profile: pd.Series) -> float:
     """Integrate a 1-minute power Series to total energy in kWh.
-
-    Despite the name (kept for backward compatibility), this function simply
-    integrates whatever Series is passed — it is NOT limited to full-year
-    profiles.  For a window shorter than a year the result is the window's
-    total energy, not an annualised figure.
 
     Args:
         profile: Power series in kW with 1-minute resolution
 
     Returns:
-        Total energy in kWh (profile.sum() / 60.0)
+        Total energy in kWh
     """
-    # Power (kW) * time (1 minute = 1/60 hour) = Energy (kWh)
-    return float(profile.sum() / 60.0)
+    return float(profile.sum() * HOURS_PER_MINUTE)
 
 
-def scale_profile_to_annual(
+def scale_profile_to_energy(
     profile: pd.Series,
-    target_annual_kwh: float,
+    target_kwh: float,
 ) -> pd.Series:
-    """Scale a load profile to match a target annual consumption.
+    """Scale a 1-minute power profile so that its total energy is target_kwh.
 
     Args:
-        profile: Power series in kW
-        target_annual_kwh: Target annual consumption in kWh
+        profile: Power series in kW with 1-minute resolution
+        target_kwh: Target total energy in kWh
 
     Returns:
         Scaled power series in kW
+
+    Raises:
+        ValueError: If the profile's energy is zero, since no factor scales it
+            to target_kwh.
     """
-    current_annual = calculate_annual_consumption(profile)
-    if current_annual == 0:
+    current_kwh = energy_kwh(profile)
+    if current_kwh == 0:
         raise ValueError("Cannot scale profile with zero consumption")
 
-    scale_factor = target_annual_kwh / current_annual
+    scale_factor = target_kwh / current_kwh
     return profile * scale_factor

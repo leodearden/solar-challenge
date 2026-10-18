@@ -41,12 +41,6 @@ SEG_PRESETS: dict[str, SEGTariff] = {
 def resolve_seg_tariff(name: str) -> SEGTariff:
     """Look up a named SEG tariff from the preset catalogue.
 
-    Provides the named-preset resolver intended for production/web/CLI SEG
-    selectors.  Wiring into those selectors (web UI, CLI ``--seg-preset``
-    flag) is owned by subsequent tasks; this function establishes the
-    in-scope seam so callers can use ``HomeConfig(seg_tariff=resolve_seg_tariff("Octopus"))``
-    today without further infrastructure.
-
     Args:
         name: Preset key to look up (e.g. ``"Octopus"``)
 

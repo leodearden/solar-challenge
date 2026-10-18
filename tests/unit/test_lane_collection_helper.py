@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_lane_collection.py, the lane contract tests' collect-only probe of an offline-lane job.
+"""Unit tests for tests/_lane_collection.py, the lane contract tests' collect-only probes.
 
-Each runs a throwaway project's lane job through this interpreter's pytest, with no uv and no mocks.
+There is one of an offline-lane job, one of a default collection of tests/, and
+one of a suite under a mark expression. Each runs a throwaway project's lane
+job, tests/ or suite through this interpreter's pytest, with no uv and no mocks.
 """
 
 import os
@@ -13,13 +15,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests._lane_collection import collect_lane_job
+from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
 _PROBE_VARIABLE = "LANE_COLLECTION_PROBE"
 
 _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
+
+_SUITE = "tests/suite"
+
+_SUITE_NODE_ID = f"{_SUITE}/test_in_suite.py::test_case"
 
 
 def _project_with_lane_job(project_root: Path, command: str, **job_fields: str) -> Path:
@@ -29,6 +35,22 @@ def _project_with_lane_job(project_root: Path, command: str, **job_fields: str) 
         yaml.safe_dump({"git": {"offline_lane_commands": [{"name": "probe", "command": command, **job_fields}]}}),
         encoding="utf-8",
     )
+    return project_root
+
+
+def _project_with_a_suite(project_root: Path, *, ini: str = "[pytest]\n", conftest: str = "") -> Path:
+    """Make *project_root* a throwaway project with *ini* as its pytest.ini and *conftest* as its tests/conftest.py.
+
+    Its tests/ holds the suite, with one test, and one test beside it, which a
+    default collection reaches too, so a probe's ids are visibly the suite's alone.
+    """
+    tests = project_root / "tests"
+    suite = project_root / _SUITE
+    suite.mkdir(parents=True)
+    (project_root / "pytest.ini").write_text(ini, encoding="utf-8")
+    (tests / "conftest.py").write_text(conftest, encoding="utf-8")
+    (suite / "test_in_suite.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
+    (tests / "test_beside.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
     return project_root
 
 
@@ -168,3 +190,94 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
     assert collection.node_ids_outside("test_contract.py") == ("test_contract_extra.py::test_case",), (
         collection.outcome
     )
+
+
+def test_a_default_collection_reaches_a_suite_nothing_excludes_and_returns_only_its_node_ids(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+
+    assert default_collection_node_ids_under(project_root, _SUITE) == (_SUITE_NODE_ID,)
+
+
+def test_a_suite_the_tests_conftest_collect_ignore_names_is_never_reached(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path, conftest='collect_ignore = ["suite"]\n')
+
+    assert default_collection_node_ids_under(project_root, _SUITE) == ()
+
+
+def test_the_ini_addopts_are_cleared_as_dark_factorys_reruns_clear_them(tmp_path: Path) -> None:
+    """dark-factory's serial and confirm reruns append `-o addopts=`, so an ini addopts --ignore does not keep a suite out of them."""
+    project_root = _project_with_a_suite(tmp_path, ini=f"[pytest]\naddopts = --ignore={_SUITE}\n")
+
+    assert default_collection_node_ids_under(project_root, _SUITE) == (_SUITE_NODE_ID,)
+
+
+def test_an_inherited_pytest_addopts_does_not_hide_the_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--ignore={_SUITE}")
+
+    assert default_collection_node_ids_under(project_root, _SUITE) == (_SUITE_NODE_ID,)
+
+
+def test_a_default_collection_that_fails_fails_describing_its_error(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "test_broken.py").write_text(
+        f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        default_collection_node_ids_under(project_root, _SUITE)
+
+    assert _IMPORT_ERROR_MESSAGE in str(failure.value)
+
+
+@pytest.mark.parametrize("suite", [f"{_SUITE}/deeper", "tests/absent"], ids=["deeper", "absent"])
+def test_a_suite_that_is_not_a_directory_directly_under_tests_is_refused_naming_it(tmp_path: Path, suite: str) -> None:
+    """Probed, either would read as never reached.
+
+    A deeper suite is ignored with its parent directory, and an absent one holds no tests.
+    """
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "deeper").mkdir()
+    (project_root / _SUITE / "deeper" / "test_deeper.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError) as failure:
+        default_collection_node_ids_under(project_root, suite)
+
+    assert repr(suite) in str(failure.value)
+
+
+def test_a_mark_selection_returns_only_the_suites_node_ids_its_expression_matches(tmp_path: Path) -> None:
+    """The test beside the suite is never collected: only the suite's path is given."""
+    project_root = _project_with_a_suite(tmp_path, ini="[pytest]\nmarkers =\n    slow: selected by its mark\n")
+    (project_root / _SUITE / "test_slow.py").write_text(
+        "import pytest\n\n\n@pytest.mark.slow\ndef test_case():\n    pass\n", encoding="utf-8"
+    )
+
+    assert suite_node_ids_matching(project_root, _SUITE, "slow") == (f"{_SUITE}/test_slow.py::test_case",)
+    assert suite_node_ids_matching(project_root, _SUITE, "not slow") == (_SUITE_NODE_ID,)
+
+
+def test_a_mark_selection_matching_none_of_the_suites_tests_returns_no_node_ids(tmp_path: Path) -> None:
+    """pytest exits NO_TESTS_COLLECTED, as for `-m 'not slow'` on a lane suite whose every test is slow."""
+    project_root = _project_with_a_suite(tmp_path)
+
+    assert suite_node_ids_matching(project_root, _SUITE, "slow") == ()
+
+
+def test_a_mark_selection_reaches_a_suite_the_tests_conftest_collect_ignore_names(tmp_path: Path) -> None:
+    """Its explicit path overrides collect_ignore, as an offline-lane job's command does."""
+    project_root = _project_with_a_suite(tmp_path, conftest='collect_ignore = ["suite"]\n')
+
+    assert suite_node_ids_matching(project_root, _SUITE, "not slow") == (_SUITE_NODE_ID,)
+
+
+def test_a_mark_selection_that_fails_to_collect_fails_describing_its_error(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "test_broken.py").write_text(
+        f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        suite_node_ids_matching(project_root, _SUITE, "not slow")
+
+    assert _IMPORT_ERROR_MESSAGE in str(failure.value)

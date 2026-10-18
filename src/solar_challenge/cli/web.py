@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from solar_challenge.cli.utils import console, handle_errors, print_info
+from solar_challenge.cli.utils import handle_errors, print_info, status_console
 
 app = typer.Typer(help="Web dashboard commands")
 
@@ -54,7 +54,7 @@ def start(
     flask_app = create_app()
 
     print_info(f"Starting web dashboard at http://{host}:{port}")
-    console.print(f"  Press [bold]Ctrl+C[/bold] to stop the server.")
+    status_console.print("  Press [bold]Ctrl+C[/bold] to stop the server.")
 
     try:
         flask_app.run(host=host, port=port, debug=debug)
