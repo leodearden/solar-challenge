@@ -127,7 +127,7 @@ def _generation_over(index: pd.DatetimeIndex, total_kwh: float) -> pd.Series:
 
 
 def _year_of_generation(total_kwh: float) -> pd.Series:
-    """1-minute generation over calendar 2023, whose window's annualisation_scale is 1, zero at night, whose energy is total_kwh."""
+    """1-minute generation over calendar 2023, zero at night, whose energy is total_kwh; its window's annualisation_scale is 1."""
     return _generation_over(_minute_index_over("2023-01-01", "2023-12-31"), total_kwh)
 
 
@@ -566,10 +566,9 @@ class TestValidateConsumption:
         assert len(march) == (31 * 24 - 1) * 60
         demand = pd.Series(3400.0 * 31 / 366 / (len(march) / 60), index=march)
 
-        results = validate_consumption(demand, target_annual_kwh=3400.0)
+        target = _annual_consumption_check(validate_consumption(demand, target_annual_kwh=3400.0))
 
-        target_check = next(r for r in results if r.check_name == "annual_consumption_target")
-        assert target_check.value == pytest.approx(3400.0)
+        assert target.value == pytest.approx(3400.0)
 
     def test_the_annual_target_refuses_unevenly_spaced_rows(self) -> None:
         index = pd.date_range(
