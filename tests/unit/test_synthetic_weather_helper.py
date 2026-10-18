@@ -24,6 +24,19 @@ def test_a_sunless_day_is_dark_every_hour_at_the_given_air_temperature() -> None
     )
 
 
+def test_the_clear_june_day_is_dark_at_midnight_and_peaks_at_noon() -> None:
+    """The profile's values at two hours, written out: the other value checks compare the builder only with its own builds."""
+    weather = synthetic_june_weather("2024-06-21")
+
+    assert weather.iloc[[0, 12]].to_dict("list") == {
+        "ghi": [0.0, 870.0],
+        "dni": [0.0, 970.0],
+        "dhi": [0.0, 200.0],
+        "temp_air": [12.0, 23.0],
+        "wind_speed": [2.0, 3.0],
+    }
+
+
 @pytest.mark.parametrize(
     ("first_day", "irradiance_scale_per_day"),
     [
