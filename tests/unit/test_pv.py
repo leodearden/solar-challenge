@@ -812,6 +812,12 @@ def rated_sapm_module(sapm_module: dict[str, float]) -> dict[str, float]:
     return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
 
 
+@pytest.fixture
+def module_beyond_every_mppt_window() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE with a V_mp_ref that no CEC inverter's MPPT window admits, even as a one-module string."""
+    return {**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6}
+
+
 class TestInverterMatchesStringVoltage:
     """The CEC inverter's MPPT window takes the array's STC string voltage, whatever the capacity.
 
@@ -1342,6 +1348,20 @@ class TestWiredDcCapacity:
 
         message = str(refusal.value)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
+
+    @pytest.mark.parametrize("module", ["rated_sapm_module", "module_beyond_every_mppt_window"])
+    def test_refuses_a_config_create_pv_system_refuses(
+        self, request: pytest.FixtureRequest, module: str
+    ) -> None:
+        """The wired DC is that of the system create_pv_system builds, so there is none where it builds none."""
+        config = PVConfig(capacity_kw=4.0, custom_module_params=request.getfixturevalue(module))
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as wiring:
+            wired_dc_capacity_kw(config)
+
+        assert str(wiring.value) == str(building.value)
 
 
 LINEAR_INVERTER_CONFIG = PVConfig(
