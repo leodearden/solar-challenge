@@ -58,3 +58,23 @@ def test_the_heap_collection_built_is_frozen_before_the_first_test(
         "rescans. Unfrozen, the verify selection spent 37 s in GC, 29.9 s of it in 76 "
         "full collections over a ~1 GB heap."
     )
+
+
+def test_a_session_nested_in_this_run_leaves_its_heap_unfrozen(
+    pytester_under_root_conftest: pytest.Pytester,
+) -> None:
+    """An in-process pytester session, which plain runpytest() starts, shares this run's heap, already frozen once."""
+    created_by_this_test: list[object] = []
+
+    nested = pytester_under_root_conftest.runpytest_inprocess("--fixtures", "-p", "no:cacheprovider")
+
+    assert "weather_cache" in nested.stdout.str(), (
+        "the nested session listed no weather_cache, so it never loaded the copy of "
+        f"tests/conftest.py whose freeze this test is about (exit {nested.ret}).\n{nested.stdout.str()[-2000:]}"
+    )
+    assert any(tracked is created_by_this_test for tracked in gc.get_objects()), (
+        "a session nested in this run, under a copy of tests/conftest.py, froze the heap again, "
+        "with this test's own objects in it. Nothing frees a frozen object, so the garbage the "
+        "run's live objects become would stay for the rest of the run: a process freezes its "
+        "heap once, after its first collection."
+    )

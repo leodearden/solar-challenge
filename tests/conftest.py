@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import os
 import sys
 import tempfile
@@ -15,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pathlib import Path
 
+from tests._heap_freeze import freeze_the_heap_once
 from tests._network_guard import refusing_network
 from tests._uv_env import isolated_uv_env
 
@@ -28,9 +28,8 @@ collect_ignore = ["interpreter_matrix", "css_build", "newest_releases"]
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Freeze the heap collection built, so the full collections during the run scan only what the tests create."""
-    gc.collect()
-    gc.freeze()
+    """Freeze the heap collection built, once per process, so the full collections during the run scan only what the tests create."""
+    freeze_the_heap_once()
 
 
 @pytest.fixture
