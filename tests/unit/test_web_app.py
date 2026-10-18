@@ -54,6 +54,7 @@ def _import_app_from_a_web_package_lacking(
         "solar_challenge.web.scenarios",
         "solar_challenge.web.api",
         "solar_challenge.web.assistant",
+        "solar_challenge.web.plotly_js",
     ],
     ids=lambda module: module.rpartition(".")[2],
 )
