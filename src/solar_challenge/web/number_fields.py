@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, which a route answers with HTTP 400 and the assistant returns to the model as its tool call's error.
+"""Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400.
 
 An integer field reads through as_whole_number, or as_whole_number_within when it has
 bounds, so a fraction or a boolean is refused, not truncated or read as 1.
