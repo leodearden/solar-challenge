@@ -100,7 +100,7 @@ def test_a_click_on_a_chart_tab_fades_the_selected_colours_from_the_tab_that_had
     path: str,
     tab_names: tuple[str, ...],
 ) -> None:
-    """Each click fades exactly two tabs, the one selected before and the one clicked, and leaves the clicked tab alone in the colours the opening tab loaded with. The opening tab is clicked last, so its click too has to move the selection."""
+    """Each click fades exactly two tabs, the one selected before and the one clicked, and leaves the clicked tab alone in the colours the opening tab loaded with. The opening tab is clicked last, so its click too has to move the selection. A ternary-string :class fails it: Alpine's string form adds and undoes only the classes it added itself, so it never removes one the server drew, while the object form chart_tabs binds removes a false key's classes."""
     run_id, _ = request.getfixturevalue(seeded_run)
     opening_tab, *other_tabs = tab_names
     _open_with_the_chart_tabs_recorded(page, live_server + path + run_id, opening_tab)
