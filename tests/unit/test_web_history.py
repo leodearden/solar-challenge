@@ -3,7 +3,6 @@
 import dataclasses
 import io
 import json
-import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -27,7 +26,7 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
