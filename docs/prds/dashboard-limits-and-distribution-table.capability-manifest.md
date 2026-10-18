@@ -1,26 +1,36 @@
 # Capability manifest: Dashboard limits and distribution editing from one table (review-all S18)
 
-This manifest mechanizes G3 (the substrate exists) and G6 (the premise is valid) for each leaf of `docs/prds/dashboard-limits-and-distribution-table.md`. Each capability that a leaf's signal asserts is bound to evidence. The machine-readable twin is `docs/prds/dashboard-limits-and-distribution-table.capability-manifest.yaml`. It validates with `shared.capability_manifest.load_capability_manifest`, and every one of its 35 grep checks fails on main `ede1d99`: checked with `git grep -E` at authoring.
+This manifest mechanizes G3 (the substrate exists) and G6 (the premise is valid) for each leaf of `docs/prds/dashboard-limits-and-distribution-table.md`. Each capability that a leaf's signal asserts is bound to evidence. The machine-readable twin is `docs/prds/dashboard-limits-and-distribution-table.capability-manifest.yaml`. It validates with `shared.capability_manifest.load_capability_manifest`, and every one of its 36 grep checks fails on main `beb1d91`. That was checked with `git grep -E` at authoring and again at the 2026-10-18 decompose, also against the open `task/*` branches that touch each check's paths; branch flips came only from merge-bases older than the symbol. `commit_planning` stamped the ids 977–984 into the sidecar. Three checks were re-anchored at the decompose:
+
+- β's size-literal pattern would have matched `heat-pump-config.html`'s `max="50000"`;
+- ζ's pattern would have matched the builder's initial `latitude: 51.45`;
+- δ's builder check is anchored on the flat `wd_values`/`sp_entries` keys, because `task/313`, a δ prereq, deletes the three names it named.
 
 **Code anchors** verified against main `ede1d99` (2026-10-17). Main moves fast: cite by symbol and re-locate lines at implementation time. The probes P1–P15 are the PRD's §2.7. They ran under `UV_OFFLINE=1 uv run --locked --extra dev --extra web python -I`.
 
 **Batch verdict: PASS, with pre-conditions.** These producers from other streams must land upstream of their consumers:
 
+- 956 (S6 β: `DEFAULT_FIRST_DAY`, `DEFAULT_LAST_DAY`, L42) before α;
 - 860 (S4 α) before β;
-- S5 γ (id from the lead), 921 (S7 ε) and 868 (S4 ζ) before γ;
+- 947 (S5 γ), 921 (S7 ε) and 868 (S4 ζ) before γ;
 - 870 (S4 η), 937 (S17 ε), 313 (in progress) and 394 before δ;
-- 786 (S2 α), 839 (S11 β) and 841 (S11 γ) before η.
+- 961 (S6 η, L42) before ζ;
+- 786 (S2 α), 839 (S11 β), 841 (S11 γ) and 911 (S7 α) before η.
 
 No binding resolves to `declared-only`, `test-only`, `producer-absent`, `producer-downstream`, `producer-extent-short`, `bound≤floor` or `rejection-absent`. Each refusal a signal asserts is absent today, either probed or read from the code, and is built by the leaf that asserts it or by an upstream producer. No signal asserts a numeric tolerance.
 
-## α: Default window constants in `timebase`; the CLI and the web read them (leaf)
+## α: The CLI, its templates and the web read `timebase`'s default window (leaf)
+
+L42: α defines no default-window constant. 956 (S6 β) puts `DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` in `timebase.py`, and α adds only `SHORT_WINDOW_START`.
 
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
+| The default pair exists | producer: 956 (S6 β), upstream of α | PASS (producer upstream) |
+| W1 holds in either order against S6's option pair | 958, 959 and 960 give the five commands the `cli/utils` pair, which defaults to None; W1 accepts None or the constants' ISO strings | PASS (order-agnostic) |
 | The literals to replace exist | grep: `"2024-01-01"`/`"2024-12-31"` as typer defaults in `cli/home.py`, `cli/fleet.py` (`run`, `sweep`) and `cli/finance.py`; the `.get` fallback in `cli/optimize.py`; `cli/config.py`'s two templates; `home quick`'s `"2024-06-01"`; `date(2024, …)` in `web/simulation_params.py` | PASS (RED observed) |
 | W1 is checkable | probe: `typer.main.get_command` exists in the locked typer; each click parameter carries `.default` | PASS |
 | W2's exact-literal scan does not hit prose | grep: the only other ISO-date texts in `src/` are inside `heat_pump.py`'s docstring example and help-text sentences (`cli/optimize.py`, `cli/finance.py`), none of them a whole string literal | PASS |
-| `timebase` may gain constants | `timebase.py` defines `HOURS_PER_MINUTE` and S10's window type; no `FROZEN_*` entry names a `timebase` constant at `ede1d99` (re-checked in-leaf; additive under D29 if it does) | PASS |
+| `timebase` may gain `SHORT_WINDOW_START` | no `FROZEN_*` entry names a `timebase` constant at `beb1d91` (re-checked in-leaf; additive under D29 if one does) | PASS |
 
 ## β: `PageLimits`; one range per component in every reader (leaf)
 

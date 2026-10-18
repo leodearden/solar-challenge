@@ -250,7 +250,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "annualised_from"
-          paths: ["src/solar_challenge/output.py"]
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
           expect: present
       - name: "finance-run-bills-summaries-days"
         binding: "B8 — fake CliFleetSimulator over 2024-03-31..04-01: notice x183.000, bills equal bill_distribution(summaries, finance, 2)"

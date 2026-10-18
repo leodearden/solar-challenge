@@ -273,7 +273,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: 'Fixed-15p|15 ?p/kWh|\b15p\b'
-          paths: ["src/solar_challenge/optimize.py", "src/solar_challenge/output.py", "src/solar_challenge/cli/optimize.py"]
+          paths: ["src/solar_challenge/optimize.py", "src/solar_challenge/output.py", "src/solar_challenge/board_report.py", "src/solar_challenge/cli/optimize.py"]
           expect: absent
       - name: "simulation-counts"
         binding: "probe: _evaluate_config 12 and finance run 12 calls today with a counting constant simulate; B10 asserts 5 and 6"

@@ -193,7 +193,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "90% of event days"
-          paths: ["src/solar_challenge/output.py"]
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
           expect: present
       - name: "report-renders-the-displaced-self-use"
         binding: "delivered by α′; absent on main"
@@ -201,7 +201,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "Evening self-use displaced"
-          paths: ["src/solar_challenge/output.py"]
+          paths: ["src/solar_challenge/output.py", "src/solar_challenge/board_report.py"]
           expect: present
       - name: "model-doc-states-the-baselines"
         binding: "grep: `delivery_baseline` absent from docs/cost-recovery-finance-model.md on main"

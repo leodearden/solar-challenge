@@ -1,7 +1,10 @@
 # Machine-readable twin of dashboard-limits-and-distribution-table.capability-manifest.md
 # Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
-# Code anchors verified against main ede1d99 (2026-10-17). Every grep check fails on main
-# ede1d99 and passes once its leaf lands (polarity checked with git grep at authoring).
+# Code anchors verified against main ede1d99 (2026-10-17); re-verified at the decompose base
+# beb1d91 (2026-10-18; no source change in the S18 paths). Every grep check fails on main
+# beb1d91 and passes once its leaf lands (polarity re-checked with git grep at decompose,
+# also against the open task/* branches that touch each check's paths).
+# α's checks name the S6 constants and timebase.py (L42).
 # Paths name fleet_distribution.py, which S5 γ creates; a check there fails until it exists.
 # task_id stays null until commit_planning stamps it.
 prd: docs/prds/dashboard-limits-and-distribution-table.md
@@ -9,16 +12,31 @@ schema_version: 1
 signal_leaves: ["θ"]
 tasks:
   - label: "α"
-    task_id: null
-    title: "Default window constants in timebase; the CLI and the web read them"
+    task_id: 977
+    title: "The CLI, its templates and the web read timebase's default window; the invariant 11 window test"
+    note: "L42: α defines no default-window constant. 956 (S6 β) puts DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY in timebase.py; α adds only S18's SHORT_WINDOW_START beside them (956: 'S18 owns its short-window start')."
     capabilities:
-      - name: "window-constants-defined"
-        binding: "new in α; timebase.py at ede1d99 holds only HOURS_PER_MINUTE among its constants"
+      - name: "default-window-constants-upstream"
+        binding: "producer: 956 (S6 β) defines timebase.DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY (L42); upstream of α"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; its own delivered checks live on 956"
+      - name: "short-window-start-defined"
+        binding: "new in α; timebase.py at beb1d91 holds no window-start constant"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "^DEFAULT_WINDOW_START"
+          pattern: "^SHORT_WINDOW_START"
           paths: ["src/solar_challenge/timebase.py"]
+          expect: present
+      - name: "home-quick-reads-the-short-window-start"
+        binding: "grep: home quick's pd.Timestamp(\"2024-06-01\", ...) in cli/home.py; 958 (S6 δ) leaves home quick alone"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "SHORT_WINDOW_START"
+          paths: ["src/solar_challenge/cli/home.py"]
           expect: present
       - name: "cli-and-web-hold-no-default-date-literal"
         binding: "grep: \"2024-01-01\"/\"2024-12-31\" as typer defaults in cli/home.py, cli/fleet.py (x2), cli/finance.py; cli/optimize.py's .get fallback; cli/config.py's two templates; home quick's \"2024-06-01\""
@@ -45,13 +63,13 @@ tasks:
           paths: ["tests/unit/test_window_defaults.py"]
           expect: present
       - name: "cli-defaults-introspectable"
-        binding: "probe: typer.main.get_command exists in the locked typer; click parameters carry .default"
+        binding: "probe: typer.main.get_command exists in the locked typer; click parameters carry .default. 958/959/960 (S6 δ, ε, ζ) give home run, finance run, optimize configs, fleet run and fleet sweep the cli/utils option pair defaulting to None, so W1 accepts None (the pair) or the constants' ISO strings, whichever order lands"
         verdict: PASS
         delivered_check:
           kind: manual
           reason: "W1 is observed by α's test over the real CLI app, not a grep"
   - label: "β"
-    task_id: null
+    task_id: 978
     title: "PageLimits: every form bound rendered from one value; one range per component in every reader"
     capabilities:
       - name: "page-limits-defined"
@@ -79,11 +97,11 @@ tasks:
           paths: ["src/solar_challenge/web/templates/base.html"]
           expect: present
       - name: "fleet-page-size-literals-gone"
-        binding: "grep: min=\"10\" max=\"500\" and range_input(... max=500 ...) in simulate/fleet.html; builder.html max=\"10000\""
+        binding: "grep: min=\"10\" max=\"500\" and range_input(... max=500, ...) in simulate/fleet.html; builder.html max=\"10000\". Anchored so heat-pump-config.html's max=\"50000\" does not match"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "max=\"?500|max=\"10000\""
+          pattern: "max=500[,) ]|max=\"500\"|max=\"10000\""
           paths: ["src/solar_challenge/web/templates/"]
           expect: absent
       - name: "script-refusals-and-parseint-gone"
@@ -131,7 +149,7 @@ tasks:
           kind: manual
           reason: "cross-stream producer; its own delivered checks live on 860"
   - label: "γ"
-    task_id: null
+    task_id: 979
     title: "The per-type distribution table in fleet_distribution.py"
     capabilities:
       - name: "table-defined"
@@ -167,7 +185,7 @@ tasks:
           paths: ["src/solar_challenge/fleet_distribution.py"]
           expect: present
   - label: "δ"
-    task_id: null
+    task_id: 980
     title: "One wire shape: both fleet pages edit and post the grammar's spec"
     capabilities:
       - name: "server-translators-deleted"
@@ -179,11 +197,11 @@ tasks:
           paths: ["src/solar_challenge/web/"]
           expect: absent
       - name: "builder-flat-fields-deleted"
-        binding: "grep: _DISTRIBUTION_FIELDS, def _distribution_spec, def _row_lists in builder_form.py"
+        binding: "grep: _DISTRIBUTION_FIELDS, def _distribution_spec, def _row_lists and the flat wd_values/sp_entries keys in builder_form.py. Anchored on the flat keys because task/313 (a δ prereq) already deletes the three names and keeps the keys"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "_DISTRIBUTION_FIELDS|def _distribution_spec|def _row_lists|_distribution_type"
+          pattern: "_DISTRIBUTION_FIELDS|def _distribution_spec|def _row_lists|wd_values|sp_entries"
           paths: ["src/solar_challenge/web/builder_form.py"]
           expect: absent
       - name: "script-serialisers-deleted"
@@ -229,9 +247,9 @@ tasks:
           kind: manual
           reason: "ordering edge, not a delivered artifact"
   - label: "ε"
-    task_id: null
+    task_id: 981
     title: "The fleet page previews the homes Run builds"
-    note: "Lead question 1 may replace ε with ε′ (delete the endpoint): then preview-has-a-page-caller flips to expect absent over src/solar_challenge/web/ and api.py's route."
+    note: "L42 Q1: ε (the preview wired into the fleet page through parse_fleet_form) is filed; ε′ is not."
     capabilities:
       - name: "copy-sampler-deleted"
         binding: "grep: def sample_distribution and _draw_samples in web/fleet_config.py; P8-P10 observed"
@@ -256,7 +274,7 @@ tasks:
           kind: manual
           reason: "P1 compares the answer with parse_fleet_form's homes in ε's test"
   - label: "ζ"
-    task_id: null
+    task_id: 982
     title: "The builder imports scenarios and presets on the server, under the fleet page's policy"
     capabilities:
       - name: "browser-yaml-parsing-gone"
@@ -268,11 +286,11 @@ tasks:
           paths: ["src/solar_challenge/web/static/js/", "src/solar_challenge/web/templates/"]
           expect: absent
       - name: "client-readers-gone"
-        binding: "grep: scenarioFormFields and loadPreset's || 51.45 in scenario-builder.js"
+        binding: "grep: scenarioFormFields and loadPreset's || 51.45 in scenario-builder.js (the initial latitude: 51.45 is not matched)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "scenarioFormFields|51\\.45"
+          pattern: "scenarioFormFields|\\|\\| 51\\.45"
           paths: ["src/solar_challenge/web/static/js/scenario-builder.js"]
           expect: absent
       - name: "shared-import-module"
@@ -306,7 +324,7 @@ tasks:
           kind: manual
           reason: "B1 is observed by ζ's route test"
   - label: "η"
-    task_id: null
+    task_id: 983
     title: "The fleet form's tariff and dispatch choices from the server's tables"
     capabilities:
       - name: "form-settings-tables-replaced"
@@ -356,7 +374,7 @@ tasks:
           kind: manual
           reason: "V2 is observed by η's import test"
   - label: "θ"
-    task_id: null
+    task_id: 984
     title: "Integration gate: both fleet pages edit, post, import and bound every distribution from one table"
     capabilities:
       - name: "integration-module"

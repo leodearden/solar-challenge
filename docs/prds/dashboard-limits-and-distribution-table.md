@@ -17,7 +17,13 @@
     - option lists render from `heat_pump.HEAT_PUMP_TYPES` and `ev.CHARGER_TYPES`;
     - the dispatch vocabulary renders from `dispatch.STRATEGY_CONFIG_BY_TYPE` and includes a tariff-clocked `tou_optimized`;
     - the translator deletion depends on S4 η (870).
-- **Status:** authored 2026-10-17 by an author-only /prd session (spawn); not committed. Decomposition waits for the lead's ids for S5 γ.
+- **Status:** authored 2026-10-17 by an author-only /prd session (spawn); committed by the lead at `aa8dece`; decomposed 2026-10-18 at main `beb1d91` (ids in the sidecar). Lead ruling L42 accepts the defaults of lead questions 1–4: ε (not ε′), decision 12's refusal, decision 9 and decision 2. L42 and L44 also move the default-window pair to S6 β (956) as `timebase.DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY`: α defines only `SHORT_WINDOW_START` and repoints the CLI, the templates and `web/simulation_params.py`. Decision 5, §4.1, §4.2, §5 W1 and §8 α say so. Decompose corrections:
+  - S6 δ, ε and ζ (958, 959, 960) give the five commands with `--start`/`--end` the `cli/utils` option pair, which defaults to None, so W1 accepts either form in either landing order;
+  - α also edits `web/assistant.py`, which imports the `simulation_params` window names;
+  - β also edits `simulate/partials/load-config.html` (it reads `fixed_range`);
+  - the δ file `tests/integration/test_web_fleet_distribution.py` does not exist and is dropped;
+  - ζ also deletes `static/vendor/js-yaml/LICENSE` and `upstream.toml`; alpinejs stays vendored, so the wheel's licence test still finds a package;
+  - three sidecar checks are re-anchored: β's size-literal check would have matched `heat-pump-config.html`'s `max="50000"`, ζ's would have matched the builder's initial `latitude: 51.45`, and δ's builder check is anchored on `wd_values`/`sp_entries` because `task/313` deletes the three names it named.
 - **Approach:** B + H. The work spans the grammar, six web modules, four templates and three scripts across two languages, and four streams' seams meet in it. §4 is the contract and §5 the two-way boundary-test sketch.
 - **Code anchors** verified against main `ede1d99` (2026-10-17). Main moves fast: cite by symbol and re-locate lines at implementation time. Against the review's pin `7dfea36e`, the S18 web files differ as follows:
   - `fleet_config.py`: `_pool_counts` is now the public `read_pool_counts`, and `sample_distribution` is imported at the top of `api.py`;
@@ -157,10 +163,10 @@ All probes ran at `ede1d99` under `UV_OFFLINE=1 uv run --locked --extra dev --ex
    Bounding drawn values, not only fixed ones, is this PRD's widening of fk-1df9dbc0d971 (heuristic 10, uniformly enforced). A fixed 50 kW and a normal around 50 kW describe the same implausible home (P14 against P15). A distribution whose tail crosses the range is refused for the seed that draws it, naming the home. The preview shows such a draw before Run.
 3. **The fleet page validates nothing on the client.** `formErrors` goes. Run and Export post the form, and the page shows the server's refusal, as the builder already does through `/api/scenarios/validate`. The scripts post numbers as the inputs hold them, with no `parseInt`. The home page keeps its client checks, which read their bounds from `page_limits`.
 4. **The fleet-size slider is a convenience, not the bound.** The number input carries the limit, 1 to `MAX_FLEET_HOMES`. The slider spans 10–500 in steps of 10, and `PageLimits` names it `fleet_size_slider`. A larger fleet is typed.
-5. **The default window is a library fact in `timebase.py`** (invariant 11):
-   - `DEFAULT_WINDOW_START = date(2024, 1, 1)` and `DEFAULT_WINDOW_END = date(2024, 12, 31)` give the 2024 calendar year. They are every CLI command's `--start`/`--end` default, the `config template` period, the dashboard's full-year window, and the longest window the dashboard runs.
-   - `SHORT_WINDOW_START = date(2024, 6, 1)` is the first day of the n-day windows that the dashboard and `home quick` run.
-   - `simulation_params`'s `FULL_YEAR_*` and `DAYS_WINDOW_START` become these names, so S10's `timebase` gains three constants and nothing else changes there.
+5. **The default window is a library fact in `timebase.py`** (invariant 11; L42):
+   - `DEFAULT_FIRST_DAY = date(2024, 1, 1)` and `DEFAULT_LAST_DAY = date(2024, 12, 31)` give the 2024 calendar year. S6 β (956) defines them as D11's default tier. They are every CLI command's default window, the `config template` period, the dashboard's full-year window, and the longest window the dashboard runs.
+   - `SHORT_WINDOW_START = date(2024, 6, 1)` is the first day of the n-day windows that the dashboard and `home quick` run. α defines it beside the pair; it is S18's only constant there.
+   - `simulation_params`'s `FULL_YEAR_*` and `DAYS_WINDOW_START` become these names.
 6. **The per-type table lives in `fleet_distribution.py`** (D18). The public `DISTRIBUTION_TYPES` replaces `_DISTRIBUTION_SPEC_TYPES`, with the same six types in the same order. Each record states, once:
    - the type's tag and title;
    - its scalar parameters, each with a title and whether it is required;
@@ -240,7 +246,7 @@ class PageLimits:
     seed: Interval                 # [-MAX_FLEET_SEED, MAX_FLEET_SEED]
     seed_default: int              # 42
     window_days: Interval          # [1, MAX_WINDOW_DAYS]
-    default_window: tuple[date, date]         # timebase.DEFAULT_WINDOW_START, DEFAULT_WINDOW_END
+    default_window: tuple[date, date]         # timebase.DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY (956)
     short_window_start: date                  # timebase.SHORT_WINDOW_START
     day_choices: tuple[int, ...]              # (7, 14, 30, 90, FULL_YEAR_DAYS_SENTINEL)
     default_days: int                          # 30
@@ -264,11 +270,11 @@ Invariants:
 
 ### 4.2 Window constants (α; owner `timebase.py`)
 
-`DEFAULT_WINDOW_START`, `DEFAULT_WINDOW_END` and `SHORT_WINDOW_START` are `Final[date]`.
+`DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` are S6 β's (956). α adds `SHORT_WINDOW_START: Final[date]` beside them.
 
 | # | Invariant (invariant 11, window half) | Enforced by |
 |---|---|---|
-| W1 | Every CLI command with `--start`/`--end` defaults to the two constants' ISO strings. `config template home` and `config template scenario` write them as the period. | α's test introspects each command's click parameters from `solar_challenge.cli:app` and runs `config template` |
+| W1 | Every CLI `--start`/`--end` option either defaults to the two constants' ISO strings or is the `cli/utils` option pair, which defaults to None and falls back to the constants through the scenario's period (S6 δ, ε, ζ: 958, 959, 960). `home quick` starts at `SHORT_WINDOW_START`. `config template home` and `config template scenario` write the pair as the period. | α's test introspects each command's click parameters from `solar_challenge.cli:app` and runs `config template` |
 | W2 | No string literal in `src/solar_challenge/**/*.py` outside `timebase.py` equals an ISO date (`^\d{4}-\d{2}-\d{2}$`), and no file in `web/static/js` or `web/templates` contains one | α's AST scan (Python); β's text scan (templates and scripts, which have no other per-task test seam) |
 | W3 | The rendered pages' window defaults equal the constants: the home and fleet pages' custom window, the fleet page's n-day window start, and the builder's start, end and period presets | β's page test, beside S11 γ's `test_web_tariff_presets.py` |
 
@@ -379,7 +385,7 @@ FLEET_FORM_DISPATCH: tuple[FormChoice, ...]   # one per dispatch.STRATEGY_CONFIG
 
 | # | Side | Scenario | Preconditions | Postconditions | Leaf |
 |---|---|---|---|---|---|
-| W1 | CLI | default window | — | `home run`, `fleet run`, `fleet sweep` and `finance run` have `--start` default `DEFAULT_WINDOW_START.isoformat()` and `--end` default `DEFAULT_WINDOW_END.isoformat()`; `config template scenario` writes them | α |
+| W1 | CLI | default window | — | `home run`, `fleet run`, `fleet sweep` and `finance run` have `--start` default `DEFAULT_FIRST_DAY.isoformat()` and `--end` default `DEFAULT_LAST_DAY.isoformat()`, or None where S6's option pair has landed; `config template scenario` writes the pair | α |
 | W2 | grammar scan | no date literal | src tree; a seeded `tmp_path` module holding `"2024-03-01"` | the scan names the seeded file and line; the real tree passes | α (Python), β (templates and scripts) |
 | L1 | pages | limits rendered | Flask test client | the four pages' `#page-limits` JSON equals `page_limits().as_json()`; the fleet `n_homes` input has `min=1 max=10000`; the builder's has the same; the home page's PV check reads `0.5`/`20` from the JSON, with no literal in the template | β |
 | L2 | home reader | battery range | P1 | 400 naming `battery_kwh`, the range 0–100 and 500 (today: 200) | β |
@@ -434,6 +440,10 @@ Statuses read 2026-10-17. Each disposition is re-checked at decompose, after con
 | 297 | pending (high) | exact pool counts (F6) | upstream through 921; no edge |
 | 697 | done (fk-9dd1d9389dd2) | the builder bounds pool counts | δ keeps its guarantee (row E7) and its tests, reshaped |
 | 395, 509 | pending | occupants rounding; one unrecognised-key rule | unrelated |
+| 759 | pending (fk-94cab00e114e), depends on 956 | the default-window constants in `config.py` | superseded by α and 956 (L44); α carries its key |
+| 844 | pending (keyless; found by the decompose's step-2 search) | the fleet form drops a distribution's keys its type does not read | delivered by δ: the blocks reach the grammar, which refuses unrecognised keys. Not ruled: it gains an edge on δ, and cancelling it is recommended to the lead |
+| 754 | pending (fk-d8ad51b22de5, `/review` run; branch 3 ahead) | `_read_battery`'s docstrings over `_null_capacity_as_zero` | δ deletes `_null_capacity_as_zero` and rewrites `_read_battery`. Not ruled: it gains an edge on δ, and cancelling it is recommended to the lead |
+| 811 | pending (S19 δ) | saved presets owned by `presets.py`; the get filters `type = 'fleet'` | ζ overlaps it in `presets.py` and `api.scenarios_get_preset`; no edge, second lands rebases, and ζ reads presets through `presets.py`'s functions if 811 has landed |
 
 ## 7. Cross-PRD relationship
 
@@ -446,8 +456,8 @@ Statuses read 2026-10-17. Each disposition is re-checked at decompose, after con
 | S11 `tariff-coverage-classifier-presets.md` | consumes | `tariff.PRESET_RATES` and its rendering into both simulate pages (841); optional `TOUOptimizedStrategyConfig.peak_hours` (839); 841's `test_web_tariff_presets.py` is invariant 11's tariff half | S11 | η depends on 839 and 841; β's window half sits beside 841's test (no edge) |
 | S2 `dispatch-configuration-below-config.md` | consumes | `dispatch.STRATEGY_CONFIG_BY_TYPE` and the strategy configs (786) | S2 | η depends on 786 |
 | S21 `chart-panels-and-theme-tokens.md` | file overlap; macro offered | β 830 moves `fleet.html`'s cards to `component-*` classes; θ 836 converts its card copies to `card`; the form-label macro is S18's (decision 14) | S21 / S18 | no edge: whichever lands second rebases by symbol. After 830, S18's template edits use the role classes; after 836, the `card` macro |
-| S10 `simulation-window-and-cadence.md` | file overlap | α adds three constants to `timebase.py` | S10 module, S18 constants | textual |
-| S6 (fleet-document overlays; PRD not yet authored) | produces for | D11's "default" window is `timebase.DEFAULT_WINDOW_*` (α); S6's policy reader replaces the CLI defaults' literal form and keeps W1 true; S6 owns `apply_fleet_overlay` (fk-a391cf1f4edf), the only thing left in `fleet_config` after ε; S6 replaces the loaders-first refusal in `scenario_import.py` (ζ moves it there) and `builder_form`'s tempfile | S6 | proposed: S6 reads α's constants; its import and validation edits land in `web/scenario_import.py` by name |
+| S10 `simulation-window-and-cadence.md` | file overlap | α adds `SHORT_WINDOW_START` to `timebase.py` | S10 module, S6 and S18 constants | textual |
+| S6 `one-scenario-reader.md` | consumes | D11's default window is `timebase.DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY` (956, L42), which α reads; S6's option pair (958, 959, 960) replaces the CLI defaults' literal form and keeps W1 true; S6 η (961) deletes `apply_fleet_overlay` (fk-a391cf1f4edf) and the restated loader order, and reads the dashboard's documents through `parse_scenario`; ζ then moves the `parse_scenario`-based readers into `web/scenario_import.py` (L42) | S6 | α depends on 956; ζ depends on 961; δ and 961 overlap textually in `fleet_scenario.py`, no edge, second lands rebases |
 | S26 sweep knob registry | produces for | the sweep page's parameter options and ranges (`parameter-sweep.js` `parameterOptions`) render from S26's registry; their value bounds may read `ComponentLimits.value_range` | S26 | proposed cross-reference; no S18 leaf edits the sweep's parameters (β renders only `sweep.html`'s window bound) |
 | S22 `assistant-facts-from-engine.md` | file overlap | β renders `assistant.py`'s two PV tool descriptions from `value_range`; 751 restructures the tools | S22 | textual |
 | S29 surface bump | none | `timebase`'s new constants are not frozen-surface names (re-checked at α); `DISTRIBUTION_TYPES` is not exported | — | — |
@@ -463,29 +473,31 @@ Every leaf that changes a template or a script rebuilds and commits `web/static/
 
 Script behaviour runs only in the lane's e2e job. Each script-changing leaf updates and adds its e2e tests. It runs them locally with `uv run --locked --extra dev --extra web --extra e2e pytest <files> -p no:cacheprovider` when Chromium is installed.
 
-**α — Default window constants in `timebase`; the CLI and the web read them** (leaf; priority medium; `x_finding_key: []`, `metadata.x_invariant = 11`)
+**α — The CLI, its templates and the web read `timebase`'s default window; the invariant 11 window test** (leaf; priority medium; `x_finding_key: [fk-94cab00e114e]` from task 759, which it supersedes with 956 (L44); `metadata.x_invariant = 11`)
 
 - **Modules:**
-  - `src/solar_challenge/timebase.py`;
-  - `cli/home.py` (`run`'s defaults; `quick`'s start);
-  - `cli/fleet.py` (`run` and `sweep`);
-  - `cli/finance.py`;
-  - `cli/optimize.py` (the period fallback);
+  - `src/solar_challenge/timebase.py` (`SHORT_WINDOW_START` only; 956 defines `DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY`);
+  - `cli/home.py` (`run`'s defaults unless 958 has landed; `quick`'s start);
+  - `cli/fleet.py` (`run` and `sweep`, unless 960 has landed);
+  - `cli/finance.py` (unless 959 has landed);
+  - `cli/optimize.py` (the period fallback, unless 959 has deleted it);
   - `cli/config.py` (`HOME_TEMPLATE` and `SCENARIO_TEMPLATE` formatted from the constants);
   - `web/simulation_params.py` (`FULL_YEAR_*` and `DAYS_WINDOW_START` become the `timebase` names);
-  - new `tests/unit/test_window_defaults.py` (W1, W2's Python scan, seeded);
+  - `web/assistant.py` (imports those names for its tool descriptions);
+  - new `tests/unit/test_window_defaults.py` (W1, W2's Python scan, seeded); `tests/unit/test_web_simulation_params.py`, `tests/unit/test_cli_home_quick.py`, `tests/unit/test_cli.py`;
   - `review/briefing.yaml` (invariant 11's conventions line names both halves' tests; S11 γ writes it if it lands first, else α writes it and S11 γ extends it);
-  - `docs/domain-library-consumption.md` (Unreleased: the three constants).
+  - `docs/domain-library-consumption.md` (Unreleased: `SHORT_WINDOW_START`).
 - **Work:**
   - §4.2.
   - Help-text examples (`--start 2024-01-01 --end 2024-01-07`) are prose inside longer strings and stay.
-  - Check at the leaf's base whether `timebase` is frozen surface. It is not at `ede1d99`; if it is, the addition is additive under D29.
+  - S6 δ, ε and ζ (958, 959, 960) overlap textually in `cli/home.py`, `cli/finance.py`, `cli/optimize.py` and `cli/fleet.py`, with no edge. A command still holding a literal default at α's base reads the constants; a command already on the option pair is left alone.
+  - Check at the leaf's base whether `timebase` is frozen surface. It is not at `beb1d91`; if it is, the addition is additive under D29.
 - **Signal:**
-  - W1: `solar-challenge home run --help` shows the constants' defaults, and the test reads every command's parameters.
+  - W1: `solar-challenge home run --help` shows the constants' defaults, or the option pair's help naming them, and the test reads every command's parameters.
   - W2: the seeded literal is named; the real tree passes.
   - `config template scenario` writes `start_date: "2024-01-01"` from the constant.
 - **Consumer:** CLI users; β (pages); S6's period policy.
-- **Prereqs:** none.
+- **Prereqs:** 956 (S6 β: `DEFAULT_FIRST_DAY`, `DEFAULT_LAST_DAY`).
 
 **β — `PageLimits`: every form bound rendered from one value; one range per component in every reader** (leaf; priority medium)
 
@@ -542,7 +554,7 @@ Script behaviour runs only in the lane's e2e job. Each script-changing leaf upda
   - T1 and T3. `validate config` prints "Configuration is valid" on every shipped scenario, and S7 γ's generation pins stay equal.
   - `grep -n "_DISTRIBUTION_SPEC_TYPES" src` finds nothing.
 - **Consumer:** δ (editor and readers), ε (preview), ζ (import), S26 (a sweep knob's spec types, if it reads them).
-- **Prereqs:** S5 γ (id from the lead), 921 (S7 ε), 868 (S4 ζ).
+- **Prereqs:** 947 (S5 γ), 921 (S7 ε), 868 (S4 ζ).
 
 **δ — One wire shape: both fleet pages edit and post the grammar's spec** (leaf; priority high)
 
@@ -630,7 +642,7 @@ Script behaviour runs only in the lane's e2e job. Each script-changing leaf upda
   - Loading `bristol-phase1` fills its distributions, period and location (RED: name, size and coordinates only).
   - `grep -rn "jsyaml\|js-yaml" src/solar_challenge/web` finds nothing.
 - **Consumer:** builder users; S6 (`scenario_import.py` is where its overlay reader replaces the loaders-first refusal).
-- **Prereqs:** δ.
+- **Prereqs:** δ; 961 (S6 η, L42), after which ζ moves the `parse_scenario`-based readers into `web/scenario_import.py`.
 
 **η — The fleet form's tariff and dispatch choices from the server's tables** (leaf; priority low)
 
@@ -672,11 +684,13 @@ Script behaviour runs only in the lane's e2e job. Each script-changing leaf upda
 **DAG.** α → β; γ → δ; β → δ; δ → {ε, ζ, η}; {β, δ, ε, ζ, η} → θ.
 
 **Out-of-batch edges:**
+- α → {956};
 - β → {860, 774};
-- γ → {S5 γ, 921, 868};
+- γ → {947 (S5 γ), 921, 868};
 - δ → {870, 937, 313, 394};
+- ζ → {961};
 - η → {786, 839, 841, 911};
-- plus §6's.
+- plus §6's: 676 → β (moved from 612); 844 → δ and 754 → δ (keyless or unruled twins, cancel recommended to the lead).
 
 **Trigger-chain gate 772:** γ and δ (high) join it. Neither is an exception to priority = severity, since both carry fk-a6d9f3e5a7e2.
 
