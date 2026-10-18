@@ -92,6 +92,9 @@ __all__: list[str] = [
     "WeatherCache",
     "get_weather_cache",
     "set_weather_cache",
+    "WeatherProvider",
+    "PvgisTmy",
+    "PrefetchedWeather",
     # --- load (load.py) ---
     "LoadConfig",
     "OFGEM_TDCV_BY_OCCUPANTS",
@@ -181,6 +184,9 @@ _SYMBOL_MODULE: dict[str, str] = {
     "WeatherCache": "weather",
     "get_weather_cache": "weather",
     "set_weather_cache": "weather",
+    "WeatherProvider": "weather",
+    "PvgisTmy": "weather",
+    "PrefetchedWeather": "weather",
     # load
     "LoadConfig": "load",
     "OFGEM_TDCV_BY_OCCUPANTS": "load",
@@ -325,6 +331,9 @@ if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache as WeatherCache
     from solar_challenge.weather import get_weather_cache as get_weather_cache
     from solar_challenge.weather import set_weather_cache as set_weather_cache
+    from solar_challenge.weather import WeatherProvider as WeatherProvider
+    from solar_challenge.weather import PvgisTmy as PvgisTmy
+    from solar_challenge.weather import PrefetchedWeather as PrefetchedWeather
     # load
     from solar_challenge.load import LoadConfig as LoadConfig
     from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS as OFGEM_TDCV_BY_OCCUPANTS
