@@ -21,6 +21,9 @@ from solar_challenge.location import Location
 # Default cache directory
 DEFAULT_CACHE_DIR = Path(".cache/weather")
 
+CACHE_DIR_VARIABLE = "SOLAR_CHALLENGE_WEATHER_CACHE_DIR"
+"""The environment variable naming the directory WeatherCache() uses when given none."""
+
 IRRADIANCE_COLUMNS = ("ghi", "dni", "dhi")
 """The TMY's irradiance columns, in W/m²: global horizontal, direct normal and diffuse horizontal."""
 
@@ -100,9 +103,12 @@ class WeatherCache:
         """Initialize the cache.
 
         Args:
-            cache_dir: Directory for cache files. Defaults to .cache/weather/
+            cache_dir: Directory for cache files. Given none, the directory CACHE_DIR_VARIABLE names when it is
+                set and non-empty, else DEFAULT_CACHE_DIR, under the working directory
         """
-        self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
+        if cache_dir is None:
+            cache_dir = Path(os.environ.get(CACHE_DIR_VARIABLE) or DEFAULT_CACHE_DIR)
+        self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _make_key(self, prefix: str, location: Location,
