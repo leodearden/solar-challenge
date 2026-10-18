@@ -7,9 +7,9 @@ schema_version: 1
 signal_leaves: ["β", "γ", "δ", "ε", "ζ", "η", "θ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 964
     title: "SweepSpec: one value generator with a typed mode, one default and finite points"
-    note: "Intermediate: unlocks δ, ζ, η. Prereqs out of batch: S5 γ (fleet_distribution.py), 868 (S4 ζ)."
+    note: "Intermediate: unlocks δ, ζ, η. Prereqs out of batch: 947 (S5 γ, fleet_distribution.py), 868 (S4 ζ)."
     capabilities:
       - name: "sweep-mode-typed"
         binding: "SweepSpec.mode is a str at dfcbde8 (config.py); fleet_distribution.py is created by S5 γ, upstream"
@@ -24,9 +24,9 @@ tasks:
         verdict: PASS
         delivered_check: {kind: manual, reason: "behaviour test P2 and the validate-config row name min and max"}
   - label: "β"
-    task_id: null
+    task_id: 965
     title: "scenario_knobs.py: the knob registry and its one alias table; optimize and its CLI resolve names through it"
-    note: "Prereqs out of batch: S6 homes() and SEG-policy leaves (labels from the lead), 802, 803."
+    note: "Prereqs out of batch: 955 (S6 α: simulated_homes, map_homes, the D10 SEG refusal), 957 (S6 γ: the reader), 802, 803 (L43). 804 (S9 ε, held) depends on β."
     capabilities:
       - name: "registry-module"
         binding: "absent on main; delivered by β"
@@ -49,9 +49,9 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "_SENSITIVITY_ALIAS_MAP", paths: ["src/solar_challenge/cli/optimize.py"], expect: absent}
   - label: "γ"
-    task_id: null
+    task_id: 966
     title: "sensitivity_panel takes the baseline RankedSweep; the retained-cash floor has one setter"
-    note: "Prereqs out of batch: 930 (S8 ζ), 885 (S16 γ), S6 cli/optimize leaf. Supersedes 718."
+    note: "Prereqs out of batch: 930 (S8 ζ), 885 (S16 γ), 959 (S6 ε, L43). Supersedes 718. 767 depends on γ."
     capabilities:
       - name: "panel-takes-baseline"
         binding: "sensitivity_panel runs its own baseline run_sweep at dfcbde8"
@@ -66,9 +66,9 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "_sweep_cache", paths: ["src/solar_challenge/optimize.py"], expect: absent}
   - label: "δ"
-    task_id: null
+    task_id: 967
     title: "POST /api/simulate/sweep reads one SweepRequest and builds every point through the registry"
-    note: "Prereqs out of batch: 807, 870, 938, 440 (lead question 1)."
+    note: "Prereqs out of batch: 807, 870, 938, 440 (L43). The steps ceiling moves into web/sweep_request.py (Flask-free); 807's present check on web/api.py needs widening (decompose cross-reference)."
     capabilities:
       - name: "sweep-request-reader"
         binding: "absent on main; delivered by δ"
@@ -83,7 +83,7 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "get\\(\"mode\", \"linear\"\\)", paths: ["src/solar_challenge/web"], expect: absent}
   - label: "ε"
-    task_id: null
+    task_id: 968
     title: "The sweep page renders its parameters, ranges, mode and preview from the server"
     note: "Prereqs out of batch: 807, 835. Supersedes 140."
     capabilities:
@@ -100,9 +100,9 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "SWEEP_PARAMETERS", paths: ["src/solar_challenge/web/scenarios.py"], expect: present}
   - label: "ζ"
-    task_id: null
+    task_id: 969
     title: "A YAML sweep's placement is grammar data; a misplaced or second sweep is refused at parse time naming its path"
-    note: "Prereqs out of batch: 919 (S7 δ), 921 (S7 ε)."
+    note: "Prereqs out of batch: 919 (S7 δ), 921 (S7 ε), 957 (S6 γ, decompose edge: both rewrite parse_fleet_config and parse_sweep_fleet_configs)."
     capabilities:
       - name: "placement-table"
         binding: "absent on main; delivered by ζ"
@@ -117,9 +117,9 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "Use proportional_to with type: sweep in multiplier", paths: ["src/solar_challenge"], expect: absent}
   - label: "η"
-    task_id: null
+    task_id: 971
     title: "fleet sweep resolves --param through the registry and labels every point by its axis"
-    note: "Prereqs out of batch: 739 (in progress), S6 fleet-document reader leaf."
+    note: "Prereqs out of batch: 739 (in progress), 957 (S6 γ, L43), 960 (S6 ζ, decompose edge: both rewrite fleet sweep's reading)."
     capabilities:
       - name: "cli-resolves-knobs"
         binding: "cli/fleet.py names no registry at dfcbde8"
@@ -134,7 +134,7 @@ tasks:
         verdict: PASS
         delivered_check: {kind: grep, pattern: "\\] = \"geometric\"", paths: ["src/solar_challenge/cli/fleet.py"], expect: absent}
   - label: "θ"
-    task_id: null
+    task_id: 972
     title: "Integration gate: one knob, one meaning at every entry point"
     note: "Prereqs: γ, δ, ε, η."
     capabilities:

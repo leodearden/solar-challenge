@@ -21,7 +21,15 @@
   - S5: S26 depends on S5 γ, because `SweepSpec` and the distribution grammar live in `fleet_distribution.py`; the S26 `web/api.simulate_sweep` leaf carries fk-59fdc80fdded.
   - S7: after S7 δ the battery-capacity placement is `ComponentDistribution.draws["capacity_kwh"]`.
   - S9: the grid-services knob means a flat rate, refused under the events model; it builds `FlatGridServices(v)` at 804 (S9 ε), which edits the registry entry if S26 has landed.
-- **Status:** authored 2026-10-17 by an author-only spawn /prd seat; not committed.
+- **Status:** authored 2026-10-17 by an author-only spawn /prd seat; committed in aa8dece. Decomposed 2026-10-18 at main `beb1d91`: α 964, β 965, γ 966, δ 967, ε 968, ζ 969, η 971, θ 972, all medium; 718 cancelled (superseded by γ 966) and 140 cancelled (superseded by ε 968, its Steps max with 807); 739 and 440 kept as prerequisites of η and δ.
+  - **L43 overrides the body** where they differ: reads go through `simulated_homes()` (the body's `homes()`), the form-preserving write is `map_homes()` (there is no `with_homes` or `with_seg`), and the SEG knob is `replace(seg_tariff_pence_per_kwh=v)`, which construction refuses when a home sets its own other rate, so the knob stays. The S6 edges are β → 955, 957; γ → 959; η → 957.
+  - **Decompose corrections** (recorded on the leaves):
+    - ζ: S7 defines no path type, so `FleetFieldPath` is ζ's own alias unless 916's sampler names a key type.
+    - δ: `web/sweep_request` cannot import 807's `_SWEEP_MAX_STEPS` from the Flask module `web/api.py`, so the ceiling moves into `sweep_request`.
+    - ε: no `JSON.parse` in `parameter-sweep.js`, because 888's check is absent on it.
+    - γ: C8's 6-of-8 count needs a fixture grid rate outside the band values.
+    - β: under D10, P3's SEG case is valid only at the per-home rate.
+  - **Extra edges added at decompose**, for the lead to ratify: ζ → 957 and η → 960 (each rewrites the same reader as the S6 leaf), and 767 → γ (767's own text waits on S26).
 - **Approach:** B + H. The registry is a seam read by four entry points (web API, sweep page, `fleet sweep`, `optimize configs`) and edited by a later stream (S9 ε). Its leaves touch eight modules, so §4 is a contract and §5 a two-way boundary-test sketch.
 - **Code anchors** verified against main `dfcbde8` (2026-10-17). Main moves fast — cite-by-symbol; re-locate lines at implementation time. Since the review's pin `7dfea36`:
   - `optimize.py` changed in tasks 704 (`SENSITIVITY_BANDS`) and 717 (a public `apply_knob` replaced `_build_axis_configs`, the anchor of fk-4cc34de4e649);
