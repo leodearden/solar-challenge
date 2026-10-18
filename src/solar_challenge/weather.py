@@ -313,17 +313,24 @@ _weather_cache: Optional[WeatherCache] = None
 
 
 def get_weather_cache() -> WeatherCache:
-    """Get or create the global weather cache."""
-    global _weather_cache
-    if _weather_cache is None:
-        _weather_cache = WeatherCache()
-    return _weather_cache
+    """The cache installed with set_weather_cache, else a new WeatherCache(), so that CACHE_DIR_VARIABLE is read at each call."""
+    return WeatherCache() if _weather_cache is None else _weather_cache
 
 
 def set_weather_cache(cache: Optional[WeatherCache]) -> None:
     """Set the global weather cache (for testing)."""
     global _weather_cache
     _weather_cache = cache
+
+
+def default_weather() -> PvgisTmy:
+    """The weather a composition root uses when it is given none.
+
+    Until the surface bump it is PvgisTmy over get_weather_cache(), so it reads the cache set_weather_cache
+    installs. At the bump it becomes PvgisTmy(WeatherCache()); docs/prds/weather-as-explicit-input.md says why,
+    in its decisions 3 and 9.
+    """
+    return PvgisTmy(get_weather_cache())
 
 
 def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
@@ -348,14 +355,14 @@ def get_tmy_data(
 ) -> pd.DataFrame:
     """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
 
-    It is PvgisTmy over the installed weather cache, or over none when use_cache is False; PvgisTmy.get says
-    what it returns and raises.
+    It is default_weather()'s get, or PvgisTmy(None)'s when use_cache is False; PvgisTmy.get says what it
+    returns and raises.
 
     Args:
         location: Location object with latitude, longitude, and altitude
         use_cache: Whether to use caching (default True)
     """
-    return PvgisTmy(get_weather_cache() if use_cache else None).get(location)
+    return (default_weather() if use_cache else PvgisTmy(None)).get(location)
 
 
 def _fetch_scaled_tmy(location: Location) -> pd.DataFrame:
