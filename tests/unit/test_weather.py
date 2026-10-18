@@ -1,6 +1,7 @@
 """Tests for weather data handling."""
 
 import json
+import pickle
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from solar_challenge.weather import (
     CACHE_DIR_VARIABLE,
     DEFAULT_CACHE_DIR,
     PVGIS_TMY_REQUEST,
+    PvgisTmy,
     WeatherCache,
     WeatherDataError,
     get_tmy_data,
@@ -336,6 +338,70 @@ class TestWeatherCacheDirectory:
 
         assert cache.cache_dir == tmp_path / "given"
         assert not (tmp_path / "named").exists()
+
+
+class TestPvgisTmy:
+    """PvgisTmy(cache) serves PVGIS's scaled TMY from its cache, else fetches it and puts it there; PvgisTmy(None) fetches on every get."""
+
+    @pytest.fixture
+    def june_day(self):
+        """The frame seeded_cache holds as Bristol's TMY."""
+        return synthetic_june_weather("2024-06-21")
+
+    @pytest.fixture
+    def seeded_cache(self, tmp_path, june_day):
+        """A cache of the test's own, not the installed one, holding june_day as Bristol's TMY."""
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+        cache.put(june_day, "tmy", Location.bristol())
+        return cache
+
+    def test_get_returns_the_tmy_its_cache_holds_exactly(self, seeded_cache, june_day, pvgis_requests):
+        """get returns the TMY its cache holds, exactly as it was put, and requests nothing from PVGIS."""
+        result = PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
+        self, tmp_path, weather_cache, pvgis_requests
+    ):
+        """A get its cache cannot answer fetches the scaled TMY once and puts it in that cache, not the installed
+        one; a later get is served from that cache with no request."""
+        bristol = Location.bristol()
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+
+        first = PvgisTmy(cache).get(bristol)
+
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), first, check_exact=True)
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
+        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
+        pd.testing.assert_frame_equal(PvgisTmy(cache).get(bristol), first, check_exact=True)
+
+    def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
+        """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the installed cache."""
+        weather = PvgisTmy(None)
+
+        weather.get(Location.bristol())
+        weather.get(Location.bristol())
+
+        assert pvgis_requests.tmy.call_count == 2
+        assert pvgis_requests.hourly.call_count == 2
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+    def test_it_pickles_with_its_cache_directory(self, seeded_cache, june_day, pvgis_requests):
+        """A PvgisTmy restored from its pickle reads the same cache directory, so it serves the same TMY."""
+        restored = pickle.loads(pickle.dumps(PvgisTmy(seeded_cache)))
+
+        assert restored.cache.cache_dir == seeded_cache.cache_dir
+        pd.testing.assert_frame_equal(restored.get(Location.bristol()), june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
 
 
 class TestGetTmyDataWithCache:
