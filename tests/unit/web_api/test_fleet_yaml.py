@@ -182,6 +182,11 @@ class TestExportFleetYAML:
                 "Unrecognised keys in fleet_distribution.battery: 'enabled'",
                 id="battery-enabled-false",
             ),
+            pytest.param(
+                {"n_homes": 5},
+                "FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' must total n_homes",
+                id="battery-pool-short-of-n-homes",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
