@@ -59,11 +59,25 @@ def test_a_frame_without_id_or_retry_lines_has_none_for_both_even_after_a_frame_
     [
         ("event: delta\nid: seven\ndata: {}\n\n", "id"),
         ("event: delta\nretry: soon\ndata: {}\n\n", "retry"),
+        ("event: delta\nid: +7\ndata: {}\n\n", "id"),
+        ("event: delta\nretry: -1\ndata: {}\n\n", "retry"),
+        ("event: delta\nretry: 1_500\ndata: {}\n\n", "retry"),
+        ("event: delta\nid:  7\ndata: {}\n\n", "id"),
+        ("event: delta\nid: \uff17\ndata: {}\n\n", "id"),
     ],
-    ids=["id", "retry"],
+    ids=[
+        "id-word",
+        "retry-word",
+        "id-plus-sign",
+        "retry-minus-sign",
+        "retry-underscore",
+        "id-leading-space",
+        "id-fullwidth-digit",
+    ],
 )
-def test_an_id_or_retry_that_is_not_an_integer_is_rejected(body: str, field: str) -> None:
-    with pytest.raises(ValueError, match=f"SSE {field} line"):
+def test_an_id_or_retry_that_is_not_all_ascii_digits_is_rejected(body: str, field: str) -> None:
+    """EventSource reads only ASCII digits as a retry, and keeps an id as its raw text."""
+    with pytest.raises(ValueError, match=f"SSE {field} line to carry only ASCII digits"):
         parse_sse_events(body)
 
 

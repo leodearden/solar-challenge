@@ -10,6 +10,7 @@ Usage::
 """
 
 import json
+import re
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Any
@@ -42,9 +43,10 @@ def parse_sse_events(body: str) -> list[SseFrame]:
 
     Raises ValueError, rather than guess, on a frame that SSE readers decode
     differently: more than one ``data`` line (the spec joins them; the chat client
-    in web/static/js/assistant.js keeps the last), or a field line with no space
-    after its colon (the spec accepts it; the chat client ignores it). It also
-    raises on an ``id`` or ``retry`` that is not an integer.
+    in web/static/js/assistant.js keeps the last), a field line with no space
+    after its colon (the spec accepts it; the chat client ignores it), or an ``id``
+    or ``retry`` that is not all ASCII digits (int() reads ``+7`` and ``-1`` as
+    numbers; EventSource ignores such a retry and keeps an id as its raw text).
     """
     runs = groupby(body.splitlines(), key=_is_blank)
     frames = (_read_frame(list(lines)) for blank, lines in runs if not blank)
@@ -76,12 +78,12 @@ def _integer_field(lines: list[str], field: str) -> int | None:
     values = _field_values(lines, field)
     if not values:
         return None
-    try:
-        return int(values[-1])
-    except ValueError:
+    value = values[-1]
+    if not re.fullmatch(r"[0-9]+", value):
         raise ValueError(
-            f"Expected the SSE {field} line to carry an integer; got: {lines!r}"
-        ) from None
+            f"Expected the SSE {field} line to carry only ASCII digits; got: {lines!r}"
+        )
+    return int(value)
 
 
 def _field_values(lines: list[str], field: str) -> list[str]:
