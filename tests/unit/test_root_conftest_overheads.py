@@ -10,21 +10,23 @@ import pytest
 
 _SIMULATION_STACK = ("pandas", "pvlib", "scipy", "solar_challenge.weather")
 
-_MARKERS_WITH_MODULES_BLOCKED = """\
+_LIST_FIXTURES_WITH_MODULES_BLOCKED = """\
 import sys
 
-for name in sys.argv[1:]:
+test_module, *blocked = sys.argv[1:]
+for name in blocked:
     sys.modules[name] = None
 
 import pytest
 
-raise SystemExit(pytest.main(["--markers", "-p", "no:cacheprovider"]))
+raise SystemExit(pytest.main(["--fixtures", "-p", "no:cacheprovider", test_module]))
 """
 
 
 def test_a_session_that_runs_no_test_never_imports_the_simulation_stack(project_root: Path) -> None:
+    """`pytest --fixtures` runs no test; it lists this module's alone, since unrestricted it imports every test module."""
     result = subprocess.run(
-        [sys.executable, "-c", _MARKERS_WITH_MODULES_BLOCKED, *_SIMULATION_STACK],
+        [sys.executable, "-c", _LIST_FIXTURES_WITH_MODULES_BLOCKED, __file__, *_SIMULATION_STACK],
         cwd=project_root,
         capture_output=True,
         text=True,
@@ -32,11 +34,16 @@ def test_a_session_that_runs_no_test_never_imports_the_simulation_stack(project_
     )
 
     assert result.returncode == 0, (
-        f"`pytest --markers` exited {result.returncode} with {', '.join(_SIMULATION_STACK)} "
+        f"`pytest --fixtures` exited {result.returncode} with {', '.join(_SIMULATION_STACK)} "
         "blocked. Every child pytest session the suite starts loads tests/conftest.py, and a "
         "session that opens no offline window, such as a collect-only probe or --markers, "
         "should not pay ~3 s CPU to import pandas, pvlib and scipy.\n"
         f"{result.stderr}{result.stdout[-2000:]}"
+    )
+    assert "weather_cache" in result.stdout, (
+        "`pytest --fixtures` listed no weather_cache, so the session never loaded "
+        "tests/conftest.py, and nothing tried to import it with the simulation stack blocked.\n"
+        f"{result.stdout[-2000:]}"
     )
 
 
