@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,6 +306,31 @@ class PvgisTmy:
         tmy = _fetch_scaled_tmy(location)
         self.cache.put(tmy, "tmy", location)
         return tmy
+
+
+@dataclass(frozen=True, eq=False)
+class PrefetchedWeather:
+    """Weather already in memory for the locations it holds; it pickles, so a worker reads no cache and no network."""
+
+    frames: dict[Location, pd.DataFrame]
+
+    def __post_init__(self) -> None:
+        """Hold a copy of frames, so that the locations held are fixed at construction: a dict, since a mappingproxy does not pickle."""
+        object.__setattr__(self, "frames", dict(self.frames))
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The frame held for location itself; LookupError naming location and the locations held, for any other."""
+        if location not in self.frames:
+            raise LookupError(
+                f"A PrefetchedWeather answers only for the locations it holds: asked for {location!r}, "
+                f"it holds {list(self.frames)!r}"
+            )
+        return self.frames[location]
+
+    @classmethod
+    def fetch(cls, weather: WeatherProvider, locations: Iterable[Location]) -> "PrefetchedWeather":
+        """weather.get once for each distinct location, in this process, in first-seen order."""
+        return cls({location: weather.get(location) for location in dict.fromkeys(locations)})
 
 
 # Global cache instance (can be replaced for testing)
