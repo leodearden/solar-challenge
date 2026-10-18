@@ -15,13 +15,13 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     calculate_fleet_summary,
-    simulate_fleet,
 )
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache
 from tests._computed_once import ComputedOnce
+from tests._june_fleet_runs import june_fleet_runs
 from tests._seeded_tmy import ClearJuneDays
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
@@ -33,16 +33,10 @@ def bristol_june_tmy(weather_cache: WeatherCache) -> None:
     _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
 
-def _simulate_june_days(config: FleetConfig, days: int) -> FleetResults:
-    """The fleet simulated in this process over the first *days* of _JUNE_DAYS, with every minute's energy balance validated."""
-    start, end = _JUNE_DAYS.window(days)
-    return simulate_fleet(config, start, end, validate_balance=True, parallel=False)
-
-
 @pytest.fixture(scope="module")
 def june_fleet_run() -> ComputedOnce[FleetResults]:
-    """_simulate_june_days, run once per equal fleet and day count in this module by the first test that asks, from that test's seeded TMY."""
-    return ComputedOnce(_simulate_june_days)
+    """The fleets this module's tests simulate over _JUNE_DAYS, each equal fleet and day count once."""
+    return june_fleet_runs(_JUNE_DAYS)
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")

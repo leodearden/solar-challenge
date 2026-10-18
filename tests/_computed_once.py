@@ -8,12 +8,14 @@ Usage::
 
     from tests._computed_once import ComputedOnce
 
-    @pytest.fixture(scope="module")
-    def june_fleet_run() -> ComputedOnce[FleetResults]:
-        return ComputedOnce(_simulate_june_days)
+    def _simulate(config: FleetConfig, days: int) -> FleetResults: ...
 
-    def test_fleet_summary(june_fleet_run, fleet_config):
-        results = june_fleet_run(fleet_config, 3)  # simulated by the first test that asks, shared by the rest
+    @pytest.fixture(scope="module")
+    def fleet_run() -> ComputedOnce[FleetResults]:
+        return ComputedOnce(_simulate)
+
+    def test_fleet_summary(fleet_run, fleet_config):
+        results = fleet_run(fleet_config, 3)  # simulated by the first test that asks, shared by the rest
 """
 
 from __future__ import annotations
