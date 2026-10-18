@@ -408,6 +408,27 @@ class TestFleetFromDistribution:
             resolve_location(location)
         assert resp.get_json() == {"error": str(refusal.value)}
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("heat_pump", "ASHP", id="heat-pump-the-fleet-has-no-overlay-for"),
+            pytest.param(
+                "tarif", {"type": "flat_rate", "rate_per_kwh": 0.3}, id="misspelt-tariff"
+            ),
+        ],
+    )
+    def test_unrecognised_key_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, key: str, value: object
+    ) -> None:
+        """A top-level key the fleet form does not have is refused by name, not dropped from a fleet run without it; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: value},
+        )
+        assert resp.status_code == 400
+        assert f"Unrecognised fleet form keys: {key!r};" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:

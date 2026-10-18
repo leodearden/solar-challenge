@@ -176,6 +176,11 @@ class TestExportFleetYAML:
                 "Unrecognised keys in fleet_distribution.battery: 'enabled'",
                 id="battery-enabled-false",
             ),
+            pytest.param(
+                {"heat_pump": "ASHP"},
+                "Unrecognised fleet form keys: 'heat_pump';",
+                id="unrecognised-key",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
