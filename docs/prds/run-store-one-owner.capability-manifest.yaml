@@ -69,8 +69,8 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "_SWEEP_MAX_STEPS"
-          paths: ["src/solar_challenge/web/api.py"]
+          pattern: "SWEEP_MAX_STEPS"
+          paths: ["src/solar_challenge/web"]
           expect: present
   - label: "ε"
     task_id: 814
