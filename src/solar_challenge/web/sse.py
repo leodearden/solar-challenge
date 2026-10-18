@@ -11,15 +11,19 @@ contract.
 
 import json
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final, Generic, TypeVar
+from dataclasses import Field, asdict, dataclass
+from typing import Any, ClassVar, Final, Generic, Protocol, TypeVar
 
 from flask import Response
 
-if TYPE_CHECKING:
-    from _typeshed import DataclassInstance
 
-P = TypeVar("P", bound="DataclassInstance")
+class _DataclassInstance(Protocol):
+    """An instance of any dataclass: what ``dataclasses.asdict`` accepts."""
+
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+
+P = TypeVar("P", bound=_DataclassInstance)
 
 _CHARACTERS_NO_EVENT_NAME_HOLDS = frozenset("\r\n:")
 
