@@ -44,6 +44,7 @@ Producers outside the batch, all upstream of the leaves that read them:
 | P7: three zone-then-period copies to replace | grep: `period.get_start_timestamp` in `project_multi_year`, `solve_cost_recovery_rate`, `_age0_baseline_outlay` | PASS |
 | Same bounds for every valid period | `get_start_timestamp(tz)` localises a date string at midnight, as `simulation_bounds()` does; only a `Timestamp` with a time of day differs (recorded on the leaf) | PASS |
 | `simulate_home`'s end is inclusive | `simulate_home` docstring: "End of simulation period (inclusive)"; `pv` builds to the last hour's last minute | PASS |
+| D11's default tier has one home | absent at `dfcbde8` (a literal in four CLI commands); L42 puts `DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY` in `timebase.py` beside `SimulationWindow`, and S18 α repoints the CLI and web to them | PASS (sidecar check scans `timebase.py`) |
 
 ## γ — One reader for every scenario document (leaf)
 

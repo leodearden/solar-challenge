@@ -10,7 +10,7 @@
   - D26 (fk-be5b13274bcb is S6's) and D28 (re-measure the weakened keys).
   - L30: freezing a pinned config with tuple fields is neither a rename nor a retirement.
   - L37 and the S5 cross-reference line: S6 depends on S5 γ and ε, owns the top-level keys of the home file and of single-scenario documents, and decides `ScenarioConfig.tariff_config`.
-- **Status:** authored 2026-10-17 by an author-only /prd session; not committed, not decomposed. Decompose waits until the lead hands over the filed ids of S5 γ and S5 ε.
+- **Status:** authored 2026-10-17 by an author-only /prd session; committed by the lead at `aa8dece`; decomposed 2026-10-18 (ids in the sidecar). Lead rulings L41 (defaults of lead questions 1-4 accepted) and D50 (question 5: retire the flat form) apply. L42 moves `DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY` from `config.py` to `timebase.py`; decision 7, §4.2, §4.4 and β below say so.
 - **Approach:** B + H. The work touches config, finance, optimize, five CLI modules and three web modules. Its seams are consumed by S8, S18, S25 and S26, and every scenario command crosses them. So §4 is a contract and §5 a two-way boundary-test sketch whose integration gate is θ.
 - **Code anchors** verified against main `dfcbde8` (2026-10-17). Main moves fast: anchors cite symbols; re-locate lines at implementation time. Since the findings' pin `7dfea36`, the files this PRD edits changed only in ways that leave every finding present (§2.3 probes ran at `dfcbde8`).
 
@@ -123,7 +123,7 @@ What a user observes:
 7. **D11 has three tiers, and each has one home.**
    - **Flag:** `ScenarioConfig.with_window(first_day=, last_day=)`. Every command calls it through one `--start`/`--end` option pair in `cli/utils`. A flag replaces only its own day.
    - **File:** the reader's `period:`.
-   - **Default:** `config.DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` (2024-01-01 and 2024-12-31). The reader fills them in when a document has no period.
+   - **Default:** `timebase.DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` (2024-01-01 and 2024-12-31), beside `SimulationWindow` (L42). The reader fills them in when a document has no period.
 
    `ScenarioConfig.period` stays required, so library callers keep giving one. Construction refuses a period whose days do not parse as dates (P10) or run backwards, through `covered_days`, which names both days. The commands are `home run`, `fleet run`, `fleet sweep`, `finance run` and `optimize configs`.
 8. **One document grammar for every form.**
@@ -193,6 +193,7 @@ class ScenarioConfig:
 ### 4.2 The reader (config.py; γ)
 
 ```python
+# in timebase.py, beside SimulationWindow (L42); config imports them
 DEFAULT_FIRST_DAY: date = date(2024, 1, 1)    # β: D11's default tier
 DEFAULT_LAST_DAY: date = date(2024, 12, 31)
 
@@ -254,7 +255,7 @@ The document grammar:
   - A YAML sweep's points come from `parse_sweep_fleet_configs`, each point's homes carrying the document's scenario-level blocks.
   - The registry never writes `homes=`/`home=` directly.
 - **S8 (projection):** `scenario_fleet(scenario)` is `ScenarioFleet(homes=scenario.simulated_homes(), start=…, end=…)`, with `start, end = scenario.simulation_bounds()`.
-- **S18 (dashboard):** the fleet form's homes are `parse_scenario(<the form's document>).simulated_homes()`. Invariant 11's window half compares the forms' default dates with `DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY`.
+- **S18 (dashboard):** the fleet form's homes are `parse_scenario(<the form's document>).simulated_homes()`. Invariant 11's window half compares the forms' default dates with `timebase.DEFAULT_FIRST_DAY`/`DEFAULT_LAST_DAY`; S18 α repoints the CLI, the templates and `web/simulation_params.py` to them (L42).
 
 ### 4.5 Invariants
 
@@ -375,12 +376,13 @@ Each leaf re-reads its symbols at its base (freshness clause) and records §2.4'
 
 - **Keys:** fk-be5b13274bcb, fk-f99038047a27.
 - **Modules:**
-  - `config.py`: `window`, `with_window`, `simulation_bounds`, `DEFAULT_FIRST_DAY`, `DEFAULT_LAST_DAY`, and the period check at construction;
+  - `config.py`: `window`, `with_window`, `simulation_bounds`, and the period check at construction;
+  - `timebase.py`: `DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` beside `SimulationWindow` (L42);
   - `finance.py` and `optimize.py`: the three zone-and-period copies become `scenario.simulation_bounds()`;
   - `tests/unit/config/test_scenario_file.py`;
   - `tests/unit/test_public_api_surface.py`: `FROZEN_MEMBERS` gains the three methods; `timebase.SimulationWindow`'s closure entry comes from 778;
   - `docs/domain-library-consumption.md`.
-- **Work:** §4.1's β part; decisions 6 and 7's library half. A period given as a `Timestamp` with a time of day now bounds at its date's midnight; record any library test that relied on the time.
+- **Work:** §4.1's β part; decisions 6 and 7's library half. A period given as a `Timestamp` with a time of day now bounds at its date's midnight; record any library test that relied on the time. Add an Unreleased line: `ScenarioConfig` gains `window()`, `with_window()` and `simulation_bounds()` and refuses a non-date or reversed period; `timebase` gains `DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY` (L42).
 - **Signal:**
   - P6 and P7. RED today: `SimulationPeriod("2024","2024")` runs as 2024-01-01 (P10), and no window accessor exists.
   - `grep 'period.get_(start|end)_timestamp'` finds nothing in `finance.py` or `optimize.py`.

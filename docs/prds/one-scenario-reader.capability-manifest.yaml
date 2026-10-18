@@ -7,7 +7,7 @@ schema_version: 1
 signal_leaves: ["θ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 955
     title: "ScenarioConfig answers which homes it simulates: one read, fill-and-refuse SEG, a frozen value"
     note: "Intermediate with its own signal: unlocks β and (proposed) 928. Prereq out of batch: 774. Supersedes 485 and 296. If 928 has moved _resolve_homes/_reconcile_seg_homes into projection.py first, the absent checks cover it (paths are src-wide)."
     capabilities:
@@ -74,9 +74,9 @@ tasks:
           kind: manual
           reason: "the refusal messages (home index and name, both rates; tariff_config and HomeConfig.tariff_config) are asserted by α's tests, not by a pattern"
   - label: "β"
-    task_id: null
+    task_id: 956
     title: "ScenarioConfig answers which window it simulates: the period as S10's window, D11's default tier"
-    note: "Intermediate with its own signal: unlocks γ and (proposed) 928. Prereqs out of batch: 893 (timebase.ONE_MINUTE), 778 (SimulationWindow in FROZEN_CLOSURE)."
+    note: "Intermediate with its own signal: unlocks γ and 928 (L41). Prereqs out of batch: 893 (timebase.ONE_MINUTE), 778 (SimulationWindow in FROZEN_CLOSURE). DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY live in timebase.py (L42)."
     capabilities:
       - name: "window-accessor-defined"
         binding: "absent at dfcbde8; SimulationWindow exists in timebase.py (777 done)"
@@ -103,12 +103,12 @@ tasks:
           paths: ["src/solar_challenge/config.py"]
           expect: present
       - name: "default-window-constants"
-        binding: "absent at dfcbde8: the 2024-01-01/2024-12-31 default is a literal in four CLI commands"
+        binding: "absent at dfcbde8: the 2024-01-01/2024-12-31 default is a literal in four CLI commands; L42 puts the constants in timebase.py beside SimulationWindow (S18 α repoints the CLI and web to them)"
         verdict: PASS
         delivered_check:
           kind: grep
           pattern: "^DEFAULT_(FIRST|LAST)_DAY"
-          paths: ["src/solar_challenge/config.py"]
+          paths: ["src/solar_challenge/timebase.py"]
           expect: present
       - name: "time-axis-copies-deleted"
         binding: "grep: scenario.period.get_start_timestamp at finance.py (2 sites) and optimize.py (1) at dfcbde8"
@@ -125,7 +125,7 @@ tasks:
           kind: manual
           reason: "an out-of-batch producer; 893's own sidecar checks timebase.py"
   - label: "γ"
-    task_id: null
+    task_id: 957
     title: "One reader for every scenario document: the blocks that reach the homes"
     note: "Leaf; unlocks δ, ε, ζ, η. Prereqs out of batch: S5 γ and S5 ε (ids at decompose), 803. Supersedes 185, 542, 325."
     capabilities:
@@ -192,7 +192,7 @@ tasks:
           kind: manual
           reason: "R4 runs fleet run on synthetic weather; asserted by γ's CLI test"
   - label: "δ"
-    task_id: null
+    task_id: 958
     title: "home run reads its file through the one reader; overrides apply to the typed home"
     note: "Leaf. Prereqs out of batch: 931 (location.parse_location). Supersedes 422 and 681 (fk-e756dab8077e's mechanical row)."
     capabilities:
@@ -219,7 +219,7 @@ tasks:
           kind: manual
           reason: "H1's bounds and refusals are behavioural; asserted by δ's tests"
   - label: "ε"
-    task_id: null
+    task_id: 959
     title: "finance run and optimize configs read the one scenario"
     note: "Leaf. Prereq out of batch: 738 (in progress; finance run's body split). Supersedes 186, 287, 541."
     capabilities:
@@ -248,15 +248,15 @@ tasks:
           paths: ["src/solar_challenge/cli"]
           expect: absent
       - name: "inert-carve-out-deleted"
-        binding: "grep: the 'pre-CR5 behaviour' comment over the inert --cost-recovery branch at dfcbde8 (task 287 measured it inert)"
+        binding: "grep: the inert --cost-recovery branch sets seg_tariff_pence_per_kwh=seg_rate on the econ scenario at dfcbde8 (task 287 measured it inert); task/738 drops the 'pre-CR5 behaviour' comment but keeps the branch as 'seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None', so the check matches the assignment, which only ε deletes (the scenario's rate comes from load_scenario)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "pre-CR5 behaviour"
+          pattern: "seg_tariff_pence_per_kwh="
           paths: ["src/solar_challenge/cli/finance.py"]
           expect: absent
   - label: "ζ"
-    task_id: null
+    task_id: 960
     title: "fleet run and fleet sweep honour the file's period"
     capabilities:
       - name: "fleet-start-default-gone"
@@ -274,7 +274,7 @@ tasks:
           kind: manual
           reason: "L1's day count and bounds are behavioural"
   - label: "η"
-    task_id: null
+    task_id: 961
     title: "The dashboard reads its scenario documents through the one reader"
     capabilities:
       - name: "web-overlay-deleted"
@@ -302,7 +302,7 @@ tasks:
           paths: ["src/solar_challenge/web/builder_form.py"]
           expect: absent
   - label: "θ"
-    task_id: null
+    task_id: 962
     title: "Integration gate: every entry point simulates what the reader reads"
     note: "Signal leaf. Prereq out of batch: 882 (every command reads its runner from the invocation)."
     capabilities:
