@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`home quick` runs to completion from 1 June 2024 and simulates the default home."""
+"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names."""
 
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -10,7 +14,8 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
-from solar_challenge.weather import WeatherCache
+from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, WeatherCache
+from tests._network_guard import refusing_network
 from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
@@ -34,6 +39,13 @@ def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
 
     assert result.exit_code == 0, result.output
     return pd.read_csv(csv_path, index_col=0, parse_dates=True)
+
+
+def _total_generation_kwh(stdout: str) -> float:
+    """The Total Generation figure of the summary table `home quick` prints, in kWh."""
+    match = re.search(r"Total Generation\W+(\d+(?:\.\d+)?) kWh", stdout)
+    assert match is not None, stdout
+    return float(match.group(1))
 
 
 def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
@@ -71,3 +83,32 @@ def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
     day = pd.Timestamp(_DAY)
     expected_demand = generate_load_profile(expected_load, day, day)
     assert saved["demand_kw"].sum() == pytest.approx(expected_demand.sum())
+
+
+def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_names(tmp_path: Path) -> None:
+    """`home quick 4 --days 1`, run as a child in an empty working directory, simulates offline from the cache the variable names.
+
+    The child runs solar_challenge.cli.app, the object the solar-challenge console script runs. It
+    sees none of this process's weather, only the directory the variable names: the autouse fixture
+    seeds this test's in-process cache, which no child can read. It leaves no cache in its working
+    directory.
+    """
+    cache_dir = tmp_path / "weather"
+    WeatherCache(cache_dir=cache_dir).put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+
+    with refusing_network() as refused:
+        result = subprocess.run(
+            [sys.executable, "-c", "from solar_challenge.cli import app; app()", "home", "quick", "4", "--days", "1"],
+            cwd=working_dir,
+            env={**os.environ, CACHE_DIR_VARIABLE: str(cache_dir)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert refused == []
+    assert result.returncode == 0, result.stderr
+    assert _total_generation_kwh(result.stdout) > 0
+    assert not (working_dir / DEFAULT_CACHE_DIR).exists()

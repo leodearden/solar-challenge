@@ -13,6 +13,8 @@ import numpy as np
 from unittest.mock import call, patch
 
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
+    DEFAULT_CACHE_DIR,
     PVGIS_TMY_REQUEST,
     WeatherCache,
     WeatherDataError,
@@ -288,6 +290,52 @@ class TestWeatherCache:
         """Invalidate returns False if entry doesn't exist."""
         removed = cache.invalidate("tmy", bristol)
         assert removed is False
+
+
+class TestWeatherCacheDirectory:
+    """A WeatherCache's directory is the one it is given, else the one CACHE_DIR_VARIABLE names when set and non-empty, else DEFAULT_CACHE_DIR.
+
+    Each test sets or deletes the variable itself, so a shell that exports it cannot change the outcome,
+    and a test that lets WeatherCache() choose works in tmp_path, so the relative default lands there.
+    """
+
+    def test_given_no_directory_it_uses_the_one_the_variable_names(self, monkeypatch, tmp_path):
+        """WeatherCache() uses the directory the variable names, and creates it."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == tmp_path / "named"
+        assert (tmp_path / "named").is_dir()
+
+    @pytest.mark.parametrize(
+        "clear_variable",
+        [
+            pytest.param(lambda monkeypatch: monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False), id="unset"),
+            pytest.param(lambda monkeypatch: monkeypatch.setenv(CACHE_DIR_VARIABLE, ""), id="empty"),
+        ],
+    )
+    def test_given_no_directory_it_uses_the_default_when_the_variable_is_unset_or_empty(
+        self, monkeypatch, tmp_path, clear_variable
+    ):
+        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, and creates it."""
+        monkeypatch.chdir(tmp_path)
+        clear_variable(monkeypatch)
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == DEFAULT_CACHE_DIR
+        assert (tmp_path / DEFAULT_CACHE_DIR).is_dir()
+
+    def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
+        """WeatherCache(cache_dir=...) uses the directory it is given and never creates the one the variable names."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache(cache_dir=tmp_path / "given")
+
+        assert cache.cache_dir == tmp_path / "given"
+        assert not (tmp_path / "named").exists()
 
 
 class TestGetTmyDataWithCache:
