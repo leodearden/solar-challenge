@@ -5,8 +5,8 @@ They pin that the command runs verbatim and only collects, keeps its project's i
 receives each extra pytest arg whole, and runs in the environment it is given, that environment's
 PYTHONPATH kept; that what it collected is read from the collection-report plugin's report, never from
 its output, with each test's file and parametrize id and each module or directory skipped at
-collection with its skip reason, and a run that wrote no report never reads as an empty collection;
-and that a failed run's description carries pytest's error report however long the listing or the
+collection with its skip reason, and a run that wrote no report never reads as an empty collection,
+nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
 command's stderr, and the output of a command that failed before pytest started.
 """
 
@@ -265,6 +265,18 @@ def test_a_collection_that_selects_nothing_is_an_empty_report_not_a_missing_one(
     assert collection.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, collection.describe()
     assert collection.report is not None, collection.describe()
     assert collection.report.tests == (), collection.describe()
+
+
+def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_last_session(tmp_path: Path) -> None:
+    """A report describes one session: replacing the first session's report would drop its tests unseen."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "test_first.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+    (tmp_path / "test_second.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(f"{_PYTEST} test_first.py && {_PYTEST} test_second.py", tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.USAGE_ERROR, collection.describe()
+    assert "more than one pytest session" in collection.stderr, collection.describe()
 
 
 def test_loaded_without_a_report_path_the_plugin_leaves_the_run_as_it_was(

@@ -19,6 +19,10 @@ The report is {"tests": [...], "skipped_collectors": [...]}:
 
 pytest writes the report even when collection stops on an error, so only the
 run's exit code says whether collection succeeded.
+
+A report describes one session. A session whose report path already holds a
+report stops with a usage error rather than replace it, so a command that runs
+pytest more than once fails instead of reporting its last session alone.
 """
 
 import json
@@ -57,7 +61,14 @@ class _CollectionReporter:
     def pytest_collection_finish(self, session: pytest.Session) -> None:
         tests = [_reported_test(item, session.config.rootpath) for item in session.items]
         report = {"tests": tests, "skipped_collectors": self._skipped_collectors}
-        self._path.write_text(json.dumps(report), encoding="utf-8")
+        try:
+            with self._path.open("x", encoding="utf-8") as report_file:
+                json.dump(report, report_file)
+        except FileExistsError:
+            raise pytest.UsageError(
+                f"--collection-report={self._path} already holds an earlier session's report: the command "
+                "runs more than one pytest session, and a report describes only one"
+            ) from None
 
 
 def _skip_message(report: pytest.CollectReport) -> str:
