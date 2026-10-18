@@ -43,10 +43,11 @@ def test_a_multi_day_build_is_its_days_built_one_at_a_time_and_joined_in_order(
         first_day, periods=24 * len(irradiance_scale_per_day), freq="h", tz="Europe/London", normalize=True
     )
 
+    weather = synthetic_june_weather(first_day, irradiance_scale_per_day=irradiance_scale_per_day)
+
+    assert set(weather.dtypes) == {np.dtype("float64")}
     pd.testing.assert_frame_equal(
-        synthetic_june_weather(first_day, irradiance_scale_per_day=irradiance_scale_per_day),
-        pd.concat(days_built_one_at_a_time, ignore_index=True).set_axis(index),
-        check_exact=True,
+        weather, pd.concat(days_built_one_at_a_time, ignore_index=True).set_axis(index), check_exact=True
     )
 
 
