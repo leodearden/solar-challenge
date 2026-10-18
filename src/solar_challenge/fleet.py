@@ -4,7 +4,7 @@
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
 import pandas as pd
 
@@ -413,6 +413,31 @@ def simulate_fleet(
     )
 
 
+def calculate_home_summaries(
+    results: FleetResults,
+    seg_tariff_pence_per_kwh: Optional[float] = None,
+) -> list[SummaryStatistics]:
+    """Calculate each home's summary statistics, in per_home_results' order.
+
+    Args:
+        results: Fleet simulation results
+        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
+            If provided, each home's summary has its SEG revenue at that tariff.
+
+    Returns:
+        calculate_summary of each home's results, in per_home_results' order
+
+    Raises:
+        ValueError: If results has no homes, or its home_configs does not hold one
+            HomeConfig per home's results
+    """
+    results._require_paired_homes()
+    return [
+        calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+        for r in results.per_home_results
+    ]
+
+
 def calculate_fleet_summary(
     results: FleetResults,
     seg_tariff_pence_per_kwh: Optional[float] = None,
@@ -431,13 +456,26 @@ def calculate_fleet_summary(
         ValueError: If results has no homes, or its home_configs does not hold one
             HomeConfig per home's results
     """
-    results._require_paired_homes()
+    return aggregate_home_summaries(calculate_home_summaries(results, seg_tariff_pence_per_kwh))
 
-    # Calculate per-home summaries
-    home_summaries: list[SummaryStatistics] = [
-        calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-        for r in results.per_home_results
-    ]
+
+def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> FleetSummary:
+    """Aggregate the summary statistics of a fleet's homes into the fleet's.
+
+    The fleet's SEG revenue total and per-home mean are taken over the homes whose
+    summary has a seg_revenue_gbp, and both are None when no home's summary has one.
+
+    Args:
+        home_summaries: The summary statistics of each home in the fleet
+
+    Returns:
+        FleetSummary of a fleet whose homes have these summaries
+
+    Raises:
+        ValueError: If home_summaries is empty
+    """
+    if not home_summaries:
+        raise ValueError("A fleet summary aggregates at least one home's summary: home_summaries is empty")
 
     # Fleet totals
     total_gen = sum(s.total_generation_kwh for s in home_summaries)
@@ -458,16 +496,15 @@ def calculate_fleet_summary(
     sc_ratios = [s.self_consumption_ratio for s in home_summaries]
     sc_series = pd.Series(sc_ratios)
 
-    # Aggregate SEG revenue if tariff was provided
+    # Aggregate SEG revenue over the homes whose summary has one
     total_seg_revenue_gbp: Optional[float] = None
     per_home_seg_revenue_mean_gbp: Optional[float] = None
-    if seg_tariff_pence_per_kwh is not None:
-        seg_revenues = [
-            s.seg_revenue_gbp for s in home_summaries if s.seg_revenue_gbp is not None
-        ]
-        if seg_revenues:
-            total_seg_revenue_gbp = sum(seg_revenues)
-            per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
+    seg_revenues = [
+        s.seg_revenue_gbp for s in home_summaries if s.seg_revenue_gbp is not None
+    ]
+    if seg_revenues:
+        total_seg_revenue_gbp = sum(seg_revenues)
+        per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
     # Fleet financial aggregates
     total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
@@ -475,7 +512,7 @@ def calculate_fleet_summary(
     total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
 
     return FleetSummary(
-        n_homes=len(results),
+        n_homes=len(home_summaries),
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
         total_self_consumption_kwh=total_self,
