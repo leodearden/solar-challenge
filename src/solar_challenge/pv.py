@@ -602,16 +602,24 @@ def create_pv_system(config: PVConfig) -> PVSystem:
 def wired_dc_capacity_kw(config: PVConfig) -> float:
     """The DC capacity, in kW, of the modules create_pv_system wires for config.
 
-    The system holds a whole number of modules, so this differs from
-    config.capacity_kw unless the module's rating divides it: 0.3 kW of
-    DEFAULT_CEC_MODULE, 400.428 W at STC, wires one module.
+    It sums each array's modules per string × strings × module rating
+    (_module_rating_w) over the arrays of the PVSystem that create_pv_system
+    builds for config. The system holds a whole number of modules, so this
+    differs from config.capacity_kw unless the module's rating divides it:
+    0.3 kW of DEFAULT_CEC_MODULE, 400.428 W at STC, wires one module.
+
+    Raises:
+        ValueError: Whatever create_pv_system raises for config.
 
     Example:
         >>> round(wired_dc_capacity_kw(PVConfig(capacity_kw=0.3)), 3)
         0.4
     """
-    module_params = _module_parameters(config)
-    return _module_count(config, module_params) * _module_rating_w(module_params) / 1000
+    wired_w = sum(
+        array.modules_per_string * array.strings * _module_rating_w(array.module_parameters)
+        for array in create_pv_system(config).arrays
+    )
+    return float(wired_w) / 1000
 
 
 def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
