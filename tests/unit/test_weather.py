@@ -5,6 +5,7 @@ import pickle
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from solar_challenge.weather import (
     CACHE_DIR_VARIABLE,
     DEFAULT_CACHE_DIR,
     PVGIS_TMY_REQUEST,
+    PrefetchedWeather,
     PvgisTmy,
     WeatherCache,
     WeatherDataError,
@@ -458,6 +460,80 @@ class TestDefaultWeather:
         pd.testing.assert_frame_equal(result, june_day, check_exact=True)
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
+
+
+@dataclass
+class _CountingWeather:
+    """A WeatherProvider by its get alone: it serves frames and records each location it is asked for."""
+
+    frames: dict[Location, pd.DataFrame]
+    asked: list[Location] = field(default_factory=list)
+
+    def get(self, location: Location) -> pd.DataFrame:
+        self.asked.append(location)
+        return self.frames[location]
+
+
+class TestPrefetchedWeather:
+    """PrefetchedWeather holds a copy of the frames it is given, or fetches, and answers only for their locations."""
+
+    BRISTOL = Location.bristol()
+    BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
+    UNHELD = Location(51.48, -3.18)
+
+    @pytest.fixture
+    def bristol_frame(self):
+        """A clear 21 June."""
+        return synthetic_june_weather("2024-06-21")
+
+    @pytest.fixture
+    def bath_frame(self):
+        """The same day as bristol_frame at half its irradiance, so that the two differ."""
+        return synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(0.5,))
+
+    @pytest.fixture
+    def counting(self, bristol_frame, bath_frame):
+        """A counting provider serving bristol_frame at BRISTOL and bath_frame at BATH."""
+        return _CountingWeather({self.BRISTOL: bristol_frame, self.BATH: bath_frame})
+
+    @pytest.fixture
+    def fetched(self, counting):
+        """What fetch makes of counting for BRISTOL, BATH and BRISTOL again."""
+        return PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+    def test_fetch_gets_each_distinct_location_once_in_first_seen_order(self, counting):
+        """fetch asks its provider for each distinct location once, in the order the locations are first seen."""
+        PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+        assert counting.asked == [self.BRISTOL, self.BATH]
+
+    def test_get_returns_the_frame_held_for_a_location(self, fetched, bristol_frame, bath_frame):
+        """get returns the frame held for each location it holds."""
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        pd.testing.assert_frame_equal(fetched.get(self.BRISTOL), bristol_frame, check_exact=True)
+
+    def test_get_refuses_a_location_it_does_not_hold_naming_it_and_those_it_holds(self, fetched):
+        """get refuses a location it does not hold with a LookupError naming that location and each one it holds."""
+        with pytest.raises(LookupError) as refusal:
+            fetched.get(self.UNHELD)
+
+        for location in (self.UNHELD, self.BRISTOL, self.BATH):
+            assert repr(location) in str(refusal.value)
+
+    def test_it_holds_a_copy_of_the_frames_it_was_given(self, bristol_frame, bath_frame):
+        """A location added to the given dict after construction is not held: the held locations are fixed then."""
+        given = {self.BRISTOL: bristol_frame}
+        weather = PrefetchedWeather(given)
+        given[self.BATH] = bath_frame
+
+        with pytest.raises(LookupError):
+            weather.get(self.BATH)
+
+    def test_it_pickles_with_its_frames(self, fetched, bath_frame):
+        """A PrefetchedWeather restored from its pickle holds the same frames."""
+        restored = pickle.loads(pickle.dumps(fetched))
+
+        pd.testing.assert_frame_equal(restored.get(self.BATH), bath_frame, check_exact=True)
 
 
 class TestGetTmyDataWithCache:
