@@ -38,7 +38,7 @@ _COLLECTION_REPORT_PLUGIN = "solar_challenge_collection_report"
 
 _PLUGIN_DIRECTORY = Path(__file__).resolve().parent / "_pytest_plugins"
 
-_OUTPUT_TAIL_CHARS = 5000
+_STREAM_TAIL_CHARS = 5000
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,8 @@ class Collection:
 
     command: str
     returncode: int
-    output: str
+    stdout: str
+    stderr: str
     report: CollectionReport | None
 
     def written_report(self) -> CollectionReport:
@@ -90,7 +91,7 @@ class Collection:
 
     def describe(self) -> str:
         """Describe how the run ended, for an assertion message."""
-        return _described(self.returncode, self.output)
+        return _described(self.returncode, self.stdout, self.stderr)
 
 
 def collect(command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] | None = None) -> Collection:
@@ -113,7 +114,9 @@ def collect(command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] |
             env=collect_env,
         )
         report = _read_report(report_path) if report_path.exists() else None
-    return Collection(command=command, returncode=result.returncode, output=result.stdout + result.stderr, report=report)
+    return Collection(
+        command=command, returncode=result.returncode, stdout=result.stdout, stderr=result.stderr, report=report
+    )
 
 
 def _read_report(path: Path) -> CollectionReport:
@@ -152,14 +155,19 @@ def run_collect_only(
     )
 
 
-def _described(returncode: int, output: str) -> str:
-    """Describe a run that ended with *returncode* after printing *output*, for an assertion message.
+def _described(returncode: int, stdout: str, stderr: str) -> str:
+    """Describe a run that ended with *returncode* after printing *stdout* and *stderr*, for an assertion message.
 
-    The output is cut to its tail, where pytest reports collection errors and its summary.
+    Each stream is cut to its own tail, so a long stderr, such as uv's log, cannot
+    crowd out the collection errors and summary pytest prints at the end of stdout.
     """
-    return f"exit {returncode}\noutput tail:\n{output[-_OUTPUT_TAIL_CHARS:]}"
+    return (
+        f"exit {returncode}\n"
+        f"stdout tail:\n{stdout[-_STREAM_TAIL_CHARS:]}\n"
+        f"stderr tail:\n{stderr[-_STREAM_TAIL_CHARS:]}"
+    )
 
 
 def describe_outcome(result: subprocess.CompletedProcess[str]) -> str:
     """Describe how a run_collect_only *result* ended, for an assertion message."""
-    return _described(result.returncode, result.stdout + result.stderr)
+    return _described(result.returncode, result.stdout, result.stderr)

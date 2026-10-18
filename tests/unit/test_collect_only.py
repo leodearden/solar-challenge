@@ -6,8 +6,8 @@ receives each extra pytest arg whole, and runs in the environment it is given, t
 PYTHONPATH kept; that what it collected is read from the collection-report plugin's report, never from
 its output, with each test's file and parametrize id and each module or directory skipped at
 collection with its skip reason, and a run that wrote no report never reads as an empty collection;
-and that a failed run's description carries pytest's error report however long the listing, and the
-output of a command that failed before pytest started.
+and that a failed run's description carries pytest's error report however long the listing or the
+command's stderr, and the output of a command that failed before pytest started.
 """
 
 import os
@@ -27,6 +27,10 @@ _PROBE_VARIABLE = "COLLECT_ONLY_PROBE"
 _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 
 _STARTUP_ERROR_MESSAGE = "the command failed before pytest started"
+
+_LONG_STDERR_COMMAND = shlex.join(
+    [sys.executable, "-c", "import sys; sys.stderr.write('a line of a long log\\n' * 10000)"]
+)
 
 _DOUBLE_COLON_LINE = "warning: a::b"
 
@@ -171,7 +175,7 @@ def test_an_output_line_holding_a_double_colon_is_not_a_test(tmp_path: Path) -> 
     collection = collect(_PYTEST, tmp_path)
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
-    assert _DOUBLE_COLON_LINE in collection.output, collection.describe()
+    assert _DOUBLE_COLON_LINE in collection.stdout, collection.describe()
     assert collection.node_ids() == ("test_two.py::test_alpha", "test_two.py::test_beta"), collection.describe()
 
 
@@ -286,9 +290,25 @@ def test_a_failed_collection_is_described_by_its_error_report_however_long_the_l
 
     assert collection.returncode == pytest.ExitCode.INTERRUPTED, description
     assert _IMPORT_ERROR_MESSAGE in description, description
-    assert len(description) < len(collection.output), (
+    assert len(description) < len(collection.stdout), (
         f"the description is {len(description)} characters long, no shorter than the "
-        f"{len(collection.output)}-character output it describes"
+        f"{len(collection.stdout)}-character stdout it describes"
+    )
+
+
+def test_a_failed_collection_is_described_by_its_error_report_however_long_the_commands_stderr(
+    project_with_a_long_listing_and_a_broken_module: Path,
+) -> None:
+    """As when uv logs at length before pytest starts: stdout and stderr are each cut to their own tail."""
+    collection = collect(f"{_LONG_STDERR_COMMAND} && {_PYTEST}", project_with_a_long_listing_and_a_broken_module)
+
+    description = collection.describe()
+
+    assert collection.returncode == pytest.ExitCode.INTERRUPTED, description
+    assert _IMPORT_ERROR_MESSAGE in description, description
+    assert len(description) < len(collection.stderr), (
+        f"the description is {len(description)} characters long, no shorter than the "
+        f"{len(collection.stderr)}-character stderr it describes"
     )
 
 
