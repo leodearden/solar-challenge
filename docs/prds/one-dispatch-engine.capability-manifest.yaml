@@ -111,7 +111,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "charg(e|ing) loss"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "briefing-balance-convention-on-bus-energy"
         binding: "built by γ; review/briefing.yaml's energy-balance convention names no storage identity test at 1fa8f79"
@@ -242,7 +242,7 @@ tasks:
           kind: manual
           reason: "cross-stream producers; gated by the add_dependency edges"
   - label: "ζ"
-    task_id: null
+    task_id: 905
     title: "Retire simulate_timestep_tou at the bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning."
     capabilities:

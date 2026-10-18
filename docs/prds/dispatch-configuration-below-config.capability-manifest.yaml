@@ -211,7 +211,7 @@ tasks:
           paths: ["src/solar_challenge/gridservices.py", "src/solar_challenge/web/charts.py"]
           expect: absent
   - label: "ε"
-    task_id: null
+    task_id: 790
     title: "Retire the home- and fleet-level dispatch key at the bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; also depends on S11's tariff-clock arm and S3's home-key routing."
     capabilities:

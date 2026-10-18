@@ -317,7 +317,7 @@ tasks:
           kind: manual
           reason: "a lead action on task state, not a code check"
   - label: "η"
-    task_id: null
+    task_id: 826
     title: "Retire apply_degradation from the public surface (held for S29)"
     note: "Held: x_seam_wait = {stream: S29, contract: one coordinated frozen-surface bump (D4)}; supersedes task 609."
     capabilities:

@@ -237,7 +237,7 @@ tasks:
           kind: manual
           reason: "S1-S3 are CliRunner assertions in ε's tests; message wording is tactical"
   - label: "ζ"
-    task_id: null
+    task_id: 950
     title: "Retire ScenarioConfig.output and OutputConfig (and ScenarioConfig.tariff_config unless S6 claims it) at the surface bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on ε; excluded from this batch's commit_planning. The tariff_config clause waits on lead question 2."
     capabilities:

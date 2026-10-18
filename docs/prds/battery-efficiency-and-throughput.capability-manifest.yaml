@@ -110,7 +110,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "equivalent full cycle"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "consumer-guide-names-compute-soh"
         binding: "grep: no compute_soh in docs/domain-library-consumption.md on main"
@@ -127,7 +127,7 @@ tasks:
           kind: manual
           reason: "values asserted by β's closed-form test (PRD §9 rows 8-9)"
   - label: "γ"
-    task_id: null
+    task_id: 867
     title: "Retire BatteryConfig.efficiency at the bump (held for S29)"
     note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; excluded from this batch's commit_planning until S29 releases it. Also depends on S19 κ (stored-run step mechanism), added by the lead when S19 files."
     capabilities:

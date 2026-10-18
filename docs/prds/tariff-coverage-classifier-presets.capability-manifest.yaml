@@ -272,7 +272,7 @@ tasks:
           kind: manual
           reason: "schedule content is asserted by δ's tests"
   - label: "ε"
-    task_id: null
+    task_id: 843
     title: "Retire TariffConfig.mean_period_rate at the bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on α."
     capabilities:

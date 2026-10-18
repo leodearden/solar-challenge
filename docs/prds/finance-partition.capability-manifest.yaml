@@ -334,7 +334,7 @@ tasks:
           kind: manual
           reason: "figures are asserted by B14's tests and recorded on the task after 812"
   - label: "ι"
-    task_id: null
+    task_id: 939
     title: "Held for S29: solve_cost_recovery_rate is defined in projection"
     note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
     capabilities:
@@ -355,7 +355,7 @@ tasks:
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
   - label: "κ"
-    task_id: null
+    task_id: 941
     title: "Held for S29: BillDistribution.per_home_total_outlay_gbp"
     note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
     capabilities:

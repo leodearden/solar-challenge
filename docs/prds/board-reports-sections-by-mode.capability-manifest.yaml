@@ -226,7 +226,7 @@ tasks:
           kind: manual
           reason: "asserted by S19's step fixture tests with a fleet run saved before ε (B15)"
   - label: "ζ"
-    task_id: null
+    task_id: 976
     title: "Held for S29: SummaryStatistics.seg_revenue_gbp is retired"
     note: "x_seam_wait = {stream: S29, contract: the surface bump release window}; excluded from the batch's commit_planning"
     capabilities:

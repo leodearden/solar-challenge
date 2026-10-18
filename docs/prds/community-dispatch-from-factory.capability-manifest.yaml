@@ -118,7 +118,7 @@ tasks:
           kind: manual
           reason: "cross-stream producer; gated by the add_dependency edge"
   - label: "γ"
-    task_id: null
+    task_id: 912
     title: "The sharing mode is derived from the community battery"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; fk-083990041fdc is weakened, re-measured in PRD §2.3."
     capabilities:

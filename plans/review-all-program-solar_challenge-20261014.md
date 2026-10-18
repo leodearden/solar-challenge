@@ -848,9 +848,12 @@ Keys: fk-b7241e0ce122
 - L46 (S26 decompose; 807 check, extra edges and task 486 reported): The 807 server-side-step-ceiling check is widened to paths src/solar_challenge/web and pattern SWEEP_MAX_STEPS on the task and in the S19 sidecar, so moving the ceiling into web/sweep_request.py at 967 does not wedge 968; the extra edges 969 -> 957, 971 -> 960 and 767 -> 966 are ratified; task 486 (pending, four commits on task/486, no claimant) is not cancelled: it depends on 964 and re-reads at dispatch, with fleet_distribution.py added to its files, since 947 empties config.py of the reader it fixes.
 - L47 (S25 decompose; checks pinned to output.py; 358; keyless overlaps 724 and 439): The 783 board-reports-render-notice, 837 report-renders-the-reliability-rows and report-renders-the-displaced-self-use present checks and the 930 configured-rate-not-a-literal absent check also scan src/solar_challenge/board_report.py, on the tasks and in the S10, S9 and S8 sidecars, because S25 β (970) moves the board reports there; the edges 970 -> 724 (its branch deletes the dead ratio wrappers) and 975 -> 439 (in progress, adds the SEG-rate-passing summaries ε removes) are ratified; 705 re-scoped in place as α stands. Task 358 is Leo's, see D51.
 - L48 (S18 decompose; θ priority; twins 844 and 754; fk-94cab00e114e): θ (984) filed high is ratified as the integration gate and joins gate 772; fk-94cab00e114e moves from the cancelled 759 to 977; twins 844 (keyless) and 754 (/review-keyed) are cancelled by the lead with x_superseded_by 980 when pending with no claimant and no branch commits, else kept behind 980.
+- L49 (S29 decompose; 804 dropped check; overbroad warnings; the β fold against five doc-pinned checks; 950 description; 224 stale fields; held-leaf priorities; γ milestone delay): The 804 transitional-rule-deleted absent check, refused as vacuous_absent because its producer has not landed, is accepted as dropped (804 keeps seven checks and its signal); the 905 and 976 overbroad warnings are advisory, their upstream leaves 904 and 975 delete the matched lines; the five finance-model-doc present checks (801 capacity_at_events and 9.97, 803 independent calibrations, 837 delivery_baseline, 865 equivalent full cycle, 900 charge loss) are widened to also scan docs/domain-library-consumption.md on the tasks and in the S9, S28 and S3 sidecars, so the 224 fold can move the Unreleased paragraphs without wedging gate 772, and the keep-in-place constraint appended to 224 becomes advisory; 950's description carries a lead note resolving its conditional clause; 224 keeps its pending_since and routing record; 912, 927 and 976 stay at their filed priority; γ takes no milestone delay.
 
 ## Cross-reference lines applied by the lead
 
+- S29 (decompose, L45, L49): α is 986 (window open; depends on 926 and 774), β is 224 re-scoped in place (release commit 0.6.0; priority medium; 116 dependencies: 986, 926, the 16 held retirement leaves and 98 open library-side program leaves recomputed from the store), γ is 987 (human gate, task_kind deterministic; depends on 224); 927 and 772 depend on 224; every held leaf (784, 790, 804, 826, 827, 843, 867, 892, 901, 905, 912, 939, 941, 950, 963, 976) depends on 986 and was released by one commit_planning each, x_seam_wait moved to x_seam_released, each stream sidecar stamped; 950 title and description note amended (tariff_config retired).
+- S9, S8, S10, S28, S3 (from S29 decompose, L49): the finance-model-doc present checks of 801 (capacity_at_events, 9.97), 803 (independent calibrations), 837 (delivery_baseline), 865 (equivalent full cycle) and 900 (charge loss) also scan docs/domain-library-consumption.md, where the 224 fold moves the Unreleased paragraphs, so the fold cannot wedge gate 772; the 804 transitional-rule-deleted absent check was refused as vacuous_absent at release and is accepted as dropped (804 keeps seven checks); the overbroad warnings on 905 (simulate_timestep_tou in home.py, deleted by 904) and 976 (seg_revenue_gbp in cli/utils.py, fleet.py, output.py, deleted by 975) are advisory; 912, 927 and 976 stay at their filed priority; 224 keeps its 2026-09-30 pending_since and routing record (gated by its dependencies).
 - S5, S6, S7, S4, S17, S11, S2, tasks (from S18 decompose, L48): S18 is 977 α, 978 β, 979 γ (high), 980 δ (high), 981 ε, 982 ζ, 983 η, 984 θ (filed high, the PRD row said medium: ratified, it is the integration gate); 979, 980 and 984 join gate 772; 977 depends on 956 (the timebase constants) and carries fk-94cab00e114e (moved from 759); 982 depends on 961; 676 moved from 612 to 978; 844 and 754 depend on 980 pending the lead cancellation; cancelled with x_superseded_by: 664, 376, 612 -> 978; 611, 753, 424, 592, 584, 360 -> 980; 569, 571 -> 981; 545, 549, 553, 554, 298, 359 -> 982; 759 -> 977 and 956; D28 re-measures recorded on δ and ζ (fleet_config 41.3% docstrings, fleet_scenario 34.2%).
 - S8, S9, S10, S19, S29, tasks (from S25 decompose): S25 is 705 α (re-scoped in place, fk-6a52ed98b18e stamped), 970 β, 973 γ (high), 974 δ (high), 975 ε, 976 ζ (held for S29); 973 and 974 join gate 772; edges 970 -> 783, 837, 930, 765, 724 (724 deletes the dead ratio wrappers β moves); 973 -> 970, 930, 959; 974 -> 973, 803; 975 -> 705, 922, 780, 822, 439 (in progress, adds a SEG-rate-passing calculate_home_summaries that ε removes); 976 -> 975, 822; 358 depends on 973 pending the D51 reconciliation of its esc-308-3 ruling with D24/D48; the 783 and 837 present checks and the 930 15p absent check also scan src/solar_challenge/board_report.py (L47) because β moves the report builders there; two S25 absent checks and one comment check were re-anchored at decompose.
 - S19, S20, S5, S6, S7, S9, tasks (from S26 decompose, L46): S26 is 964 α, 965 β, 966 γ, 967 δ, 968 ε, 969 ζ, 971 η, 972 θ, all medium, none on gate 772; 807 server-side-step-ceiling check widened by the lead to paths src/solar_challenge/web and pattern SWEEP_MAX_STEPS because δ moves the ceiling into the Flask-free web/sweep_request.py; ε must not use JSON.parse in parameter-sweep.js (888 absent check); 804 depends on 965; 718 cancelled -> 966 and 140 -> 968; 739 delivers fk-32d5e6707fb5 and 971 depends on it; 440 stays narrowed and 967 depends on it; extra edges ratified: 969 -> 957 (both rewrite parse_fleet_config and parse_sweep_fleet_configs), 971 -> 960 (fleet sweep file reading), 767 -> 966 (its own text starts after S26); 486 (four commits on its branch) depends on 964 and re-reads at dispatch, its files gain fleet_distribution.py; S7 defines no FleetFieldPath, ζ defines its own alias; textual overlaps only: 732 with η, 854 with γ, 959 and 767 with β; .worktrees/718 is an empty worktree of a cancelled task.
@@ -996,6 +999,7 @@ Keys: fk-b7241e0ce122
 | Stream | PRD | Task id | Finding keys | Severity |
 |---|---|---|---|---|
 | (Phase 5 mechanical) | — | see report §Mechanical filings | 69 keys: 53 filed as tickets, 13 already covered, 3 left open (weakened) | mixed |
+| S29 β | docs/prds/surface-version-bump.md | 224 (pending) |  | medium |
 | S25 α | docs/prds/board-reports-sections-by-mode.md | 705 (pending) | fk-2106d1fbaed0 fk-6a52ed98b18e | medium |
 | S22 β | docs/prds/assistant-facts-from-engine.md | 751 (pending) | fk-93d3bd7aa219 | low |
 | S1 α | docs/prds/errors-leaf.md | 773 (done) | fk-601c5b5f6415 fk-4435376bedb3 fk-da69830bb2d6 | medium |
@@ -1008,16 +1012,16 @@ Keys: fk-b7241e0ce122
 | S10 δ | docs/prds/simulation-window-and-cadence.md | 781 (pending) | fk-d63c41ca13f9 | medium |
 | S10 ε | docs/prds/simulation-window-and-cadence.md | 782 (pending) | fk-1cd332300623 fk-d63c41ca13f9 fk-286fe17c28c9 | medium |
 | S10 ζ | docs/prds/simulation-window-and-cadence.md | 783 (pending) | fk-1cd332300623 fk-d63c41ca13f9 | medium |
-| S10 η | docs/prds/simulation-window-and-cadence.md | 784 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-286fe17c28c9 fk-7ef1099d24e8 fk-1cd332300623 | medium |
+| S10 η | docs/prds/simulation-window-and-cadence.md | 784 (pending) | fk-286fe17c28c9 fk-7ef1099d24e8 fk-1cd332300623 | medium |
 | S2 α | docs/prds/dispatch-configuration-below-config.md | 786 (pending) | fk-b3dfd41a4d6a fk-615cbc883512 fk-370b3e49b67c fk-c36d6fcbc2a8 fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S2 β | docs/prds/dispatch-configuration-below-config.md | 787 (pending) | fk-fc652220a4d3 fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S2 γ | docs/prds/dispatch-configuration-below-config.md | 788 (pending) | fk-8529726bbd6b fk-99244625d7f2 fk-f126b1c9cbbe | high |
 | S2 δ | docs/prds/dispatch-configuration-below-config.md | 789 (pending) | fk-f126b1c9cbbe | high |
-| S2 ε | docs/prds/dispatch-configuration-below-config.md | 790 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-94f4881bbe48 fk-04b52ee632c6 | medium |
+| S2 ε | docs/prds/dispatch-configuration-below-config.md | 790 (pending) | fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S9 α | docs/prds/grid-services-pricing-model.md | 801 (pending) | fk-758b2f309cab fk-4ddab794283a | medium |
 | S9 β | docs/prds/grid-services-pricing-model.md | 802 (pending) | fk-aafe32daa988 fk-d432a549b03f | medium |
 | S9 γ | docs/prds/grid-services-pricing-model.md | 803 (pending) | fk-0f24b7f66eb2 fk-aafe32daa988 | medium |
-| S9 ε | docs/prds/grid-services-pricing-model.md | 804 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-aafe32daa988 fk-d432a549b03f | medium |
+| S9 ε | docs/prds/grid-services-pricing-model.md | 804 (pending) | fk-aafe32daa988 fk-d432a549b03f | medium |
 | S19 α | docs/prds/run-store-one-owner.md | 805 (pending) | fk-bfdae4525795 | medium |
 | S19 β | docs/prds/run-store-one-owner.md | 806 (pending) | fk-bfdae4525795 fk-df9d0fc1b2d3 fk-9d7f66fdcfdd fk-c14c02dc1b77 | medium |
 | S19 η | docs/prds/run-store-one-owner.md | 807 (pending) | fk-2ac79d7a1989 fk-9d7f66fdcfdd | medium |
@@ -1039,8 +1043,8 @@ Keys: fk-b7241e0ce122
 | S14 ε | docs/prds/pv-model-one-home.md | 823 (pending) | fk-f5cd69400ce6 fk-0edf0069c6bb | high |
 | S19 μ | docs/prds/run-store-one-owner.md | 824 (pending) | fk-df9d0fc1b2d3 fk-bfdae4525795 | medium |
 | S14 ζ | docs/prds/pv-model-one-home.md | 825 (pending) | fk-f5cd69400ce6 fk-0edf0069c6bb | high |
-| S14 η | docs/prds/pv-model-one-home.md | 826 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-3ccbba41d836 | medium |
-| S15 ε | docs/prds/weather-as-explicit-input.md | 827 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-06035cd76226 fk-44fdf5fb356b | medium |
+| S14 η | docs/prds/pv-model-one-home.md | 826 (pending) | fk-3ccbba41d836 | medium |
+| S15 ε | docs/prds/weather-as-explicit-input.md | 827 (pending) | fk-06035cd76226 fk-44fdf5fb356b | medium |
 | S21 α | docs/prds/chart-panels-and-theme-tokens.md | 829 (pending) | fk-93ee9a05751a | medium |
 | S21 β | docs/prds/chart-panels-and-theme-tokens.md | 830 (pending) | fk-93ee9a05751a fk-2e7ddcee2379 | medium |
 | S21 γ | docs/prds/chart-panels-and-theme-tokens.md | 831 (pending) | fk-93ee9a05751a fk-55f4e4ea396d | medium |
@@ -1055,7 +1059,7 @@ Keys: fk-b7241e0ce122
 | S21  | docs/prds/chart-panels-and-theme-tokens.md | 840 (cancelled) | fk-657669b23e71 | low |
 | S11 γ | docs/prds/tariff-coverage-classifier-presets.md | 841 (pending) | fk-463e82417506 | medium |
 | S11 δ | docs/prds/tariff-coverage-classifier-presets.md | 842 (pending) | fk-bd03fe349ffd | medium |
-| S11 ε | docs/prds/tariff-coverage-classifier-presets.md | 843 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-2f88003e22c8 | medium |
+| S11 ε | docs/prds/tariff-coverage-classifier-presets.md | 843 (pending) | fk-2f88003e22c8 | medium |
 | S4 α | docs/prds/finite-quantities.md | 860 (pending) | fk-a9c609ecb8ef fk-649851e5fc38 | high |
 | S4 β | docs/prds/finite-quantities.md | 861 (pending) | fk-a9c609ecb8ef fk-606a9211b34d fk-7dcdc5559d22 fk-a2b33a420bcf | high |
 | S4 γ | docs/prds/finite-quantities.md | 862 (pending) | fk-b69968a37b36 fk-606a9211b34d | medium |
@@ -1063,7 +1067,7 @@ Keys: fk-b7241e0ce122
 | S4 δ | docs/prds/finite-quantities.md | 864 (pending) | fk-a9c609ecb8ef fk-606a9211b34d | high |
 | S28 β | docs/prds/battery-efficiency-and-throughput.md | 865 (pending) | fk-50a3985fae0f | medium |
 | S4 ε | docs/prds/finite-quantities.md | 866 (pending) | fk-649851e5fc38 fk-a2b33a420bcf | high |
-| S28 γ | docs/prds/battery-efficiency-and-throughput.md | 867 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-35b8ddcf5565 | medium |
+| S28 γ | docs/prds/battery-efficiency-and-throughput.md | 867 (pending) | fk-35b8ddcf5565 | medium |
 | S4 ζ | docs/prds/finite-quantities.md | 868 (pending) | fk-649851e5fc38 fk-60410de6dd0a fk-a2b33a420bcf | high |
 | S4 η | docs/prds/finite-quantities.md | 870 (pending) | fk-60410de6dd0a fk-239274130a5a | high |
 | S4 θ | docs/prds/finite-quantities.md | 871 (pending) | fk-f2f8a5512feb fk-a9c609ecb8ef | high |
@@ -1085,7 +1089,7 @@ Keys: fk-b7241e0ce122
 | S16 δ | docs/prds/fleet-execution-policy.md | 889 (pending) | fk-7bdd33abd0ff fk-f6c905f91d32 fk-7aaa879bf0ac fk-7e76b4cf2cb2 | medium |
 | S16 ε | docs/prds/fleet-execution-policy.md | 890 (pending) |  | medium |
 | S24 θ | docs/prds/lane-harness-one-collection-source.md | 891 (pending) | fk-eec3806e584e | medium |
-| S16 ζ | docs/prds/fleet-execution-policy.md | 892 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-7e76b4cf2cb2 | medium |
+| S16 ζ | docs/prds/fleet-execution-policy.md | 892 (pending) | fk-7e76b4cf2cb2 | medium |
 | S12 α | docs/prds/load-composition-and-calendar-days.md | 893 (pending) | fk-1d920c89e872 | high |
 | S12 β | docs/prds/load-composition-and-calendar-days.md | 894 (pending) | fk-1d920c89e872 fk-89777ec9faad fk-72af0b90338d | high |
 | S12 γ | docs/prds/load-composition-and-calendar-days.md | 895 (pending) | fk-1d920c89e872 fk-7fa120a8bb98 fk-781d153ab978 | high |
@@ -1094,17 +1098,17 @@ Keys: fk-b7241e0ce122
 | S3 β | docs/prds/one-dispatch-engine.md | 898 (pending) | fk-4df47ebe6a96 | medium |
 | S12 ε | docs/prds/load-composition-and-calendar-days.md | 899 (pending) | fk-781d153ab978 | medium |
 | S3 γ | docs/prds/one-dispatch-engine.md | 900 (pending) | fk-7440003fdd59 | high |
-| S12 ζ | docs/prds/load-composition-and-calendar-days.md | 901 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-781d153ab978 fk-7fa120a8bb98 | medium |
+| S12 ζ | docs/prds/load-composition-and-calendar-days.md | 901 (pending) | fk-781d153ab978 fk-7fa120a8bb98 | medium |
 | S3 δ | docs/prds/one-dispatch-engine.md | 902 (pending) | fk-2a53ae89932e fk-f622bbaa9f2e fk-a9c609ecb8ef | high |
 | S3 ε | docs/prds/one-dispatch-engine.md | 904 (pending) | fk-4df47ebe6a96 | medium |
-| S3 ζ | docs/prds/one-dispatch-engine.md | 905 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-4df47ebe6a96 | medium |
+| S3 ζ | docs/prds/one-dispatch-engine.md | 905 (pending) | fk-4df47ebe6a96 | medium |
 | S13 α | docs/prds/rng-hand-off.md | 906 (pending) | fk-16df1a7ac416 fk-c78416de5500 | high |
 | S22 α | docs/prds/assistant-facts-from-engine.md | 907 (pending) | fk-194e5b40da23 | medium |
 | S13 β | docs/prds/rng-hand-off.md | 908 (pending) | fk-e0e34ef46058 | low |
 | S27 α | docs/prds/community-dispatch-from-factory.md | 909 (pending) | fk-664e2030921e | medium |
 | S27 β | docs/prds/community-dispatch-from-factory.md | 910 (pending) | fk-8995288451e6 | low |
 | S7 α | docs/prds/component-defaults-one-home.md | 911 (pending) | fk-d6f16d95b126 | low |
-| S27 γ | docs/prds/community-dispatch-from-factory.md | 912 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-083990041fdc | low |
+| S27 γ | docs/prds/community-dispatch-from-factory.md | 912 (pending) | fk-083990041fdc | low |
 | S23 α | docs/prds/surface-lock-one-module.md | 913 (pending) | fk-293a1282ace4 fk-9df95e9e2b45 | low |
 | S7 β | docs/prds/component-defaults-one-home.md | 914 (pending) | fk-2b16cc8bcf46 fk-d2b4045c6676 fk-148991ab9439 fk-dfeefbe95640 | high |
 | S23 β | docs/prds/surface-lock-one-module.md | 915 (pending) | fk-879e8c13f581 | high |
@@ -1118,7 +1122,7 @@ Keys: fk-b7241e0ce122
 | S23 ε | docs/prds/surface-lock-one-module.md | 924 (pending) | fk-d2881616c782 | medium |
 | S8 γ | docs/prds/finance-partition.md | 925 (pending) | fk-caeaf35c8151 fk-c2c9277c1920 fk-9cc706d3afdd | high |
 | S23 ζ | docs/prds/surface-lock-one-module.md | 926 (pending) | fk-dc5370224a78 | low |
-| S23 η | docs/prds/surface-lock-one-module.md | 927 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the release commit that bumps the version and writes the one release section'} | fk-dc5370224a78 | low |
+| S23 η | docs/prds/surface-lock-one-module.md | 927 (pending) | fk-dc5370224a78 | low |
 | S8 δ | docs/prds/finance-partition.md | 928 (pending) | fk-b0f648b0e6d0 fk-41283f42a36a fk-5fdb04305288 fk-9cc706d3afdd | medium |
 | S8 ε | docs/prds/finance-partition.md | 929 (pending) | fk-c0e0ae3dcca8 fk-5b34adae950b | high |
 | S8 ζ | docs/prds/finance-partition.md | 930 (pending) | fk-4a9af7c31a4f fk-3b0a239d0489 | medium |
@@ -1130,9 +1134,9 @@ Keys: fk-b7241e0ce122
 | S8 θ | docs/prds/finance-partition.md | 936 (pending) | fk-8b8f9d686b86 | medium |
 | S17 ε | docs/prds/web-request-boundary.md | 937 (pending) | fk-29af8a4fe018 fk-ba29e186122f | medium |
 | S17 ζ | docs/prds/web-request-boundary.md | 938 (pending) | fk-da0e3a4df6e7 fk-5827f41eb082 | medium |
-| S8 ι | docs/prds/finance-partition.md | 939 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-5fdb04305288 | medium |
+| S8 ι | docs/prds/finance-partition.md | 939 (pending) | fk-5fdb04305288 | medium |
 | S17 η | docs/prds/web-request-boundary.md | 940 (pending) | fk-70edc755ede4 | medium |
-| S8 κ | docs/prds/finance-partition.md | 941 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-3f4daea21220 | medium |
+| S8 κ | docs/prds/finance-partition.md | 941 (pending) | fk-3f4daea21220 | medium |
 | S17 θ | docs/prds/web-request-boundary.md | 942 (pending) | fk-bd7f2abebeba | low |
 | S17 κ | docs/prds/web-request-boundary.md | 943 (pending) | fk-6c98ee030531 fk-1d143fefefed fk-66f886576b3f | medium |
 | S9  | docs/prds/grid-services-pricing-model.md | 944 (pending) |  | medium |
@@ -1141,7 +1145,7 @@ Keys: fk-b7241e0ce122
 | S5 γ | docs/prds/scenario-grammar-partition.md | 947 (pending) | fk-62821dcde535 fk-2dc9d1cd2c06 fk-59fdc80fdded | high |
 | S5 δ | docs/prds/scenario-grammar-partition.md | 948 (pending) | fk-e2aaf2bfe651 | medium |
 | S5 ε | docs/prds/scenario-grammar-partition.md | 949 (pending) | fk-897e13f84164 | medium |
-| S5 ζ | docs/prds/scenario-grammar-partition.md | 950 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-897e13f84164 | medium |
+| S5 ζ | docs/prds/scenario-grammar-partition.md | 950 (pending) | fk-897e13f84164 | medium |
 | S6 α | docs/prds/one-scenario-reader.md | 955 (pending) | fk-8047de9b6789 fk-188af6c13d71 fk-0b791f2be2d6 fk-81d0840d19e2 | high |
 | S6 β | docs/prds/one-scenario-reader.md | 956 (pending) | fk-be5b13274bcb fk-f99038047a27 | medium |
 | S6 γ | docs/prds/one-scenario-reader.md | 957 (pending) | fk-3be3240278ee fk-2264bc150fa3 fk-a391cf1f4edf | high |
@@ -1150,7 +1154,7 @@ Keys: fk-b7241e0ce122
 | S6 ζ | docs/prds/one-scenario-reader.md | 960 (pending) | fk-be5b13274bcb | medium |
 | S6 η | docs/prds/one-scenario-reader.md | 961 (pending) | fk-a391cf1f4edf fk-ad65ad5e4e48 | medium |
 | S6 θ | docs/prds/one-scenario-reader.md | 962 (pending) | fk-3be3240278ee fk-2264bc150fa3 fk-be5b13274bcb | high |
-| S6 ι | docs/prds/one-scenario-reader.md | 963 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-be5b13274bcb | medium |
+| S6 ι | docs/prds/one-scenario-reader.md | 963 (pending) | fk-be5b13274bcb | medium |
 | S26 α | docs/prds/sweep-knob-registry.md | 964 (pending) | fk-59fdc80fdded fk-4cc34de4e649 | medium |
 | S26 β | docs/prds/sweep-knob-registry.md | 965 (pending) | fk-4cc34de4e649 | medium |
 | S26 γ | docs/prds/sweep-knob-registry.md | 966 (pending) | fk-3ca00f8edeb8 fk-0b4f5e04067c fk-4cc34de4e649 | medium |
@@ -1163,7 +1167,7 @@ Keys: fk-b7241e0ce122
 | S25 γ | docs/prds/board-reports-sections-by-mode.md | 973 (pending) | fk-b7241e0ce122 | high |
 | S25 δ | docs/prds/board-reports-sections-by-mode.md | 974 (pending) | fk-b7241e0ce122 | high |
 | S25 ε | docs/prds/board-reports-sections-by-mode.md | 975 (pending) | fk-ef13881623be | low |
-| S25 ζ | docs/prds/board-reports-sections-by-mode.md | 976 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-ef13881623be | low |
+| S25 ζ | docs/prds/board-reports-sections-by-mode.md | 976 (pending) | fk-ef13881623be | low |
 | S18 α | docs/prds/dashboard-limits-and-distribution-table.md | 977 (pending) | fk-94cab00e114e | medium |
 | S18 β | docs/prds/dashboard-limits-and-distribution-table.md | 978 (pending) | fk-1df9dbc0d971 fk-f8b7b3ab709d fk-366773b4083f | medium |
 | S18 γ | docs/prds/dashboard-limits-and-distribution-table.md | 979 (pending) | fk-8107696f0b02 fk-a6d9f3e5a7e2 | high |
@@ -1172,8 +1176,10 @@ Keys: fk-b7241e0ce122
 | S18 ζ | docs/prds/dashboard-limits-and-distribution-table.md | 982 (pending) | fk-40dff1473b94 fk-d303b6dbf669 fk-021a21b35427 | medium |
 | S18 η | docs/prds/dashboard-limits-and-distribution-table.md | 983 (pending) | fk-006c3339e3b2 | low |
 | S18 θ | docs/prds/dashboard-limits-and-distribution-table.md | 984 (pending) | fk-a6d9f3e5a7e2 fk-1df9dbc0d971 | high |
-| trigger chain | — | 772 (deferred; depends on [788, 789, 823, 825, 816, 822, 832, 860, 861, 864, 866, 868, 870, 871, 872, 883, 888, 877, 893, 894, 895, 900, 902, 906, 914, 919, 921, 915, 935, 297, 922, 925, 929, 946, 947, 955, 957, 958, 959, 962, 973, 974, 979, 980, 984]) | — | medium |
+| S29 α | docs/prds/surface-version-bump.md | 986 (pending) |  | medium |
+| S29 γ | docs/prds/surface-version-bump.md | 987 (pending) |  | medium |
+| trigger chain | — | 772 (deferred; depends on [788, 789, 823, 825, 816, 822, 832, 860, 861, 864, 866, 868, 870, 871, 872, 883, 888, 877, 893, 894, 895, 900, 902, 906, 914, 919, 921, 915, 935, 297, 922, 925, 929, 946, 947, 955, 957, 958, 959, 962, 973, 974, 979, 980, 984, 224]) | — | medium |
 
-Trigger chain: human gate task 772 (interim form, skills/_shared/filing-the-trigger-chain.md §4; `metadata.trigger_chain = {role: human_gate, skill: review-all, run_id: review-all-solar_challenge-20261013}`), filed deferred under planning mode on 2026-10-14; each /prd session adds its high and critical leaves as its dependencies; committed by the human once this table is complete. No earlier review-all chain existed; launched_from: none.
+Trigger chain: human gate task 772 (interim form, skills/_shared/filing-the-trigger-chain.md §4; `metadata.trigger_chain = {role: human_gate, skill: review-all, run_id: review-all-solar_challenge-20261013}`), filed deferred under planning mode on 2026-10-14; each /prd session added its high and critical leaves as its dependencies, and S29 β (224, the release commit) joined it at L45; the table above is complete as of 2026-10-18 (every stream S1-S29 filed, every held leaf released), so the human commits the gate with commit_planning(task_ids="772"). No earlier review-all chain existed; launched_from: none.
 
 Coordinator interventions: the S9 and S11 spawns failed once on shell quoting and were relaunched; the fused-memory server restarted during Phase 5 ticket resolution and 29 tickets were resubmitted.

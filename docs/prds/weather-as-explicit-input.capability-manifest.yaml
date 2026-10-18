@@ -265,7 +265,7 @@ tasks:
           kind: manual
           reason: "a constraint on the encoding choice, checked in review"
   - label: "ε"
-    task_id: null
+    task_id: 827
     title: "Retire the global weather cache at the surface bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on β, γ and δ; excluded from this batch's commit_planning. get_tmy_data's deletion follows Q1's default."
     capabilities:

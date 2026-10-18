@@ -116,7 +116,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "capacity_at_events"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "model-doc-carries-the-worked-figure"
         binding: "arithmetic: (1.00 x 12 + 0.6 x 3 x 0.060 x 12) x 0.75 = 9.972; `9.97` absent from the model doc on main"
@@ -124,7 +124,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "9\\.97"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "consumer-guide-names-the-new-member"
         binding: "grep: `annual_income_gbp` absent from docs/domain-library-consumption.md on main"
@@ -209,7 +209,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "delivery_baseline"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "consumer-guide-names-the-model-change"
         binding: "grep: `delivery_baseline` absent from docs/domain-library-consumption.md on main"
@@ -429,7 +429,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "independent calibrations"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "band-refusals-share-one-message"
         binding: "divergence observed: resolve_flex_band raises ValueError 'Unknown flexibility band' (CLI 'Invalid value:'); GridServicesEventsConfig raises ConfigurationError 'band must be one of [...]'"
@@ -438,7 +438,7 @@ tasks:
           kind: manual
           reason: "message text across entry points judged by γ's own tests (PRD §9 P4, C10)"
   - label: "ε"
-    task_id: null
+    task_id: 804
     title: "FinanceConfig.grid_services_model holds the pricing model; the scenario names it once"
     note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; depends on β and γ; excluded from the batch's commit_planning."
     capabilities:

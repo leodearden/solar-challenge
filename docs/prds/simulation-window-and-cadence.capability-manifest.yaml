@@ -259,7 +259,7 @@ tasks:
           kind: manual
           reason: "CLI behaviour asserted by B8's CliRunner test (INV-8 CLI half)"
   - label: "η"
-    task_id: null
+    task_id: 784
     title: "Surface bump edits for the window (held for S29)"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning until S29 releases it. Includes D31: householder_bill and bill_distribution lose simulation_days."
     capabilities:

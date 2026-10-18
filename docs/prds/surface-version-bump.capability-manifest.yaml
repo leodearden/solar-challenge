@@ -7,7 +7,7 @@ schema_version: 1
 signal_leaves: ["α", "β", "γ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 986
     title: "Open the 0.6.0 release window; ConfigurationError in __all__"
     note: "Intermediate: unlocks the held leaves 784, 790, 804, 826, 827, 843, 867, 892, 901, 905, 912, 939, 941, 950, 963 and S25 ζ (each depends on α). Prereqs out of batch: 926 (S23 ζ), 774 (S1 β). x_finding_key [], x_lead_ruling D4."
     capabilities:
@@ -48,7 +48,7 @@ tasks:
           kind: manual
           reason: "ordering edge α -> 926; S23's sidecar checks the classifier"
   - label: "β"
-    task_id: null
+    task_id: 224
     title: "Release solar-challenge 0.6.0: version, folded release notes, consumer recipe"
     note: "Task 224 re-scoped in place (PRD decision 9). Prereqs out of batch: 926; every held leaf other than 927; S25 ζ; the library-side program leaves of PRD decision 3 (31 at the store read, recomputed at decompose). 927 (S23 η) and γ depend on β; β joins gate 772 (PRD §10 Q5). x_finding_key [], x_lead_ruling D4."
     capabilities:
@@ -109,7 +109,7 @@ tasks:
           kind: manual
           reason: "R8 is checked in-leaf at β's base"
   - label: "γ"
-    task_id: null
+    task_id: 987
     title: "Human gate: cut and push solar-challenge-v0.6.0 on β's merge commit; file the platform re-pin"
     note: "task_kind deterministic. Prereq: β. Files one task in solar_challenge_platform (project_root /home/leo/src/solar-challenge-platform) carrying β's recipe and site list. x_finding_key [], x_lead_ruling D4."
     capabilities:

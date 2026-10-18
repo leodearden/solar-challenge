@@ -322,7 +322,7 @@ tasks:
           paths: ["review/briefing.yaml"]
           expect: present
   - label: "ι"
-    task_id: null
+    task_id: 963
     title: "ScenarioConfig.period becomes a SimulationWindow; SimulationPeriod is retired at the surface bump"
     note: "Held: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from commit_planning."
     capabilities:

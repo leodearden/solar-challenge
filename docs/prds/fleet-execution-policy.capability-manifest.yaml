@@ -312,7 +312,7 @@ tasks:
           kind: manual
           reason: "B16 and B17 pin the count and the refusals"
   - label: "ζ"
-    task_id: null
+    task_id: 892
     title: "Retire the solve's implicit simulator and export the runner (held for S29)"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on γ; excluded from this batch's commit_planning. Conditional on lead Q2."
     capabilities:
