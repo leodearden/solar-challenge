@@ -7,8 +7,11 @@
     request.endpoint, the endpoint its link's URL is built from. Alpine.js
     opens and closes the groups; on desktop, the group holding the current
     page is always shown open while the sidebar is expanded.
-    The sidebar state (expanded/collapsed) is controlled by the parent
-    Alpine.js x-data on the layout wrapper in base.html.
+    base.html's head script puts sidebar-collapsed on <html> before first
+    paint, so the sidebar-collapsed: classes style the collapsed desktop
+    sidebar from the first paint. The toggle flips that class, body's
+    sidebarOpen and localStorage together; sidebarOpen drives only the
+    group links' x-show and the toggle's title.
 #}
 
 {% from "components/icons.html" import dashboard, simulate, scenarios, history, close, brand_sun, assistant %}
@@ -88,7 +91,7 @@
             {% if is_mobile %}
             <span>{{ item.label }}</span>
             {% else %}
-            <span class="whitespace-nowrap transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">{{ item.label }}</span>
+            <span class="whitespace-nowrap transition-opacity duration-200 sidebar-collapsed:opacity-0 sidebar-collapsed:w-0 sidebar-collapsed:overflow-hidden">{{ item.label }}</span>
             {% endif %}
         {% endcall %}
     {% else %}
@@ -115,10 +118,10 @@
                     <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
                 </svg>
                 {% else %}
-                <span class="whitespace-nowrap flex-1 text-left transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">{{ item.label }}</span>
+                <span class="whitespace-nowrap flex-1 text-left transition-opacity duration-200 sidebar-collapsed:opacity-0 sidebar-collapsed:w-0 sidebar-collapsed:overflow-hidden">{{ item.label }}</span>
                 <svg
-                    xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform flex-shrink-0"
-                    :class="{'rotate-90': openGroup === '{{ item.id }}', 'opacity-0': !sidebarOpen}"
+                    xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform flex-shrink-0 sidebar-collapsed:opacity-0"
+                    :class="{'rotate-90': openGroup === '{{ item.id }}'}"
                     viewBox="0 0 20 20" fill="currentColor"
                 >
                     <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
@@ -145,8 +148,7 @@
 
 <!-- Desktop sidebar -->
 <aside
-    class="hidden lg:flex fixed top-0 left-0 z-40 h-screen bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 transition-all duration-300 flex-col"
-    :class="sidebarOpen ? 'w-64' : 'w-16'"
+    class="hidden lg:flex fixed top-0 left-0 z-40 h-screen bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 transition-all duration-300 flex-col w-64 sidebar-collapsed:w-16"
 >
     <!-- Brand header -->
     <div class="flex items-center h-16 px-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
@@ -155,8 +157,7 @@
                 {{ brand_sun() }}
             </span>
             <span
-                class="font-bold text-lg text-slate-800 dark:text-white whitespace-nowrap transition-opacity duration-200"
-                :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'"
+                class="font-bold text-lg text-slate-800 dark:text-white whitespace-nowrap transition-opacity duration-200 sidebar-collapsed:opacity-0 sidebar-collapsed:w-0"
             >Solar Challenge</span>
         </a>
     </div>
@@ -171,12 +172,16 @@
         <div class="flex items-center justify-between px-1">
             {% include "partials/theme-toggle.html" %}
             <button
-                @click="sidebarOpen = !sidebarOpen; localStorage.setItem('sidebarOpen', sidebarOpen)"
+                @click="
+                    sidebarOpen = !sidebarOpen;
+                    document.documentElement.classList.toggle('sidebar-collapsed', !sidebarOpen);
+                    localStorage.setItem('sidebarOpen', sidebarOpen);
+                "
                 class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                 :title="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'"
                 aria-label="Toggle sidebar"
             >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="sidebarOpen ? '' : 'rotate-180'" viewBox="0 0 20 20" fill="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform sidebar-collapsed:rotate-180" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
                 </svg>
             </button>

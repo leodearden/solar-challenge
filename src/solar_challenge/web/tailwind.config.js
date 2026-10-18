@@ -24,5 +24,8 @@ module.exports = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // sidebar-collapsed:<utility> applies while <html> has the sidebar-collapsed class, which base.html's head script sets before first paint.
+    ({ addVariant }) => addVariant('sidebar-collapsed', '.sidebar-collapsed &'),
+  ],
 };
