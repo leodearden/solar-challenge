@@ -23,7 +23,7 @@ from solar_challenge.fleet import (
     simulate_fleet_iter,
     simulate_multi_sweep_iter,
 )
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -451,13 +451,88 @@ class TestFleetSummary:
             for results in sample_results.per_home_results
         ]
 
-    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
-    def test_the_fleet_summary_is_the_aggregate_of_its_homes_summaries(self, sample_results, seg_tariff_pence_per_kwh):
-        """calculate_fleet_summary gives exactly the FleetSummary aggregated from the fleet's home summaries at the same SEG tariff."""
-        home_summaries = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+    def test_home_summaries_aggregate_into_the_fleets_totals_ratios_and_per_home_statistics(self):
+        """The fleet's totals sum its homes', its ratios divide those totals, and its per-home statistics range over its homes' generation and self-consumption ratios."""
+        small_array = SummaryStatistics(
+            total_generation_kwh=4.0,
+            total_demand_kwh=6.0,
+            total_self_consumption_kwh=3.0,
+            total_grid_import_kwh=3.0,
+            total_grid_export_kwh=1.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=1.0,
+            peak_demand_kw=1.5,
+            self_consumption_ratio=0.75,
+            grid_dependency_ratio=0.5,
+            export_ratio=0.25,
+            simulation_days=1,
+            total_import_cost_gbp=0.75,
+            total_export_revenue_gbp=0.125,
+            net_cost_gbp=0.625,
+            seg_revenue_gbp=0.125,
+        )
+        medium_array = SummaryStatistics(
+            total_generation_kwh=16.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=2.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=14.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=3.0,
+            peak_demand_kw=2.0,
+            self_consumption_ratio=0.125,
+            grid_dependency_ratio=0.75,
+            export_ratio=0.875,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=1.75,
+            net_cost_gbp=-0.25,
+            seg_revenue_gbp=1.75,
+        )
+        large_array = SummaryStatistics(
+            total_generation_kwh=40.0,
+            total_demand_kwh=16.0,
+            total_self_consumption_kwh=10.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=30.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=6.0,
+            peak_demand_kw=3.0,
+            self_consumption_ratio=0.25,
+            grid_dependency_ratio=0.375,
+            export_ratio=0.75,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=3.75,
+            net_cost_gbp=-2.25,
+            seg_revenue_gbp=3.75,
+        )
 
-        assert aggregate_home_summaries(home_summaries) == calculate_fleet_summary(
-            sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh
+        assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(
+            n_homes=3,
+            total_generation_kwh=60.0,
+            total_demand_kwh=30.0,
+            total_self_consumption_kwh=15.0,
+            total_grid_import_kwh=15.0,
+            total_grid_export_kwh=45.0,
+            fleet_self_consumption_ratio=0.25,
+            fleet_grid_dependency_ratio=0.5,
+            per_home_generation_min_kwh=4.0,
+            per_home_generation_max_kwh=40.0,
+            per_home_generation_mean_kwh=20.0,
+            per_home_generation_median_kwh=16.0,
+            per_home_self_consumption_ratio_min=0.125,
+            per_home_self_consumption_ratio_max=0.75,
+            per_home_self_consumption_ratio_mean=0.375,
+            simulation_days=1,
+            total_seg_revenue_gbp=5.625,
+            per_home_seg_revenue_mean_gbp=1.875,
+            total_net_cost_gbp=-1.875,
+            total_import_cost_gbp=3.75,
+            total_export_revenue_gbp=5.625,
         )
 
     def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
