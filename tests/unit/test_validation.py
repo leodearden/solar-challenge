@@ -134,7 +134,7 @@ def _peak_check(results: list[ValidationResult]) -> ValidationResult:
     return next(r for r in results if r.check_name == "peak_within_capacity")
 
 
-# Wires four 250 W modules, 1.0 kWp; the default 400.428 W module would wire three, 1.2 kWp.
+# Wires four 250 W modules, 1.0 kWp; DEFAULT_CEC_MODULE (400.428 W at STC) would wire three, 1.2 kWp.
 _PVWATTS_250_W_AT_1_1_KW = PVConfig(
     capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
 )
@@ -306,7 +306,7 @@ class TestAnnualYieldPerWiredKwp:
         assert result.value == pytest.approx(kwh_per_wired_kwp)
 
     def test_0_3_kw_is_judged_per_the_one_400_428_w_module_it_wires(self) -> None:
-        """0.3 kW wires one 400.428 W module, so 400.428 kWh a year is 1000 kWh/kWp."""
+        """0.3 kW wires one DEFAULT_CEC_MODULE (400.428 W at STC), so 400.428 kWh a year is 1000 kWh/kWp."""
         generation = _year_of_generation(400.428)
 
         result = _annual_yield_check(
@@ -408,7 +408,7 @@ class TestPeakWithinWiredCapacity:
     """The peak may exceed the DC of the modules the PV model wires by 10%."""
 
     def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(self) -> None:
-        """0.7 kW wires two 400.428 W modules, 0.80 kWp.
+        """0.7 kW wires two DEFAULT_CEC_MODULE (400.428 W at STC) modules, 0.80 kWp.
 
         Behind a 1.0 kW inverter the model's AC peaked at 0.804 kW, as
         docs/pv-annual-yield-benchmark.md §4 records.
