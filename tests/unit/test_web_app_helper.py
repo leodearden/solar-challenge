@@ -38,10 +38,7 @@ def test_the_app_runs_in_testing_mode_with_its_data_under_the_given_directory(
     assert Path(app.config["DATA_DIR"]) == tmp_path
 
 
-def test_the_app_fixture_is_the_builders_app_on_the_tests_own_tmp_path(
-    app: Flask, tmp_path: Path
-) -> None:
-    assert app.testing
+def test_the_app_fixture_keeps_its_data_under_the_tests_own_tmp_path(app: Flask, tmp_path: Path) -> None:
     assert Path(app.config["DATA_DIR"]) == tmp_path
 
 
