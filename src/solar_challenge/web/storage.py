@@ -17,20 +17,21 @@ import functools
 import json
 import re
 import shutil
+import sqlite3
 import sys
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import Any, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
 import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType, get_db
 
 T = TypeVar("T")
 
@@ -161,6 +162,128 @@ def stored_fleet_home_configs(config: Mapping[str, Any]) -> list[HomeConfig]:
     return [stored_home_config(home) for home in config["homes"]]
 
 
+@dataclass(frozen=True)
+class RunRecord:
+    """One row of the runs table, each column in the field of the same name.
+
+    config_json and summary_json are the JSON texts a save wrote; None while the run has none.
+    type holds one of RUN_TYPES and status one of RUN_STATUSES, each None for NULL; a record
+    given another value raises ValueError.
+    """
+
+    id: str
+    name: str | None
+    type: RunType | None
+    config_json: str | None
+    summary_json: str | None
+    status: RunStatus | None
+    error_message: str | None
+    created_at: str | None
+    completed_at: str | None
+    duration_seconds: float | None
+    n_homes: int | None
+    notes: str | None
+
+    def __post_init__(self) -> None:
+        _require_one_of("type", self.type, RUN_TYPES)
+        _require_one_of("status", self.status, RUN_STATUSES)
+
+    def decoded_config(self) -> Any:
+        """The value config_json encodes; {} when the run has no config text or it is not JSON."""
+        return _decoded_or_empty(self.config_json)
+
+    def decoded_summary(self) -> Any:
+        """The value summary_json encodes; {} when the run has no summary text or it is not JSON."""
+        return _decoded_or_empty(self.summary_json)
+
+
+def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]) -> None:
+    """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
+    if value is not None and value not in allowed:
+        raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
+
+
+def _decoded_or_empty(text: str | None) -> Any:
+    """The value JSON *text* encodes; {} when *text* is None, empty or not JSON."""
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
+    """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
+    return None if row is None else RunRecord(**dict(row))
+
+
+RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
+RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
+
+
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
+
+
+def _run_row_upsert() -> str:
+    """The statement writing a RunRecord, bound by field name, as the runs row under its id.
+
+    A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes
+    every other column from the record.
+    """
+    columns = [field.name for field in fields(RunRecord)]
+    rewritten = [column for column in columns if column not in _COLUMNS_A_RESAVE_KEEPS]
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(f":{column}" for column in columns)
+    assignments = ", ".join(f"{column} = excluded.{column}" for column in rewritten)
+    return (
+        f"INSERT INTO runs ({column_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT(id) DO UPDATE SET {assignments}"
+    )
+
+
+_RUN_ROW_UPSERT = _run_row_upsert()
+
+
+def _saved_run_row(
+    *,
+    run_id: str,
+    name: str,
+    run_type: RunType,
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    status: RunStatus,
+    error_message: str | None,
+    created_at: str | None,
+    duration_seconds: float | None,
+    n_homes: int,
+) -> RunRecord:
+    """The runs row a save writes for the run it stored under *run_id*, its config and summary as JSON text.
+
+    The run is created now unless *created_at* is given, is completed now if its *status* is
+    completed, and has no notes. Now is one time, read once: a run created and completed by the
+    same save has the same time for both.
+
+    Raises:
+        ValueError: *status* is not one of RUN_STATUSES, as RunRecord refuses it.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    return RunRecord(
+        id=run_id,
+        name=name,
+        type=run_type,
+        config_json=json.dumps(config),
+        summary_json=json.dumps(summary),
+        status=status,
+        error_message=error_message,
+        created_at=now if created_at is None else created_at,
+        completed_at=now if status == "completed" else None,
+        duration_seconds=duration_seconds,
+        n_homes=n_homes,
+        notes=None,
+    )
+
+
 class RunStorage:
     """Storage service for simulation runs.
 
@@ -191,7 +314,7 @@ class RunStorage:
             ValueError: If run_id contains invalid characters or resolves
                 outside the runs directory
         """
-        if not re.match(r"^[a-zA-Z0-9_-]+$", run_id):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
             raise ValueError(
                 f"Invalid run_id: {run_id!r}. "
                 "Only alphanumeric characters, hyphens, and underscores are allowed."
@@ -219,6 +342,31 @@ class RunStorage:
         self._validate_run_id(run_id)
         return self.data_dir / "runs" / run_id
 
+    def _stored_run_dir(self, run_id: str) -> Path:
+        """The directory holding the files of the run stored under *run_id*.
+
+        Raises:
+            FileNotFoundError: No run is stored under *run_id*: the store refuses the id, so
+                no save can have written one (the refusal is the cause), or no directory holds it.
+        """
+        try:
+            run_dir = self._get_run_dir(run_id)
+        except ValueError as refusal:
+            raise FileNotFoundError(f"No run is stored under {run_id!r}: {refusal}") from refusal
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        return run_dir
+
+    def _upsert_run_row(self, row: RunRecord) -> None:
+        """Write *row* as the runs row under row.id.
+
+        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names, among
+        them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
+        runs keeps the new name when the job's save rewrites its row.
+        """
+        with get_db(self.db_path) as conn:
+            conn.execute(_RUN_ROW_UPSERT, asdict(row))
+
     def save_home_run(
         self,
         run_id: str,
@@ -226,7 +374,7 @@ class RunStorage:
         results: SimulationResults,
         summary: SummaryStatistics,
         name: str | None = None,
-        status: str = "completed",
+        status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
@@ -234,7 +382,9 @@ class RunStorage:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and upserts metadata into database.
+        saves time series to parquet, and upserts metadata into database. A run
+        already stored under run_id keeps the columns of its runs row that
+        _upsert_run_row keeps.
 
         Args:
             run_id: Unique run identifier
@@ -242,24 +392,42 @@ class RunStorage:
             results: Simulation results with time series
             summary: Summary statistics
             name: Optional run name (defaults to config.name)
-            status: Run status (completed, failed, running)
+            status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
+
+        Raises:
+            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
+                The save has written nothing then.
         """
-        # Create run directory
         run_dir = self._get_run_dir(run_id)
+        config_dict = _serialize_dataclass(config)
+        summary_dict = _serialize_dataclass(summary)
+        # Build the row first, so a save RunRecord refuses has written no file.
+        row = _saved_run_row(
+            run_id=run_id,
+            name=name or config.name or "Unnamed Run",
+            run_type="home",
+            config=config_dict,
+            summary=summary_dict,
+            status=status,
+            error_message=error_message,
+            created_at=created_at,
+            duration_seconds=duration_seconds,
+            n_homes=1,
+        )
+
+        # Create run directory
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Serialize config to JSON
-        config_dict = _serialize_dataclass(config)
+        # Write config to JSON
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
             json.dump(config_dict, f, indent=2)
 
-        # Serialize summary to JSON
-        summary_dict = _serialize_dataclass(summary)
+        # Write summary to JSON
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
             json.dump(summary_dict, f, indent=2)
@@ -269,46 +437,7 @@ class RunStorage:
         parquet_path = run_dir / "data.parquet"
         df.to_parquet(parquet_path, engine="pyarrow")
 
-        # Upsert run metadata into database
-        if created_at is None:
-            created_at = datetime.now(timezone.utc).isoformat()
-        run_name = name or config.name or "Unnamed Run"
-
-        with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    type = excluded.type,
-                    config_json = excluded.config_json,
-                    summary_json = excluded.summary_json,
-                    status = excluded.status,
-                    error_message = excluded.error_message,
-                    completed_at = excluded.completed_at,
-                    duration_seconds = excluded.duration_seconds,
-                    n_homes = excluded.n_homes
-                """,
-                (
-                    run_id,
-                    run_name,
-                    "home",
-                    json.dumps(config_dict),
-                    json.dumps(summary_dict),
-                    status,
-                    error_message,
-                    created_at,
-                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
-                    duration_seconds,
-                    1,  # n_homes for a single home run
-                    None,  # notes field, can be added later
-                ),
-            )
+        self._upsert_run_row(row)
 
     def load_home_run(
         self,
@@ -326,12 +455,11 @@ class RunStorage:
             Tuple of (config, results, summary)
 
         Raises:
-            FileNotFoundError: If run directory or required files don't exist
-            ValueError: If run data is corrupted or incomplete
+            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
+                or its directory is missing), or a required file is missing.
+            ValueError: If run data is corrupted or incomplete.
         """
-        run_dir = self._get_run_dir(run_id)
-        if not run_dir.exists():
-            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        run_dir = self._stored_run_dir(run_id)
 
         # Load config from JSON
         config_path = run_dir / "config.json"
@@ -365,7 +493,7 @@ class RunStorage:
         fleet_summary: FleetSummary,
         per_home_summaries: list[SummaryStatistics],
         name: str | None = None,
-        status: str = "completed",
+        status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
@@ -373,7 +501,9 @@ class RunStorage:
         """Save a fleet simulation run to storage.
 
         Creates directory structure with homes/ subdirectory, saves per-home
-        parquet files, fleet summary JSON, and fleet config JSON.
+        parquet files, fleet summary JSON, and fleet config JSON. A run already
+        stored under run_id keeps the columns of its runs row that _upsert_run_row
+        keeps.
 
         Args:
             run_id: Unique run identifier
@@ -381,29 +511,47 @@ class RunStorage:
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
             name: Optional run name
-            status: Run status (completed, failed, running)
+            status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
+
+        Raises:
+            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
+                The save has written nothing then.
         """
-        # Create run directory and homes subdirectory
         run_dir = self._get_run_dir(run_id)
+        fleet_config_dict = {
+            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
+            "n_homes": len(fleet_results.home_configs),
+        }
+        summary_dict = _serialize_dataclass(fleet_summary)
+        # Build the row first, so a save RunRecord refuses has written no file.
+        row = _saved_run_row(
+            run_id=run_id,
+            name=name or "Unnamed Fleet Run",
+            run_type="fleet",
+            config=fleet_config_dict,
+            summary=summary_dict,
+            status=status,
+            error_message=error_message,
+            created_at=created_at,
+            duration_seconds=duration_seconds,
+            n_homes=len(fleet_results.home_configs),
+        )
+
+        # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
         homes_dir = run_dir / "homes"
         homes_dir.mkdir(exist_ok=True)
 
         # Save fleet config (list of HomeConfigs) to JSON
-        fleet_config_dict = {
-            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
-            "n_homes": len(fleet_results.home_configs),
-        }
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
             json.dump(fleet_config_dict, f, indent=2)
 
         # Save fleet summary to JSON
-        summary_dict = _serialize_dataclass(fleet_summary)
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
             json.dump(summary_dict, f, indent=2)
@@ -421,46 +569,7 @@ class RunStorage:
             with home_summary_path.open("w") as f:
                 json.dump(home_summary_dict, f, indent=2)
 
-        # Upsert run metadata into database
-        if created_at is None:
-            created_at = datetime.now(timezone.utc).isoformat()
-        run_name = name or "Unnamed Fleet Run"
-
-        with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    type = excluded.type,
-                    config_json = excluded.config_json,
-                    summary_json = excluded.summary_json,
-                    status = excluded.status,
-                    error_message = excluded.error_message,
-                    completed_at = excluded.completed_at,
-                    duration_seconds = excluded.duration_seconds,
-                    n_homes = excluded.n_homes
-                """,
-                (
-                    run_id,
-                    run_name,
-                    "fleet",
-                    json.dumps(fleet_config_dict),
-                    json.dumps(summary_dict),
-                    status,
-                    error_message,
-                    created_at,
-                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
-                    duration_seconds,
-                    len(fleet_results.home_configs),
-                    None,
-                ),
-            )
+        self._upsert_run_row(row)
 
     def load_fleet_run(
         self,
@@ -478,12 +587,11 @@ class RunStorage:
             Tuple of (fleet_results, fleet_summary, per_home_summaries)
 
         Raises:
-            FileNotFoundError: If run directory or required files don't exist
-            ValueError: If run data is corrupted or incomplete
+            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
+                or its directory is missing), or a required file is missing.
+            ValueError: If run data is corrupted or incomplete.
         """
-        run_dir = self._get_run_dir(run_id)
-        if not run_dir.exists():
-            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        run_dir = self._stored_run_dir(run_id)
 
         homes_dir = run_dir / "homes"
         if not homes_dir.exists():
@@ -538,20 +646,51 @@ class RunStorage:
 
         return fleet_results, fleet_summary, per_home_summaries
 
+    def run_record(self, run_id: str) -> RunRecord | None:
+        """The record of run *run_id*: its row in the runs table. None when no run has that id."""
+        with get_db(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return _record_of_row(row)
+
     def run_name(self, run_id: str) -> str | None:
         """The name run *run_id* is saved under, the one Run History lists and renames.
 
         None when no run has that id, or its name is NULL.
         """
+        record = self.run_record(run_id)
+        return None if record is None else record.name
+
+    def latest_run_named(self, name: str) -> RunRecord | None:
+        """The run named *name* that was created last. None when no run has that name."""
         with get_db(self.db_path) as conn:
-            row = conn.execute("SELECT name FROM runs WHERE id = ?", (run_id,)).fetchone()
-        name: str | None = None if row is None else row["name"]
-        return name
+            row = conn.execute(
+                "SELECT * FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1", (name,)
+            ).fetchone()
+        return _record_of_row(row)
+
+    def update_run_labels(
+        self, run_id: str, labels: Mapping[RunLabel, str | None]
+    ) -> RunRecord | None:
+        """Write each of *labels* to run *run_id*, None as NULL; a label not in *labels* keeps its value.
+
+        Returns:
+            The run's record as written, or None when no run has that id.
+
+        Raises:
+            ValueError: Writing nothing, when a key of *labels* is not one of RUN_LABELS.
+        """
+        unknown = sorted(set(labels) - set(RUN_LABELS))
+        if unknown:
+            raise ValueError(f"Not run labels: {unknown}; the run labels are {list(RUN_LABELS)}")
+        with get_db(self.db_path) as conn:
+            for label, value in labels.items():
+                conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
+        return self.run_record(run_id)
 
     def list_runs(
         self,
-        run_type: str | None = None,
-        status: str | None = None,
+        run_type: RunType | None = None,
+        status: RunStatus | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -560,8 +699,8 @@ class RunStorage:
         Queries SQLite database for run metadata with optional filters.
 
         Args:
-            run_type: Filter by run type ('home', 'fleet', 'sweep'), None for all
-            status: Filter by status ('running', 'completed', 'failed'), None for all
+            run_type: Filter by run type, None for all
+            status: Filter by status, None for all
             limit: Maximum number of results to return, None for all
             offset: Number of results to skip (for pagination)
 
@@ -606,23 +745,21 @@ class RunStorage:
     def delete_run(self, run_id: str) -> None:
         """Delete a simulation run from storage.
 
-        Removes the database row and all associated files.
+        Removes the database row and all associated files, whichever exist: a delete
+        of an id that has neither changes nothing.
 
         Args:
             run_id: Unique run identifier
 
         Raises:
-            FileNotFoundError: If run directory doesn't exist
+            ValueError: If the store refuses run_id. No run can be saved under a refused
+                id, so a delete under one is a caller bug.
         """
         run_dir = self._get_run_dir(run_id)
 
         # Delete from database first
         with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-            if cursor.rowcount == 0:
-                # Run not in database, but may have files
-                pass
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         # Delete run directory and all files
         if run_dir.exists():

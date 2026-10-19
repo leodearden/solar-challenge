@@ -2,10 +2,13 @@
    Parameters:
    - result_type: 'home' or 'fleet' — used to build the results URL
    - heading: Display heading text (e.g. "Simulation Progress" or "Fleet Simulation Progress")
+   The tracker follows the job whose id is jobId in the calling page's Alpine scope, in a
+   progressTracker scope (static/js/progress-tracker.js, which base.html loads).
 #}
 {% macro progress_tracker(result_type, heading="Simulation Progress") %}
-<template x-if="jobId">
-    <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+{# Keyed by job, so a new jobId replaces the tracker and the old one's destroy() closes its job's progress stream #}
+<template x-for="trackedJobId in (jobId ? [jobId] : [])" :key="trackedJobId">
+    <div x-data="progressTracker(trackedJobId)" class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
         <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100" x-text="'{{ heading }}'"></h3>
             <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
@@ -25,6 +28,7 @@
             <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
         </div>
         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
+        <p x-show="reconnecting" class="mt-2 text-sm text-slate-500 dark:text-slate-400">Reconnecting to server...</p>
 
         <!-- Completed state -->
         <template x-if="status === 'completed'">
@@ -32,7 +36,7 @@
                 <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
                 <a
                     :href="'/results/{{ result_type }}/' + completedRunId"
-                    class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
+                    class="inline-flex items-center px-4 py-2 rounded-lg bg-primary-500 text-white font-medium hover:bg-primary-600 transition-colors"
                 >View Results</a>
             </div>
         </template>

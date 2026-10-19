@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Electric vehicle charging configuration and load profile generation."""
 
+import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import TypeAlias
 
 import numpy as np
 import pandas as pd
+
+_MINUTES_PER_HOUR = 60
+_MINUTES_PER_DAY = 24 * _MINUTES_PER_HOUR
+
+_MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
 
 
 class EVChargerType(str, Enum):
@@ -34,6 +40,14 @@ class SmartChargingMode(str, Enum):
     NONE = "none"
     SOLAR = "solar"
     OFF_PEAK = "off_peak"
+
+
+_PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
+    SmartChargingMode.NONE: (),
+    SmartChargingMode.SOLAR: ((10 * _MINUTES_PER_HOUR, 16 * _MINUTES_PER_HOUR),),
+    SmartChargingMode.OFF_PEAK: ((30, 7 * _MINUTES_PER_HOUR + 30),),
+}
+"""Each mode's preferred charging windows, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times."""
 
 
 @dataclass(frozen=True)
@@ -151,6 +165,33 @@ class EVConfig:
         return self._calculate_available_hours()
 
 
+def _preferred_minutes(mode: SmartChargingMode) -> _MinuteFlags:
+    """One flag for each minute of the day, set where *mode* prefers to charge."""
+    preferred = np.zeros(_MINUTES_PER_DAY, dtype=np.bool_)
+    for start, end in _PREFERRED_WINDOWS[mode]:
+        preferred[start:end] = True
+    return preferred
+
+
+def _earliest_best_start(preferred: _MinuteFlags, charge_minutes: int) -> int:
+    """The offset of the earliest run of *charge_minutes* flags in *preferred* that holds the most set flags."""
+    covered = np.concatenate(([0], np.cumsum(preferred)))
+    coverage = covered[charge_minutes:] - covered[: covered.size - charge_minutes]
+    return int(np.argmax(coverage))
+
+
+def _daily_session(config: EVConfig) -> range:
+    """The minutes of one day's charging session, counted from the midnight before arrival."""
+    arrival = config.arrival_hour * _MINUTES_PER_HOUR
+    stay_minutes = round(config.get_available_charging_hours() * _MINUTES_PER_HOUR)
+    hours_needed = config.required_charge_kwh / config.get_charger_power_kw()
+    charge_minutes = min(math.ceil(hours_needed * _MINUTES_PER_HOUR), stay_minutes)
+    stay = (arrival + np.arange(stay_minutes)) % _MINUTES_PER_DAY
+    preferred = _preferred_minutes(SmartChargingMode(config.smart_charging_mode))[stay]
+    start = arrival + _earliest_best_start(preferred, charge_minutes)
+    return range(start, start + charge_minutes)
+
+
 def generate_ev_charging_profile(
     config: EVConfig,
     start_date: pd.Timestamp,
@@ -159,12 +200,24 @@ def generate_ev_charging_profile(
 ) -> pd.Series:
     """Generate EV charging load profile.
 
-    Supports multiple charging strategies:
-    - "none": Dumb charging - starts immediately on arrival
-    - "solar": Solar-aware - prefers daylight hours (10:00-16:00)
-    - "off_peak": Off-peak tariff - prefers Economy 7 hours (00:30-07:30)
+    Each day of the period the car is home from ``arrival_hour`` until
+    ``departure_hour``, the next day when ``departure_hour`` is not after
+    ``arrival_hour``. It charges in one unbroken session at the charger's full
+    power, for as many whole minutes as ``required_charge_kwh`` needs. The
+    session lies inside that stay, so the charge is always delivered before
+    departure. Of all such sessions it is the one covering the most minutes of
+    the mode's preferred window, on either day of an overnight stay, and the
+    earliest on a tie. "solar" prefers 10:00-16:00 and "off_peak" Economy 7's
+    00:30-07:30, the windows ``_PREFERRED_WINDOWS`` holds; "none" prefers no
+    time, so it charges from arrival. A stay holding one window too short for
+    the charge uses it whole, charging the rest just before it opens, or from
+    arrival when that is later.
 
-    All strategies ensure the required charge is delivered before departure.
+    The period is laid out as 1,440 minutes a day from its first midnight, so
+    after a clock change inside it the times above run an hour off the wall
+    clock. It holds only its own days' sessions: one still running when the
+    period ends is cut there, and the first morning has none from the evening
+    before.
 
     Args:
         config: EV configuration
@@ -175,140 +228,24 @@ def generate_ev_charging_profile(
     Returns:
         Time series of charging power in kW at 1-minute resolution
     """
-    # Create minute-by-minute time index for the full period
     date_range = pd.date_range(
         start=start_date,
         end=end_date,
         freq="D",
         tz=timezone,
     )
+    n_minutes = len(date_range) * _MINUTES_PER_DAY
+    session = _daily_session(config)
 
-    # Calculate total minutes in the period
-    n_days = len(date_range)
-    n_minutes = n_days * 1440
+    # One spare day holds the last day's session whole, until the cut below.
+    power_kw = np.zeros(n_minutes + _MINUTES_PER_DAY, dtype=np.float64)
+    for day_start in range(0, n_minutes, _MINUTES_PER_DAY):
+        power_kw[day_start + session.start : day_start + session.stop] = config.get_charger_power_kw()
 
-    # Initialize power array (kW) - zeros everywhere by default
-    power_kw = np.zeros(n_minutes, dtype=np.float64)
-
-    # Get charger power
-    charger_power_kw = config.get_charger_power_kw()
-
-    # Calculate how many minutes of charging are needed
-    # Energy (kWh) = Power (kW) × Time (hours)
-    # Time (hours) = Energy (kWh) / Power (kW)
-    charging_hours_needed = config.required_charge_kwh / charger_power_kw
-    charging_minutes_needed = int(np.ceil(charging_hours_needed * 60))
-
-    # For each day, apply the charging schedule
-    for day_idx in range(n_days):
-        day_start_minute = day_idx * 1440
-        arrival_minute = day_start_minute + (config.arrival_hour * 60)
-        departure_minute = day_start_minute + (config.departure_hour * 60)
-
-        # Handle overnight charging (departure before arrival next day)
-        if config.departure_hour <= config.arrival_hour:
-            # Overnight case: e.g., arrive 18:00, depart 07:00 next day
-            departure_minute += 1440  # Next day
-
-        # Calculate available charging window
-        available_minutes = departure_minute - arrival_minute
-
-        # Determine charging start time based on smart charging mode
-        if config.smart_charging_mode == "solar":
-            # Solar-aware charging: prefer daylight hours (10:00-16:00)
-            solar_start_minute = day_start_minute + (10 * 60)  # 10:00
-            solar_end_minute = day_start_minute + (16 * 60)  # 16:00
-
-            # Find overlap between solar window and available charging window
-            charging_start_minute = max(arrival_minute, solar_start_minute)
-            charging_window_end = min(departure_minute, solar_end_minute)
-
-            # Check if there's enough time in the solar window
-            solar_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-            if solar_window_minutes >= charging_minutes_needed:
-                # Enough time in solar window - charge during solar hours
-                actual_charging_minutes = charging_minutes_needed
-            else:
-                # Not enough time in solar window - use as much solar time as possible
-                # then charge immediately after solar window or from arrival
-                if solar_window_minutes > 0:
-                    # Partial solar charging + remaining time after solar window
-                    charging_start_minute = max(arrival_minute, solar_start_minute)
-                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                else:
-                    # No overlap with solar window - start charging at arrival
-                    charging_start_minute = arrival_minute
-                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-        elif config.smart_charging_mode == "off_peak":
-            # Off-peak tariff charging: prefer Economy 7 hours (00:30-07:30)
-            # Off-peak window for current day
-            off_peak_start_minute = day_start_minute + (0 * 60 + 30)  # 00:30
-            off_peak_end_minute = day_start_minute + (7 * 60 + 30)  # 07:30
-
-            # For overnight charging, also consider next day's off-peak window
-            if config.departure_hour <= config.arrival_hour:
-                # Overnight case - look at next day's off-peak window
-                next_day_off_peak_start = day_start_minute + 1440 + (0 * 60 + 30)  # Next day 00:30
-                next_day_off_peak_end = day_start_minute + 1440 + (7 * 60 + 30)  # Next day 07:30
-
-                # Find overlap with next day's off-peak window
-                charging_start_minute = max(arrival_minute, next_day_off_peak_start)
-                charging_window_end = min(departure_minute, next_day_off_peak_end)
-
-                # Check if there's enough time in the off-peak window
-                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-                if off_peak_window_minutes >= charging_minutes_needed:
-                    # Enough time in off-peak window - charge during off-peak hours
-                    actual_charging_minutes = charging_minutes_needed
-                else:
-                    # Not enough time - use available off-peak time + fallback
-                    if off_peak_window_minutes > 0:
-                        charging_start_minute = max(arrival_minute, next_day_off_peak_start)
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                    else:
-                        # No overlap - start at arrival
-                        charging_start_minute = arrival_minute
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-            else:
-                # Same day charging - use current day's off-peak window
-                charging_start_minute = max(arrival_minute, off_peak_start_minute)
-                charging_window_end = min(departure_minute, off_peak_end_minute)
-
-                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-                if off_peak_window_minutes >= charging_minutes_needed:
-                    # Enough time in off-peak window
-                    actual_charging_minutes = charging_minutes_needed
-                else:
-                    # Not enough time in off-peak window
-                    if off_peak_window_minutes > 0:
-                        charging_start_minute = max(arrival_minute, off_peak_start_minute)
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                    else:
-                        # No overlap - start at arrival
-                        charging_start_minute = arrival_minute
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-        else:
-            # Dumb charging (mode="none")
-            # Start charging immediately on arrival
-            charging_start_minute = arrival_minute
-            actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-
-        # Set power during charging period
-        charging_end_minute = charging_start_minute + actual_charging_minutes
-        power_kw[charging_start_minute:charging_end_minute] = charger_power_kw
-
-    # Create time index for the full period at minute resolution
     time_index = pd.date_range(
         start=start_date,
         periods=n_minutes,
         freq="1min",
         tz=timezone,
     )
-
-    # Create pandas Series
-    profile = pd.Series(power_kw, index=time_index, name=config.name or "EV Charging")
-
-    return profile
+    return pd.Series(power_kw[:n_minutes], index=time_index, name=config.name or "EV Charging")

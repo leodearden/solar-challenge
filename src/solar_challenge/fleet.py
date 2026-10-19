@@ -4,7 +4,7 @@
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 import pandas as pd
 
@@ -131,15 +131,29 @@ class FleetConfig:
 
 @dataclass
 class FleetResults:
-    """Results from a fleet simulation.
+    """Results from a fleet simulation of at least one home, each home's SimulationResults paired with its HomeConfig.
 
     Attributes:
         per_home_results: List of SimulationResults for each home
-        home_configs: List of HomeConfig for each home (for reference)
+        home_configs: The HomeConfig of each home, in per_home_results' order
     """
 
     per_home_results: list[SimulationResults]
     home_configs: list[HomeConfig]
+
+    def __post_init__(self) -> None:
+        """Enforce _require_paired_homes at construction."""
+        self._require_paired_homes()
+
+    def _require_paired_homes(self) -> None:
+        """Raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        if not self.per_home_results:
+            raise ValueError("FleetResults must have at least one home: per_home_results is empty")
+        if len(self.home_configs) != len(self.per_home_results):
+            raise ValueError(
+                "FleetResults pairs one HomeConfig with each home's results: "
+                f"got {len(self.per_home_results)} per_home_results and {len(self.home_configs)} home_configs"
+            )
 
     def __len__(self) -> int:
         """Return number of homes in fleet."""
@@ -156,8 +170,14 @@ class FleetResults:
             series_name: Name of the series (e.g., 'generation', 'demand')
 
         Returns:
-            Sum of the series across all homes
+            Sum of the series across all homes, named as each home's series is: its
+            SimulationResults column, which to_aggregate_dataframe relies on
+
+        Raises:
+            ValueError: If the fleet has no homes, or home_configs does not hold one
+                HomeConfig per home's results
         """
+        self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
 
@@ -187,14 +207,17 @@ class FleetResults:
         return self.get_aggregate_series("self_consumption")
 
     def to_aggregate_dataframe(self) -> pd.DataFrame:
-        """Get aggregate results as DataFrame."""
-        return pd.DataFrame({
-            "generation_kw": self.total_generation,
-            "demand_kw": self.total_demand,
-            "self_consumption_kw": self.total_self_consumption,
-            "grid_import_kw": self.total_grid_import,
-            "grid_export_kw": self.total_grid_export,
-        })
+        """The fleet's total generation, demand, self-consumption, grid import and grid export, each under the column SimulationResults.to_dataframe writes that series under."""
+        return pd.concat(
+            [
+                self.total_generation,
+                self.total_demand,
+                self.total_self_consumption,
+                self.total_grid_import,
+                self.total_grid_export,
+            ],
+            axis=1,
+        )
 
 
 @dataclass
@@ -241,9 +264,12 @@ def _simulate_home_worker(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool,
+    weather_data: pd.DataFrame,
 ) -> tuple[int, SimulationResults]:
-    """Worker for parallel execution. Must be top-level for pickle."""
-    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    """Run one home's simulation job, from its location's TMY, tagged with the home's index. Must be top-level for pickle."""
+    results = simulate_home(
+        home_config, start_date, end_date, validate_balance, weather_data=weather_data
+    )
     return (home_index, results)
 
 
@@ -254,8 +280,9 @@ def _simulate_home_worker_tagged(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool,
+    weather_data: pd.DataFrame,
 ) -> tuple[int, int, SimulationResults]:
-    """Worker with sweep tagging for cross-sweep parallel execution.
+    """Run one home's simulation job, from its location's TMY, tagged with its sweep and home indices.
 
     Must be top-level for pickle.
 
@@ -266,12 +293,23 @@ def _simulate_home_worker_tagged(
         start_date: Start of simulation period
         end_date: End of simulation period
         validate_balance: Whether to validate energy balance
+        weather_data: The TMY of the home's location, as get_tmy_data returns it
 
     Returns:
         Tuple of (sweep_index, home_index, SimulationResults)
     """
-    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    results = simulate_home(
+        home_config, start_date, end_date, validate_balance, weather_data=weather_data
+    )
     return (sweep_index, home_index, results)
+
+
+def _tmy_by_location(homes: Iterable[HomeConfig]) -> dict[Location, pd.DataFrame]:
+    """The TMY get_tmy_data returns for each distinct location of homes, fetched once per location in this process."""
+    return {
+        location: get_tmy_data(location)
+        for location in dict.fromkeys(home.location for home in homes)
+    }
 
 
 def simulate_fleet_iter(
@@ -283,6 +321,12 @@ def simulate_fleet_iter(
     max_workers: int | None = None,
 ) -> Iterator[tuple[int, SimulationResults]]:
     """Yield (home_index, result) as each simulation completes.
+
+    Each home is simulated from its location's TMY, fetched once per distinct
+    location by get_tmy_data in the calling process before any home runs, and
+    handed to the home's simulation. So a worker reads no weather cache, and a
+    cache installed with set_weather_cache serves the run under any
+    multiprocessing start method.
 
     Args:
         config: Fleet configuration
@@ -296,19 +340,30 @@ def simulate_fleet_iter(
         Tuples of (home_index, SimulationResults) as each completes
     """
     n_homes = len(config.homes)
-
-    # Pre-warm weather cache
-    get_tmy_data(config.homes[0].location, use_cache=True)
+    tmy_by_location = _tmy_by_location(config.homes)
 
     if not parallel or n_homes == 1:
         for idx, home in enumerate(config.homes):
-            yield (idx, simulate_home(home, start_date, end_date, validate_balance))
+            yield _simulate_home_worker(
+                idx,
+                home,
+                start_date,
+                end_date,
+                validate_balance,
+                tmy_by_location[home.location],
+            )
     else:
         workers = max_workers or min(n_homes, os.cpu_count() or 4)
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    _simulate_home_worker, i, h, start_date, end_date, validate_balance
+                    _simulate_home_worker,
+                    i,
+                    h,
+                    start_date,
+                    end_date,
+                    validate_balance,
+                    tmy_by_location[h.location],
                 ): i
                 for i, h in enumerate(config.homes)
             }
@@ -326,8 +381,7 @@ def simulate_fleet(
 ) -> FleetResults:
     """Simulate all homes in a fleet for a date range.
 
-    Weather data is retrieved once and shared across all homes
-    (assumes same location).
+    Weather is fetched as simulate_fleet_iter fetches it.
 
     Args:
         config: Fleet configuration
@@ -372,7 +426,13 @@ def calculate_fleet_summary(
 
     Returns:
         FleetSummary with totals and distribution statistics
+
+    Raises:
+        ValueError: If results has no homes, or its home_configs does not hold one
+            HomeConfig per home's results
     """
+    results._require_paired_homes()
+
     # Calculate per-home summaries
     home_summaries: list[SummaryStatistics] = [
         calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
@@ -409,12 +469,10 @@ def calculate_fleet_summary(
             total_seg_revenue_gbp = sum(seg_revenues)
             per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
-    # Fleet financial aggregates (per-home fields are always-present floats).
-    # float() ensures the result is 0.0 (float), not 0 (int), when home_summaries is
-    # empty — Python's sum() of an empty generator returns int 0 by default.
-    total_import_cost = float(sum(s.total_import_cost_gbp for s in home_summaries))
-    total_export_revenue = float(sum(s.total_export_revenue_gbp for s in home_summaries))
-    total_net_cost = float(sum(s.net_cost_gbp for s in home_summaries))
+    # Fleet financial aggregates
+    total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
+    total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
+    total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
 
     return FleetSummary(
         n_homes=len(results),
@@ -432,7 +490,7 @@ def calculate_fleet_summary(
         per_home_self_consumption_ratio_min=float(sc_series.min()),
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
-        simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
+        simulation_days=home_summaries[0].simulation_days,
         total_seg_revenue_gbp=total_seg_revenue_gbp,
         per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
         total_net_cost_gbp=total_net_cost,
@@ -454,6 +512,8 @@ def simulate_multi_sweep_iter(
     This function enables cross-sweep parallel execution: when sweep N's last batch
     has only a few jobs, sweep N+1's jobs fill the remaining worker slots.
 
+    Weather is fetched as simulate_fleet_iter fetches it, over every sweep's homes.
+
     Args:
         sweep_configs: List of (sweep_value, FleetConfig) pairs
         start_date: Start of simulation period
@@ -468,8 +528,9 @@ def simulate_multi_sweep_iter(
     if not sweep_configs:
         return
 
-    # Pre-warm weather cache using first home from first sweep
-    get_tmy_data(sweep_configs[0][1].homes[0].location, use_cache=True)
+    tmy_by_location = _tmy_by_location(
+        home for _, fleet_config in sweep_configs for home in fleet_config.homes
+    )
 
     # Count total jobs
     total_jobs = sum(len(cfg.homes) for _, cfg in sweep_configs)
@@ -478,8 +539,15 @@ def simulate_multi_sweep_iter(
         # Sequential execution
         for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
             for home_idx, home in enumerate(fleet_config.homes):
-                result = simulate_home(home, start_date, end_date, validate_balance)
-                yield (sweep_idx, home_idx, result)
+                yield _simulate_home_worker_tagged(
+                    sweep_idx,
+                    home_idx,
+                    home,
+                    start_date,
+                    end_date,
+                    validate_balance,
+                    tmy_by_location[home.location],
+                )
     else:
         # Parallel execution with all jobs in single pool
         workers = max_workers or min(total_jobs, os.cpu_count() or 4)
@@ -495,6 +563,7 @@ def simulate_multi_sweep_iter(
                         start_date,
                         end_date,
                         validate_balance,
+                        tmy_by_location[home.location],
                     )
                     futures[future] = (sweep_idx, home_idx)
 

@@ -1,23 +1,28 @@
 """Tests for output and reporting functions."""
 
 import tempfile
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
+    SeasonSummary,
     aggregate_annual,
     aggregate_daily,
     aggregate_monthly,
     calculate_export_ratio,
     calculate_grid_dependency_ratio,
+    calculate_seasonal_metrics,
     calculate_self_consumption_ratio,
     export_to_csv,
     generate_summary_report,
 )
+from tests._finance_builders import make_home_config
+from tests._synthetic_weather import synthetic_june_weather
 
 
 @pytest.fixture
@@ -66,6 +71,42 @@ def _run_with_distinct_rising_series(
         tariff_rate=series(0.3),
         heat_pump_load=series(1.2) if with_optional_series else None,
         grid_charge_cost=series(0.0005) if with_optional_series else None,
+        grid_charge=series(0.4) if with_optional_series else None,
+    )
+
+
+def _seasonal_run() -> SimulationResults:
+    """Two February days, the spring, and half a June day, each day steady at its own levels, on one unbroken minute index.
+
+    The first February day's battery stores its PV surplus and meets part of the sunless second
+    day's demand. Every minute balances as a simulated one does.
+    """
+    index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq="1min", tz="Europe/London")
+    days = index.normalize()
+    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
+    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
+    spring = index.month <= 5
+
+    def steady(*, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
+        return pd.Series(
+            np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
+            index=index,
+        )
+
+    zeros = pd.Series(0.0, index=index)
+    return SimulationResults(
+        generation=steady(winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
+        demand=steady(winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
+        self_consumption=steady(winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
+        battery_charge=steady(winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
+        battery_discharge=steady(winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
+        battery_soc=zeros,
+        grid_import=steady(winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
+        grid_export=steady(winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
+        import_cost=zeros,
+        export_revenue=zeros,
+        tariff_rate=zeros,
+        heat_pump_load=steady(winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=0.25),
     )
 
 
@@ -137,6 +178,76 @@ class TestGenerateSummaryReport:
         assert "Grid Import Cost" in report
         assert "Grid Export Revenue" in report
         assert "Net Cost" in report
+
+
+class TestSeasonalBreakdowns:
+    """Winter (December to February) and summer (June to August) each count only their own rows."""
+
+    def test_report_tables_each_seasons_heat_pump_figures(self):
+        lines = generate_summary_report(_seasonal_run()).splitlines()
+
+        # Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
+        # Summer: 0.25 kW × 12 h = 3 kWh, 25% of 1 kW × 12 h, over half a day.
+        assert "| Total Heat Pump Load | 96.0 kWh | 3.0 kWh | 32.0x |" in lines
+        assert "| Peak Heat Pump Load | 2.00 kW | 0.25 kW | 8.0x |" in lines
+        assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
+        assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
+
+    def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self):
+        seasons = calculate_seasonal_metrics(_seasonal_run())
+
+        # Winter self-consumption: 5 kW × 24 h plus the battery's 1 kW × 24 h = 144 kWh, where
+        # min(generation, demand) would give 120. Winter import: 4 kW × 24 h = 96 kWh of 240.
+        # Spring's rows count in neither season.
+        assert asdict(seasons.winter) == pytest.approx(
+            {
+                "generation_kwh": 192.0,
+                "demand_kwh": 240.0,
+                "self_consumption_kwh": 144.0,
+                "self_consumption_ratio": 0.75,
+                "grid_dependency_ratio": 0.4,
+            }
+        )
+        assert asdict(seasons.summer) == pytest.approx(
+            {
+                "generation_kwh": 48.0,
+                "demand_kwh": 12.0,
+                "self_consumption_kwh": 12.0,
+                "self_consumption_ratio": 0.25,
+                "grid_dependency_ratio": 0.0,
+            }
+        )
+
+    def test_a_battery_homes_summer_day_has_its_summarys_figures(self):
+        day = pd.Timestamp("2024-06-21")
+        run = simulate_home(
+            make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)),
+            day,
+            day,
+            weather_data=synthetic_june_weather(day),
+        )
+        summary = calculate_summary(run)
+        # The battery discharges, so min(generation, demand) would differ from the summary.
+        assert summary.total_battery_discharge_kwh > 0
+
+        seasons = calculate_seasonal_metrics(run)
+
+        assert seasons.winter == SeasonSummary(
+            generation_kwh=0.0,
+            demand_kwh=0.0,
+            self_consumption_kwh=0.0,
+            self_consumption_ratio=0.0,
+            grid_dependency_ratio=0.0,
+        )
+        assert asdict(seasons.summer) == pytest.approx(
+            {
+                "generation_kwh": summary.total_generation_kwh,
+                "demand_kwh": summary.total_demand_kwh,
+                "self_consumption_kwh": summary.total_self_consumption_kwh,
+                "self_consumption_ratio": summary.self_consumption_ratio,
+                "grid_dependency_ratio": summary.grid_dependency_ratio,
+            }
+        )
 
 
 class TestRatioCalculations:
@@ -296,7 +407,7 @@ class TestPeriodTotalsAndPeaks:
             "peak_demand_kw",
         ]
         if with_optional_series:
-            expected += ["heat_pump_load_kwh", "grid_charge_cost_gbp"]
+            expected += ["heat_pump_load_kwh", "grid_charge_cost_gbp", "grid_charge_kwh"]
         assert sorted(frame.columns) == sorted(expected)
 
     def test_totals_over_all_periods_equal_the_run_summary(self, aggregate):
@@ -317,6 +428,7 @@ class TestPeriodTotalsAndPeaks:
             "import_cost_gbp": summary.total_import_cost_gbp,
             "export_revenue_gbp": summary.total_export_revenue_gbp,
             "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,
+            "grid_charge_kwh": summary.total_grid_charge_kwh,
         }
 
         frame = aggregate(results)

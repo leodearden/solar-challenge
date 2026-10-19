@@ -1,0 +1,315 @@
+# Machine-readable twin of weather-as-explicit-input.capability-manifest.md (stream S15).
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it at decompose. ε is held for S29 (x_seam_wait).
+# Every mechanical delivered_check was polarity-checked on main d316d0e (2026-10-14):
+# each 'present' pattern is absent today and each 'absent' pattern is present today.
+prd: docs/prds/weather-as-explicit-input.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: 808
+    title: "Weather providers, the root default, and the cache-directory variable"
+    capabilities:
+      - name: "provider-protocol-defined"
+        binding: "producer:α — WeatherProvider, new in weather.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class WeatherProvider\\(Protocol\\)"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "cache-backed-provider-defined"
+        binding: "producer:α — PvgisTmy(cache), today's get_tmy_data body with the cache an attribute"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class PvgisTmy\\b"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "prefetched-provider-defined"
+        binding: "producer:α — PrefetchedWeather with fetch(weather, locations)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class PrefetchedWeather\\b"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "root-default-defined"
+        binding: "producer:α — default_weather(), the one default a composition root resolves"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def default_weather\\("
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "cache-dir-variable-named-once"
+        binding: "producer:α — CACHE_DIR_VARIABLE, read by WeatherCache.__init__ when cache_dir is None"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^CACHE_DIR_VARIABLE = \"SOLAR_CHALLENGE_WEATHER_CACHE_DIR\""
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "default-cache-not-memoised"
+        binding: "grep:weather.py::get_weather_cache assigns _weather_cache = WeatherCache() today; α returns a fresh WeatherCache() when none is installed"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_weather_cache = WeatherCache\\(\\)"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "providers-exported"
+        binding: "producer:α — additive __all__ entries (D29)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"PvgisTmy\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "providers-frozen"
+        binding: "producer:α — FROZEN_SURFACE entry, in whichever surface module S23 leaves"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"PvgisTmy\": "
+          paths: ["tests"]
+          expect: present
+      - name: "providers-pickle"
+        binding: "probe: PvgisTmy(WeatherCache(d)) and PrefetchedWeather({loc: frame}) round-trip through pickle; a mappingproxy field would not"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B1 and B2 assert the round trips; not a grep"
+      - name: "variable-configures-a-cli-process"
+        binding: "grep:cli/home.py::quick -> home._hourly_weather -> get_tmy_data -> get_weather_cache -> WeatherCache() in a fresh process; B3"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B3 runs the CLI as a child with the variable set and the network refused"
+  - label: "β"
+    task_id: 809
+    title: "simulate_home takes its weather; every caller passes it"
+    capabilities:
+      - name: "simulate-home-requires-provider"
+        binding: "producer:β — keyword-only weather: WeatherProvider"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "weather: WeatherProvider,"
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "frame-parameter-gone"
+        binding: "grep:home.py::simulate_home weather_data: pd.DataFrame | None = None today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "weather_data: pd\\.DataFrame \\| None = None"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "engine-reads-no-global"
+        binding: "grep:home.py::_hourly_weather calls get_tmy_data(config.location) today (invariant I1)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "get_tmy_data"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "fleet-compensation-replaced"
+        binding: "grep:fleet.py::_tmy_by_location today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_tmy_by_location"
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: absent
+      - name: "fleet-prefetches-through-provider"
+        binding: "producer:α PrefetchedWeather.fetch; β calls it in simulate_fleet_iter and simulate_multi_sweep_iter"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "PrefetchedWeather\\.fetch\\("
+          paths: ["src/solar_challenge/fleet.py"]
+          expect: present
+      - name: "cli-home-passes-weather"
+        binding: "grep:cli/home.py::run and ::quick call simulate_home(home_config, start_date, end_date) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_home\\(home_config, start_date, end_date\\)"
+          paths: ["src/solar_challenge/cli/home.py"]
+          expect: absent
+      - name: "job-manager-default-simulator-gone"
+        binding: "grep:web/jobs.py::JobManager.__init__ simulate_home: HomeSimulator = _default_simulate_home today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "simulate_home: HomeSimulator = _default_simulate_home"
+          paths: ["src/solar_challenge/web/jobs.py"]
+          expect: absent
+      - name: "web-root-binds-default-weather"
+        binding: "producer:β — create_app passes partial(simulate_home, weather=default_weather())"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "default_weather\\(\\)"
+          paths: ["src/solar_challenge/web/app.py"]
+          expect: present
+      - name: "missing-weather-refused"
+        binding: "identity: CPython raises TypeError naming a missing keyword-only argument; B4 and B6 observe it for weather and simulate_home"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content asserted by B4 and B6"
+      - name: "workers-cannot-miss"
+        binding: "grep:tests/unit/test_fleet.py::TestParallelFleetWeather (forkserver, spawn); B5"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behavioural: per-home results equal simulate_home's under each start method"
+  - label: "γ"
+    task_id: 813
+    title: "Tests and scripts construct their weather; the test window sets the variable"
+    capabilities:
+      - name: "conftest-installs-no-global"
+        binding: "grep:tests/conftest.py::_open_offline_window and the weather_cache fixture call set_weather_cache today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "set_weather_cache"
+          paths: ["tests/conftest.py"]
+          expect: absent
+      - name: "conftest-window-sets-variable"
+        binding: "producer:α CACHE_DIR_VARIABLE; precedent grep:tests/_network_guard.py::refusing_network sets variables for the window"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "CACHE_DIR_VARIABLE"
+          paths: ["tests/conftest.py"]
+          expect: present
+      - name: "scripts-construct-their-provider"
+        binding: "grep:scripts/measure_mppt_window.py::main and scripts/measure_pv_performance_ratio.py::main call set_weather_cache today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "set_weather_cache"
+          paths: ["scripts"]
+          expect: absent
+      - name: "guard-tests-install-no-global"
+        binding: "grep: set_weather_cache( in test_e2e_job_wait.py (2) and test_fast_tests_run_offline.py (1) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "set_weather_cache\\("
+          paths: ["tests/unit/test_e2e_job_wait.py", "tests/unit/test_fast_tests_run_offline.py"]
+          expect: absent
+      - name: "pvgis-contract-tests-use-provider"
+        binding: "grep:tests/integration/test_pvgis.py::bristol_tmy calls get_tmy_data(BRISTOL, use_cache=False) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "get_tmy_data"
+          paths: ["tests/integration/test_pvgis.py"]
+          expect: absent
+      - name: "project-instructions-current"
+        binding: "grep:CLAUDE.md 'Offline fast tests' bullet ends 'or pass `weather_data`' today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "or pass `weather_data`"
+          paths: ["CLAUDE.md"]
+          expect: absent
+      - name: "window-default-is-the-tests-own"
+        binding: "B7 — an unseeded fast test reaching PVGIS through a root fails naming it; a child the test starts reads the test's cache"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "pytester self-tests in test_fast_tests_run_offline assert the outcomes"
+  - label: "δ"
+    task_id: 815
+    title: "One self-describing file per weather cache entry"
+    capabilities:
+      - name: "sidecar-gone"
+        binding: "grep:weather.py::WeatherCache._meta_path today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_meta_path"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "key-version-bumped"
+        binding: "grep:weather.py::WeatherCache._KEY_VERSION is 2 today; _make_key puts it first, so 3 changes every hash"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_KEY_VERSION = 3"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: present
+      - name: "unread-keys-gone"
+        binding: "grep:weather.py::WeatherCache.put writes \"latitude\": location.latitude (and 4 more unread keys) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"latitude\": location\\.latitude"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "exact-round-trip-or-refusal"
+        binding: "B8 — each put leaves one file; get returns values, zone, freq and index name exactly; a garbage entry raises ValueError naming its path; an old-form entry is a miss"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "frame equality and messages are asserted by B8's tests"
+      - name: "no-new-core-dependency"
+        binding: "grep:pyproject.toml pyarrow only in the web extra; decision 11 forbids pickle"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a constraint on the encoding choice, checked in review"
+  - label: "ε"
+    task_id: 827
+    title: "Retire the global weather cache at the surface bump"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on β, γ and δ; excluded from this batch's commit_planning. get_tmy_data's deletion follows Q1's default."
+    capabilities:
+      - name: "setter-retired"
+        binding: "grep:weather.py::set_weather_cache today; producer:S29 releases"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def set_weather_cache"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "getter-retired"
+        binding: "grep:weather.py::get_weather_cache today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def get_weather_cache"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "module-global-retired"
+        binding: "grep:weather.py module-level _weather_cache today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^_weather_cache"
+          paths: ["src/solar_challenge/weather.py"]
+          expect: absent
+      - name: "surface-drops-retired-names"
+        binding: "grep:__init__.py __all__ and the lazy-loader map name set_weather_cache today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"set_weather_cache\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: absent
+      - name: "retired-name-refused"
+        binding: "rejection-check: solar_challenge.not_a_public_name raised AttributeError (PEP 562 guard); B9"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B9 asserts AttributeError and ImportError for each retired name"
+      - name: "get-tmy-data-retired"
+        binding: "conditional on Q1 (default: retire); if the lead keeps it, ε leaves the facade and its FROZEN_SURFACE entry"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "depends on the lead's Q1 ruling"

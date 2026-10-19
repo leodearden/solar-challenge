@@ -1,135 +1,167 @@
 /**
- * Shared Plotly chart renderer used by home and fleet results pages.
+ * Draws each Plotly chart of a page from the figure its container carries
+ * (data-chart-figure, written by components/macros.html's chart_panel), once
+ * the container is shown, so a hidden tab's chart waits for its tab (AC3).
  *
- * Expects Plotly.js to be loaded before this script.
+ * Charts are drawn in the theme's colours (AC9), and each drawn chart is
+ * recoloured on theme-changed once it is shown (AC10): at once if it is, else
+ * when its tab is next shown. A chart that cannot be drawn or recoloured,
+ * whether Plotly fails at once or after it returns, logs a console error
+ * naming its container's id, and the page's other charts still draw.
  *
- * Features:
- *   - Deferred rendering for charts in hidden tabs (AC3)
- *   - Dark mode detection and layout overrides (AC9)
- *   - Re-renders on theme-changed event (AC10)
+ * Plotly must load first.
  */
-"use strict";
+(function () {
+    "use strict";
 
-var SOLAR_CHART_CONFIG = { responsive: true, displayModeBar: true, scrollZoom: false };
+    var SOLAR_CHART_CONFIG = { responsive: true, displayModeBar: true, scrollZoom: false };
 
-/** Registry of all rendered charts for theme toggle re-render (AC10). */
-var _CHART_REGISTRY = [];
+    /** The containers whose charts are drawn. */
+    var _drawn = [];
 
-/** Queue of deferred charts waiting for their container to become visible. */
-var _DEFERRED_QUEUE = [];
-
-/** Check whether dark mode is active. */
-function _isDark() {
-    return document.documentElement.classList.contains('dark');
-}
-
-/** Layout overrides for dark mode. */
-function _darkOverrides() {
-    return {
-        paper_bgcolor: '#1e293b',
-        plot_bgcolor: '#1e293b',
-        font: { color: '#e2e8f0' },
-        xaxis: { gridcolor: '#334155' },
-        yaxis: { gridcolor: '#334155' }
-    };
-}
-
-/** Layout overrides for light mode. */
-function _lightOverrides() {
-    return {
-        paper_bgcolor: '#ffffff',
-        plot_bgcolor: '#ffffff',
-        font: { color: '#1e293b' },
-        xaxis: { gridcolor: '#e2e8f0' },
-        yaxis: { gridcolor: '#e2e8f0' }
-    };
-}
-
-/**
- * Deep-merge theme overrides into a layout object (mutates target).
- */
-function _applyOverrides(layout, overrides) {
-    var keys = Object.keys(overrides);
-    for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        if (overrides[k] !== null && typeof overrides[k] === 'object' && !Array.isArray(overrides[k])) {
-            if (!layout[k] || typeof layout[k] !== 'object') {
-                layout[k] = {};
-            }
-            _applyOverrides(layout[k], overrides[k]);
-        } else {
-            layout[k] = overrides[k];
-        }
+    /** Check whether dark mode is active. */
+    function _isDark() {
+        return document.documentElement.classList.contains('dark');
     }
-    return layout;
-}
 
-/**
- * Internal: actually render a chart and register it.
- */
-function _doRender(elementId, fig) {
-    var layout = fig.layout || {};
-    var overrides = _isDark() ? _darkOverrides() : _lightOverrides();
-    _applyOverrides(layout, overrides);
-    Plotly.newPlot(elementId, fig.data, layout, SOLAR_CHART_CONFIG);
-    _CHART_REGISTRY.push({ elementId: elementId, fig: fig });
-}
+    /** Layout overrides for dark mode. */
+    function _darkOverrides() {
+        return {
+            paper_bgcolor: '#1e293b',
+            plot_bgcolor: '#1e293b',
+            font: { color: '#e2e8f0' },
+            xaxis: { gridcolor: '#334155' },
+            yaxis: { gridcolor: '#334155' }
+        };
+    }
 
-/**
- * Render a Plotly chart from a JSON string into a DOM element.
- *
- * If the target element is hidden (e.g. in a non-active tab), rendering is
- * deferred until the element becomes visible via a ResizeObserver (AC3).
- *
- * @param {string} elementId - ID of the target DOM element.
- * @param {string} jsonStr   - JSON-encoded Plotly figure (data + layout).
- */
-function renderChart(elementId, jsonStr) {
-    if (!jsonStr || jsonStr === '{}') return;
-    var el = document.getElementById(elementId);
-    if (!el) return;
-    try {
-        var fig = JSON.parse(jsonStr);
+    /** Layout overrides for light mode. */
+    function _lightOverrides() {
+        return {
+            paper_bgcolor: '#ffffff',
+            plot_bgcolor: '#ffffff',
+            font: { color: '#1e293b' },
+            xaxis: { gridcolor: '#e2e8f0' },
+            yaxis: { gridcolor: '#e2e8f0' }
+        };
+    }
 
-        // If the element is hidden (zero-size), defer the render (AC3).
-        if (el.offsetParent === null) {
-            _DEFERRED_QUEUE.push({ elementId: elementId, fig: fig });
+    /** Layout overrides for dark mode if dark is true, else for light mode. */
+    function _themeOverrides(dark) {
+        return dark ? _darkOverrides() : _lightOverrides();
+    }
 
-            var observer = new ResizeObserver(function(entries) {
-                for (var j = 0; j < entries.length; j++) {
-                    if (entries[j].contentRect.width > 0) {
-                        // Find and remove from deferred queue
-                        for (var q = 0; q < _DEFERRED_QUEUE.length; q++) {
-                            if (_DEFERRED_QUEUE[q].elementId === elementId) {
-                                var entry = _DEFERRED_QUEUE.splice(q, 1)[0];
-                                _doRender(entry.elementId, entry.fig);
-                                break;
-                            }
-                        }
-                        observer.disconnect();
-                        return;
-                    }
+    /**
+     * Deep-merge theme overrides into a layout object (mutates target).
+     */
+    function _applyOverrides(layout, overrides) {
+        var keys = Object.keys(overrides);
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            if (overrides[k] !== null && typeof overrides[k] === 'object' && !Array.isArray(overrides[k])) {
+                if (!layout[k] || typeof layout[k] !== 'object') {
+                    layout[k] = {};
+                }
+                _applyOverrides(layout[k], overrides[k]);
+            } else {
+                layout[k] = overrides[k];
+            }
+        }
+        return layout;
+    }
+
+    /**
+     * The leaves of the nested overrides, each keyed by its Plotly attribute
+     * path, such as 'font.color'. Given a nested object, Plotly.relayout
+     * replaces that whole container, axis titles and all, while a path sets
+     * only its leaf.
+     */
+    function _attributePaths(overrides, prefix) {
+        var paths = {};
+        Object.keys(overrides).forEach(function (key) {
+            var path = prefix ? prefix + '.' + key : key;
+            var value = overrides[key];
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+                Object.assign(paths, _attributePaths(value, path));
+            } else {
+                paths[path] = value;
+            }
+        });
+        return paths;
+    }
+
+    /**
+     * Calls plotlyCall, which throws or returns the promise of a Plotly call,
+     * and then onSuccess, if given, once that promise resolves. Either failure,
+     * a throw or a rejection, logs one console error naming the activity and
+     * the id of container.
+     */
+    function _attempt(container, activity, plotlyCall, onSuccess) {
+        new Promise(function (resolve) {
+            resolve(plotlyCall());
+        }).then(onSuccess, function (e) {
+            console.error('chart-renderer.js: failed to ' + activity + ' #' + container.id, e);
+        });
+    }
+
+    /**
+     * Draws the chart of container's figure in the active theme's colours. The
+     * theme-changed listener recolours only drawn charts, so a chart whose
+     * drawing finishes after a theme change is recoloured here.
+     */
+    function _draw(container) {
+        var drawnDark = _isDark();
+        _attempt(container, 'draw the figure of', function () {
+            var fig = JSON.parse(container.dataset.chartFigure);
+            var layout = _applyOverrides(fig.layout || {}, _themeOverrides(drawnDark));
+            return Plotly.newPlot(container, fig.data, layout, SOLAR_CHART_CONFIG);
+        }, function () {
+            _drawn.push(container);
+            if (_isDark() !== drawnDark) {
+                _recolourOnceShown.observe(container);
+            }
+        });
+    }
+
+    /** Applies the active theme's overrides to the chart of container, which is drawn, and changes nothing else of it. */
+    function _recolour(container) {
+        _attempt(container, 'recolour the chart of', function () {
+            return Plotly.relayout(container, _attributePaths(_themeOverrides(_isDark())));
+        });
+    }
+
+    /**
+     * Returns a ResizeObserver that calls action with each observed container
+     * the first time it has a width, at the next frame if it has one already,
+     * so nothing is laid out in a hidden tab.
+     */
+    function _onceShown(action) {
+        return new ResizeObserver(function (entries, observer) {
+            entries.forEach(function (entry) {
+                if (entry.contentRect.width > 0) {
+                    observer.unobserve(entry.target);
+                    action(entry.target);
                 }
             });
-            observer.observe(el);
-            return;
-        }
-
-        _doRender(elementId, fig);
-    } catch (e) {
-        console.error('Failed to render chart ' + elementId, e);
+        });
     }
-}
 
-/**
- * Re-apply theme overrides to all registered charts when dark mode toggles (AC10).
- */
-document.addEventListener('theme-changed', function() {
-    var overrides = _isDark() ? _darkOverrides() : _lightOverrides();
-    _CHART_REGISTRY.forEach(function(entry) {
-        var el = document.getElementById(entry.elementId);
-        if (el && el.offsetParent !== null) {
-            Plotly.relayout(entry.elementId, overrides);
-        }
+    /** Draws each observed container the first time it is shown (AC3). */
+    var _drawOnceShown = _onceShown(_draw);
+
+    /** Recolours each observed container's chart the first time it is shown (AC10). */
+    var _recolourOnceShown = _onceShown(_recolour);
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('[data-chart-figure]').forEach(function (container) {
+            _drawOnceShown.observe(container);
+        });
     });
-});
+
+    /** Recolours each drawn chart once it is shown, in the theme that is active then (AC10). */
+    document.addEventListener('theme-changed', function () {
+        _drawn.forEach(function (container) {
+            _recolourOnceShown.observe(container);
+        });
+    });
+}());

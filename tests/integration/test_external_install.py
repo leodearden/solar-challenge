@@ -9,47 +9,70 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
   - Confirm the wheel ships every file under solar_challenge/web/templates and
     solar_challenge/web/static, which the dashboard renders and serves.
-  - Confirm the wheel's METADATA names the license by the PEP 639
-    License-Expression AGPL-3.0-or-later.
+  - Confirm the wheel's METADATA names its licenses by the PEP 639
+    License-Expression AGPL-3.0-or-later AND MIT.
+  - Confirm the wheel ships, under .dist-info/licenses, the text of the root
+    LICENSE and of each package vendored under solar_challenge/web/static/vendor.
+  - Confirm the wheel ships, under .dist-info/licenses, the license texts of the
+    Tailwind code compiled into solar_challenge/web/static/dist/style.css, kept
+    beside that stylesheet.
+  - Confirm the license texts the wheel ships beside that stylesheet are exactly
+    those tests/_tailwindcss_license_copies.py names, the copies the css-build
+    lane compares with the locked tailwindcss package.
+  - Confirm that License-Expression names the license each package vendored
+    under solar_challenge/web/static/vendor records in its upstream.toml.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
-The consumer-side proof runs inside an isolated uv env via _external_probe.py,
-which is NOT collected by pytest (underscore-prefixed, matches _helpers.py).
-Both uv commands run offline, reading everything they need from uv's cache.
+The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
+(underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
+environment the module-scoped consumer_environment fixture builds. That
+environment holds only the wheel and the runtime dependencies uv.lock pins.
+Every uv command runs offline: the build reads its build backend from uv's
+cache, and the install reads the wheels uv.lock pins from it.
 
 Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
 deselect ``build``, so a plain ``pytest`` run will execute these heavy tests
-(timeouts: 300 s build + 600 s isolated install).  Tests skip automatically
-when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checkout.
+(timeouts: 300 s for the build, 600 s for each install command and for the
+probe).  Tests skip automatically when ``git`` or ``uv`` is absent from PATH,
+or when the tree is not a git checkout.
 """
 
 from __future__ import annotations
 
 import email
+import json
 import os
+import shlex
 import shutil
 import subprocess
+import tomllib
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from packaging.utils import canonicalize_name
+
+from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
+from tests._uv_env import isolated_uv_env
+from tests._working_tree import copy_working_tree
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _EXTERNAL_PROBE = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
 
 
-def _offline_uv_environment(**overrides: str) -> dict[str, str]:
-    """Return the environment of every uv command this module runs: this process's, with uv offline, then *overrides*.
+def _offline_uv_environment(base: Mapping[str, str], **overrides: str) -> dict[str, str]:
+    """Return the environment of every uv command this module runs: *base*, with uv offline, then *overrides*.
 
     Offline, uv reads the package index, the build backend and the wheels from its
     cache alone. The offline guard (tests/conftest.py) refuses the network access of
-    a test not marked slow, its child processes' included, and built_wheel's build
-    runs in the window of the module's first test.
+    a test not marked slow, its child processes' included, and the commands of the
+    module-scoped fixtures run in the window of the first test that requests them.
     """
-    return {**os.environ, "UV_OFFLINE": "1", **overrides}
+    return {**base, "UV_OFFLINE": "1", **overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -84,21 +107,7 @@ def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     stops declaring them.
     """
     _skip_unless_a_clean_wheel_can_be_built()
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    copy_root = tmp_path_factory.mktemp("wheel_source")
-    for relative_path in filter(None, listing.stdout.split("\0")):
-        source = PROJECT_ROOT / relative_path
-        if source.is_file():
-            destination = copy_root / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-    return copy_root
+    return copy_working_tree(PROJECT_ROOT, tmp_path_factory.mktemp("wheel_source"))
 
 
 def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
@@ -109,7 +118,7 @@ def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subproces
         capture_output=True,
         text=True,
         timeout=300,
-        env=_offline_uv_environment(**env_overrides),
+        env=_offline_uv_environment(os.environ, **env_overrides),
     )
 
 
@@ -207,53 +216,311 @@ def test_built_wheel_ships_every_file_of_the_dashboard_folder(
 
 
 # ---------------------------------------------------------------------------
-# License: the wheel names its license by a PEP 639 SPDX expression
+# License: the wheel names its licenses by a PEP 639 SPDX expression and ships their texts
 # ---------------------------------------------------------------------------
 
 
+def _metadata_member(wheel: zipfile.ZipFile) -> str:
+    """Return the name of the one .dist-info/METADATA member of the open *wheel*."""
+    [metadata_member] = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+    return metadata_member
+
+
+def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
+    """Return the core metadata of the open *wheel*, parsed from its METADATA member's email-header format."""
+    return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
+
+
+def _shipped_license_members(wheel: zipfile.ZipFile) -> dict[str, str]:
+    """Return the member of the open *wheel* holding each license file it carries, keyed by its METADATA License-File entry.
+
+    PEP 639 keeps each license file at <dist>.dist-info/licenses/<entry>, where the entry is the
+    file's path relative to the project root.
+    """
+    licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
+    members = set(wheel.namelist())
+    declared = _wheel_metadata(wheel).get_all("License-File", [])
+    return {entry: licenses_dir + entry for entry in declared if licenses_dir + entry in members}
+
+
+def _shipped_license_files(built_wheel: Path) -> list[str]:
+    """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        return list(_shipped_license_members(wheel))
+
+
+def _shipped_license_texts(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries, keyed by its METADATA License-File entry."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        return {entry: wheel.read(member).decode("utf-8") for entry, member in _shipped_license_members(wheel).items()}
+
+
 @pytest.mark.build
-def test_built_wheel_declares_the_agpl_license_expression(built_wheel: Path) -> None:
+def test_built_wheel_declares_the_agpl_and_mit_license_expression(built_wheel: Path) -> None:
     """Installers, PyPI and license scanners read a wheel's license from its METADATA, where
     PEP 639 makes License-Expression the field that names it.
+
+    The project's own code is AGPL-3.0-or-later. The third-party code the dashboard bundles is
+    MIT-licensed: the scripts vendored under web/static/vendor/, and Tailwind's preflight compiled
+    into static/dist/style.css. AND says both apply.
     """
-    with zipfile.ZipFile(built_wheel) as zf:
-        [metadata_member] = [
-            name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
-        ]
-        metadata = email.message_from_bytes(zf.read(metadata_member))
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
 
     expressions = metadata.get_all("License-Expression")
-    assert expressions == ["AGPL-3.0-or-later"], (
+    assert expressions == ["AGPL-3.0-or-later AND MIT"], (
         f"The built wheel's METADATA carries License-Expression {expressions} and the legacy "
-        f"License {metadata.get_all('License')}, so it does not name its license by the PEP 639 "
-        'SPDX expression AGPL-3.0-or-later. Declare [project] license = "AGPL-3.0-or-later" in '
-        "pyproject.toml: an SPDX expression string, not a TOML table."
+        f"License {metadata.get_all('License')}, so it does not name its licenses by the PEP 639 "
+        "SPDX expression AGPL-3.0-or-later AND MIT. Declare [project] "
+        'license = "AGPL-3.0-or-later AND MIT" in pyproject.toml: an SPDX expression string, '
+        "not a TOML table. Once the wheel bundles code under a further license, name that license "
+        "in this test's expected expression too."
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_project_license_text(built_wheel: Path) -> None:
+    """Under PEP 639, a wheel carries the text of each license file it declares under
+    .dist-info/licenses/ and names it in METADATA as License-File. setuptools' default patterns
+    pick up the root LICENSE only while pyproject.toml names no license-files.
+    """
+    shipped = _shipped_license_files(built_wheel)
+
+    assert "LICENSE" in shipped, (
+        f"The built wheel ships the license texts {shipped}, without the root LICENSE, which holds "
+        "the project's AGPL-3.0-or-later text. List \"LICENSE\" in [project] license-files in "
+        "pyproject.toml: naming any license-files pattern switches off setuptools' default patterns."
+    )
+
+
+def _vendored_packages(source: Path) -> list[Path]:
+    """Return the directory of each package vendored under web/static/vendor/ in the project at *source*,
+    failing the calling test if there is none.
+    """
+    vendor = source / "src" / "solar_challenge" / "web" / "static" / "vendor"
+    packages = sorted(path for path in vendor.glob("*") if path.is_dir())
+    assert packages, (
+        "found no package directory under src/solar_challenge/web/static/vendor in the copy of the "
+        "working tree, so this test would pass vacuously"
+    )
+    return packages
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_license_text_of_every_vendored_package(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ keeps its upstream license file in
+    its directory. The wheel declares that file, so its text also lands in .dist-info/licenses/,
+    where license tools read it.
+    """
+    packages = [package.relative_to(wheel_source).as_posix() for package in _vendored_packages(wheel_source)]
+    shipped = _shipped_license_files(built_wheel)
+    unlicensed = [
+        package for package in packages if not any(entry.startswith(f"{package}/") for entry in shipped)
+    ]
+
+    assert unlicensed == [], (
+        f"The built wheel ships no license text for the vendored packages {unlicensed}; the license "
+        f"texts it ships are {shipped}. Keep each package's upstream license file in the package's "
+        "own directory and match it with a [project] license-files pattern in pyproject.toml, such as "
+        '"src/solar_challenge/web/static/vendor/*/LICENSE*".'
+    )
+
+
+_UPSTREAM_RECORD = "upstream.toml"
+
+
+def _recorded_license(package: Path) -> str | None:
+    """Return the license that the upstream.toml in the *package* directory records, or None if it records none."""
+    record = package / _UPSTREAM_RECORD
+    if not record.is_file():
+        return None
+    license_id = tomllib.loads(record.read_text(encoding="utf-8")).get("license")
+    return license_id if isinstance(license_id, str) else None
+
+
+@pytest.mark.build
+def test_built_wheel_declares_the_license_each_vendored_package_records(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ records the SPDX id of its upstream
+    license as `license` in its upstream.toml. The wheel bundles the package, so its
+    License-Expression must join that license with AND.
+    """
+    with zipfile.ZipFile(built_wheel) as wheel:
+        expressions = _wheel_metadata(wheel).get_all("License-Expression", [])
+    joined = {term for expression in expressions for term in expression.split(" AND ")}
+    recorded = {
+        package.relative_to(wheel_source).as_posix(): _recorded_license(package)
+        for package in _vendored_packages(wheel_source)
+    }
+    unnamed = {package: license_id for package, license_id in recorded.items() if license_id not in joined}
+
+    assert unnamed == {}, (
+        f"The built wheel's License-Expression {expressions} does not name the licenses these vendored "
+        f"packages record (None: the package records none): {unnamed}. Record each vendored package's "
+        f'upstream license by its SPDX id, as license = "<id>" in the package directory\'s '
+        f"{_UPSTREAM_RECORD}, and join every recorded license into [project] license in "
+        "pyproject.toml with AND."
+    )
+
+
+_COMPILED_CSS_DIR = "src/solar_challenge/web/static/dist"
+_COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
+    "tailwindcss": ("Copyright (c) Tailwind Labs, Inc.",),
+    "tailwindcss's preflight.css": (
+        "Copyright (c) Nicolas Gallagher",
+        "Copyright (c) Jonathan Neal",
+        "Copyright (c) Sindre Sorhus",
+        "Copyright (c) Adam Wathan",
+        "Copyright (c) Jonathan Reinink",
+    ),
+}
+
+
+def _license_texts_beside_compiled_css(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries from beside the compiled CSS, keyed by
+    its file name in _COMPILED_CSS_DIR.
+    """
+    prefix = f"{_COMPILED_CSS_DIR}/"
+    return {
+        entry.removeprefix(prefix): text
+        for entry, text in _shipped_license_texts(built_wheel).items()
+        if entry.startswith(prefix)
+    }
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css(built_wheel: Path) -> None:
+    """The Tailwind CLI compiles two MIT-licensed works into web/static/dist/style.css. One is the
+    CSS tailwindcss's engine emits (the --tw-* defaults and the utilities), under tailwindcss's
+    license. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
+    under a separate license of its own.
+
+    The banner names their license but carries neither their copyright notices nor the permission
+    notice that MIT requires to accompany a copy. Both license texts, kept verbatim beside the
+    compiled CSS, carry them; tests/_tailwindcss_license_copies.py names the tailwindcss file each
+    one copies. The wheel declares them, so they also land in .dist-info/licenses/.
+    """
+    beside_css = _license_texts_beside_compiled_css(built_wheel)
+    absent = {
+        work: [notice for notice in notices if not any(notice in text for text in beside_css.values())]
+        for work, notices in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
+    }
+    unlicensed = {work: notices for work, notices in absent.items() if notices}
+    shipped = _shipped_license_files(built_wheel)
+    copies = "; ".join(
+        f"{licensed_file} to {_COMPILED_CSS_DIR}/{license_copy}"
+        for license_copy, licensed_file in TAILWINDCSS_LICENSE_COPIES.items()
+    )
+
+    assert unlicensed == {}, (
+        f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
+        f"carrying these copyright notices of the Tailwind works: {unlicensed}; the license texts it "
+        f"ships are {shipped}. Copy, verbatim, from the tailwindcss package of the version that "
+        "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
+        f"package's npm dependencies are installed in src/solar_challenge/web): {copies}. Match them "
+        f'with the [project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_beside_the_compiled_css_exactly_the_license_texts_the_css_build_lane_checks(
+    built_wheel: Path,
+) -> None:
+    """Every license text the wheel ships beside the compiled CSS is a copy TAILWINDCSS_LICENSE_COPIES
+    names, and every copy it names ships, so the css-build lane, which compares only the named copies
+    with the locked tailwindcss package, checks exactly the texts the wheel ships.
+    """
+    beside_css = sorted(_license_texts_beside_compiled_css(built_wheel))
+    named_copies = sorted(TAILWINDCSS_LICENSE_COPIES)
+
+    assert beside_css == named_copies, (
+        f"The built wheel ships beside the compiled CSS in {_COMPILED_CSS_DIR} the license texts "
+        f"{beside_css}, while TAILWINDCSS_LICENSE_COPIES in tests/_tailwindcss_license_copies.py names "
+        f"the copies {named_copies}. The css-build lane compares only the copies it names, byte for byte, "
+        "with the locked tailwindcss package. Map each license text kept beside the compiled CSS to the "
+        "file of the tailwindcss package it copies, and drop each entry whose text the wheel no longer ships."
     )
 
 
 # ---------------------------------------------------------------------------
 # H1: every public symbol resolves and is callable/present in an isolated install
+# holding only the wheel and the runtime dependencies uv.lock pins
 # ---------------------------------------------------------------------------
 
 
-def _run_isolated_install(wheel: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
-    """Run _external_probe.py in a project-free uv environment holding *wheel*, its environment overridden by *env_overrides*."""
+def _run_uv_on(environment: Path, args: list[str], cwd: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    """Run uv with *args* offline in *cwd* on the virtual environment *environment*, without the caller's
+    virtualenv or uv lock mode, the command's environment overridden by *env_overrides*.
+
+    `uv pip` ignores UV_PROJECT_ENVIRONMENT, so a pip command names *environment* with --python itself.
+    """
     return subprocess.run(
-        ["uv", "run", "--no-project", "--isolated", "--with", str(wheel), "python", str(_EXTERNAL_PROBE)],
-        cwd=str(PROJECT_ROOT),
+        ["uv", *args],
+        cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=600,
-        env=_offline_uv_environment(**env_overrides),
+        env=_offline_uv_environment(isolated_uv_env(environment), **env_overrides),
     )
 
 
-@pytest.mark.build
-def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> None:
-    """Install the wheel in a project-free env and resolve every __all__ symbol (H1).
+def _install_against_uv_lock(
+    wheel: Path, source: Path, environment: Path, **env_overrides: str
+) -> subprocess.CompletedProcess[str]:
+    """Create the virtual environment *environment* holding the runtime dependencies that the uv.lock in
+    *source* pins, then install *wheel* into it.
 
-    Runs tests/integration/_external_probe.py inside a ``uv run --no-project
-    --isolated --with <wheel>`` environment.  The probe:
+    The locked sync installs no extras, no dependency groups and not the project. It takes the lock's
+    recorded wheels from uv's cache and reads no package index, yet takes no --no-index: without an
+    index, uv re-resolves the lock and finds it unsatisfiable. The wheel install reads no index, so
+    what the sync installed must already meet the wheel's declared requirements.
+
+    Both uv commands run in *source*, their environment overridden by *env_overrides*. Return the result
+    of the first that fails, else of the install.
+    """
+    synced = _run_uv_on(
+        environment, ["sync", "--locked", "--no-install-project", "--no-default-groups"], source, **env_overrides
+    )
+    if synced.returncode != 0:
+        return synced
+    return _run_uv_on(
+        environment,
+        ["pip", "install", "--no-index", "--python", str(environment), str(wheel)],
+        source,
+        **env_overrides,
+    )
+
+
+@pytest.fixture(scope="module")
+def consumer_environment(wheel_source: Path, built_wheel: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return a fresh virtual environment, outside the checkout, into which the built wheel is installed once."""
+    environment = tmp_path_factory.mktemp("consumer_environment") / "venv"
+
+    result = _install_against_uv_lock(built_wheel, wheel_source, environment)
+    assert result.returncode == 0, (
+        f"`{shlex.join(result.args)}` failed (returncode={result.returncode}).\n"
+        "If uv says the network is disabled, its cache lacks a wheel uv.lock pins for this interpreter: run "
+        "`uv sync --locked --no-install-project` once in the checkout, with network access and "
+        "UV_PROJECT_ENVIRONMENT set to a temporary directory, so the checkout's .venv keeps its extras.\n"
+        "If uv says a package was not found in the provided package locations, the wheel requires a package "
+        "the locked sync did not install: compare the wheel's Requires-Dist with [project] dependencies in "
+        "pyproject.toml.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    return environment
+
+
+@pytest.mark.build
+def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: Path) -> None:
+    """In a project-free env holding the installed wheel, resolve every __all__ symbol (H1).
+
+    Runs tests/integration/_external_probe.py with the interpreter of
+    consumer_environment.  The probe:
+      - Prints that interpreter's version, which the interpreter matrix varies.
       - Asserts the package loaded from site-packages (not the worktree src/).
       - Iterates solar_challenge.__all__ and getattr-resolves each name.
       - Classifies: classes/routines → resolution is the assertion (callable() is
@@ -264,34 +531,109 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
     The test asserts returncode==0 AND the sentinel is in stdout.
     stdout+stderr are embedded in the failure message for debuggability.
 
-    Design: ``--no-project --isolated`` gives a project-free ephemeral env
-    (ignores the worktree's pyproject and venv); ``--with <wheel>`` installs
-    the built wheel, and uv resolves and installs its declared deps offline,
-    from its cache alone.
+    Design: consumer_environment holds only the built wheel and the runtime
+    dependencies uv.lock pins, installed offline from the wheels the verify's own
+    locked sync has cached.  So H1 proves the packaging: the wheel ships every
+    module, imports only its declared runtime dependencies, and loads from
+    site-packages.  It proves this against the versions the suite runs against,
+    not against newer releases inside the declared ranges.  The probe runs with
+    that environment's ``bin/python``.
     """
-    result = _run_isolated_install(built_wheel)
+    result = subprocess.run(
+        [str(consumer_environment / "bin" / "python"), str(_EXTERNAL_PROBE)],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
 
     assert result.returncode == 0 and "EXTERNAL-INSTALL-OK" in result.stdout, (
         f"External-consumer boundary test FAILED.\n"
         f"returncode: {result.returncode}\n"
-        "If uv says packages were unavailable because the network was disabled, its cache lacks what "
-        f"this resolution reads: run `uv run --no-project --isolated --with {built_wheel} python "
-        "tests/integration/_external_probe.py` once in the checkout, with network access. Any wheel "
-        "built from this tree serves.\n"
+        "A RESOLVE ERROR naming a ModuleNotFoundError means the wheel imports a package outside its runtime "
+        "dependencies (declare it in [project] dependencies in pyproject.toml and run `uv lock`), or that "
+        "the wheel does not ship a solar_challenge module it imports.\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
 
 
+def _installed_distributions(environment: Path) -> dict[str, str]:
+    """Return the version of each distribution installed in the virtual environment *environment*, keyed by its normalised name."""
+    result = _run_uv_on(environment, ["pip", "list", "--python", str(environment), "--format", "json"], environment)
+    assert result.returncode == 0, f"uv pip list failed (returncode={result.returncode}):\n{result.stderr}"
+    return {entry["name"]: entry["version"] for entry in json.loads(result.stdout)}
+
+
+def _locked_runtime_versions(source: Path, environment: Path) -> dict[str, set[str]]:
+    """Return the versions that the uv.lock in *source* pins for each runtime dependency of its project, on any
+    platform, keyed by its normalised name.
+
+    uv exports them as a PEP 751 lock without the project, extras or dependency groups. The export runs on
+    the virtual environment *environment* and leaves it as it is.
+    """
+    result = _run_uv_on(
+        environment,
+        ["export", "--locked", "--no-emit-project", "--no-default-groups", "--format", "pylock.toml"],
+        source,
+    )
+    assert result.returncode == 0, f"uv export failed (returncode={result.returncode}):\n{result.stderr}"
+    versions: dict[str, set[str]] = {}
+    for package in tomllib.loads(result.stdout)["packages"]:
+        if "version" in package:
+            versions.setdefault(package["name"], set()).add(package["version"])
+    return versions
+
+
+def _wheel_distribution(built_wheel: Path) -> tuple[str, str]:
+    """Return the normalised name and the version of the distribution *built_wheel* installs."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
+    return canonicalize_name(metadata["Name"]), metadata["Version"]
+
+
+@pytest.mark.build
+def test_the_isolated_install_holds_only_the_wheel_and_the_runtime_dependencies_uv_lock_pins(
+    consumer_environment: Path, wheel_source: Path, built_wheel: Path
+) -> None:
+    """H1 tests the wheel against what uv.lock pins for its runtime dependencies, which the whole suite runs against.
+
+    Offline, a resolution of the wheel's declared ranges takes whichever newer versions earlier online
+    runs left in uv's cache. What H1 tested would then vary with the cache's history, and a cache without
+    those versions fails it. And the probe catches an undeclared import only as a ModuleNotFoundError,
+    which a package installed by an extra would prevent.
+    """
+    project, project_version = _wheel_distribution(built_wheel)
+    installed = _installed_distributions(consumer_environment)
+    assert project in installed, (
+        f"consumer_environment does not list the built wheel's {project}, so this test would pass vacuously. "
+        f"It lists: {installed}"
+    )
+
+    pinned = {**_locked_runtime_versions(wheel_source, consumer_environment), project: {project_version}}
+    unpinned = {name: version for name, version in installed.items() if version not in pinned.get(name, set())}
+
+    assert unpinned == {}, (
+        f"consumer_environment holds these distributions, each neither the built wheel nor a runtime dependency "
+        f"at a version uv.lock pins: {unpinned}. H1 must install uv.lock's runtime dependencies alone: no extras, "
+        "and no resolution of the wheel's declared ranges."
+    )
+
+
 # ---------------------------------------------------------------------------
-# Offline: each uv command reads the package index, the build backend and the
-# wheels from uv's cache alone, so an empty cache fails it
+# Offline: the build reads its build backend, and the install the wheels uv.lock
+# pins, from uv's cache alone, so an empty cache fails each
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.build
+@pytest.mark.usefixtures("built_wheel")
 def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_source: Path, tmp_path: Path) -> None:
-    """uv build exits 2 offline and when refused alike; the offline guard tells them apart, failing this test if the build reached the network."""
+    """The build that built_wheel runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure. uv build exits 2 offline and when refused alike; the
+    offline guard tells them apart, failing this test if the build reached the network.
+    """
     result = _build_wheel(wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
 
     assert result.returncode != 0, (
@@ -301,11 +643,21 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 
 
 @pytest.mark.build
-def test_the_isolated_install_resolves_from_uv_s_cache_alone(built_wheel: Path, tmp_path: Path) -> None:
-    """With an empty cache, the isolated install fails; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
-    result = _run_isolated_install(built_wheel, UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
+@pytest.mark.usefixtures("consumer_environment")
+def test_the_isolated_install_takes_uv_lock_s_wheels_only_from_uv_s_cache(
+    wheel_source: Path, built_wheel: Path, tmp_path: Path
+) -> None:
+    """The install that consumer_environment runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure: offline, the locked sync finds none of uv.lock's
+    wheels. The offline guard, not uv's exit code, catches a fetch, failing this test if the install
+    reached the network.
+    """
+    result = _install_against_uv_lock(
+        built_wheel, wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
+    )
 
     assert result.returncode != 0, (
-        "the isolated install succeeded with an empty cache, so it found the wheel's dependencies outside uv's cache\n"
+        "the isolated install succeeded with an empty cache, so it found uv.lock's wheels outside uv's cache\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )

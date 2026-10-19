@@ -50,11 +50,26 @@ escalation:
 # the playwright suite out of collection (the `not e2e` marker only deselects
 # post-collection, which still trips the playwright import).
 test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e"
-# No standalone linter configured; mypy strict (type_check_command) is the
-# static-analysis gate. Use a no-op rather than a command that always fails.
-# `--extra web` so web/* modules type-check against their real deps (flask).
+# No-op: the lint runs in the test suite (tests/unit/test_lint.py); docs/lint-gate.md says why.
 lint_command: "true"
+# `--extra web` so web/* modules type-check against their real deps (flask).
 type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
+
+# 2026-10-09 (dark-factory plans/verify-rate-improvement-2026-10-09/MEMO.md §3
+# item 14): run verify legs in `df-verify-<project>-*.scope` systemd units,
+# each weighted by its role (merge, task, background) through dark-factory's
+# verify_cgroup_cpu_weight_* settings, as dark-factory and reify do. Without it
+# this project's task verifies share the service unit's CPU weight with its
+# agents and out-weigh other projects' task legs. Restart tier: takes effect
+# at the next orchestrator restart, not on hot reload.
+verify_use_cgroup_scope: true
+
+# 2026-10-17: the warm per-command verify timeout, which task verifies and the
+# main-tip sweep run under. A pure timeout reruns the whole task verify up to
+# verify_timeout_retries times (dark-factory's default of 2, not overridden
+# here), so a hung task verify takes about 3 h to fail (3 x 3600 s).
+# Restart tier: takes effect at the next orchestrator restart.
+verify_command_timeout_secs: 3600
 
 git:
   main_branch: "main"
@@ -74,6 +89,19 @@ git:
   #   outlasting a run and its confirm re-run files a fix task, never a silent
   #   green (CLAUDE.md says how to tell one). `timeout` caps a hung request at
   #   600 s; a run measures ~20 s: uv syncs a fresh .venv, then 11 s of tests.
+  # - css-build: rebuilds static/dist/style.css in a scratch copy from the
+  #   committed sources and package-lock.json (tests/css_build), and goes red
+  #   when the committed file differs, e.g. after an unrebuilt
+  #   tailwind.config.js edit, or when the Tailwind license texts beside it are
+  #   not the locked tailwindcss package's. It needs npm and registry.npmjs.org.
+  #   `timeout` caps a hung run at 600 s; a run measures 17-38 s, by host load:
+  #   uv syncs a fresh .venv, then 6-19 s of npm ci and the build.
+  # - newest-releases: re-runs the verify suite in a scratch copy of the tree
+  #   whose uv.lock is upgraded to the newest releases pyproject.toml's ranges
+  #   admit (tests/newest_releases), the releases a consumer that re-locks
+  #   installs, so an upstream release that breaks this code files a fix task.
+  #   It needs PyPI. Like interpreter-matrix it has no `timeout`: its suite
+  #   timeout bounds a hang. A run measures 17-19 min, by host load.
   # The legacy numeric and infra seams are off: this repo has neither
   # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at
@@ -93,6 +121,12 @@ git:
     - name: pvgis
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider"
       fix_task_priority: "medium"
+    - name: css-build
+      command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider"
+      fix_task_priority: "medium"
+    - name: newest-releases
+      command: "uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider"
+      fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
 # rollout, fleet-remainder wave (PRD os-sandbox-worktree-containment in the
@@ -105,3 +139,9 @@ git:
 sandbox:
   enabled: true
   backend: landlock
+
+# Task 3546 (mu gate), Leo's ruling of 2026-10-18 on esc-3546-1: enforce strand
+# conversion (task 3539) fleet-wide. Restart-only, so it takes effect at the next
+# scheduled fleet redeploy. workflow_exit_contract_enforce stays False until task
+# 3113 lands and a fresh soak shows zero would-violates.
+convert_to_blocked_enforce: true

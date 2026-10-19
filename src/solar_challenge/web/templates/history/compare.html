@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_container %}
+{% from "components/macros.html" import chart_panel, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -14,11 +14,7 @@
         {% for run in runs %}
         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-center">
             <h3 class="text-lg font-bold text-slate-900 dark:text-white truncate">{{ run.name or 'Unnamed Run' }}</h3>
-            <span class="inline-flex items-center mt-1 px-2.5 py-0.5 rounded-full text-xs font-medium
-                {% if run.type == 'home' %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400
-                {% elif run.type == 'fleet' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
-                {% else %}bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400{% endif %}
-            ">{{ run.type }}</span>
+            <div class="mt-1">{{ run_type_badge(run.type) }}</div>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ run.created_at[:19] if run.created_at else '-' }}</p>
         </div>
         {% endfor %}
@@ -103,14 +99,14 @@
                     @click="activeTab = 'bar'"
                     class="pb-3 px-1 text-sm font-medium border-b-2 transition-colors"
                     :class="activeTab === 'bar'
-                        ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                         : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
                 >Energy Totals</button>
                 <button
                     @click="activeTab = 'radar'"
                     class="pb-3 px-1 text-sm font-medium border-b-2 transition-colors"
                     :class="activeTab === 'radar'
-                        ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                         : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
                 >Efficiency Ratios</button>
             </nav>
@@ -118,24 +114,12 @@
 
         {# Bar chart #}
         <div x-show="activeTab === 'bar'">
-            {% if charts.get('bar') and charts.bar != '{}' %}
-            {{ chart_container('chart-comparison-bar', 'Energy Totals Comparison', '450px') }}
-            {% else %}
-            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                No chart data available.
-            </div>
-            {% endif %}
+            {{ chart_panel('chart-comparison-bar', 'Energy Totals Comparison', charts.get('bar'), '450px', empty_message='No chart data available.') }}
         </div>
 
         {# Radar chart #}
         <div x-show="activeTab === 'radar'" x-cloak>
-            {% if charts.get('radar') and charts.radar != '{}' %}
-            {{ chart_container('chart-comparison-radar', 'Efficiency Ratios', '450px') }}
-            {% else %}
-            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                No chart data available.
-            </div>
-            {% endif %}
+            {{ chart_panel('chart-comparison-radar', 'Efficiency Ratios', charts.get('radar'), '450px', empty_message='No chart data available.') }}
         </div>
     </div>
 
@@ -143,7 +127,7 @@
     <div class="mt-6">
         <a
             href="/history/runs"
-            class="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors"
+            class="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 transition-colors"
         >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
@@ -160,7 +144,7 @@
     </svg>
     <h2 class="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">No Runs Selected</h2>
     <p class="text-slate-500 dark:text-slate-400 mb-6">Select 2-4 simulation runs from the history page to compare their results side by side.</p>
-    <a href="/history/runs" class="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors">
+    <a href="/history/runs" class="inline-flex items-center gap-2 px-5 py-2.5 bg-primary-500 hover:bg-primary-600 text-white font-medium text-sm rounded-lg transition-colors">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
         </svg>
@@ -172,22 +156,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    {% if charts.get('bar') and charts.bar != '{}' %}
-    try {
-        var barData = JSON.parse({{ charts.bar | tojson }});
-        Plotly.newPlot('chart-comparison-bar', barData.data || [], barData.layout || {}, {responsive: true});
-    } catch (e) { console.error('Bar chart error:', e); }
-    {% endif %}
-
-    {% if charts.get('radar') and charts.radar != '{}' %}
-    try {
-        var radarData = JSON.parse({{ charts.radar | tojson }});
-        Plotly.newPlot('chart-comparison-radar', radarData.data || [], radarData.layout || {}, {responsive: true});
-    } catch (e) { console.error('Radar chart error:', e); }
-    {% endif %}
-});
-</script>
+<script src="{{ url_for('plotly_js.script') }}"></script>
+<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
 {% endblock %}

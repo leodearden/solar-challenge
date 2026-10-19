@@ -29,7 +29,7 @@ Built on the existing Flask + Alpine.js stack, enhanced with compiled Tailwind C
 | Templating | Jinja2 | Server-rendered pages |
 | Client interactivity | Alpine.js 3.x | Lightweight reactivity for forms, toggles, tabs (as-built; HTMX was not adopted) |
 | Styling | Tailwind CSS 3.x | Compiled build (`static/dist/style.css`; CDN play mode was not adopted) |
-| Charts | Plotly.js 2.x | Already present |
+| Charts | Plotly.js | As-built: the release the `plotly` Python package bundles, served by `web/plotly_js.py` |
 | Persistence | SQLite via `sqlite3` | stdlib, no ORM |
 | Background jobs | `concurrent.futures.ThreadPoolExecutor` + SSE | No external broker |
 | AI | Anthropic Python SDK | `claude-sonnet-4-5-20250514` |
@@ -79,7 +79,7 @@ Full configuration form exposing all `HomeConfig` parameters, with run execution
 | **Heat Pump** | Enable toggle, Type: ASHP / GSHP radio, Thermal capacity (kW), Annual heat demand (kWh) | Only visible when enabled |
 | **Tariff** | Preset selector: Flat / Economy 7 / Economy 10 / Custom, Custom: add/remove TOU periods (start time, end time, rate, name) | SEG export rate (p/kWh, optional) |
 | **Location** | Preset dropdown (Bristol, London, Edinburgh, Manchester) + Custom (lat, lon, altitude), Name field | Map pin would be nice but not required |
-| **Period** | Date range picker, Quick presets: 7 days / 30 days / 90 days / 365 days | 365 days defaults to full year 2024-01-01 to 2024-12-31 |
+| **Period** | Date range picker, Quick presets: 7 days / 30 days / 90 days / 365 days | 365 days defaults to full year 2024-01-01 to 2024-12-31. A run spans at most that full year, 366 days, and must not end before it starts: the weather is one TMY year, so a longer window would repeat it (`MAX_WINDOW_DAYS`, web/simulation_params.py). The form leaves both rules to the server and shows its refusal. |
 
 **Execution:**
 - "Run Simulation" button -> HTMX POST to `/api/simulate/home`

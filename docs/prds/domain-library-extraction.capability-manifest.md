@@ -33,6 +33,11 @@ inherits a false premise. The behaviour-preservation guarantee (sim suite +
 
 ## T2 — relocate `FinanceConfig` into `finance.py` (back-compat) — intermediate (unlocks T3)
 
+Amended 2026-10-04 (task 242): `config.FinanceConfig` is retired as an import
+path (see the PRD's header amendment), and the PRD's H5 row (§9) states the
+contract that now holds. Read the back-compat re-export in the rows below, and
+the signal row's identity assertion, as historical (decompose-time 2026-06-20).
+
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
 | `FinanceConfig` frozen dataclass (relocation source) | grep:`config.py:485` wired | ✅ |
@@ -63,6 +68,12 @@ inherits a false premise. The behaviour-preservation guarantee (sim suite +
 | Signal = test fails on surface drift without a deliberate frozen-constant update; green on the authored surface (H2) | own-task CI test against the **real** public surface (not synthetic input) | ✅ |
 
 ## T5 — external-consumer boundary test (the G2 leaf) — leaf · prereqs T1, T3
+
+Amended 2026-10-05 (task 402): H1's install now runs against `uv.lock` (see
+the PRD's header amendment), and the PRD's H1 row (§9) states the environment
+that now holds. Read the first row's
+`uv run --no-project --isolated --with <wheel>` evidence, and "project-free" in
+the rows below, as historical (decompose-time 2026-06-20).
 
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|

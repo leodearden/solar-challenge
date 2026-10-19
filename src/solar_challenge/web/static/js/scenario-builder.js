@@ -9,9 +9,10 @@ document.addEventListener('alpine:init', () => {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
     }
 
-    // The form fields whose preview is `scenario`, a document in the preview's grammar.
+    // The form fields whose preview is `scenario`, a document in the preview's grammar. The distribution of each of
+    // `components` is the form's one in `dists` with what its spec sets laid over it.
     // Throws, saying why, for a document the form cannot hold.
-    function scenarioFormFields(scenario) {
+    function scenarioFormFields(scenario, components, dists) {
         if (!isMapping(scenario)) {
             throw new Error('it does not hold a YAML mapping');
         }
@@ -29,9 +30,9 @@ document.addEventListener('alpine:init', () => {
             n_homes: inputValue(fleet.n_homes),
             import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
             seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
-            ...componentFields(fleet, 'pv', 'pv_capacity_kw', 'capacity_kw'),
-            ...componentFields(fleet, 'battery', 'battery_capacity_kwh', 'capacity_kwh'),
-            ...componentFields(fleet, 'load', 'annual_consumption_kwh', 'annual_consumption_kwh'),
+            dists: Object.fromEntries(components.map((component) => [
+                component.key, { ...dists[component.key], ...componentDistribution(fleet, component) },
+            ])),
         };
         if (scenario.location) {
             fields.location_preset = 'custom';
@@ -42,30 +43,31 @@ document.addEventListener('alpine:init', () => {
         return fields;
     }
 
-    // One component's form fields, read from its spec at fleet[prefix][key]: a fixed number, or a distribution.
+    // The fields of one component's distribution that its spec in `fleet` sets: a fixed number, or a distribution.
     // Throws, naming the spec, for one the form cannot hold.
-    function componentFields(fleet, prefix, fixedField, key) {
-        const spec = (fleet[prefix] || {})[key];
-        const path = 'fleet_distribution.' + prefix + '.' + key;
+    function componentDistribution(fleet, { key, grammar_key }) {
+        const spec = (fleet[key] || {})[grammar_key];
+        const path = 'fleet_distribution.' + key + '.' + grammar_key;
         if (spec === undefined || spec === null || typeof spec === 'number') {
-            return { [prefix + '_distribution_type']: '', [fixedField]: inputValue(spec) };
+            return { type: '', fixed: inputValue(spec) };
         }
         if (!isMapping(spec)) {
             throw new Error(path + ' must be a number or a distribution, got ' + JSON.stringify(spec));
         }
-        const fields = { [prefix + '_distribution_type']: spec.type };
         if (spec.type === 'weighted_discrete') {
-            fields[prefix + '_wd_values'] = distributionRows(spec, 'weights', 'weight', path);
-        } else if (spec.type === 'shuffled_pool') {
-            fields[prefix + '_sp_entries'] = distributionRows(spec, 'counts', 'count', path);
-        } else if (spec.type === 'normal' || spec.type === 'uniform') {
-            for (const parameter of ['mean', 'std', 'min', 'max']) {
-                fields[prefix + '_' + parameter] = inputValue(spec[parameter]);
-            }
-        } else {
-            throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
+            return { type: spec.type, values: distributionRows(spec, 'weights', 'weight', path) };
         }
-        return fields;
+        if (spec.type === 'shuffled_pool') {
+            return { type: spec.type, entries: distributionRows(spec, 'counts', 'count', path) };
+        }
+        if (spec.type === 'normal' || spec.type === 'uniform') {
+            const distribution = { type: spec.type };
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                distribution[parameter] = inputValue(spec[parameter]);
+            }
+            return distribution;
+        }
+        throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
     }
 
     // The form's rows of a distribution: each of its values, with the same entry of its `listKey` list as `rowKey`.
@@ -79,7 +81,29 @@ document.addEventListener('alpine:init', () => {
         return values.map((value, i) => ({ value, [rowKey]: column[i] }));
     }
 
-    Alpine.data('scenarioBuilder', () => ({
+    // The fields of the form the builder sends that give one component's distribution `dist`: its fixed value, or its
+    // type and the fields that type reads (all four parameters for normal and uniform alike)
+    function componentFormData(dist, { key, fixed_field }) {
+        if (!dist.type) {
+            return { [fixed_field]: dist.fixed };
+        }
+        const data = { [key + '_distribution_type']: dist.type };
+        if (dist.type === 'weighted_discrete') {
+            data[key + '_wd_values'] = dist.values;
+        } else if (dist.type === 'shuffled_pool') {
+            data[key + '_sp_entries'] = dist.entries;
+        } else {
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                data[key + '_' + parameter] = dist[parameter];
+            }
+        }
+        return data;
+    }
+
+    // components is what scenarios.py lists from web/fleet_components.py for each fleet component: its key (its
+    // fleet_distribution block and its form fields' prefix), the field a fixed value is sent in, its grammar key, and
+    // the distribution its card starts at.
+    Alpine.data('scenarioBuilder', (initialSection, components) => ({
         // Form state
         name: '',
         description: '',
@@ -90,39 +114,16 @@ document.addEventListener('alpine:init', () => {
         longitude: -2.58,
         altitude: 11.0,
         n_homes: 100,
-        pv_capacity_kw: 4.0,
-        pv_distribution_type: '',
-        pv_mean: 4.0,
-        pv_std: 1.0,
-        pv_min: 2.0,
-        pv_max: 8.0,
-        battery_capacity_kwh: 5.0,
-        battery_distribution_type: '',
-        battery_mean: 5.0,
-        battery_std: 2.0,
-        battery_min: 0,
-        battery_max: 13.5,
-        annual_consumption_kwh: 3500,
-        load_distribution_type: '',
-        load_mean: 3400,
-        load_std: 800,
-        load_min: 2000,
-        load_max: 5000,
         import_rate: 0.245,
         seg_rate_pence_per_kwh: 15.0,
 
-        // Weighted discrete / shuffled pool arrays
-        pv_wd_values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
-        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
-        battery_wd_values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
-        battery_sp_entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
-        load_wd_values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
-        load_sp_entries: [{ value: 2900, count: 30 }, { value: 3500, count: 40 }, { value: 4500, count: 30 }],
+        // Each component's distribution, by its key: a fixed value while type is ''
+        dists: Object.fromEntries(components.map((component) => [component.key, component.dist])),
 
         // UI state
         yamlPreview: '# Configure your scenario...',
         validationResult: null,
-        accordionOpen: 'general',
+        accordionOpen: initialSection,
         presetDropdownOpen: false,
         showSaveModal: false,
         saveName: '',
@@ -147,7 +148,6 @@ document.addEventListener('alpine:init', () => {
                 this.start_date = '2024-06-01';
                 this.end_date = '2024-06-30';
             }
-            this.updatePreview();
         },
 
         // Debounced YAML preview update
@@ -235,14 +235,13 @@ document.addEventListener('alpine:init', () => {
             event.target.value = '';
             let fields;
             try {
-                fields = scenarioFormFields(jsyaml.load(text));
+                fields = scenarioFormFields(jsyaml.load(text), components, this.dists);
             } catch (e) {
                 this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
                 return;
             }
             Object.assign(this, fields);
             this.yamlPreview = text;
-            this.updatePreview();
         },
 
         // Load presets list
@@ -275,7 +274,6 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
                 this.presetDropdownOpen = false;
-                this.updatePreview();
             } catch (e) { /* ignore */ }
         },
 
@@ -295,50 +293,8 @@ document.addEventListener('alpine:init', () => {
                 data.longitude = this.longitude;
                 data.altitude = this.altitude;
             }
-            if (this.pv_distribution_type === 'weighted_discrete') {
-                data.pv_distribution_type = 'weighted_discrete';
-                data.pv_wd_values = this.pv_wd_values;
-            } else if (this.pv_distribution_type === 'shuffled_pool') {
-                data.pv_distribution_type = 'shuffled_pool';
-                data.pv_sp_entries = this.pv_sp_entries;
-            } else if (this.pv_distribution_type) {
-                data.pv_distribution_type = this.pv_distribution_type;
-                data.pv_mean = this.pv_mean;
-                data.pv_std = this.pv_std;
-                data.pv_min = this.pv_min;
-                data.pv_max = this.pv_max;
-            } else {
-                data.pv_capacity_kw = this.pv_capacity_kw;
-            }
-            if (this.battery_distribution_type === 'weighted_discrete') {
-                data.battery_distribution_type = 'weighted_discrete';
-                data.battery_wd_values = this.battery_wd_values;
-            } else if (this.battery_distribution_type === 'shuffled_pool') {
-                data.battery_distribution_type = 'shuffled_pool';
-                data.battery_sp_entries = this.battery_sp_entries;
-            } else if (this.battery_distribution_type) {
-                data.battery_distribution_type = this.battery_distribution_type;
-                data.battery_mean = this.battery_mean;
-                data.battery_std = this.battery_std;
-                data.battery_min = this.battery_min;
-                data.battery_max = this.battery_max;
-            } else {
-                data.battery_capacity_kwh = this.battery_capacity_kwh;
-            }
-            if (this.load_distribution_type === 'weighted_discrete') {
-                data.load_distribution_type = 'weighted_discrete';
-                data.load_wd_values = this.load_wd_values;
-            } else if (this.load_distribution_type === 'shuffled_pool') {
-                data.load_distribution_type = 'shuffled_pool';
-                data.load_sp_entries = this.load_sp_entries;
-            } else if (this.load_distribution_type) {
-                data.load_distribution_type = this.load_distribution_type;
-                data.load_mean = this.load_mean;
-                data.load_std = this.load_std;
-                data.load_min = this.load_min;
-                data.load_max = this.load_max;
-            } else {
-                data.annual_consumption_kwh = this.annual_consumption_kwh;
+            for (const component of components) {
+                Object.assign(data, componentFormData(this.dists[component.key], component));
             }
             return data;
         },
@@ -346,6 +302,9 @@ document.addEventListener('alpine:init', () => {
         init() {
             this.loadPresets();
             this.fetchPreview();
+            // The one trigger of the preview: any change to the form getFormData sends, whether a control, a button or
+            // an upload made it. $watch reads every field the form sends, rows included, and only those.
+            this.$watch(() => this.getFormData(), () => this.updatePreview());
         }
     }));
 });

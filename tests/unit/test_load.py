@@ -1,17 +1,23 @@
 """Tests for load profile generation."""
 
+import dataclasses
+import logging
 import math
 import re
 
 import numpy as np
 import pandas as pd
 import pytest
+import richardsonpy.classes.appliance as _app_mod
+from richardsonpy.classes.stochastic_el_load_wrapper import ElectricityProfile
+import solar_challenge.load as load_module
 from solar_challenge.load import (
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
-    calculate_annual_consumption,
+    energy_kwh,
     generate_load_profile,
-    scale_profile_to_annual,
+    household_occupant_count,
+    scale_profile_to_energy,
 )
 
 
@@ -132,6 +138,36 @@ class TestLoadConfigValidation:
         assert config.household_occupants == 3
 
 
+class TestHouseholdOccupantCount:
+    """household_occupant_count is LoadConfig's occupant rule, for a caller holding a count that is not an int."""
+
+    @pytest.mark.parametrize(
+        "occupants",
+        [pytest.param(3.0, id="float"), pytest.param(np.int64(3), id="numpy-int64")],
+    )
+    def test_a_whole_number_count_is_given_as_the_int_it_equals(self, occupants: float) -> None:
+        count = household_occupant_count(occupants)
+
+        assert type(count) is int
+        assert count == 3
+
+    @pytest.mark.parametrize(
+        ("occupants", "refusal"),
+        [
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="below-one"),
+            pytest.param(11, "Household occupants seems unrealistic: 11", id="above-ten"),
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+        ],
+    )
+    def test_a_count_that_is_not_a_whole_number_from_1_to_10_is_refused_naming_it(
+        self, occupants: float, refusal: str
+    ) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            household_occupant_count(occupants)
+        assert str(exc_info.value) == refusal
+
+
 class TestGenerateLoadProfile:
     """Test LOAD-002/LOAD-006: Elexon profile generation."""
 
@@ -195,7 +231,7 @@ class TestGenerateLoadProfile:
         profile = generate_load_profile(config, start, end)
 
         # Calculate consumption for this week
-        weekly_kwh = calculate_annual_consumption(profile)
+        weekly_kwh = energy_kwh(profile)
 
         # Should be approximately 3400 / 52 ≈ 65 kWh per week
         # Allow some variation due to seasonal factors (June is lower)
@@ -247,36 +283,35 @@ class TestElexonProfileShape:
         assert winter_total > summer_total
 
 
-class TestCalculateAnnualConsumption:
-    """Test annual consumption calculation."""
+class TestEnergyKwh:
+    """energy_kwh integrates a 1-minute kW profile to its energy in kWh."""
 
     def test_calculates_from_minute_profile(self):
-        """Correctly calculates total consumption."""
+        """A day at a constant 1 kW is 24 kWh: the window's own energy."""
         # Create 1 day profile at constant 1 kW
         index = pd.date_range("2024-01-01", periods=1440, freq="1min")
         profile = pd.Series([1.0] * 1440, index=index)
 
         # 1 kW for 1440 minutes = 1440/60 = 24 kWh
-        total = calculate_annual_consumption(profile)
+        total = energy_kwh(profile)
         assert total == pytest.approx(24.0, rel=0.001)
 
     def test_empty_profile_returns_zero(self):
-        """Empty profile returns zero consumption."""
+        """An empty profile has zero energy."""
         profile = pd.Series([], dtype=float)
-        assert calculate_annual_consumption(profile) == 0.0
+        assert energy_kwh(profile) == 0.0
 
 
-class TestScaleProfileToAnnual:
-    """Test LOAD-003: Profile scaling to annual target."""
+class TestScaleProfileToEnergy:
+    """Test LOAD-003: scaling a profile to a target energy."""
 
     def test_scales_to_target(self):
-        """Scales profile to match target annual consumption."""
-        # Create simple 1-year profile (simplified)
+        """Scales a profile so that its energy is the target."""
         index = pd.date_range("2024-01-01", periods=1440, freq="1min")
         profile = pd.Series([1.0] * 1440, index=index)  # 24 kWh
 
-        scaled = scale_profile_to_annual(profile, target_annual_kwh=48.0)
-        total = calculate_annual_consumption(scaled)
+        scaled = scale_profile_to_energy(profile, target_kwh=48.0)
+        total = energy_kwh(scaled)
 
         assert total == pytest.approx(48.0, rel=0.001)
 
@@ -285,7 +320,7 @@ class TestScaleProfileToAnnual:
         index = pd.date_range("2024-01-01", periods=100, freq="1min")
         profile = pd.Series(np.arange(100, dtype=float), index=index)
 
-        scaled = scale_profile_to_annual(profile, target_annual_kwh=100.0)
+        scaled = scale_profile_to_energy(profile, target_kwh=100.0)
 
         # Relative values should be preserved
         assert (scaled.iloc[50] / scaled.iloc[25]) == pytest.approx(
@@ -296,7 +331,7 @@ class TestScaleProfileToAnnual:
         """Raises error when profile has zero consumption."""
         profile = pd.Series([0.0] * 100)
         with pytest.raises(ValueError, match="zero"):
-            scale_profile_to_annual(profile, target_annual_kwh=100.0)
+            scale_profile_to_energy(profile, target_kwh=100.0)
 
 
 class TestHouseholdSizeParameter:
@@ -336,8 +371,8 @@ class TestHouseholdSizeParameter:
         profile_small = generate_load_profile(config_small, start, end)
         profile_large = generate_load_profile(config_large, start, end)
 
-        total_small = calculate_annual_consumption(profile_small)
-        total_large = calculate_annual_consumption(profile_large)
+        total_small = energy_kwh(profile_small)
+        total_large = energy_kwh(profile_large)
 
         # Larger household should use more energy
         assert total_large > total_small
@@ -392,8 +427,6 @@ class TestWindowedStochasticGeneration:
         365 times regardless of the requested window. The windowed implementation
         must call it exactly window_days times.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -421,8 +454,6 @@ class TestWindowedStochasticGeneration:
         to a constant (365 or otherwise).  Also checks structural invariants on
         the returned Series.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -479,8 +510,8 @@ class TestWindowedStochasticGeneration:
         profile_stochastic = generate_load_profile(config_stochastic, start, end)
         profile_elexon = generate_load_profile(config_elexon, start, end)
 
-        stochastic_kwh = calculate_annual_consumption(profile_stochastic)
-        elexon_kwh = calculate_annual_consumption(profile_elexon)
+        stochastic_kwh = energy_kwh(profile_stochastic)
+        elexon_kwh = energy_kwh(profile_elexon)
 
         # Both should be in a sane daily band
         assert 2.0 <= stochastic_kwh <= 30.0, (
@@ -497,6 +528,22 @@ class TestWindowedStochasticGeneration:
             f"from Elexon ({elexon_kwh:.2f} kWh)"
         )
 
+    def test_a_richardsonpy_window_is_scaled_to_the_energy_of_the_elexon_profile_for_the_same_days(
+        self,
+    ):
+        """The stochastic shape is scaled to the Elexon path's seasonal energy, each day at its own month's factor."""
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-29")
+        end = pd.Timestamp("2024-07-02")  # June and July days; no clock change
+
+        stochastic = generate_load_profile(config, start, end)
+        elexon = generate_load_profile(
+            dataclasses.replace(config, use_stochastic=False), start, end
+        )
+
+        assert not stochastic.equals(elexon)
+        assert energy_kwh(stochastic) == pytest.approx(energy_kwh(elexon), rel=1e-9)
+
     def test_window_crossing_spring_dst_counts_calendar_days(self, monkeypatch):
         """3-calendar-day window spanning the spring DST change calls run_application_simulation 3 times.
 
@@ -506,8 +553,6 @@ class TestWindowedStochasticGeneration:
         (the off-by-one bug).  Calendar-date arithmetic gives
         (Apr 1 − Mar 30).days + 1 = 3, which is correct.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -545,8 +590,6 @@ class TestWindowedStochasticGeneration:
 
         The returned profile must still be a valid 1-minute Series (Elexon shape).
         """
-        import solar_challenge.load as load_module
-
         def _always_raise(*args, **kwargs):
             raise RuntimeError("Simulated richardsonpy internal failure")
 
@@ -563,3 +606,31 @@ class TestWindowedStochasticGeneration:
         assert len(profile) == 1440, "Fallback must return a full 1-day profile"
         assert (profile >= 0).all(), "Fallback profile must have no negative values"
         assert profile.index.tz is not None, "Fallback profile index must be tz-aware"
+
+    def test_a_richardsonpy_window_with_no_energy_falls_back_to_the_elexon_profile_with_a_warning(
+        self, monkeypatch, caplog
+    ):
+        """A window richardsonpy fills with zeros cannot be scaled to its seasonal energy, so the Elexon profile replaces it and a warning names the cause."""
+
+        def _no_power(_wrapper, irradiation, weekend, day, occupancy):
+            zeros = np.zeros(1440)
+            return zeros, zeros, zeros
+
+        monkeypatch.setattr(ElectricityProfile, "power_sim", _no_power)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = end = pd.Timestamp("2024-06-21")
+
+        with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
+            profile = generate_load_profile(config, start, end)
+
+        elexon = generate_load_profile(
+            dataclasses.replace(config, use_stochastic=False), start, end
+        )
+        pd.testing.assert_series_equal(profile, elexon)
+        assert [
+            record.levelno
+            for record in caplog.records
+            if record.name == "solar_challenge.load"
+            and "zero consumption" in record.getMessage()
+        ] == [logging.WARNING]

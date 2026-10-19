@@ -62,12 +62,12 @@ document.addEventListener('alpine:init', () => {
             this.maxVal = param.defaultMax;
         },
 
-        // Active EventSource connections
-        _eventSources: [],
+        // Aborts the current sweep's requests, each point's progress stream and result fetch,
+        // and stops the sweep following its remaining points
+        _sweepRequests: new AbortController(),
 
         destroy() {
-            this._eventSources.forEach(es => es.close());
-            this._eventSources = [];
+            this._sweepRequests.abort();
         },
 
         // Submit sweep
@@ -98,7 +98,7 @@ document.addEventListener('alpine:init', () => {
                 } else {
                     this.sweepId = data.sweep_id;
                     this.sweepValues = data.values || [];
-                    // Populate initial results as pending
+                    // A row shows 'pending' until _followSweep starts following its point, whose job may be running or done by then
                     this.sweepResults = this.sweepValues.map((v, i) => ({
                         value: v,
                         status: 'pending',
@@ -107,12 +107,13 @@ document.addEventListener('alpine:init', () => {
                         grid_import: '-',
                         job_id: data.job_ids ? data.job_ids[i] : null,
                     }));
-                    // Start polling each job
-                    this.sweepResults.forEach((result, idx) => {
-                        if (result.job_id) {
-                            this._pollJob(result.job_id, idx);
-                        }
-                    });
+                    // Follow the points' jobs unawaited, so submitting ends once the sweep is accepted.
+                    // Read each row back from this.sweepResults: only Alpine's reactive proxy of a row
+                    // passes the job's writes to the page.
+                    const sweepRequests = new AbortController();
+                    this._sweepRequests = sweepRequests;
+                    this._followSweep(this.sweepResults.filter(row => row.job_id), sweepRequests.signal)
+                        .catch(e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; });
                 }
             } catch (e) {
                 this.errorMsg = 'Network error: ' + e.message;
@@ -121,65 +122,68 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Poll a single sweep job via SSE
-        _pollJob(jobId, idx) {
-            const es = new EventSource('/api/jobs/' + jobId + '/progress');
-            this._eventSources.push(es);
+        // Follow each point's job in turn until signal aborts, so the page holds one progress stream at a time;
+        // tests/e2e/test_parameter_sweep.py's test_another_tab_loads_run_history_while_an_eight_point_sweep_runs says why, and what it costs
+        async _followSweep(rows, signal) {
+            for (const row of rows) {
+                if (signal.aborted) return;
+                await this._followPoint(row, signal);
+            }
+        },
 
-            es.addEventListener('progress', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = data.status || 'running';
-                    }
-                } catch(err) {}
-            });
+        // Follow one sweep point's job via SSE, writing its status and results into that point's row;
+        // resolves once the job ends, the page loses its stream, or signal aborts
+        _followPoint(row, signal) {
+            return new Promise(resolve => {
+                const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
+                const end = () => {
+                    es.close();
+                    signal.removeEventListener('abort', end);
+                    resolve();
+                };
+                signal.addEventListener('abort', end);
 
-            es.addEventListener('complete', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = 'completed';
+                es.addEventListener('progress', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        row.status = data.status || 'running';
+                    } catch(err) {}
+                });
+
+                es.addEventListener('complete', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        row.status = 'completed';
                         if (data.run_id) {
-                            this._fetchResult(data.run_id, idx);
+                            this._fetchResult(row, signal);
                         }
-                    }
-                } catch(err) {}
-                es.close();
-                this._checkAllDone();
-            });
+                    } catch(err) {}
+                    end();
+                    this._checkAllDone();
+                });
 
-            es.addEventListener('error', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = 'failed';
-                    }
-                } catch(err) {
-                    if (this.sweepResults[idx] && this.sweepResults[idx].status !== 'completed') {
-                        this.sweepResults[idx].status = 'failed';
-                    }
-                }
-                es.close();
-                this._checkAllDone();
+                const fail = () => {
+                    row.status = 'failed';
+                    end();
+                    this._checkAllDone();
+                };
+                onJobProgressStreamErrors(es, { failed: fail, lost: fail });
             });
         },
 
-        // Fetch completed result summary
-        async _fetchResult(runId, idx) {
+        // Fetch a completed point's result summary into that point's row, unless signal aborts first
+        async _fetchResult(row, signal) {
             try {
-                const resp = await fetch('/api/jobs/' + this.sweepResults[idx].job_id + '/results');
+                const resp = await fetch('/api/jobs/' + row.job_id + '/results', { signal });
                 if (resp.ok) {
                     const data = await resp.json();
                     const s = data.summary || {};
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].generation = s.total_generation_kwh != null
-                            ? s.total_generation_kwh.toFixed(1) : '-';
-                        this.sweepResults[idx].self_consumption = s.self_consumption_ratio != null
-                            ? (s.self_consumption_ratio * 100).toFixed(1) + '%' : '-';
-                        this.sweepResults[idx].grid_import = s.total_grid_import_kwh != null
-                            ? s.total_grid_import_kwh.toFixed(1) : '-';
-                    }
+                    row.generation = s.total_generation_kwh != null
+                        ? s.total_generation_kwh.toFixed(1) : '-';
+                    row.self_consumption = s.self_consumption_ratio != null
+                        ? (s.self_consumption_ratio * 100).toFixed(1) + '%' : '-';
+                    row.grid_import = s.total_grid_import_kwh != null
+                        ? s.total_grid_import_kwh.toFixed(1) : '-';
                 }
             } catch(err) {}
         },

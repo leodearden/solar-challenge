@@ -1,0 +1,127 @@
+# Machine-readable twin of surface-version-bump.capability-manifest.md (review-all stream S29).
+# Code anchors verified against main beb1d9103ad8 (2026-10-18); task store read 2026-10-18T09:14:46Z.
+# Every grep check fails on main beb1d91 and passes once its leaf lands (polarity tested with git grep).
+# task_id values stay null until commit_planning stamps them; β is task 224 re-scoped in place (PRD §10 Q1).
+prd: docs/prds/surface-version-bump.md
+schema_version: 1
+signal_leaves: ["α", "β", "γ"]
+tasks:
+  - label: "α"
+    task_id: 986
+    title: "Open the 0.6.0 release window; ConfigurationError in __all__"
+    note: "Intermediate: unlocks the held leaves 784, 790, 804, 826, 827, 843, 867, 892, 901, 905, 912, 939, 941, 950, 963 and S25 ζ (each depends on α). Prereqs out of batch: 926 (S23 ζ), 774 (S1 β). x_finding_key [], x_lead_ruling D4."
+    capabilities:
+      - name: "release-window-section-exists"
+        binding: "git grep '^### solar-challenge-v0\\.6\\.0' on main beb1d91 exits 1; the held leaves write 'in the release section S29 opens'"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^### solar-challenge-v0\\.6\\.0"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "configuration-error-exported"
+        binding: "git grep '\"ConfigurationError\"' in src/solar_challenge/__init__.py on main beb1d91 exits 1 (L3)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"ConfigurationError\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "configuration-error-frozen-row"
+        binding: "git grep '\"ConfigurationError\"' in tests/unit/test_public_api_surface.py on main beb1d91 exits 1"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"ConfigurationError\""
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: present
+      - name: "error-base-is-value-error"
+        binding: "producer: 774 (S1 β, D2) upstream of α; errors.ConfigurationError(Exception) on main beb1d91"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering edge α -> 774; 774's own sidecar checks the base class"
+      - name: "drift-classified-before-window"
+        binding: "producer: 926 (S23 ζ) upstream of α; F4/F5 of docs/prds/surface-lock-one-module.md"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "ordering edge α -> 926; S23's sidecar checks the classifier"
+  - label: "β"
+    task_id: 224
+    title: "Release solar-challenge 0.6.0: version, folded release notes, consumer recipe"
+    note: "Task 224 re-scoped in place (PRD decision 9). Prereqs out of batch: 926; every held leaf other than 927; S25 ζ; the library-side program leaves of PRD decision 3 (31 at the store read, recomputed at decompose). 927 (S23 η) and γ depend on β; β joins gate 772 (PRD §10 Q5). x_finding_key [], x_lead_ruling D4."
+    capabilities:
+      - name: "pyproject-version-bumped"
+        binding: "pyproject.toml version = \"0.5.0\" on main beb1d91"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^version = \"0\\.6\\.0\""
+          paths: ["pyproject.toml"]
+          expect: present
+      - name: "dunder-version-bumped"
+        binding: "src/solar_challenge/__init__.py __version__ = \"0.5.0\" on main beb1d91; test_pyproject_version_matches_dunder ties the two"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "__version__ = \"0\\.6\\.0\""
+          paths: ["src/solar_challenge/__init__.py"]
+          expect: present
+      - name: "worked-example-pins-new-tag"
+        binding: "docs/domain-library-consumption.md worked example pins @solar-challenge-v0.5.0 on main beb1d91"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "solar-challenge\\.git@solar-challenge-v0\\.6\\.0"
+          paths: ["docs/domain-library-consumption.md"]
+          expect: present
+      - name: "finance-model-version-header"
+        binding: "docs/cost-recovery-finance-model.md '**Version**: 0.5.0' with 7 Unreleased lines on main beb1d91"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^\\*\\*Version\\*\\*: 0\\.6\\.0"
+          paths: ["docs/cost-recovery-finance-model.md"]
+          expect: present
+      - name: "uv-lock-relocked"
+        binding: "uv.lock records the editable project's version 0.5.0; every verify runs uv run --locked"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the per-task verify's uv run --locked fails on a stale lock, so a green verify is the check"
+      - name: "no-unreleased-paragraph-left"
+        binding: "25 + 7 '**Unreleased on main**' paragraphs on main beb1d91; later tasks may add new ones after β, so an absent check would wedge"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "R4 is checked in-leaf at β's base; a durable absent check would turn red at the next post-release change"
+      - name: "inventory-names-every-break"
+        binding: "producer: 926 (S23 ζ) labels drift; the tables at α's merge commit are the baseline (PRD decision 4, R5)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a scratch run on β's branch; 927 makes the comparison permanent from β on"
+      - name: "no-transitional-marker"
+        binding: "git grep -i -E 'S29|surface bump' main -- src tests is empty on beb1d91 (vacuous as a delivered check)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "R8 is checked in-leaf at β's base"
+  - label: "γ"
+    task_id: 987
+    title: "Human gate: cut and push solar-challenge-v0.6.0 on β's merge commit; file the platform re-pin"
+    note: "task_kind deterministic. Prereq: β. Files one task in solar_challenge_platform (project_root /home/leo/src/solar-challenge-platform) carrying β's recipe and site list. x_finding_key [], x_lead_ruling D4."
+    capabilities:
+      - name: "tag-on-origin"
+        binding: "solar-challenge-v0.5.0 is on 03af26e, task 110's merge commit; the guide's push-and-ls-remote rule"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "git ls-remote --tags origin solar-challenge-v0.6.0 is a networked human check"
+      - name: "platform-repin-filed"
+        binding: "solar-challenge-platform is factory project solar_challenge_platform, pinned @solar-challenge-v0.5.0 at d521265"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the task is filed in another project's store"

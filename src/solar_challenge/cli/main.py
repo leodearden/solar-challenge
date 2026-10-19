@@ -13,7 +13,7 @@ from solar_challenge.cli import home as home_app
 from solar_challenge.cli import optimize as optimize_app
 from solar_challenge.cli import validate as validate_app
 from solar_challenge.cli import web as web_app
-from solar_challenge.cli.utils import console
+from solar_challenge.cli.utils import console, set_status_quiet
 
 # Create main app
 app = typer.Typer(
@@ -50,42 +50,19 @@ def main(
             is_eager=True,
         ),
     ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option(
-            "--verbose",
-            help="Enable verbose output",
-        ),
-    ] = False,
     quiet: Annotated[
         bool,
         typer.Option(
             "--quiet", "-q",
-            help="Suppress non-essential output",
+            help="Suppress status messages and progress; results, warnings and errors still print",
         ),
     ] = False,
 ) -> None:
     """Solar Challenge Energy Flow Simulator.
 
     A CLI tool for simulating domestic PV and battery systems in the UK.
-
-    Commands:
-      home      Single home simulation
-      fleet     Fleet (multiple homes) simulation
-      validate  Validate results or config files
-      config    Configuration management
-      web       Web dashboard server
-
-    Examples:
-      solar-challenge home quick 4 5 --days 7
-      solar-challenge home run config.yaml --report
-      solar-challenge fleet bristol-phase1 --days 30
-      solar-challenge config template home -o my-config.yaml
-      solar-challenge web start --port 8080
     """
-    # Store verbose/quiet in context for subcommands
-    # In practice, subcommands can check these via the context if needed
-    pass
+    set_status_quiet(quiet)
 
 
 if __name__ == "__main__":

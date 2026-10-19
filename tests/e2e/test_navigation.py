@@ -115,6 +115,15 @@ def test_sidebar_history_link(page: Page, live_server: str) -> None:
     assert "/history/runs" in page.url
 
 
+def test_sidebar_shows_the_group_of_the_current_page_open(page: Page, live_server: str) -> None:
+    """On the fleet page the desktop sidebar shows the Simulate group's links without a click, and keeps the Scenarios group's links hidden."""
+    page.goto(live_server + "/simulate/fleet")
+
+    sidebar = _desktop_sidebar(page)
+    expect(sidebar.get_by_role("link", name="Fleet", exact=True)).to_be_visible()
+    expect(sidebar.get_by_role("link", name="Builder", exact=True)).to_be_hidden()
+
+
 # ── Breadcrumb dead-link detection ─────────────────────────────────────
 
 

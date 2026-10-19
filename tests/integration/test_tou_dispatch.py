@@ -1,10 +1,9 @@
-"""Integration tests comparing default vs TOU-optimized battery dispatch.
+"""TOU-optimized battery dispatch of an Economy 7 home, simulated over clear June days.
 
-These tests make real PVGIS API calls and may be slow.
-The non-slow counterpart, run by verify: tests/integration/test_tou_dispatch_synthetic_weather.py
+The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
+The home has no seg_tariff, so simulate_home's warning that export revenue is 0.0 is ignored.
+tests/integration/test_tou_dispatch_synthetic_weather.py compares TOU-optimized with greedy dispatch.
 """
-
-import dataclasses
 
 import pytest
 import pandas as pd
@@ -20,67 +19,42 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
-from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
+from solar_challenge.weather import WeatherCache
+from tests._seeded_tmy import ClearJuneDays
 
-# Float rounding at the battery's SOC floor can differ by ~1e-16 kWh between strategies.
-KWH_ROUNDING_TOLERANCE = 1e-9
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.mark.slow
+@pytest.fixture
+def bristol_june_tmy(weather_cache: WeatherCache) -> None:
+    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
+    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
+@pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning")
 @pytest.mark.integration
-class TestTOUDispatchComparison:
-    """Test TOU-optimized dispatch vs default greedy dispatch."""
+class TestTOUOptimizedDispatch:
+    """An Economy 7 home with a 5 kWh battery under TOU-optimized dispatch, over clear June days."""
 
     @pytest.fixture
-    def home_config_economy7(self) -> HomeConfig:
-        """4 kW PV with 5 kWh battery and Economy 7 tariff."""
+    def tou_home(self) -> HomeConfig:
+        """4 kW PV with a 5 kWh battery on Economy 7, dispatched TOU-optimized."""
         return HomeConfig(
             pv_config=PVConfig.default_4kw(),
             load_config=LoadConfig(annual_consumption_kwh=3400.0, seed=42),
             battery_config=BatteryConfig.default_5kwh(),
             location=Location.bristol(),
             tariff_config=TariffConfig.economy_7(),
-            name="Economy 7 test home",
-        )
-
-    def test_greedy_dispatch_completes(self, home_config_economy7):
-        """Greedy dispatch strategy completes successfully."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")  # 3 days
-
-        # Use default greedy dispatch
-        config = home_config_economy7
-        results = simulate_home(config, start, end)
-
-        # All result fields populated
-        assert isinstance(results, SimulationResults)
-        assert len(results.generation) == 3 * 1440  # 3 days of minutes
-        assert len(results.demand) == 3 * 1440
-
-        # Battery should be active
-        assert results.battery_charge.sum() > 0
-        assert results.battery_discharge.sum() > 0
-
-        # Financial fields should be calculated
-        assert results.import_cost.sum() > 0
-        assert results.tariff_rate.sum() > 0
-
-    def test_tou_dispatch_completes(self, home_config_economy7):
-        """TOU-optimized dispatch strategy completes successfully."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")  # 3 days
-
-        # Use TOU-optimized dispatch
-        config = HomeConfig(
-            pv_config=home_config_economy7.pv_config,
-            load_config=home_config_economy7.load_config,
-            battery_config=home_config_economy7.battery_config,
-            location=home_config_economy7.location,
-            tariff_config=home_config_economy7.tariff_config,
             name="TOU-optimized home",
             dispatch_strategy="tou_optimized",
         )
-        results = simulate_home(config, start, end)
+
+    def test_tou_dispatch_completes(self, tou_home):
+        """TOU-optimized dispatch strategy completes successfully."""
+        start, end = _JUNE_DAYS.window(3)
+
+        results = simulate_home(tou_home, start, end)
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -95,103 +69,11 @@ class TestTOUDispatchComparison:
         assert results.import_cost.sum() > 0
         assert results.tariff_rate.sum() > 0
 
-    def test_tou_dispatch_never_imports_more_at_peak_rate(self, home_config_economy7):
-        """TOU never imports more at the peak rate than greedy.
+    def test_tou_dispatch_balances_energy_with_no_negative_values(self, tou_home):
+        """Energy balances every minute, and no output is negative, with TOU dispatch."""
+        start, end = _JUNE_DAYS.window(2)
 
-        It holds the battery through the off-peak window and spends it at peak. Total cost
-        is not asserted: over this sunny June week PV refills the battery before the next
-        peak, stranding the charge TOU held back, so it pays more off-peak than it saves.
-        """
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")  # 7 days for better signal
-
-        greedy_results = simulate_home(home_config_economy7, start, end)
-        greedy_summary = calculate_summary(greedy_results)
-
-        tou_config = dataclasses.replace(home_config_economy7, dispatch_strategy="tou_optimized")
-        tou_results = simulate_home(tou_config, start, end)
-        tou_summary = calculate_summary(tou_results)
-
-        assert off_peak_discharge_kwh(tou_results) == 0.0
-
-        tou_peak_import_kwh = peak_rate_import_kwh(tou_results)
-        greedy_peak_import_kwh = peak_rate_import_kwh(greedy_results)
-        assert tou_peak_import_kwh <= greedy_peak_import_kwh + KWH_ROUNDING_TOLERANCE
-
-        # Should have similar energy totals (same PV, load, battery capacity)
-        assert abs(tou_summary.total_generation_kwh - greedy_summary.total_generation_kwh) < 0.01
-        assert abs(tou_summary.total_demand_kwh - greedy_summary.total_demand_kwh) < 0.01
-
-    def test_battery_behavior_differs(self, home_config_economy7):
-        """Battery charge/discharge patterns can differ between strategies."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")  # 2 days
-
-        # Simulate with greedy dispatch
-        greedy_config = home_config_economy7
-        greedy_results = simulate_home(greedy_config, start, end)
-
-        # Simulate with TOU-optimized dispatch
-        tou_config = HomeConfig(
-            pv_config=home_config_economy7.pv_config,
-            load_config=home_config_economy7.load_config,
-            battery_config=home_config_economy7.battery_config,
-            location=home_config_economy7.location,
-            tariff_config=home_config_economy7.tariff_config,
-            name="TOU-optimized home",
-            dispatch_strategy="tou_optimized",
-        )
-        tou_results = simulate_home(tou_config, start, end)
-
-        # Both strategies should complete successfully
-        assert greedy_results is not None
-        assert tou_results is not None
-
-        # Battery should be active in both cases
-        assert greedy_results.battery_charge.sum() > 0
-        assert greedy_results.battery_discharge.sum() > 0
-        assert tou_results.battery_charge.sum() > 0
-        assert tou_results.battery_discharge.sum() > 0
-
-        # Note: In summer with high solar generation, both strategies may
-        # make similar decisions, so we don't strictly require differences
-
-    def test_tou_dispatch_maintains_energy_balance(self, home_config_economy7):
-        """Energy balance should be maintained with TOU dispatch."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")  # 2 days
-
-        # Use TOU-optimized dispatch with validation enabled
-        config = HomeConfig(
-            pv_config=home_config_economy7.pv_config,
-            load_config=home_config_economy7.load_config,
-            battery_config=home_config_economy7.battery_config,
-            location=home_config_economy7.location,
-            tariff_config=home_config_economy7.tariff_config,
-            name="TOU-optimized home",
-            dispatch_strategy="tou_optimized",
-        )
-
-        # validate_balance=True is default, should not raise
-        results = simulate_home(config, start, end, validate_balance=True)
-        assert results is not None
-
-    def test_no_negative_values_with_tou(self, home_config_economy7):
-        """All output values should be non-negative with TOU dispatch."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")
-
-        # Use TOU-optimized dispatch
-        config = HomeConfig(
-            pv_config=home_config_economy7.pv_config,
-            load_config=home_config_economy7.load_config,
-            battery_config=home_config_economy7.battery_config,
-            location=home_config_economy7.location,
-            tariff_config=home_config_economy7.tariff_config,
-            name="TOU-optimized home",
-            dispatch_strategy="tou_optimized",
-        )
-        results = simulate_home(config, start, end)
+        results = simulate_home(tou_home, start, end, validate_balance=True)
 
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
@@ -204,41 +86,11 @@ class TestTOUDispatchComparison:
         assert (results.import_cost >= 0).all()
         assert (results.export_revenue >= 0).all()
 
-    def test_tariff_rate_varies_correctly(self, home_config_economy7):
-        """Tariff rate should vary between off-peak and peak periods."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")  # 1 day
-
-        config = home_config_economy7
-        results = simulate_home(config, start, end)
-
-        # Economy 7: off-peak 00:30-07:30 at £0.09, peak rest at £0.25
-        # Should see both rates in the data
-        unique_rates = results.tariff_rate.unique()
-
-        # Should have at least 2 different rates
-        assert len(unique_rates) >= 2
-
-        # Should include both Economy 7 rates
-        assert 0.09 in unique_rates  # off-peak
-        assert 0.25 in unique_rates  # peak
-
-    def test_summary_statistics_with_tou(self, home_config_economy7):
+    def test_summary_statistics_with_tou(self, tou_home):
         """Summary statistics should be reasonable with TOU dispatch."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")  # 7 days
+        start, end = _JUNE_DAYS.window(7)
 
-        # Use TOU-optimized dispatch
-        config = HomeConfig(
-            pv_config=home_config_economy7.pv_config,
-            load_config=home_config_economy7.load_config,
-            battery_config=home_config_economy7.battery_config,
-            location=home_config_economy7.location,
-            tariff_config=home_config_economy7.tariff_config,
-            name="TOU-optimized home",
-            dispatch_strategy="tou_optimized",
-        )
-        results = simulate_home(config, start, end)
+        results = simulate_home(tou_home, start, end)
         summary = calculate_summary(results)
 
         # 7 days of simulation

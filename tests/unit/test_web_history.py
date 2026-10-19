@@ -3,11 +3,10 @@
 import dataclasses
 import io
 import json
-import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
@@ -17,18 +16,27 @@ from flask.testing import FlaskClient
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.charts import (
+    comparison_bar_chart,
+    comparison_radar,
+)
+from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
-from tests._html_page import texts_after
+from tests._html_page import element_count, texts_after
+from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
+
+
+_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
 
 
 @pytest.fixture
@@ -137,6 +145,34 @@ class TestRunBrowserRoute:
 
 
 # ---------------------------------------------------------------------------
+# Old /history/api/* path tests
+# ---------------------------------------------------------------------------
+
+
+class TestOldHistoryApiPaths:
+    """The /history/api/* paths no longer resolve: the run history's JSON and export endpoints answer only under /api/history/."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param("GET", "/history/api/runs", id="list-runs"),
+            pytest.param("GET", "/history/api/runs/stored-run", id="get-run"),
+            pytest.param("DELETE", "/history/api/runs/stored-run", id="delete-run"),
+            pytest.param("PATCH", "/history/api/runs/stored-run", id="patch-run"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/csv", id="export-csv"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/yaml", id="export-yaml"),
+        ],
+    )
+    def test_answers_404_instead_of_redirecting(
+        self, storage: RunStorage, client: FlaskClient, method: str, path: str
+    ) -> None:
+        """Each old path, requested with the method its redirect took, answers 404 for a stored run, which its /api/history/ twin serves."""
+        _store_home_run(storage, "stored-run", _A_HOME)
+
+        assert client.open(path, method=method).status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Runs API tests
 # ---------------------------------------------------------------------------
 
@@ -239,6 +275,83 @@ class TestRunDetailAPI:
         response = client.get("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
 
+    def test_api_get_run_answers_every_column_with_config_and_summary_decoded(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A run's detail is each column of its row, plus its config and summary decoded."""
+        config = {"pv_config": {"capacity_kw": 4.0}}
+        summary = {"total_generation_kwh": 100.0, "self_consumption_ratio": 0.6}
+        _insert_test_run(app, run_id="detail-run", name="Detail Run", summary=summary, config=config)
+
+        response = client.get("/api/history/runs/detail-run")
+
+        assert response.get_json() == {
+            "id": "detail-run",
+            "name": "Detail Run",
+            "type": "home",
+            "config_json": json.dumps(config),
+            "summary_json": json.dumps(summary),
+            "status": "completed",
+            "error_message": None,
+            "created_at": "2025-06-01T12:00:00",
+            "completed_at": "2025-06-01T12:01:00",
+            "duration_seconds": 60.0,
+            "n_homes": 1,
+            "notes": None,
+            "config": config,
+            "summary": summary,
+        }
+
+    def test_api_get_run_of_a_running_run_answers_its_row_without_decoded_config_or_summary(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A running run's detail is its row alone: with no config or summary stored yet, neither is decoded.
+
+        The row is the placeholder JobManager.submit_fleet_job writes when it queues a fleet run.
+        """
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, n_homes)"
+                " VALUES ('running-run', 'Still Running', 'fleet', 'running', '2025-06-02T09:00:00', 3)"
+            )
+
+        response = client.get("/api/history/runs/running-run")
+
+        assert response.get_json() == {
+            "id": "running-run",
+            "name": "Still Running",
+            "type": "fleet",
+            "config_json": None,
+            "summary_json": None,
+            "status": "running",
+            "error_message": None,
+            "created_at": "2025-06-02T09:00:00",
+            "completed_at": None,
+            "duration_seconds": None,
+            "n_homes": 3,
+            "notes": None,
+        }
+
+    def test_api_get_run_decodes_a_config_or_summary_that_is_not_json_as_empty(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
+                " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"
+                " '2025-06-03T10:00:00')"
+            )
+
+        data = client.get("/api/history/runs/garbled-run").get_json()
+
+        assert {key: data[key] for key in ("config_json", "summary_json", "config", "summary")} == {
+            "config_json": "{not json",
+            "summary_json": "not json either",
+            "config": {},
+            "summary": {},
+        }
+
 
 class TestDeleteAPI:
     """Tests for the run delete API endpoint."""
@@ -247,6 +360,13 @@ class TestDeleteAPI:
         """Test DELETE /api/history/runs/<id> returns 404 for missing run."""
         response = client.delete("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
+
+    def test_api_delete_of_an_id_that_is_no_valid_run_id_is_404(self, client: FlaskClient) -> None:
+        """An id the store refuses answers 404, as an id no run has does, not a server error."""
+        response = client.delete("/api/history/runs/no.such.run")
+
+        assert response.status_code == 404
+        assert response.get_json() == {"error": "Run not found"}
 
     def test_api_delete_existing_run(self, app: Flask, client: FlaskClient) -> None:
         """Test DELETE /api/history/runs/<id> deletes an existing run."""
@@ -307,6 +427,42 @@ class TestPatchAPI:
         )
         assert response.status_code == 400
 
+    def test_api_patch_of_name_and_notes_answers_the_updated_row(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A PATCH of name and notes answers the run's row as updated, its config and summary not decoded."""
+        config = {"pv_config": {"capacity_kw": 4.0}}
+        summary = {"total_generation_kwh": 100.0, "self_consumption_ratio": 0.6}
+        _insert_test_run(app, run_id="relabel-me", name="Old Name", summary=summary, config=config)
+
+        response = client.patch(
+            "/api/history/runs/relabel-me",
+            json={"name": "New Name", "notes": "Checked"},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "id": "relabel-me",
+            "name": "New Name",
+            "type": "home",
+            "config_json": json.dumps(config),
+            "summary_json": json.dumps(summary),
+            "status": "completed",
+            "error_message": None,
+            "created_at": "2025-06-01T12:00:00",
+            "completed_at": "2025-06-01T12:01:00",
+            "duration_seconds": 60.0,
+            "n_homes": 1,
+            "notes": "Checked",
+        }
+
+    def test_api_patch_with_no_fields_of_an_unknown_run_is_404(self, client: FlaskClient) -> None:
+        """An unknown run answers 404 even when the body has no fields to update, which would answer 400."""
+        response = client.patch("/api/history/runs/nonexistent-id", json={})
+
+        assert response.status_code == 404
+        assert response.get_json() == {"error": "Run not found"}
+
 
 class TestExportAPI:
     """Tests for the CSV and YAML export API endpoints."""
@@ -326,13 +482,31 @@ class TestExportAPI:
         _store_home_run(
             storage,
             "yaml-export",
-            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            _A_HOME,
             name="YAML Run",
         )
 
         response = client.get("/api/history/runs/yaml-export/export/yaml")
         assert response.status_code == 200
         assert "attachment" in response.headers.get("Content-Disposition", "")
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    def test_export_is_named_after_its_run(
+        self, storage: RunStorage, client: FlaskClient, export: str
+    ) -> None:
+        """An export's file is named after its run's name and the first 8 characters of its id."""
+        run_id = "0123456789-named-export"
+        _store_home_run(
+            storage,
+            run_id,
+            _A_HOME,
+            name="North Roof",
+        )
+
+        response = client.get(f"/api/history/runs/{run_id}/export/{export}")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"] == f'attachment; filename="North Roof_01234567.{export}"'
 
     def test_export_of_a_home_run_loads_back_through_home_run(
         self, storage: RunStorage, client: FlaskClient, tmp_path: Path
@@ -524,6 +698,48 @@ class TestComparisonRoute:
         assert "Compare A" in html
         assert "Compare B" in html
 
+    def test_compare_shows_each_run_s_name_type_creation_time_and_summary_metrics(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each run's header card shows its name, type and creation time; each metric row its values, Delta and % Change.
+
+        The cards are read after the page's subtitle, the one text before them, since each run
+        name appears twice on the page.
+        """
+        _insert_test_run(
+            app, run_id="cmp-a", name="Compare A", run_type="home", summary={"total_generation_kwh": 100.0}
+        )
+        _insert_test_run(
+            app, run_id="cmp-b", name="Compare B", run_type="fleet", summary={"total_generation_kwh": 120.0}
+        )
+
+        page = client.get("/history/compare?ids=cmp-a,cmp-b").get_data(as_text=True)
+
+        assert texts_after(page, "Side-by-side comparison of selected simulation runs", 6) == [
+            "Compare A",
+            "home",
+            "2025-06-01T12:00:00",
+            "Compare B",
+            "fleet",
+            "2025-06-01T12:00:00",
+        ]
+        assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
+
+    def test_compare_answers_a_server_error_when_a_chart_cannot_be_drawn(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A comparison chart that cannot be drawn fails the request with the app's 500 page, as a results page's chart does, instead of the page being served without it."""
+        _insert_test_run(app, run_id="cmp-1", name="Compare A")
+        null_ratio = {"grid_dependency_ratio": None}
+        _insert_test_run(app, run_id="cmp-2", name="Compare B", summary=null_ratio)
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.get("/history/compare?ids=cmp-1,cmp-2")
+
+        assert response.status_code == 500
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "500", 1) == ["Internal Server Error"]
+
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""
         response = client.get("/history/compare?ids=fake-1,fake-2")
@@ -540,8 +756,6 @@ class TestComparisonCharts:
 
     def test_comparison_bar_chart_returns_json(self) -> None:
         """Test comparison_bar_chart returns a non-empty JSON string."""
-        from solar_challenge.web.charts import comparison_bar_chart
-
         summaries = [
             {
                 "total_generation_kwh": 100,
@@ -565,8 +779,6 @@ class TestComparisonCharts:
 
     def test_comparison_radar_returns_json(self) -> None:
         """Test comparison_radar returns a non-empty JSON string."""
-        from solar_challenge.web.charts import comparison_radar
-
         summaries = [
             {
                 "self_consumption_ratio": 0.6,
@@ -590,16 +802,12 @@ class TestComparisonCharts:
 
     def test_comparison_bar_chart_handles_missing_keys(self) -> None:
         """Test comparison_bar_chart handles summaries with missing keys."""
-        from solar_challenge.web.charts import comparison_bar_chart
-
         summaries = [{"total_generation_kwh": 50}, {}]
         result = comparison_bar_chart(summaries, ["A", "B"])
         assert result and result != "{}"
 
     def test_comparison_radar_handles_zero_generation(self) -> None:
         """Test comparison_radar handles zero generation gracefully."""
-        from solar_challenge.web.charts import comparison_radar
-
         summaries = [
             {
                 "self_consumption_ratio": 0,
@@ -612,173 +820,70 @@ class TestComparisonCharts:
         result = comparison_radar(summaries, ["Empty Run"])
         assert result and result != "{}"
 
-    def test_overlaid_power_flows_returns_json(self) -> None:
-        """Test overlaid_power_flows returns a non-empty JSON string."""
-        import numpy as np
-
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import overlaid_power_flows
-
-        index = pd.date_range("2024-06-01", periods=60, freq="min")
-        gen = pd.Series(np.sin(np.arange(60) * 0.1) * 2, index=index)
-        dem = pd.Series(np.ones(60) * 0.5, index=index)
-        zeros = pd.Series(np.zeros(60), index=index)
-
-        results = SimulationResults(
-            generation=gen,
-            demand=dem,
-            self_consumption=dem,
-            battery_charge=zeros,
-            battery_discharge=zeros,
-            battery_soc=zeros,
-            grid_import=zeros,
-            grid_export=zeros,
-            import_cost=zeros,
-            export_revenue=zeros,
-            tariff_rate=zeros,
-            strategy_name="greedy",
-        )
-
-        output = overlaid_power_flows([results, results], ["Run A", "Run B"])
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        assert "data" in parsed
-
 
 # ---------------------------------------------------------------------------
 # Fleet CSV export tests
 # ---------------------------------------------------------------------------
 
 
-def _make_sim_results(days: int = 1, gen_scale: float = 3.0, demand_val: float = 0.5) -> "SimulationResults":
-    """Create a minimal SimulationResults object for testing.
-
-    Args:
-        days: Number of simulation days.
-        gen_scale: Peak generation scale (kW).
-        demand_val: Flat demand value (kW).
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
-    from solar_challenge.home import SimulationResults
-
-    freq = "min"
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
-
-    hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * gen_scale)
-    demand = np.full(len(index), demand_val)
-    self_consumption = np.minimum(generation, demand)
-    grid_import = np.maximum(0, demand - generation)
-    grid_export = np.maximum(0, generation - demand)
-    battery_charge = np.zeros(len(index))
-    battery_discharge = np.zeros(len(index))
-    battery_soc = np.zeros(len(index))
-
-    def _series(values: np.ndarray, name: str) -> pd.Series:
-        return pd.Series(values, index=index, name=name)
-
-    return SimulationResults(
-        generation=_series(generation, "generation_kw"),
-        demand=_series(demand, "demand_kw"),
-        self_consumption=_series(self_consumption, "self_consumption_kw"),
-        battery_charge=_series(battery_charge, "battery_charge_kw"),
-        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
-        battery_soc=_series(battery_soc, "battery_soc_kwh"),
-        grid_import=_series(grid_import, "grid_import_kw"),
-        grid_export=_series(grid_export, "grid_export_kw"),
-        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
-        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
-        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
-        strategy_name="self_consumption",
-    )
-
-
 def _store_home_run(
     storage: RunStorage, run_id: str, config: HomeConfig, name: str | None = None
 ) -> None:
     """Save a one-day home run of *config* through RunStorage, as a finished job does."""
-    results = _make_sim_results(days=1)
-    storage.save_home_run(
-        run_id=run_id,
-        config=config,
-        results=results,
-        summary=calculate_summary(results),
-        name=name,
-    )
+    store_home_run(storage, run_id, config, make_sinusoidal_sim_results(days=1), name=name)
 
 
 def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:
     """Save a one-day fleet run of *home_configs* through RunStorage, as a finished job does."""
-    fleet_results = FleetResults(
-        per_home_results=[_make_sim_results(days=1) for _ in home_configs],
-        home_configs=home_configs,
-    )
-    storage.save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet_results,
-        fleet_summary=calculate_fleet_summary(fleet_results),
-        per_home_summaries=[calculate_summary(r) for r in fleet_results.per_home_results],
+    store_fleet_run(
+        storage,
+        run_id,
+        FleetResults(
+            per_home_results=[make_sinusoidal_sim_results(days=1) for _ in home_configs],
+            home_configs=home_configs,
+        ),
     )
 
 
 class TestFleetCSVExport:
     """Tests for fleet CSV export containing aggregate data."""
 
-    def _save_fleet_run(self, app: Flask, run_id: str, n_homes: int = 3) -> None:
+    def _save_fleet_run(self, storage: RunStorage, run_id: str, n_homes: int = 3) -> None:
         """Save a fleet run with multiple homes to storage for testing.
 
         Each home gets different generation/demand to verify aggregation.
         """
-        from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-        from solar_challenge.home import HomeConfig, calculate_summary, SummaryStatistics
-        from solar_challenge.pv import PVConfig
-        from solar_challenge.load import LoadConfig
-
         per_home_results = []
         home_configs = []
-        per_home_summaries = []
 
         for i in range(n_homes):
-            # Each home has different generation scale to make aggregation testable
-            gen_scale = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
-            demand_val = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
+            # Each home has a different peak generation to make aggregation testable
+            peak_generation_kw = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
+            demand_kw = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
 
-            results = _make_sim_results(days=1, gen_scale=gen_scale, demand_val=demand_val)
+            results = make_sinusoidal_sim_results(
+                days=1, peak_generation_kw=peak_generation_kw, demand_kw=demand_kw
+            )
             per_home_results.append(results)
 
             config = HomeConfig(
-                pv_config=PVConfig(capacity_kw=gen_scale),
+                pv_config=PVConfig(capacity_kw=peak_generation_kw),
                 load_config=LoadConfig(annual_consumption_kwh=3000 + i * 500),
                 name=f"Home {i + 1}",
             )
             home_configs.append(config)
-            per_home_summaries.append(calculate_summary(results))
 
-        fleet_results = FleetResults(
-            per_home_results=per_home_results,
-            home_configs=home_configs,
+        store_fleet_run(
+            storage,
+            run_id,
+            FleetResults(per_home_results=per_home_results, home_configs=home_configs),
+            name="Test Fleet",
         )
-        fleet_summary = calculate_fleet_summary(fleet_results)
 
-        with app.app_context():
-            storage = RunStorage(
-                db_path=app.config["DATABASE"],
-                data_dir=app.config["DATA_DIR"],
-            )
-            storage.save_fleet_run(
-                run_id=run_id,
-                fleet_results=fleet_results,
-                fleet_summary=fleet_summary,
-                per_home_summaries=per_home_summaries,
-                name="Test Fleet",
-            )
-
-    def test_fleet_csv_contains_aggregate_data(self, app: Flask, client: FlaskClient) -> None:
+    def test_fleet_csv_contains_aggregate_data(self, storage: RunStorage, client: FlaskClient) -> None:
         """Test that fleet CSV export contains aggregated data from all homes, not just the first."""
         run_id = str(uuid.uuid4())
-        self._save_fleet_run(app, run_id, n_homes=3)
+        self._save_fleet_run(storage, run_id, n_homes=3)
 
         response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
@@ -794,9 +899,9 @@ class TestFleetCSVExport:
         assert "demand_kw" in df.columns
 
         # Aggregate generation should be the SUM of all homes.
-        # Each home has different gen_scale (2.0, 3.0, 4.0), so the aggregate
+        # Each home has a different peak_generation_kw (2.0, 3.0, 4.0), so the aggregate
         # maximum should be higher than any single home's max.
-        # A single home with gen_scale=4.0 would have max ~4.0 kW.
+        # A single home with peak_generation_kw=4.0 would have max ~4.0 kW.
         # The aggregate of 3 homes should have max ~(2+3+4) = ~9 kW.
         max_gen = df["generation_kw"].max()
         assert max_gen > 5.0, (
@@ -804,10 +909,10 @@ class TestFleetCSVExport:
             "CSV may contain only first home, not the aggregate"
         )
 
-    def test_fleet_csv_has_expected_columns(self, app: Flask, client: FlaskClient) -> None:
+    def test_fleet_csv_has_expected_columns(self, storage: RunStorage, client: FlaskClient) -> None:
         """Test fleet CSV export has the expected aggregate columns."""
         run_id = str(uuid.uuid4())
-        self._save_fleet_run(app, run_id, n_homes=2)
+        self._save_fleet_run(storage, run_id, n_homes=2)
 
         response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
@@ -824,36 +929,20 @@ class TestContentDispositionHeader:
     """Tests for Content-Disposition header quoting in export endpoints."""
 
     def test_csv_content_disposition_has_quoted_filename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Test CSV export Content-Disposition header has quotes around the filename."""
         run_id = str(uuid.uuid4())
-
-        # Save a simple home run for export
-        from solar_challenge.home import HomeConfig, calculate_summary
-        from solar_challenge.pv import PVConfig
-        from solar_challenge.load import LoadConfig
-
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3500),
+        _store_home_run(
+            storage,
+            run_id,
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3500),
+                name="Quote Test",
+            ),
             name="Quote Test",
         )
-        results = _make_sim_results(days=1)
-        summary = calculate_summary(results)
-
-        with app.app_context():
-            storage = RunStorage(
-                db_path=app.config["DATABASE"],
-                data_dir=app.config["DATA_DIR"],
-            )
-            storage.save_home_run(
-                run_id=run_id,
-                config=config,
-                results=results,
-                summary=summary,
-                name="Quote Test",
-            )
 
         response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
@@ -873,7 +962,7 @@ class TestContentDispositionHeader:
         _store_home_run(
             storage,
             run_id,
-            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            _A_HOME,
             name="YAML Quote Test",
         )
 
@@ -885,6 +974,50 @@ class TestContentDispositionHeader:
         assert 'filename="' in cd, (
             f"Content-Disposition filename is not properly quoted: {cd}"
         )
+
+
+def _store_home_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
+    """Save a home run of _A_HOME as *run_id*, and return the path of its results page."""
+    _store_home_run(storage, run_id, _A_HOME)
+    return f"/results/home/{run_id}"
+
+
+def _store_fleet_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
+    """Save a fleet run of two _A_HOMEs as *run_id*, and return the path of its results page."""
+    _store_fleet_run(storage, run_id, [_A_HOME, _A_HOME])
+    return f"/results/fleet/{run_id}"
+
+
+class TestResultsPageExportLinks:
+    """Each results page links to its run's CSV and YAML exports at /api/history/runs/<run_id>/export/*, the URLs that serve them."""
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    @pytest.mark.parametrize(
+        "store_run_and_return_its_results_page",
+        [
+            pytest.param(_store_home_run_and_return_its_results_page, id="home"),
+            pytest.param(_store_fleet_run_and_return_its_results_page, id="fleet"),
+        ],
+    )
+    def test_the_results_page_links_to_each_export_of_its_run(
+        self,
+        storage: RunStorage,
+        client: FlaskClient,
+        store_run_and_return_its_results_page: Callable[[RunStorage, str], str],
+        export: str,
+    ) -> None:
+        """A stored run's results page, home or fleet, has exactly one link to that run's export at /api/history/runs/<run_id>/export/<export>."""
+        run_id = "stored-run"
+        results_page = store_run_and_return_its_results_page(storage, run_id)
+
+        response = client.get(results_page)
+
+        assert response.status_code == 200
+        assert element_count(
+            response.get_data(as_text=True),
+            "a",
+            {"href": f"/api/history/runs/{run_id}/export/{export}"},
+        ) == 1
 
 
 class TestCompareWithoutIDs:

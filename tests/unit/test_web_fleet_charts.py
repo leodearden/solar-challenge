@@ -9,14 +9,24 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-from solar_challenge.home import calculate_summary
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.web.charts import (
+    fleet_aggregate_timeline,
+    fleet_box_plots,
+    fleet_distribution_histograms,
+    fleet_grid_impact,
+    fleet_heatmap,
+    power_flow_timeline,
+)
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
-from tests._finance_builders import make_fleet_results
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._html_page import headings, texts, texts_after
+from tests._plotly_figure import traces, traces_by_name
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run
 
 
 @pytest.fixture
@@ -34,267 +44,158 @@ def client(app: Flask) -> FlaskClient:
 def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:
     """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
     run_id = str(uuid.uuid4())
-    RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]).save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet,
-        fleet_summary=calculate_fleet_summary(fleet),
-        per_home_summaries=[calculate_summary(results) for results in fleet.per_home_results],
+    store_fleet_run(
+        RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]),
+        run_id,
+        fleet,
         name=name,
     )
     return run_id
 
 
+def _one_day_homes(n_homes: int) -> list[SimulationResults]:
+    """The first *n_homes* of two one-day homes: a net exporter, then a net importer.
+
+    Every flow the fleet charts draw is non-zero in both homes, so adding the second changes each of the fleet's totals.
+    """
+    net_exporter = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+    net_importer = make_sim_results(self_kwh=6.0, export_kwh=2.0, import_kwh=40.0, days=1)
+    return [net_exporter, net_importer][:n_homes]
+
+
 class TestFleetChartFunctions:
-    """Tests for the fleet-specific chart functions in charts.py."""
+    """Tests for the fleet-specific chart functions in charts.py.
 
-    def test_fleet_heatmap_returns_json(self) -> None:
-        """Test fleet_heatmap returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_heatmap
+    The per-home charts' summaries are calculate_summary's, so renaming a field a chart reads fails their tests.
+    """
 
-        summaries = [
-            {
-                "total_generation_kwh": 100,
-                "total_demand_kwh": 80,
-                "total_self_consumption_kwh": 60,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 40,
-            }
-            for _ in range(5)
+    def test_fleet_heatmap_rows_are_each_homes_energy_totals(self) -> None:
+        """Each row is one home's five energy totals, in the order the columns name them."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
+
+        heatmap = traces(fleet_heatmap(summaries))[0]
+
+        assert heatmap["x"] == ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
+        assert heatmap["y"] == ["Home 1", "Home 2"]
+        assert heatmap["z"] == [[72.0, 45.0, 18.0, 27.0, 54.0], [8.0, 46.0, 6.0, 40.0, 2.0]]
+
+    def test_fleet_heatmap_draws_only_the_first_50_homes(self) -> None:
+        """Of 51 homes, the heatmap draws the first 50, in order."""
+        summaries = [calculate_summary(make_sim_results(self_kwh=float(n), days=1)) for n in range(1, 52)]
+
+        heatmap = traces(fleet_heatmap(summaries))[0]
+
+        assert heatmap["y"] == [f"Home {n}" for n in range(1, 51)]
+        assert [row[2] for row in heatmap["z"]] == [float(n) for n in range(1, 51)]
+
+    def test_fleet_heatmap_rounds_each_total_to_two_decimal_places(self) -> None:
+        """Each cell is the home's total rounded to 2 dp; the box plots draw the same totals unrounded, so the rounding is the heatmap's own."""
+        home = make_sim_results(self_kwh=18.456, export_kwh=54.321, import_kwh=27.788, days=1)
+        summaries = [calculate_summary(home)]
+
+        heatmap = traces(fleet_heatmap(summaries))[0]
+        boxes = traces(fleet_box_plots(summaries))
+
+        assert [box["y"][0] for box in boxes] == pytest.approx([72.777, 46.244, 18.456, 27.788, 54.321])
+        assert heatmap["z"] == [[72.78, 46.24, 18.46, 27.79, 54.32]]
+
+    def test_fleet_box_plots_draw_each_energy_total_across_the_homes(self) -> None:
+        """Each box is one energy total, drawn from each home's summary in the homes' order."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
+
+        data = traces(fleet_box_plots(summaries))
+
+        assert [(trace["name"], trace["y"]) for trace in data] == [
+            ("Generation", [72.0, 8.0]),
+            ("Demand", [45.0, 46.0]),
+            ("Self-Consumption", [18.0, 6.0]),
+            ("Grid Import", [27.0, 40.0]),
+            ("Grid Export", [54.0, 2.0]),
         ]
-        result = fleet_heatmap(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
 
-    def test_fleet_heatmap_limits_to_50_homes(self) -> None:
-        """Test fleet_heatmap limits display to first 50 homes."""
-        from solar_challenge.web.charts import fleet_heatmap
+    def test_fleet_distribution_histograms_draw_each_homes_generation_and_ratios(self) -> None:
+        """The three histograms draw each home's generation, self-consumption ratio and grid dependency ratio."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
 
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i,
-                "total_demand_kwh": 80,
-                "total_self_consumption_kwh": 60,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 40,
-            }
-            for i in range(70)
+        data = traces(fleet_distribution_histograms(summaries))
+
+        assert [(trace["name"], trace["x"]) for trace in data] == [
+            ("Generation", [72.0, 8.0]),
+            ("Self-Consumption", [18 / 72, 6 / 8]),
+            ("Grid Dependency", [27 / 45, 40 / 46]),
         ]
-        result = fleet_heatmap(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        # The heatmap z data should have at most 50 rows
-        z_data = parsed["data"][0]["z"]
-        assert len(z_data) <= 50
 
-    def test_fleet_box_plots_returns_json(self) -> None:
-        """Test fleet_box_plots returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_box_plots
+    @pytest.mark.parametrize("n_homes", [1, 2], ids=["one-home", "two-homes"])
+    def test_fleet_aggregate_timeline_draws_each_flow_summed_across_the_fleets_homes(
+        self, n_homes: int
+    ) -> None:
+        """Each trace is that flow summed across the fleet's homes."""
+        homes = _one_day_homes(n_homes)
 
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i * 10,
-                "total_demand_kwh": 80 + i * 5,
-                "total_self_consumption_kwh": 60 + i * 3,
-                "total_grid_import_kwh": 20 + i * 2,
-                "total_grid_export_kwh": 40 + i * 5,
-            }
-            for i in range(10)
-        ]
-        result = fleet_box_plots(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
-        # Should have 5 box traces (one per metric)
-        assert len(parsed["data"]) == 5
+        drawn = {
+            name: trace["y"]
+            for name, trace in traces_by_name(fleet_aggregate_timeline(make_fleet_results_of(homes))).items()
+        }
 
-    def test_fleet_distribution_histograms_returns_json(self) -> None:
-        """Test fleet_distribution_histograms returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_distribution_histograms
+        assert drawn == {
+            "Generation": sum(home.generation for home in homes).round(4).tolist(),
+            "Demand": sum(home.demand for home in homes).round(4).tolist(),
+            "Self-Consumption": sum(home.self_consumption for home in homes).round(4).tolist(),
+            "Grid Import": sum(home.grid_import for home in homes).round(4).tolist(),
+            "Grid Export": sum(home.grid_export for home in homes).round(4).tolist(),
+        }
 
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i * 10,
-                "self_consumption_ratio": 0.5 + i * 0.02,
-                "grid_dependency_ratio": 0.3 + i * 0.01,
-            }
-            for i in range(20)
-        ]
-        result = fleet_distribution_histograms(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
-        # Should have 3 histogram traces
-        assert len(parsed["data"]) == 3
+    def test_fleet_aggregate_timeline_of_a_one_home_fleet_is_that_homes_power_flow_timeline(
+        self,
+    ) -> None:
+        """A one-home fleet's totals are its home's flows, so its timeline is the home's power-flow timeline under the fleet's own title."""
+        home = make_sim_results(days=365)
 
-    def test_fleet_aggregate_timeline_returns_json(self) -> None:
-        """Test fleet_aggregate_timeline returns valid JSON."""
-        import numpy as np
-        import pandas as pd
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import fleet_aggregate_timeline
+        home_figure = json.loads(power_flow_timeline(home))
+        fleet_figure = json.loads(fleet_aggregate_timeline(make_fleet_results_of([home])))
 
-        index = pd.date_range("2024-06-01", periods=1440, freq="min", tz="Europe/London")
-        hours = np.arange(len(index)) / 60.0
-        generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-        demand = np.full(len(index), 0.5)
-        self_consumption = np.minimum(generation, demand)
-        grid_import = np.maximum(0, demand - generation)
-        grid_export = np.maximum(0, generation - demand)
-        zeros = np.zeros(len(index))
+        titles = (home_figure["layout"].pop("title"), fleet_figure["layout"].pop("title"))
+        assert titles == ({"text": "Power Flow Timeline"}, {"text": "Fleet Aggregate Power Flow"})
+        assert fleet_figure == home_figure
 
-        def _s(v: np.ndarray, n: str) -> pd.Series:
-            return pd.Series(v, index=index, name=n)
+    @pytest.mark.parametrize("n_homes", [1, 2], ids=["one-home", "two-homes"])
+    def test_fleet_grid_impact_draws_the_fleets_summed_import_less_its_summed_export(
+        self, n_homes: int
+    ) -> None:
+        """The net is the fleet's summed import less its summed export, so the two-home fleet draws an import although its first home alone exports."""
+        homes = _one_day_homes(n_homes)
+        net = sum(home.grid_import for home in homes) - sum(home.grid_export for home in homes)
 
-        results = SimulationResults(
-            generation=_s(generation, "generation_kw"),
-            demand=_s(demand, "demand_kw"),
-            self_consumption=_s(self_consumption, "self_consumption_kw"),
-            battery_charge=_s(zeros, "battery_charge_kw"),
-            battery_discharge=_s(zeros, "battery_discharge_kw"),
-            battery_soc=_s(zeros, "battery_soc_kwh"),
-            grid_import=_s(grid_import, "grid_import_kw"),
-            grid_export=_s(grid_export, "grid_export_kw"),
-            import_cost=_s(zeros, "import_cost_gbp"),
-            export_revenue=_s(zeros, "export_revenue_gbp"),
-            tariff_rate=_s(zeros, "tariff_rate_per_kwh"),
-            strategy_name="self_consumption",
-        )
+        drawn = {
+            name: trace["y"]
+            for name, trace in traces_by_name(fleet_grid_impact(make_fleet_results_of(homes))).items()
+        }
 
-        output = fleet_aggregate_timeline(results)
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        assert "data" in parsed
-
-    def test_fleet_grid_impact_returns_json(self) -> None:
-        """Test fleet_grid_impact returns valid JSON."""
-        import numpy as np
-        import pandas as pd
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import fleet_grid_impact
-
-        index = pd.date_range("2024-06-01", periods=1440, freq="min", tz="Europe/London")
-        hours = np.arange(len(index)) / 60.0
-        generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-        demand = np.full(len(index), 0.5)
-        self_consumption = np.minimum(generation, demand)
-        grid_import = np.maximum(0, demand - generation)
-        grid_export = np.maximum(0, generation - demand)
-        zeros = np.zeros(len(index))
-
-        def _s(v: np.ndarray, n: str) -> pd.Series:
-            return pd.Series(v, index=index, name=n)
-
-        results = SimulationResults(
-            generation=_s(generation, "generation_kw"),
-            demand=_s(demand, "demand_kw"),
-            self_consumption=_s(self_consumption, "self_consumption_kw"),
-            battery_charge=_s(zeros, "battery_charge_kw"),
-            battery_discharge=_s(zeros, "battery_discharge_kw"),
-            battery_soc=_s(zeros, "battery_soc_kwh"),
-            grid_import=_s(grid_import, "grid_import_kw"),
-            grid_export=_s(grid_export, "grid_export_kw"),
-            import_cost=_s(zeros, "import_cost_gbp"),
-            export_revenue=_s(zeros, "export_revenue_gbp"),
-            tariff_rate=_s(zeros, "tariff_rate_per_kwh"),
-            strategy_name="self_consumption",
-        )
-
-        output = fleet_grid_impact(results)
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        assert "data" in parsed
-        # Should have two traces: import and export
-        assert len(parsed["data"]) == 2
-
-
-class TestFinancialBreakdownPricing:
-    """Tests that financial_breakdown uses engine-priced series, not hardcoded rates."""
-
-    def test_uses_engine_priced_series(self) -> None:
-        """financial_breakdown must aggregate import_cost/export_revenue series directly."""
-        import numpy as np
-        import pandas as pd
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import financial_breakdown
-
-        # ~2 days at 1-min resolution
-        index = pd.date_range(
-            "2024-06-01", periods=2 * 24 * 60, freq="min", tz="Europe/London"
-        )
-        n = len(index)
-        hours = np.arange(n) / 60.0
-
-        # Sinusoidal generation (3 kW peak), flat 0.5 kW demand
-        generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-        demand = np.full(n, 0.5)
-        self_consumption = np.minimum(generation, demand)
-        grid_import = np.maximum(0, demand - generation)
-        grid_export = np.maximum(0, generation - demand)
-
-        # Engine-priced series: DELIBERATELY inconsistent with hardcoded 0.245/0.15
-        # import: 0.30 GBP/kWh  (kW / 60 * rate = per-minute GBP)
-        # export: 0.05 GBP/kWh  (realistic SEG, ~3x smaller than hardcoded 0.15)
-        engine_import_cost = grid_import / 60 * 0.30
-        engine_export_revenue = grid_export / 60 * 0.05
-
-        def _s(v: np.ndarray, name: str) -> pd.Series:
-            return pd.Series(v, index=index, name=name)
-
-        zeros = np.zeros(n)
-        results = SimulationResults(
-            generation=_s(generation, "generation_kw"),
-            demand=_s(demand, "demand_kw"),
-            self_consumption=_s(self_consumption, "self_consumption_kw"),
-            battery_charge=_s(zeros, "battery_charge_kw"),
-            battery_discharge=_s(zeros, "battery_discharge_kw"),
-            battery_soc=_s(zeros, "battery_soc_kwh"),
-            grid_import=_s(grid_import, "grid_import_kw"),
-            grid_export=_s(grid_export, "grid_export_kw"),
-            import_cost=_s(engine_import_cost, "import_cost_gbp"),
-            export_revenue=_s(engine_export_revenue, "export_revenue_gbp"),
-            tariff_rate=_s(zeros, "tariff_rate_per_kwh"),
-            strategy_name="self_consumption",
-        )
-
-        output = financial_breakdown(results)
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        traces = {t["name"]: t for t in parsed["data"]}
-
-        # Expected daily totals from engine series (NO /60 division — already per-minute GBP)
-        expected_revenue = results.export_revenue.resample("D").sum().round(2)
-        expected_cost = results.import_cost.resample("D").sum().round(2)
-
-        # (1) Chart totals must match engine series daily sums
-        assert sum(traces["Daily Revenue"]["y"]) == pytest.approx(
-            expected_revenue.sum(), abs=0.02
-        ), "Daily Revenue total must come from engine export_revenue series"
-        assert sum(traces["Daily Cost"]["y"]) == pytest.approx(
-            expected_cost.sum(), abs=0.02
-        ), "Daily Cost total must come from engine import_cost series"
-
-        # (2) Behavioral guard: chart follows the engine's 0.05 export rate, NOT
-        # the old hardcoded 0.15.  With engine_export_revenue = grid_export/60*0.05,
-        # the chart total must be ~3x BELOW grid_export_kwh * 0.15.
-        total_grid_export_kwh = results.grid_export.sum() / 60
-        revenue_total = sum(traces["Daily Revenue"]["y"])
-        assert revenue_total != pytest.approx(
-            total_grid_export_kwh * 0.15, rel=0.1
-        ), "Daily Revenue must not match old hardcoded 0.15 export rate"
-        assert revenue_total < total_grid_export_kwh * 0.15 * 0.5, (
-            "Daily Revenue must be substantially below the old 0.15 rate "
-            "(engine uses 0.05 GBP/kWh, ~3x smaller)"
-        )
+        assert drawn == {
+            "Grid Import": net.clip(lower=0).round(4).tolist(),
+            "Grid Export": net.clip(upper=0).round(4).tolist(),
+        }
 
 
 class TestFleetResultsRoute:
     """Tests for the GET /results/fleet/<run_id> route."""
 
-    def test_fleet_results_unknown_run_redirects(self, client: FlaskClient) -> None:
-        """Test accessing fleet results for a non-existent run redirects."""
-        response = client.get("/results/fleet/nonexistent-id")
-        assert response.status_code in (302, 404)
+    @pytest.mark.parametrize(
+        "run_id",
+        [
+            pytest.param("nonexistent-id", id="an-id-no-run-has"),
+            pytest.param("bad.id", id="an-id-the-store-refuses"),
+        ],
+    )
+    def test_fleet_results_unknown_run_redirects(self, client: FlaskClient, run_id: str) -> None:
+        """The page of an id no run has redirects to the dashboard, which flashes Fleet run not found.
+
+        'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
+        """
+        response = client.get(f"/results/fleet/{run_id}", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+        assert "Fleet run not found." in texts(response.get_data(as_text=True))
 
     def test_fleet_results_route_exists(self, client: FlaskClient) -> None:
         """Test that the fleet results route is registered and accessible."""
@@ -332,6 +233,47 @@ class TestFleetResultsRoute:
             label: texts_after(page, label, len(card))
             for label, card in expected_cards.items()
         } == expected_cards
+
+    def test_fleet_results_stat_cards_round_each_saved_total_and_ratio_once(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each stat card rounds the saved fleet summary's value once, to the card's own precision.
+
+        Each of the two homes self-consumes 5 kWh, exports 4.523 kWh and imports 2.8745 kWh
+        in its one day. Each card below sits where rounding its value to 2 dp first (a ratio
+        to 4 dp) would move the card's last digit: the fleet's 9.046 kWh export would show 9.1.
+        """
+        run_id = _save_fleet_run(
+            app,
+            make_fleet_results(n_homes=2, self_kwh=5.0, export_kwh=4.523, import_kwh=2.8745, days=1),
+        )
+        response = client.get(f"/results/fleet/{run_id}")
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        expected_cards = {
+            "Total Generation": ["19.0", "kWh"],
+            "Total Demand": ["15.7", "kWh"],
+            "Grid Import": ["5.7", "kWh"],
+            "Grid Export": ["9.0", "kWh"],
+            "Fleet Self-Consumption": ["53", "%"],
+            "Fleet Grid Dependency": ["37", "%"],
+        }
+        assert {
+            label: texts_after(page, label, len(card))
+            for label, card in expected_cards.items()
+        } == expected_cards
+
+    def test_fleet_results_page_header_reads_the_saved_fleets_home_count_and_days(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """The header under the title reads the saved fleet's number of homes and simulated days."""
+        run_id = _save_fleet_run(app, make_fleet_results(n_homes=3, days=2))
+
+        response = client.get(f"/results/fleet/{run_id}")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        assert f"3 homes — 2-day simulation — Run ID: {run_id[:8]}…" in texts(page)
 
     def test_fleet_results_page_is_titled_with_the_name_its_run_was_saved_under(
         self, app: Flask, client: FlaskClient

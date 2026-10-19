@@ -19,27 +19,24 @@ import numpy as np
 import pytest
 from scipy.interpolate import CubicSpline, PchipInterpolator  # type: ignore[import-untyped]
 
-from solar_challenge.finance import project_multi_year
+from solar_challenge.finance import MultiYearCurve, YearPoint, project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 if TYPE_CHECKING:
     import pandas as pd
 
-    from solar_challenge.finance import MultiYearCurve, YearPoint
     from solar_challenge.fleet import FleetConfig, FleetResults
 
 
 class TestYearPoint:
     """YearPoint frozen dataclass construction and validation."""
 
-    def _make_valid(self) -> "YearPoint":
-        from solar_challenge.finance import YearPoint
-
+    def _make_valid(self) -> YearPoint:
         return YearPoint(
             year=5,
             pv_soh=0.975,
             battery_soh=0.900,
-            fleet_self_consumption_kwh=10_000.0,
+            fleet_billed_own_use_kwh=10_000.0,
             fleet_export_kwh=3_000.0,
             fleet_import_kwh=5_000.0,
             fleet_revenue_gbp=1_200.0,
@@ -47,35 +44,29 @@ class TestYearPoint:
 
     def test_construction_valid(self) -> None:
         """Valid YearPoint constructs without errors."""
-        from solar_challenge.finance import YearPoint
-
         yp = self._make_valid()
         assert yp.year == 5
         assert yp.pv_soh == pytest.approx(0.975)
         assert yp.battery_soh == pytest.approx(0.900)
-        assert yp.fleet_self_consumption_kwh == pytest.approx(10_000.0)
+        assert yp.fleet_billed_own_use_kwh == pytest.approx(10_000.0)
         assert yp.fleet_export_kwh == pytest.approx(3_000.0)
         assert yp.fleet_import_kwh == pytest.approx(5_000.0)
         assert yp.fleet_revenue_gbp == pytest.approx(1_200.0)
 
     def test_frozen(self) -> None:
         """Assigning a field raises FrozenInstanceError."""
-        from solar_challenge.finance import YearPoint
-
         yp = self._make_valid()
         with pytest.raises(dataclasses.FrozenInstanceError):
             yp.year = 99  # type: ignore[misc]
 
     def test_pv_soh_out_of_range_low(self) -> None:
         """pv_soh < 0 raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="pv_soh"):
             YearPoint(
                 year=0,
                 pv_soh=-0.01,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
@@ -83,14 +74,12 @@ class TestYearPoint:
 
     def test_pv_soh_out_of_range_high(self) -> None:
         """pv_soh > 1 raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="pv_soh"):
             YearPoint(
                 year=0,
                 pv_soh=1.01,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
@@ -98,59 +87,68 @@ class TestYearPoint:
 
     def test_battery_soh_out_of_range(self) -> None:
         """battery_soh outside [0,1] raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="battery_soh"):
             YearPoint(
                 year=0,
                 pv_soh=1.0,
                 battery_soh=1.05,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
             )
 
-    def test_negative_year_raises(self) -> None:
-        """year < 0 raises ValueError."""
-        from solar_challenge.finance import YearPoint
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, 2.5, True, -1])
+    def test_a_year_that_is_negative_or_not_a_whole_number_is_refused_naming_it(
+        self, value: float
+    ) -> None:
+        """A year that is negative, NaN, infinite, fractional or a bool is refused, naming year, that it must be a whole number >= 0, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), year=value)
 
-        with pytest.raises(ValueError, match="year"):
-            YearPoint(
-                year=-1,
-                pv_soh=1.0,
-                battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
-                fleet_export_kwh=0.0,
-                fleet_import_kwh=0.0,
-                fleet_revenue_gbp=0.0,
-            )
+        assert str(exc_info.value) == f"year must be a whole number >= 0, got {value!r}"
 
-    def test_negative_energy_raises(self) -> None:
-        """Negative fleet energies raise ValueError."""
-        from solar_challenge.finance import YearPoint
+    @pytest.mark.parametrize("value", [2.0, np.int64(2)], ids=["float", "numpy_int64"])
+    def test_a_whole_number_year_is_held_as_the_int_it_equals(self, value: object) -> None:
+        """A whole-number float or a numpy integer year is held as the plain int it equals, as year's annotation says."""
+        year = dataclasses.replace(self._make_valid(), year=value).year
 
-        with pytest.raises(ValueError):
-            YearPoint(
-                year=0,
-                pv_soh=1.0,
-                battery_soh=1.0,
-                fleet_self_consumption_kwh=-1.0,
-                fleet_export_kwh=0.0,
-                fleet_import_kwh=0.0,
-                fleet_revenue_gbp=0.0,
-            )
+        assert year == 2
+        assert type(year) is int
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -1.0])
+    @pytest.mark.parametrize(
+        "field", ["fleet_billed_own_use_kwh", "fleet_export_kwh", "fleet_import_kwh"]
+    )
+    def test_a_fleet_energy_that_is_negative_or_not_finite_is_refused_naming_it(
+        self, field: str, value: float
+    ) -> None:
+        """A negative, NaN or infinite fleet energy is refused, naming the field, that it must be >= 0 and finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), **{field: value})
+
+        assert str(exc_info.value) == f"{field} must be >= 0 and finite, got {value!r}"
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_a_fleet_revenue_that_is_not_finite_is_refused_naming_it(self, value: float) -> None:
+        """A NaN or infinite fleet revenue is refused, naming the field, that it must be finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), fleet_revenue_gbp=value)
+
+        assert str(exc_info.value) == f"fleet_revenue_gbp must be finite, got {value!r}"
+
+    def test_a_negative_fleet_revenue_is_accepted(self) -> None:
+        """A negative revenue is accepted: the cost-recovery solve rebuilds each year's revenue at trial own-use rates, which can fall below zero."""
+        assert dataclasses.replace(self._make_valid(), fleet_revenue_gbp=-1_000.0).fleet_revenue_gbp == -1_000.0
 
     def test_boundary_soh_values_valid(self) -> None:
         """SOH == 0 or 1 is valid (exact boundary)."""
-        from solar_challenge.finance import YearPoint
-
         # Should not raise
         yp0 = YearPoint(
             year=0,
             pv_soh=0.0,
             battery_soh=0.0,
-            fleet_self_consumption_kwh=0.0,
+            fleet_billed_own_use_kwh=0.0,
             fleet_export_kwh=0.0,
             fleet_import_kwh=0.0,
             fleet_revenue_gbp=0.0,
@@ -159,7 +157,7 @@ class TestYearPoint:
             year=0,
             pv_soh=1.0,
             battery_soh=1.0,
-            fleet_self_consumption_kwh=0.0,
+            fleet_billed_own_use_kwh=0.0,
             fleet_export_kwh=0.0,
             fleet_import_kwh=0.0,
             fleet_revenue_gbp=0.0,
@@ -171,22 +169,18 @@ class TestYearPoint:
 class TestMultiYearCurve:
     """MultiYearCurve frozen dataclass construction and validation."""
 
-    def _make_point(self, year: int, val: float = 1.0) -> "YearPoint":
-        from solar_challenge.finance import YearPoint
-
+    def _make_point(self, year: int, val: float = 1.0) -> YearPoint:
         return YearPoint(
             year=year,
             pv_soh=max(0.0, 1.0 - year * 0.005),
             battery_soh=max(0.0, 1.0 - year * 0.01),
-            fleet_self_consumption_kwh=val,
+            fleet_billed_own_use_kwh=val,
             fleet_export_kwh=val * 0.3,
             fleet_import_kwh=val * 0.5,
             fleet_revenue_gbp=val * 0.1,
         )
 
-    def _make_valid(self) -> "MultiYearCurve":
-        from solar_challenge.finance import MultiYearCurve
-
+    def _make_valid(self) -> MultiYearCurve:
         points = tuple(self._make_point(y) for y in range(25))
         return MultiYearCurve(
             points=points,
@@ -196,8 +190,6 @@ class TestMultiYearCurve:
 
     def test_construction_valid(self) -> None:
         """Valid MultiYearCurve constructs and exposes all §3.1 fields."""
-        from solar_challenge.finance import MultiYearCurve
-
         mc = self._make_valid()
         assert len(mc.points) == 25
         assert mc.sampled_ages == (0, 12, 24)
@@ -215,16 +207,12 @@ class TestMultiYearCurve:
 
     def test_frozen(self) -> None:
         """Assigning a field raises FrozenInstanceError."""
-        from solar_challenge.finance import MultiYearCurve
-
         mc = self._make_valid()
         with pytest.raises(dataclasses.FrozenInstanceError):
             mc.interp_error_estimate = 99.0  # type: ignore[misc]
 
     def test_empty_points_raises(self) -> None:
         """Empty points tuple raises ValueError."""
-        from solar_challenge.finance import MultiYearCurve
-
         with pytest.raises(ValueError, match="points"):
             MultiYearCurve(
                 points=(),
@@ -232,22 +220,18 @@ class TestMultiYearCurve:
                 interp_error_estimate=0.0,
             )
 
-    def test_negative_interp_error_raises(self) -> None:
-        """Negative interp_error_estimate raises ValueError."""
-        from solar_challenge.finance import MultiYearCurve
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.1])
+    def test_an_interp_error_estimate_that_is_negative_or_not_finite_is_refused_naming_it(
+        self, value: float
+    ) -> None:
+        """A negative, NaN or infinite interp_error_estimate is refused, naming the field, that it must be >= 0 and finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), interp_error_estimate=value)
 
-        points = tuple(self._make_point(y) for y in range(25))
-        with pytest.raises(ValueError, match="interp_error_estimate"):
-            MultiYearCurve(
-                points=points,
-                sampled_ages=(0, 12, 24),
-                interp_error_estimate=-0.1,
-            )
+        assert str(exc_info.value) == f"interp_error_estimate must be >= 0 and finite, got {value!r}"
 
     def test_empty_sampled_ages_raises(self) -> None:
         """Empty sampled_ages raises ValueError."""
-        from solar_challenge.finance import MultiYearCurve
-
         points = tuple(self._make_point(y) for y in range(25))
         with pytest.raises(ValueError, match="sampled_ages"):
             MultiYearCurve(
@@ -301,7 +285,7 @@ class TestPerYearInterpolation:
             "the fixture must make PCHIP differ from straight lines between the sampled ages, "
             "or this test cannot tell interpolants apart"
         )
-        assert [point.fleet_self_consumption_kwh for point in curve.points] == pytest.approx(
+        assert [point.fleet_billed_own_use_kwh for point in curve.points] == pytest.approx(
             expected.tolist(), rel=1e-9
         )
 
@@ -315,7 +299,7 @@ class TestPerYearInterpolation:
             "a free cubic must overshoot these sampled values, or this test cannot tell "
             "a shape-preserving interpolant from one that is not"
         )
-        per_year_kwh = [point.fleet_self_consumption_kwh for point in curve.points]
+        per_year_kwh = [point.fleet_billed_own_use_kwh for point in curve.points]
         tolerance_kwh = 1e-6
         rising_years = [
             year
@@ -331,6 +315,6 @@ class TestPerYearInterpolation:
         curve = _project_without_refinement(1)
 
         assert curve.sampled_ages == (0,)
-        assert [point.fleet_self_consumption_kwh for point in curve.points] == pytest.approx(
+        assert [point.fleet_billed_own_use_kwh for point in curve.points] == pytest.approx(
             [_self_consumption_kwh_at(0)]
         )

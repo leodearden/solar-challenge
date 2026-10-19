@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Energy flow calculations for PV and battery systems."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +15,7 @@ from solar_challenge.dispatch import (
     compute_grid_charge_power_kw,
 )
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
 def calculate_self_consumption(
@@ -124,7 +125,10 @@ def calculate_shortfall(
 class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 
-    All values in kWh for the timestep.
+    Every field but battery_soc is a flow: an energy the timestep moved, in kWh,
+    so never negative. Construction raises ValueError naming each flow below 0
+    or NaN, and its value. battery_soc is the state of charge after the
+    timestep, in kWh.
     """
 
     generation: float
@@ -137,6 +141,18 @@ class EnergyFlowResult:
     battery_soc: float  # SOC after this timestep
     grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
 
+    def __post_init__(self) -> None:
+        """Refuse a flow that is negative or NaN, naming each such flow and its value."""
+        refused = [f"{flow}={value!r}" for flow in _FLOWS if not (value := getattr(self, flow)) >= 0.0]
+        if refused:
+            raise ValueError(
+                "EnergyFlowResult's flows are the energies its timestep moved, so each is at least 0: "
+                f"got {', '.join(refused)}"
+            )
+
+
+_FLOWS = tuple(field.name for field in fields(EnergyFlowResult) if field.name != "battery_soc")
+
 
 def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
     """Return True if *current_rate* is below the tariff's peak rate and at or below its mean period rate.
@@ -147,7 +163,7 @@ def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
     This is the single source of truth for cheap-period classification.  Both
     :func:`simulate_timestep_tou` and :func:`_build_grid_charge_context` call
     this helper so the two dispatch paths always classify cheap vs. expensive
-    periods identically (PRD §4).
+    periods identically (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
     """
     return current_rate < tariff.peak_rate and current_rate <= tariff.mean_period_rate
 
@@ -160,7 +176,7 @@ def _build_grid_charge_context(
     """Build a GridChargeContext from a battery and tariff for the given timestamp.
 
     Uses :func:`_is_cheap_period` for cheap-period classification so both
-    dispatch paths stay in sync (PRD §4).
+    dispatch paths stay in sync.
 
     Requires battery.config.grid_charging is not None.
     """
@@ -177,6 +193,44 @@ def _build_grid_charge_context(
         max_charge_kw=battery.config.max_charge_kw,
         round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
         charge_efficiency=battery.charge_efficiency,
+    )
+
+
+def _settle_timestep(
+    *,
+    generation_kwh: float,
+    demand_kwh: float,
+    pv_charge_stored_kwh: float,
+    grid_charge_stored_kwh: float,
+    battery_discharge_kwh: float,
+    battery_soc: float,
+) -> EnergyFlowResult:
+    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
+    excess_kwh = max(0.0, generation_kwh - demand_kwh)
+    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+
+    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+
+    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
+    direct_consumption_kwh = min(generation_kwh, demand_kwh)
+    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
+
+    # Split-source grid flows, which keep validate_energy_balance closed
+    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
+    # reduces export, and grid charge adds the energy it stored to import.
+    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
+
+    return EnergyFlowResult(
+        generation=generation_kwh,
+        demand=demand_kwh,
+        self_consumption=self_consumption_kwh,
+        battery_charge=battery_charge_kwh,
+        battery_discharge=battery_discharge_kwh,
+        grid_export=grid_export_kwh,
+        grid_import=grid_import_kwh,
+        battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
     )
 
 
@@ -216,17 +270,13 @@ def simulate_timestep(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes / 60
+    duration_hours = timestep_minutes * HOURS_PER_MINUTE
 
     # Convert power to energy for this timestep
     generation_kwh = generation_kw * duration_hours
     demand_kwh = demand_kw * duration_hours
 
-    # Calculate excess and shortfall
-    excess_kwh = max(0.0, generation_kwh - demand_kwh)
-    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
-
-    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    # Initialize battery-related values (split-source tracking)
     pv_charge_stored_kwh = 0.0
     grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
@@ -256,7 +306,7 @@ def simulate_timestep(
             grid_charge_ctx=grid_charge_ctx,
         )
 
-        # Split-source charge/discharge execution (PRD §3.1)
+        # Split-source charge/discharge execution
         pv_charge_stored_kwh = (
             battery.charge(decision.charge_kw, timestep_minutes)
             if decision.charge_kw > 0 else 0.0
@@ -271,32 +321,13 @@ def simulate_timestep(
         )
         battery_soc = battery.soc_kwh
 
-    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
-
-    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    direct_consumption_kwh = min(generation_kwh, demand_kwh)
-    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
-
-    # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import.
-    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
-    # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  The grid-charge cost
-    # accounting in home.py prices stored energy directly — the same basis as
-    # grid_import_kwh — so no charge-efficiency divisor is applied.
-    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
-
-    return EnergyFlowResult(
-        generation=generation_kwh,
-        demand=demand_kwh,
-        self_consumption=self_consumption_kwh,
-        battery_charge=battery_charge_kwh,
-        battery_discharge=battery_discharge_kwh,
-        grid_export=grid_export_kwh,
-        grid_import=grid_import_kwh,
+    return _settle_timestep(
+        generation_kwh=generation_kwh,
+        demand_kwh=demand_kwh,
+        pv_charge_stored_kwh=pv_charge_stored_kwh,
+        grid_charge_stored_kwh=grid_charge_stored_kwh,
+        battery_discharge_kwh=battery_discharge_kwh,
         battery_soc=battery_soc,
-        grid_charge=grid_charge_stored_kwh,
     )
 
 
@@ -337,7 +368,7 @@ def simulate_timestep_tou(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes / 60
+    duration_hours = timestep_minutes * HOURS_PER_MINUTE
 
     # Convert power to energy for this timestep
     generation_kwh = generation_kw * duration_hours
@@ -346,14 +377,14 @@ def simulate_timestep_tou(
     # Get current tariff rate
     current_rate = tariff.get_rate(timestamp)
 
-    # Determine if current period is cheap via the shared single-source heuristic (PRD §4)
+    # Determine if current period is cheap via the shared single-source heuristic
     is_cheap_period = _is_cheap_period(tariff, current_rate)
 
     # Calculate excess and shortfall
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    # Initialize battery-related values (split-source tracking)
     pv_charge_stored_kwh = 0.0
     grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
@@ -393,32 +424,13 @@ def simulate_timestep_tou(
 
         battery_soc = battery.soc_kwh
 
-    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
-
-    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    direct_consumption_kwh = min(generation_kwh, demand_kwh)
-    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
-
-    # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import.
-    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
-    # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  The grid-charge cost
-    # accounting in home.py prices stored energy directly — the same basis as
-    # grid_import_kwh — so no charge-efficiency divisor is applied.
-    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
-
-    return EnergyFlowResult(
-        generation=generation_kwh,
-        demand=demand_kwh,
-        self_consumption=self_consumption_kwh,
-        battery_charge=battery_charge_kwh,
-        battery_discharge=battery_discharge_kwh,
-        grid_export=grid_export_kwh,
-        grid_import=grid_import_kwh,
+    return _settle_timestep(
+        generation_kwh=generation_kwh,
+        demand_kwh=demand_kwh,
+        pv_charge_stored_kwh=pv_charge_stored_kwh,
+        grid_charge_stored_kwh=grid_charge_stored_kwh,
+        battery_discharge_kwh=battery_discharge_kwh,
         battery_soc=battery_soc,
-        grid_charge=grid_charge_stored_kwh,
     )
 
 

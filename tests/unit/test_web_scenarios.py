@@ -1,8 +1,7 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
-from collections.abc import Callable
-from inspect import signature
+import math
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +22,13 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.charts import sweep_parameter_chart
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.shared import LOCATION_PRESETS
-from tests._html_page import element_count, texts, texts_after
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._html_page import element_attributes, element_count, texts, texts_after
+from tests._plotly_figure import traces
 from tests._web_app import build_test_app
 
 
@@ -34,55 +38,10 @@ def app(tmp_path: Path) -> Flask:
     return build_test_app(tmp_path)
 
 
-class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
-
-    def __init__(self) -> None:
-        self.submitted_homes: list[object] = []
-
-    def submit_home_job(
-        self,
-        config: object,
-        start_date: object,
-        end_date: object,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-    ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
-        self.submitted_homes.append(config)
-        n = len(self.submitted_homes)
-        return f"job-{n}", f"run-{n}"
-
-
 @pytest.fixture
-def recording_job_manager(app: Flask) -> _RecordingJobManager:
-    """Install a recording double as the app's job manager and return it."""
-    job_manager = _RecordingJobManager()
-    app.extensions["job_manager"] = job_manager
-    return job_manager
-
-
-@pytest.fixture
-def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
-    """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
+def client(app: Flask) -> FlaskClient:
+    """Create a Flask test client."""
     return app.test_client()
-
-
-def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object]]:
-    """The parameter names, kinds and defaults that decide which calls a method accepts."""
-    return [(p.name, p.kind, p.default) for p in signature(method).parameters.values()]
-
-
-class TestRecordingJobManager:
-    """The recording double stays in step with the real JobManager it stands in for."""
-
-    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
-        """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
-        real_job_manager = app.extensions["job_manager"]
-        double = _RecordingJobManager()
-
-        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
 class TestScenarioBuilderRoute:
@@ -124,6 +83,29 @@ class TestScenarioBuilderRoute:
         assert "Download YAML" in data
         assert "Save" in data
 
+    def test_the_builder_page_hands_its_script_each_components_keys_and_starting_distribution(
+        self, client: FlaskClient
+    ) -> None:
+        """The second argument is what static/js/scenario-builder.js reads of each component."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
+        (x_data,) = [scope for scope in scopes if scope.startswith("scenarioBuilder(")]
+        try:
+            arguments = json.loads("[" + x_data.removeprefix("scenarioBuilder(").removesuffix(")") + "]")
+        except json.JSONDecodeError as exc:
+            pytest.fail(f"x-data={x_data!r} does not pass scenarioBuilder JSON arguments: {exc}")
+        assert arguments[1:] == [
+            [
+                {
+                    "key": component.key,
+                    "fixed_field": component.fixed_field,
+                    "grammar_key": component.grammar_key,
+                    "dist": component.builder_default.editor_state(),
+                }
+                for component in FLEET_COMPONENTS.values()
+            ]
+        ]
+
 
 class TestSweepRoute:
     """Tests for the GET /scenarios/sweep route."""
@@ -151,6 +133,18 @@ class TestSweepRoute:
         page = response.get_data(as_text=True)
         assert texts(page).count("Sweep Point Preview") == 1
 
+    def test_sweep_page_days_input_allows_the_days_the_server_accepts(self, client: FlaskClient) -> None:
+        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_WINDOW_DAYS: the days parse_date_range accepts."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        days_inputs = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model") == "baseConfig.days"
+        ]
+        assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
+            ("1", str(MAX_WINDOW_DAYS))
+        ]
+
 
 class TestOldScenarioApiPaths:
     """The /scenarios/api/* paths no longer resolve: the scenario builder's JSON endpoints answer only under /api/scenarios/."""
@@ -168,6 +162,28 @@ class TestOldScenarioApiPaths:
     def test_answers_404_instead_of_redirecting(self, client: FlaskClient, method: str, path: str) -> None:
         """Each old path, requested with the method its redirect took, answers 404 rather than redirecting to /api/scenarios/*."""
         assert client.open(path, method=method).status_code == 404
+
+
+def _validation_with_pv_pool(
+    client: FlaskClient, entries: list[dict[str, float]], **form_changes: Any
+) -> Any:
+    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity, and with *form_changes* over it."""
+    form = {
+        key: value
+        for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+        if key != "pv_capacity_kw"
+    }
+    response = client.post(
+        "/api/scenarios/validate",
+        json={
+            **form,
+            "pv_distribution_type": "shuffled_pool",
+            "pv_sp_entries": entries,
+            **form_changes,
+        },
+    )
+    assert response.status_code == 200
+    return response.get_json()
 
 
 class TestScenarioAPI:
@@ -273,29 +289,25 @@ class TestScenarioAPI:
     ) -> None:
         """A PV pool of 90 values for 100 homes is the one fault in a form that validates with a pool of 100.
 
-        The builder's default PV pool used to hold those 90 values.  The fault's message is
-        not asserted: load_fleet_config raises a bare IndexError for it today.
+        The builder's default PV pool used to hold those 90 values.  The fault is reported in
+        the loader's words, naming the pool, n_homes and the pool's size.
         """
 
-        def validation_with_pv_pool(counts: tuple[int, int, int]) -> Any:
-            form = {
-                key: value
-                for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-                if key != "pv_capacity_kw"
-            }
-            form["pv_distribution_type"] = "shuffled_pool"
-            form["pv_sp_entries"] = [
+        def validation_with_pv_pool_counts(counts: tuple[int, int, int]) -> Any:
+            entries = [
                 {"value": value, "count": count}
                 for value, count in zip((3.0, 4.0, 5.0), counts)
             ]
-            response = client.post("/api/scenarios/validate", json=form)
-            assert response.status_code == 200
-            return response.get_json()
+            return _validation_with_pv_pool(client, entries)
 
-        assert validation_with_pv_pool((20, 40, 40)) == {"valid": True, "errors": []}
-        short_pool = validation_with_pv_pool((20, 40, 30))
-        assert short_pool["valid"] is False
-        assert len(short_pool["errors"]) == 1, short_pool["errors"]
+        assert validation_with_pv_pool_counts((20, 40, 40)) == {"valid": True, "errors": []}
+        assert validation_with_pv_pool_counts((20, 40, 30)) == {
+            "valid": False,
+            "errors": [
+                "FleetDistributionConfig: shuffled_pool counts for 'pv.capacity_kw' must total "
+                "n_homes (100), got 90"
+            ],
+        }
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
@@ -322,8 +334,6 @@ class TestScenarioAPI:
         self, client: FlaskClient
     ) -> None:
         """The builder accepts a fleet of exactly the dashboard's fleet limit, and refuses one home more, naming the limit."""
-        from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-
         at_limit = client.post(
             "/api/scenarios/validate",
             json={**TestBuilderScenarioYaml._DEFAULT_FORM, "n_homes": MAX_FLEET_HOMES},
@@ -338,6 +348,63 @@ class TestScenarioAPI:
             "valid": False,
             "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
         }
+
+    def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
+        self, client: FlaskClient
+    ) -> None:
+        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, naming the count.
+
+        The form's fleet has that many homes, since a pool holds one value per home.  The pool
+        sent is at most one value over the limit, never a count such as finding
+        fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
+        of the pool.
+        """
+        at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
+        above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
+
+        assert _validation_with_pv_pool(client, at_limit, n_homes=MAX_FLEET_HOMES) == {
+            "valid": True,
+            "errors": [],
+        }
+        assert _validation_with_pv_pool(client, above_limit, n_homes=MAX_FLEET_HOMES) == {
+            "valid": False,
+            "errors": [
+                f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}"
+            ],
+        }
+
+    def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
+        self, client: FlaskClient
+    ) -> None:
+        """Each component's Fixed Value validates at either end of the min and max the builder page serves for it, and not one float step beyond either."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        bounds = [
+            (attributes["min"], attributes["max"])
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model.number") == "dist.fixed"
+        ]
+
+        def validation_with(field: str, value: float) -> Any:
+            response = client.post(
+                "/api/scenarios/validate",
+                json={**TestBuilderScenarioYaml._DEFAULT_FORM, field: value},
+            )
+            assert response.status_code == 200
+            return response.get_json()
+
+        for component, (served_min, served_max) in zip(FLEET_COMPONENTS.values(), bounds, strict=True):
+            low, high = float(served_min), float(served_max)
+            for value in (low, high):
+                answer = validation_with(component.fixed_field, value)
+                assert answer == {"valid": True, "errors": []}, (
+                    f"{component.fixed_field} {value!r}, which the page allows, was refused: {answer}"
+                )
+            for value in (math.nextafter(low, -math.inf), math.nextafter(high, math.inf)):
+                answer = validation_with(component.fixed_field, value)
+                assert answer["valid"] is False, (
+                    f"{component.fixed_field} {value!r}, beyond what the page allows, was accepted: {answer}"
+                )
 
     def test_list_presets(self, client: FlaskClient) -> None:
         """Test GET /api/scenarios/presets returns a list."""
@@ -365,6 +432,28 @@ class TestScenarioAPI:
             json={"config": {"n_homes": 10}},
         )
         assert response.status_code == 400
+
+    def test_save_under_a_name_a_saved_home_preset_holds_returns_409_and_changes_nothing(
+        self, client: FlaskClient
+    ) -> None:
+        """Saved presets share one namespace: a scenario save under a home preset's name is a 409 naming that preset, which keeps its config."""
+        assert client.post("/api/presets", json={"name": "Taken", "pv_kw": 3.0}).status_code == 201
+
+        response = client.post("/api/scenarios/save", json={"name": "Taken", "config": {"n_homes": 9}})
+
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "A saved home preset is already named 'Taken'"}
+        home_preset = client.get("/api/presets/Taken").get_json()
+        assert (home_preset["source"], home_preset["pv_kw"]) == ("saved", 3.0)
+        assert "Taken" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+    def test_saving_a_scenario_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
+        """A second save under a saved scenario's name updates that preset in place."""
+        first = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 9}})
+        second = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 12}})
+        assert (first.status_code, second.status_code) == (201, 201)
+        assert second.get_json()["id"] == first.get_json()["id"]
+        assert client.get("/api/scenarios/presets/again").get_json()["config"] == {"n_homes": 12}
 
     def test_save_and_list_roundtrip(self, client: FlaskClient) -> None:
         """Test saving a preset and then finding it in the list."""
@@ -397,6 +486,20 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["name"] == "fetch-me"
         assert data["source"] == "saved"
+
+    def test_a_builtin_scenario_file_is_listed_and_served_by_its_name(self, client: FlaskClient) -> None:
+        """GET /api/scenarios/presets lists scenarios/bristol-phase1.yaml as the builtin preset bristol-phase1, and GET /api/scenarios/presets/bristol-phase1 answers that file's scenario."""
+        listed = client.get("/api/scenarios/presets").get_json()["presets"]
+        preset = client.get("/api/scenarios/presets/bristol-phase1")
+
+        assert {"name": "bristol-phase1", "source": "builtin", "filename": "bristol-phase1.yaml"} in listed
+        assert preset.status_code == 200
+        answer = preset.get_json()
+        assert (answer["name"], answer["source"], answer["config"]["name"]) == (
+            "bristol-phase1",
+            "builtin",
+            "Bristol Phase 1",
+        )
 
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
@@ -603,189 +706,11 @@ class TestBuilderScenarioYaml:
         assert "latitude" in response.get_json()["error"]
 
 
-class TestSweepAPI:
-    """Tests for the POST /api/simulate/sweep endpoint."""
-
-    def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
-        """POST /api/simulate/sweep returns 201 with the values, the parameter and each point's job id, in point order."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-                "base_config": {"battery_kwh": 5.0, "location": "bristol", "days": 7},
-            },
-        )
-        assert response.status_code == 201
-        data = response.get_json()
-        assert "values" in data
-        assert len(data["values"]) == 4
-        assert data["parameter"] == "pv_capacity_kw"
-        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
-
-    def test_sweep_linear_values(self, client: FlaskClient) -> None:
-        """Test that linear sweep generates evenly spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-            },
-        )
-        data = response.get_json()
-        assert data["values"] == [2.0, 4.0, 6.0, 8.0]
-
-    def test_sweep_geometric_values(self, client: FlaskClient) -> None:
-        """Test that geometric sweep generates geometrically spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 1.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "geometric",
-            },
-        )
-        data = response.get_json()
-        assert len(data["values"]) == 4
-        # First should be 1.0, last should be 8.0
-        assert data["values"][0] == 1.0
-        assert data["values"][-1] == 8.0
-        # Geometric spacing: each ratio should be approximately equal
-        ratios = [data["values"][i + 1] / data["values"][i] for i in range(len(data["values"]) - 1)]
-        assert abs(ratios[0] - ratios[1]) < 0.01
-
-    def test_sweep_empty_body_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with no body returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            content_type="application/json",
-        )
-        assert response.status_code == 400
-
-    def test_sweep_invalid_range_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with min >= max returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 10.0, "max": 2.0, "steps": 4},
-        )
-        assert response.status_code == 400
-
-    def test_sweep_too_few_steps_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with steps < 2 returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 2.0, "max": 8.0, "steps": 1},
-        )
-        assert response.status_code == 400
-
-
-class TestSweepParameters:
-    """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
-
-    @pytest.mark.parametrize(
-        ("parameter", "values", "swept_value_of"),
-        [
-            pytest.param(
-                "pv_capacity_kw",
-                [2.0, 5.0, 8.0],
-                lambda home: home.pv_config.capacity_kw,
-                id="pv",
-            ),
-            pytest.param(
-                "battery_capacity_kwh",
-                [5.0, 10.0, 15.0],
-                lambda home: home.battery_config.capacity_kwh,
-                id="battery",
-            ),
-            pytest.param(
-                "annual_consumption_kwh",
-                [2000.0, 3500.0, 5000.0],
-                lambda home: home.load_config.annual_consumption_kwh,
-                id="consumption",
-            ),
-        ],
-    )
-    def test_each_point_simulates_a_home_carrying_that_points_value(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-        parameter: str,
-        values: list[float],
-        swept_value_of: Callable[[object], float],
-    ) -> None:
-        """Each sweep point submits one home whose swept field holds that point's value."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": parameter,
-                "min": values[0],
-                "max": values[-1],
-                "steps": len(values),
-                "mode": "linear",
-            },
-        )
-
-        assert response.status_code == 201
-        assert response.get_json()["values"] == values
-        assert [swept_value_of(home) for home in recording_job_manager.submitted_homes] == values
-
-    @pytest.mark.parametrize("parameter", ["n_homes", "tilt", "no_such_parameter"])
-    def test_unsupported_parameter_is_refused_before_any_point_is_submitted(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-        parameter: str,
-    ) -> None:
-        """A parameter outside the supported set, even a real home-config key, gets 400 and submits nothing.
-
-        The error names the refused parameter and every supported one.
-        """
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": parameter, "min": 10.0, "max": 40.0, "steps": 3},
-        )
-
-        assert response.status_code == 400
-        error = response.get_json()["error"]
-        assert parameter in error
-        for supported in ("pv_capacity_kw", "battery_capacity_kwh", "annual_consumption_kwh"):
-            assert supported in error
-        assert recording_job_manager.submitted_homes == []
-
-    def test_a_later_invalid_point_refuses_the_sweep_before_any_point_is_submitted(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-    ) -> None:
-        """A sweep whose last point exceeds the PV capacity a home accepts gets 400 naming that point, and submits none of its points.
-
-        Its earlier points are valid, so a sweep that submitted each point as it validated it would already have started their jobs.
-        """
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3},
-        )
-
-        assert response.status_code == 400
-        assert "pv_capacity_kw=25.0" in response.get_json()["error"]
-        assert recording_job_manager.submitted_homes == []
-
-
 class TestSweepChart:
     """Tests for the sweep_parameter_chart function in charts.py."""
 
     def test_sweep_parameter_chart_returns_json(self) -> None:
         """Test sweep_parameter_chart returns valid Plotly JSON."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [2.0, 4.0, 6.0, 8.0],
             [50.5, 65.3, 72.1, 78.4],
@@ -798,29 +723,22 @@ class TestSweepChart:
 
     def test_sweep_parameter_chart_has_traces(self) -> None:
         """Test sweep_parameter_chart includes main, optimal, and trend traces."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [1.0, 2.0, 3.0, 4.0, 5.0],
             [10.0, 25.0, 40.0, 55.0, 70.0],
             "Battery (kWh)",
             "Grid Import (kWh)",
         )
-        parsed = json.loads(result)
         # Should have at least the main trace, optimal marker, and trend line
-        assert len(parsed["data"]) >= 2
+        assert len(traces(result)) >= 2
 
     def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
         """Test sweep_parameter_chart returns '{}' with empty inputs."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart([], [], "X", "Y")
         assert result == "{}"
 
     def test_sweep_parameter_chart_two_points(self) -> None:
         """Test sweep_parameter_chart works with just two data points."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [1.0, 10.0],
             [20.0, 80.0],

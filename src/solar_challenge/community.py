@@ -1,17 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Community energy sharing layer (post-hoc, read-only over FleetResults).
+"""Community energy sharing: peer-to-peer netting over an already-simulated fleet.
 
-This module implements the peer-to-peer (P2P) community netting layer described
-in PRD §3.  Homes are NOT re-simulated; this layer consumes the public aggregate
-API of :class:`~solar_challenge.fleet.FleetResults` and derives shared grid flows.
-
-Exported symbols
-----------------
-CommunityBillingConfig  — forward-compatible billing data container (α; logic in ε)
-CommunityConfig         — frozen, picklable simulation configuration
-CommunityResults        — output of :func:`simulate_community`
-simulate_community      — run P2P netting over an existing FleetResults
-validate_community_balance — cross-check the COMMUNITY-BALANCE invariant (PRD §3.1)
+Homes are not re-simulated. This layer reads the public aggregate API of
+:class:`~solar_challenge.fleet.FleetResults` and nets the fleet's grid flows at
+the community's one connection point, optionally through a shared community
+battery. docs/prds/inter-home-community-energy-sharing.md §3.1 proves the
+COMMUNITY-BALANCE invariant that :func:`validate_community_balance` checks.
 """
 
 from __future__ import annotations
@@ -26,6 +20,7 @@ from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig, calculate_bill
+from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -37,17 +32,18 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class CommunityBillingConfig:
-    """Forward-compatible billing data container.
+    """The community's import tariff and SEG export rate.
 
-    This is a pure data holder populated by γ (config parsing) and consumed by
-    ε (VNM pricing).  No pricing logic lives here.
+    :func:`simulate_community` prices the community's grid flows only when both
+    are set; otherwise the result's ``baseline_net_cost_gbp``,
+    ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
 
     Attributes
     ----------
     tariff:
-        Community import tariff configuration (optional; None = no cost tracking).
+        Community import tariff configuration.
     seg_rate_pence_per_kwh:
-        Smart Export Guarantee rate in pence per kWh (optional; None = no SEG).
+        Smart Export Guarantee rate in pence per kWh.
     """
 
     tariff: Optional[TariffConfig] = None
@@ -72,7 +68,8 @@ class CommunityConfig:
         provided when ``sharing_mode="community_battery"`` and *must not* be
         provided when ``sharing_mode="p2p"``.
     billing:
-        Optional billing container for γ/ε to populate; no pricing logic here.
+        The community's import tariff and SEG rate, for pricing its grid
+        flows; ``None`` (default) skips billing.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -155,9 +152,8 @@ def _price_grid_flows(
 ) -> tuple[float, float]:
     """Price grid import and export flows using canonical billing primitives.
 
-    Derives the timestep duration (dt_h) from the series index so the function
-    is correct for any cadence (1-min, hourly, etc.).  This mirrors the
-    convention used in :func:`~solar_challenge.output.compute_community_metrics`.
+    Each row's energy is its kW times :func:`~solar_challenge.timebase.step_hours`
+    of the index, so it prices any cadence.
 
     Parameters
     ----------
@@ -177,29 +173,18 @@ def _price_grid_flows(
     (import_cost_gbp, export_revenue_gbp)
         Both values in GBP.
     """
-    # Infer dt_h from the index spacing; fall back to 1/60 for degenerate
-    # single-element series (consistent with simulate_community's own fallback).
-    #
     # PRECONDITION: import_kw must have a uniformly-spaced DatetimeIndex.
-    # dt_h is derived from the first interval only; a non-uniform index would
-    # silently mis-price every subsequent interval.  This matches the same
-    # assumption in output.compute_community_metrics and simulate_community.
-    # A first-vs-last check catches common irregular patterns (dropped rows,
-    # DST gaps, hour-boundary aggregates) with O(1) overhead.
-    if len(import_kw) >= 2:
-        dt_h = (import_kw.index[1] - import_kw.index[0]).total_seconds() / 3600.0
-        if len(import_kw) >= 3:
-            dt_last_h = (
-                (import_kw.index[-1] - import_kw.index[-2]).total_seconds() / 3600.0
+    # step_hours reads only the first gap, so an uneven index would misprice
+    # later rows.  A first-vs-last check catches dropped rows, DST gaps and
+    # hour-boundary aggregates at O(1) cost.
+    dt_h = step_hours(import_kw.index)
+    if len(import_kw) >= 3:
+        dt_last_h = step_hours(import_kw.index[-2:])
+        if abs(dt_h - dt_last_h) > 1e-9:
+            raise ValueError(
+                f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
+                f"first interval={dt_h:.9f} h but last={dt_last_h:.9f} h differ."
             )
-            if abs(dt_h - dt_last_h) > 1e-9:
-                raise ValueError(
-                    f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
-                    f"first interval={dt_h:.9f} h but last={dt_last_h:.9f} h differ. "
-                    "This matches the convention in output.compute_community_metrics."
-                )
-    else:
-        dt_h = 1.0 / 60.0
 
     # Import cost: per-timestep TOU-aware pricing via the canonical loop.
     import_cost_gbp: float = calculate_bill(import_kw * dt_h, tariff)
@@ -242,12 +227,9 @@ def simulate_community(
         :func:`~solar_challenge.flow.simulate_timestep` with
         :class:`~solar_challenge.dispatch.SelfConsumptionStrategy`.  The
         sequential loop is required because SOC is stateful and cannot be
-        vectorised.  Per-step outputs (kWh/step) are scaled back to kW using
-        ``60 / timestep_minutes`` derived from the fleet index, matching the
-        conversion convention in ``home.py``.  When *validate_balance* is
-        ``True``, a per-step :func:`~solar_challenge.flow.validate_energy_balance`
-        check (◆) is applied inside the loop before the tail
-        :func:`validate_community_balance` cross-check.
+        vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
+        dividing by :func:`~solar_challenge.timebase.step_hours` of the fleet
+        index.
 
     Parameters
     ----------
@@ -258,9 +240,10 @@ def simulate_community(
         ``"community_battery"`` mode, the shared battery's
         :class:`~solar_challenge.battery.BatteryConfig`.
     validate_balance:
-        When ``True`` (default), call :func:`validate_community_balance` on the
-        completed result to enforce the COMMUNITY-BALANCE invariant (PRD §3.1).
-        In ``community_battery`` mode a per-step ◆ check is also applied.
+        When ``True`` (default), check the completed result with
+        :func:`validate_community_balance` and, in ``community_battery`` mode,
+        each step's flow with :func:`~solar_challenge.flow.validate_energy_balance`
+        as it is dispatched.
 
     Returns
     -------
@@ -269,15 +252,8 @@ def simulate_community(
     surplus: pd.Series = fleet_results.total_grid_export
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
-
-    # Derive the timestep from the index so the kWh→kW conversion factor and
-    # the simulate_timestep call are correct for any cadence (1-min operational,
-    # hourly TMY, downsampled, etc.) rather than silently assuming 1-minute.
-    # A single-element index is degenerate; the sequential loop won't execute.
-    if len(index) >= 2:
-        timestep_minutes = (index[1] - index[0]).total_seconds() / 60.0
-    else:
-        timestep_minutes = 1.0
+    dt_h = step_hours(index)
+    timestep_minutes = dt_h / HOURS_PER_MINUTE
 
     # Branch on the community battery config; using a local variable so mypy
     # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
@@ -301,12 +277,7 @@ def simulate_community(
         )
     else:
         # Community battery dispatch — sequential because SOC is stateful.
-        # Reuses Battery + simulate_timestep + SelfConsumptionStrategy from α.
-        #
-        # Battery starts at the per-home default SOC envelope (initial_soc_kwh
-        # defaults to mid-range, usable window 10%–90%).  This is an intentional
-        # reuse of the per-home convention; callers that need a different starting
-        # state (e.g. start empty) should pass an adjusted BatteryConfig.
+        # Like each home's battery, it starts at the midpoint of its usable SOC window.
         battery = Battery(cb_config)
         strategy = SelfConsumptionStrategy()
 
@@ -315,7 +286,7 @@ def simulate_community(
         # (~525 k iterations for a full-year, 1-min, 100-home fleet run).
         surplus_arr = surplus.to_numpy()
         deficit_arr = deficit.to_numpy()
-        scale = 60.0 / timestep_minutes  # kWh/step → kW
+        scale = 1 / dt_h  # kWh/step → kW
 
         cg_imp_vals: list[float] = []
         cg_exp_vals: list[float] = []
@@ -334,7 +305,6 @@ def simulate_community(
                 timestamp=t.to_pydatetime(),
                 strategy=strategy,
             )
-            # Per-step ◆ invariant (PRD §3.2) — mirrors home.simulate_home:299-300.
             if validate_balance:
                 validate_energy_balance(r)
             # Scale kWh/step → kW; SOC is an energy state, kept in kWh.
@@ -354,7 +324,7 @@ def simulate_community(
             sharing_mode=config.sharing_mode,
         )
 
-    # --- VNM billing: baseline vs community net cost (ε / task-34) ---
+    # --- Virtual-net-metering billing: baseline vs community net cost ---
     # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
     # always receives non-None arguments (keeps it total / no None branches).
     billing = config.billing
@@ -400,7 +370,7 @@ def validate_community_balance(
     community_results: CommunityResults,
     tolerance: float = 0.001,
 ) -> bool:
-    """Validate the COMMUNITY-BALANCE invariant (PRD §3.1) at every timestep.
+    """Validate the COMMUNITY-BALANCE invariant at every timestep.
 
     The invariant (in kW on the 1-minute index) is::
 

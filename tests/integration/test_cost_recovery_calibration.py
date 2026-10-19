@@ -22,7 +22,29 @@ has the same structure and is also excluded for this reason.)
 """
 from __future__ import annotations
 
+import dataclasses
+
+import pandas as pd
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import (
+    CostRecoverySolution,
+    FinanceConfig,
+    MultiYearCurve,
+    YearPoint,
+    _cbs_own_use_kwh,
+    bill_distribution,
+    project_economics,
+    project_multi_year,
+    solve_cost_recovery_rate,
+    spreadsheet_revenue_curve,
+)
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 
 
 # ---------------------------------------------------------------------------
@@ -56,26 +78,24 @@ def _make_sim_results_cr6(
     self_kwh: float,
     export_kwh: float,
     import_kwh: float,
-    n_steps: int = 8760,  # hourly resolution; energy = sum*(1/60) still correct
-) -> "SimulationResults":  # type: ignore[name-defined]
+    n_steps: int = 8760,  # hourly rows; each kW row counts for the hour it lasts
+) -> SimulationResults:
     """Build a synthetic SimulationResults.
 
     Hourly resolution (n_steps=8760 ≈ 1 yr) keeps memory ~60× lower than the
     former 1-minute default while preserving energy totals exactly:
-      home.py computes total_kwh = series.sum() * (1/60)
-      sc_kw = self_kwh / (n_steps/60)  →  sum*1/60 = self_kwh  ✓
+      home.py totals each kW series as (series * window.step_hours).sum(),
+      and step_hours is 1 on this hourly index:
+      sc_kw = self_kwh / n_steps  →  sum = self_kwh  ✓
 
     No battery grid-charging: grid_import is all load import.
     Untariffed: import_cost is zero and grid_charge_cost is None.
     export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)   # kW s.t. sum*(1/60) = self_kwh
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_kw = import_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps   # kW s.t. its hourly rows total self_kwh
+    exp_kw = export_kwh / n_steps
+    imp_kw = import_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
@@ -101,7 +121,7 @@ def _make_fleet_results_fin_cr6(
     self_kwh: float = 2000.0,
     export_kwh: float = 3775.0,
     import_kwh: float = 1400.0,
-) -> "FleetResults":  # type: ignore[name-defined]
+) -> FleetResults:
     """Build a [FIN]-aligned synthetic FleetResults.
 
     With _make_finance_fin_cr6 defaults the solve lands in the interior 'floor'
@@ -120,8 +140,6 @@ def _make_fleet_results_fin_cr6(
 
     No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
@@ -133,13 +151,8 @@ def _make_fleet_results_fin_cr6(
 def _make_home_config_fin_cr6(
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "HomeConfig":  # type: ignore[name-defined]
+) -> HomeConfig:
     """Build a [FIN]-aligned HomeConfig for CR6 tests (Bristol defaults)."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.pv import PVConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.battery import BatteryConfig
-
     pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
     batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
@@ -150,10 +163,8 @@ def _make_scenario_fin_cr6(
     n_homes: int = 100,
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
+) -> ScenarioConfig:
     """Build a homogeneous [FIN]-aligned ScenarioConfig (100 homes, 2024 full year)."""
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     homes = [_make_home_config_fin_cr6(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
              for _ in range(n_homes)]
@@ -171,7 +182,7 @@ def _make_finance_cr6(
     equity_fraction: float = 0.75,
     loan_term_years: int = 15,
     loan_rate: float = 0.07,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> FinanceConfig:
     """Unified FinanceConfig factory for CR6 tests.
 
     All three former builders (_make_finance_fin_cr6 / _make_finance_interior_cr6 /
@@ -181,8 +192,6 @@ def _make_finance_cr6(
     Default values match [FIN] (capex=£775k, grant=£250k, retail=23p, floor=£27).
     Interior/flex tests pass explicit overrides (pv_cost=2000, grant=0, retail=30, floor=50).
     """
-    from solar_challenge.config import FinanceConfig
-
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
         pv_cost_per_kwp_gbp=pv_cost_per_kwp,
@@ -210,7 +219,7 @@ def _make_finance_fin_cr6(
     retained_cash_floor: float = 27.0,
     own_use_rate: float = 15.0,
     retail_rate: float = 23.0,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> FinanceConfig:
     """[FIN]-aligned FinanceConfig (capex=£775k, grant=£250k, retail=23p, floor=£27).
 
     Capex = 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
@@ -232,10 +241,10 @@ def _make_finance_fin_cr6(
 
 
 def _surplus_the_bills_fund_cr6(
-    sol: "CostRecoverySolution",  # type: ignore[name-defined]
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
-    fleet: "FleetResults",  # type: ignore[name-defined]
+    sol: CostRecoverySolution,
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
+    fleet: FleetResults,
 ) -> float:
     """Net surplus per home per year that the solve's own bills fund.
 
@@ -246,9 +255,6 @@ def _surplus_the_bills_fund_cr6(
     figure is valid only for an age-independent injected simulate, which every CR6
     fixture uses.
     """
-    from solar_challenge.finance import MultiYearCurve, YearPoint, project_economics
-    from solar_challenge.home import calculate_summary
-
     outlays = sol.outlay.per_home_net_bill_gbp
     assert min(outlays) == max(outlays), (
         f"per-home outlays range £{min(outlays):.6f} to £{max(outlays):.6f}, "
@@ -274,7 +280,7 @@ def _surplus_the_bills_fund_cr6(
                 year=year,
                 pv_soh=1.0,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=fleet_revenue_gbp,
@@ -327,13 +333,11 @@ class TestNoFlexAnchorReconciliation:
         return scenario, finance, fr, simulate
 
     def test_no_flex_cbs_revenue_identity(self) -> None:
-        """No-flex identity: fleet_revenue_gbp == own_use_rate × fleet_sc / 100.
+        """No-flex identity: fleet_revenue_gbp == own_use_rate × fleet_billed_own_use_kwh / 100.
 
         With grid_services=0 and export_revenue=0 (SEG=0 in synthetic):
           fleet_revenue = own_use × sc / 100 + 0 + 0 (by construction)
         """
-        from solar_challenge.finance import project_multi_year
-
         scenario, finance, fr, simulate = self._build_fin_anchor()
 
         # Run project_multi_year to inspect a YearPoint's fleet_revenue_gbp
@@ -344,7 +348,7 @@ class TestNoFlexAnchorReconciliation:
         # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0
         expected_revenue = (
             finance.own_use_rate_pence_per_kwh
-            * year0.fleet_self_consumption_kwh
+            * year0.fleet_billed_own_use_kwh
             / 100.0
         )
         assert year0.fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-9), (
@@ -354,8 +358,6 @@ class TestNoFlexAnchorReconciliation:
 
     def test_no_flex_solve_feasible(self) -> None:
         """Hard: sol.feasible is True on [FIN] no-flex fleet."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._build_fin_anchor()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -365,8 +367,6 @@ class TestNoFlexAnchorReconciliation:
 
     def test_no_flex_solve_rate_in_valid_range(self) -> None:
         """Hard: 0 ≤ solved own_use_rate ≤ retail_baseline_rate."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._build_fin_anchor()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -374,8 +374,6 @@ class TestNoFlexAnchorReconciliation:
 
     def test_surplus_is_what_the_bills_fund(self) -> None:
         """Physics control: the bills at the solved rate fund exactly the surplus the solve reports."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._build_fin_anchor()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -392,8 +390,6 @@ class TestNoFlexAnchorReconciliation:
         spreadsheet's 0.70); see docs/cost-recovery-finance-model.md §7.3–§7.4.
         This test prints and PASSES always.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._build_fin_anchor()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -436,15 +432,14 @@ class TestOverrideOwnUseCappedAtDemand:
     """
 
     @staticmethod
-    def _scenario_and_finance() -> "tuple[ScenarioConfig, FinanceConfig]":  # type: ignore[name-defined]
+    def _scenario_and_finance() -> tuple[ScenarioConfig, FinanceConfig]:
         """The 100-home [FIN] anchor and its finance under the spreadsheet's 0.70 override."""
-        import dataclasses
-
         finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
         return _make_scenario_fin_cr6(), finance
 
     @pytest.fixture(scope="class")
-    def fleets(self) -> "tuple[FleetResults, FleetResults]":  # type: ignore[name-defined]
+    @classmethod
+    def fleets(cls) -> tuple[FleetResults, FleetResults]:
         """The anchor fleets with 5,775 and 5,000 kWh of generation per home."""
         high_gen, low_gen = (
             _make_fleet_results_fin_cr6(self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0)
@@ -453,15 +448,14 @@ class TestOverrideOwnUseCappedAtDemand:
         return high_gen, low_gen
 
     @pytest.fixture(scope="class")
+    @classmethod
     def solutions(
-        self, fleets: "tuple[FleetResults, FleetResults]"  # type: ignore[name-defined]
-    ) -> "tuple[CostRecoverySolution, CostRecoverySolution]":  # type: ignore[name-defined]
+        cls, fleets: tuple[FleetResults, FleetResults]
+    ) -> tuple[CostRecoverySolution, CostRecoverySolution]:
         """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
-        from solar_challenge.finance import solve_cost_recovery_rate
+        scenario, finance = cls._scenario_and_finance()
 
-        scenario, finance = self._scenario_and_finance()
-
-        def solve(fleet: "FleetResults") -> "CostRecoverySolution":  # type: ignore[name-defined]
+        def solve(fleet: FleetResults) -> CostRecoverySolution:
             with pytest.warns(UserWarning, match="capped at demand"):
                 return solve_cost_recovery_rate(scenario, finance, simulate=lambda fc, s, e: fleet)
 
@@ -470,8 +464,8 @@ class TestOverrideOwnUseCappedAtDemand:
 
     def test_surplus_is_what_the_bills_fund(
         self,
-        fleets: "tuple[FleetResults, FleetResults]",  # type: ignore[name-defined]
-        solutions: "tuple[CostRecoverySolution, CostRecoverySolution]",  # type: ignore[name-defined]
+        fleets: tuple[FleetResults, FleetResults],
+        solutions: tuple[CostRecoverySolution, CostRecoverySolution],
     ) -> None:
         """On both fleets the bills at the solved rate fund the surplus the solve reports, the floor."""
         scenario, finance = self._scenario_and_finance()
@@ -488,7 +482,7 @@ class TestOverrideOwnUseCappedAtDemand:
             )
 
     def test_solved_rate_does_not_depend_on_generation(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         """Premise: both fleets solve to the same floor-binding rate."""
         high_gen, low_gen = solutions
@@ -499,7 +493,7 @@ class TestOverrideOwnUseCappedAtDemand:
         )
 
     def test_representative_own_use_is_billed_at_demand(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         for sol in solutions:
             assert sol.outlay.representative.own_use_payment_gbp == pytest.approx(
@@ -507,7 +501,7 @@ class TestOverrideOwnUseCappedAtDemand:
             )
 
     def test_saving_does_not_rise_as_generation_falls(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         high_gen, low_gen = solutions
 
@@ -529,7 +523,7 @@ def _make_finance_flex_cr6(
     pv_cost_per_kwp: float = 2000.0,
     grant_gbp: float = 0.0,
     retail_rate: float = 30.0,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> FinanceConfig:
     """Interior FinanceConfig with optional flex (grid_services) — thin wrapper."""
     return _make_finance_cr6(
         grid_services=grid_services,
@@ -545,7 +539,7 @@ def _make_arbitrage_fleet_cr6(
     self_kwh: float = 2400.0,    # elevated sc vs flat-rate 2000 kWh
     export_kwh: float = 400.0,
     import_kwh: float = 800.0,
-) -> "FleetResults":  # type: ignore[name-defined]
+) -> FleetResults:
     """Build an 'arbitrage-on' synthetic FleetResults representing W1 TOU time-shift.
 
     Arbitrage on: higher basis-C own-use than the flat-rate fleet (2400 vs 2000
@@ -553,8 +547,6 @@ def _make_arbitrage_fleet_cr6(
     a lower r*.  Grid-charge energy is paid by the householder inside grid import
     (docs/cost-recovery-finance-model.md §4 and §8.2); it is not a CBS term.
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
@@ -573,7 +565,7 @@ def _make_interior_fleet_cr6(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-) -> "FleetResults":  # type: ignore[name-defined]
+) -> FleetResults:
     """Build a small synthetic FleetResults tuned to the interior 'floor' regime.
 
     Interior guarantee (with _make_finance_interior_cr6 defaults):
@@ -593,8 +585,6 @@ def _make_interior_fleet_cr6(
 
     No-flex: no grid charging, export_revenue=0.
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
@@ -608,7 +598,7 @@ def _make_finance_interior_cr6(
     pv_cost_per_kwp: float = 2000.0,
     grant_gbp: float = 0.0,
     retail_rate: float = 30.0,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> FinanceConfig:
     """Interior-regime FinanceConfig for H1/H2 structural invariant tests — thin wrapper.
 
     Interior regime guaranteed by: high capex (no grant) + moderate floor →
@@ -646,8 +636,6 @@ class TestStructuralInvariants:
         retail_rate: float = 30.0,
     ) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, simulate) for an interior 'floor' regime."""
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
         homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
         scenario = ScenarioConfig(name="CR6-Interior", period=period, homes=homes)
@@ -671,13 +659,6 @@ class TestStructuralInvariants:
         Cross-check: re-run project_multi_year at the solved rate; the affine
         reconstruction and re-sim must agree to float ε (mirrors CR4 H1 cross-check).
         """
-        import dataclasses
-        from solar_challenge.finance import (
-            project_economics,
-            project_multi_year,
-            solve_cost_recovery_rate,
-        )
-
         scenario, finance, simulate = self._build_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -714,8 +695,6 @@ class TestStructuralInvariants:
         Tuned so BOTH configs stay in the interior 'floor' regime (r* ∈ (0, retail)).
         RED until step-6 tunes the fixture pair.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, _, simulate = self._build_interior()
 
         # Low-capex config (interior, low rate)
@@ -768,8 +747,6 @@ class TestFlexLowersSolvedRate:
 
     def _build_base_interior(self) -> tuple:  # type: ignore[type-arg]
         """Base interior fleet (no flex, same fleet used for both directional tests)."""
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
         n_homes = 5
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
         homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
@@ -783,8 +760,6 @@ class TestFlexLowersSolvedRate:
         Both solve at grid_services=0 and grid_services=Central use SAME energy mix.
         RED until magnitudes tuned in step-8.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, n_homes = self._build_base_interior()
         fr = _make_interior_fleet_cr6(n_homes=n_homes)
         simulate = lambda fc, s, e: fr  # noqa: E731
@@ -825,8 +800,6 @@ class TestFlexLowersSolvedRate:
 
         RED until the arbitrage-on synthetic aggregates are tuned in step-8.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, n_homes = self._build_base_interior()
 
         # Flat-rate fleet (baseline): grid_charge_cost=None
@@ -860,8 +833,8 @@ class TestFlexLowersSolvedRate:
 
 
 def _spreadsheet_economics_cr6(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
 ) -> "ProjectEconomics":  # type: ignore[name-defined]
     """[FIN]-assumption ProjectEconomics for ``scenario``: spreadsheet_revenue_curve → project_economics.
 
@@ -869,8 +842,6 @@ def _spreadsheet_economics_cr6(
     scenario's homes and ``finance`` alone, so callers that read only those do not
     depend on the curve's revenue.
     """
-    from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
     curve = spreadsheet_revenue_curve(
         n_homes=len(scenario.homes),
         pv_kwp=_FIN_GOLDEN["inp_kWp"],
@@ -930,7 +901,7 @@ def _make_grid_charge_sim_results_cr6(
     import_to_load_kwh: float,
     grid_charge_kwh: float,
     n_steps: int = 8760,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> SimulationResults:
     """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
 
     Energy accounting:
@@ -944,14 +915,11 @@ def _make_grid_charge_sim_results_cr6(
     Untariffed, like _make_sim_results_cr6: import_cost is zero and grid_charge_cost
     is None.
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_to_load_kw = import_to_load_kwh / (n_steps / 60.0)
-    grid_charge_kw = grid_charge_kwh / (n_steps / 60.0)
+    sc_kw = self_kwh / n_steps
+    exp_kw = export_kwh / n_steps
+    imp_to_load_kw = import_to_load_kwh / n_steps
+    grid_charge_kw = grid_charge_kwh / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_to_load_kw          # demand = sc + import_to_load
     total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
@@ -979,7 +947,7 @@ def _make_grid_charge_fleet_cr6(
     export_kwh: float = 400.0,
     import_to_load_kwh: float = 800.0,
     grid_charge_kwh: float = 200.0,
-) -> "FleetResults":  # type: ignore[name-defined]
+) -> FleetResults:
     """Build a grid-charging FleetResults for basis-C reconciliation tests.
 
     With defaults:
@@ -989,8 +957,6 @@ def _make_grid_charge_fleet_cr6(
         _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
     per_home = [
         _make_grid_charge_sim_results_cr6(
@@ -1014,7 +980,7 @@ class TestArbitrageBasisCReconciliation:
 
     Verifies three properties on a fleet where grid_charge_kwh > 0:
     (c) _cbs_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
-    (a) project_multi_year().points[0].fleet_self_consumption_kwh == sum(_cbs_own_use_kwh)
+    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh)
         AND strictly < sum(total_self_consumption_kwh)
     Plus a flat/no-grid-charge control showing no gap.
 
@@ -1028,9 +994,6 @@ class TestArbitrageBasisCReconciliation:
 
     def _build_grid_charge(self) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, fr, summaries) for the grid-charging fleet."""
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-        from solar_challenge.home import calculate_summary
-
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
         homes = [_make_home_config_fin_cr6() for _ in range(self._N_HOMES)]
         scenario = ScenarioConfig(name="CR6-Arb-BasisC", period=period, homes=homes)
@@ -1050,8 +1013,6 @@ class TestArbitrageBasisCReconciliation:
 
     def test_c_helper_gap_on_grid_charge_homes(self) -> None:
         """(c) For each home: _cbs_own_use_kwh(s) < total_sc AND == demand - import."""
-        from solar_challenge.finance import _cbs_own_use_kwh
-
         _, _, _, summaries = self._build_grid_charge()
         for s in summaries:
             basis_c = _cbs_own_use_kwh(s)
@@ -1064,13 +1025,11 @@ class TestArbitrageBasisCReconciliation:
                 s.total_demand_kwh - s.total_grid_import_kwh, rel=1e-9
             )
 
-    def test_a_fleet_sc_is_basis_c(self) -> None:
-        """(a) project_multi_year fleet_sc == sum(_cbs_own_use_kwh) < sum(total_sc).
+    def test_a_fleet_billed_own_use_is_basis_c(self) -> None:
+        """(a) project_multi_year fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh) < sum(total_sc).
 
         RED until step-4: before the fix _simulate_age uses total_self_consumption_kwh.
         """
-        from solar_challenge.finance import _cbs_own_use_kwh, project_multi_year
-
         scenario, finance, fr, summaries = self._build_grid_charge()
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -1080,20 +1039,17 @@ class TestArbitrageBasisCReconciliation:
         expected_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
         b_style_sum = sum(s.total_self_consumption_kwh for s in summaries)
 
-        # (a) fleet_self_consumption_kwh must equal the basis-C sum (not B-style)
-        assert year0.fleet_self_consumption_kwh == pytest.approx(expected_basis_c, rel=1e-9), (
-            f"fleet_sc should be basis-C {expected_basis_c:.1f} kWh "
-            f"but got {year0.fleet_self_consumption_kwh:.1f} kWh "
+        # (a) fleet_billed_own_use_kwh must equal the basis-C sum (not B-style)
+        assert year0.fleet_billed_own_use_kwh == pytest.approx(expected_basis_c, rel=1e-9), (
+            f"fleet_billed_own_use_kwh should be basis-C {expected_basis_c:.1f} kWh "
+            f"but got {year0.fleet_billed_own_use_kwh:.1f} kWh "
             f"(B-style = {b_style_sum:.1f} kWh)"
         )
         # And must be strictly less than B-style
-        assert year0.fleet_self_consumption_kwh < b_style_sum
+        assert year0.fleet_billed_own_use_kwh < b_style_sum
 
     def test_flat_control_no_gap(self) -> None:
         """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
-        from solar_challenge.finance import _cbs_own_use_kwh
-        from solar_challenge.home import calculate_summary
-
         # Use the existing flat-rate builder
         flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
@@ -1111,9 +1067,6 @@ class TestArbitrageBasisCReconciliation:
            ≈ (135 + 655 + 1,818 × 15/25) / 130 ≈ 14.5p < retail = 30p
         → binding='floor', feasible=True.
         """
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-        from solar_challenge.home import calculate_summary
-
         n_homes = 5
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
         homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
@@ -1141,8 +1094,6 @@ class TestArbitrageBasisCReconciliation:
         slope, so the interior condition holds for the grid-charging fleet and the
         closed-form identity surplus(r*) == floor is exact to float ε.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, summaries = self._build_grid_charge_interior()
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -1163,13 +1114,6 @@ class TestArbitrageBasisCReconciliation:
         giving own_use_payment = rate × total_sc/100, so the == assertion fails.
         After step-6 the == assertion passes and < assertion confirms the gap.
         """
-        import dataclasses
-        from solar_challenge.finance import (
-            _cbs_own_use_kwh,
-            bill_distribution,
-            solve_cost_recovery_rate,
-        )
-
         scenario, finance, fr, summaries = self._build_grid_charge_interior()
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -1203,11 +1147,7 @@ class TestArbitrageBasisCReconciliation:
 
     def test_b_flat_control_still_binds_floor(self) -> None:
         """Flat-rate fleet control: solve still binding='floor' with same finance."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         # Use the no-grid-charge interior fleet with the same finance config
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
         n_homes = 5
         period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
         homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
@@ -1240,8 +1180,6 @@ class TestArbitrageBasisCReconciliation:
         would lower the solved rate, causing CBS under-recovery and silently
         missing the retained-cash floor.
         """
-        from solar_challenge.finance import _cbs_own_use_kwh, solve_cost_recovery_rate
-
         scenario, finance, fr, summaries = self._build_grid_charge_interior()
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -1272,14 +1210,11 @@ class TestCbsOwnUseKwhHelper:
 
     def test_normal_case(self) -> None:
         """demand=3400, import=1600 → basis C = 1800 kWh."""
-        from solar_challenge.finance import _cbs_own_use_kwh
-
         s = _make_sim_results_cr6(
             self_kwh=1800.0,
             export_kwh=400.0,
             import_kwh=1600.0,
         )
-        from solar_challenge.home import calculate_summary
         summary = calculate_summary(s)
         # total_demand = sc + import = 1800 + 1600 = 3400
         # total_grid_import = 1600
@@ -1288,24 +1223,19 @@ class TestCbsOwnUseKwhHelper:
 
     def test_clamp_to_zero(self) -> None:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
-        from solar_challenge.finance import _cbs_own_use_kwh
-
         # Build a summary with demand=500, import=900 by construction.
         # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
         # Instead, build manually via _make_sim_results_cr6 with sc=0, import>demand:
         # Use sc=500, import=900 → demand=1400 (still basis C > 0).
         # We need a summary where demand < import to test the clamp.
         # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
-        import pandas as pd
-        from solar_challenge.home import SimulationResults, calculate_summary
-
         n_steps = 8760
         idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
         zeros = pd.Series(0.0, index=idx)
-        # demand_kw such that sum*(1/60) = 500 kWh
-        demand_kw = 500.0 / (n_steps / 60.0)
-        # import_kw such that sum*(1/60) = 900 kWh
-        import_kw = 900.0 / (n_steps / 60.0)
+        # demand_kw such that its hourly rows total 500 kWh
+        demand_kw = 500.0 / n_steps
+        # import_kw such that its hourly rows total 900 kWh
+        import_kw = 900.0 / n_steps
         # gen_kw = 0 (no generation)
         sr = SimulationResults(
             generation=zeros.copy(),
@@ -1323,7 +1253,6 @@ class TestCbsOwnUseKwhHelper:
         )
         summary = calculate_summary(sr)
         # total_demand = 500, total_grid_import = 900 → demand - import = -400 → clamp to 0.0
-        from solar_challenge.finance import _cbs_own_use_kwh
         assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
         # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
@@ -1332,10 +1261,8 @@ class TestCbsOwnUseKwhHelper:
         assert result == pytest.approx(0.0, abs=1e-9)
 
 
-def _make_physics_column_scenario_cr6() -> "ScenarioConfig":  # type: ignore[name-defined]
+def _make_physics_column_scenario_cr6() -> ScenarioConfig:
     """The scenario TestPhysicsReconciliationColumn simulates: 2 homes × 5.5 kWp + 5 kWh, 3 days."""
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
     homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
     return ScenarioConfig(name="CR6-Physics-Test", period=period, homes=homes)
@@ -1384,8 +1311,6 @@ class TestPhysicsReconciliationColumn:
 
         REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
         """
-        from solar_challenge.finance import CostRecoverySolution, solve_cost_recovery_rate
-
         scenario = _make_physics_column_scenario_cr6()
         finance = _make_finance_fin_cr6()
 

@@ -6,6 +6,9 @@ These tests enforce that:
    ``-m 'not slow'``.
 3. Specific network-touching unit-test classes are also deselected under
    ``-m 'not slow'``, while pure-logic unit-test classes remain selected.
+4. The verify's mark expression selects every test in OFFLINE_INTEGRATION_FILES,
+   the integration modules that run offline from a seeded weather cache, and at
+   least one in each.
 
 All assertions run pytest in a subprocess so they reflect the *effective*
 pytest configuration, not just TOML parsing.  These tests must NOT be marked
@@ -19,18 +22,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests._lane_collection import suite_node_ids_matching
+
 # Repo root is three levels up from tests/unit/this_file.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 INTEGRATION_FILES = [
     "tests/integration/test_pvgis.py",
-    "tests/integration/test_home_simulation.py",
-    "tests/integration/test_fleet_simulation.py",
-    "tests/integration/test_dispatch_strategies.py",
-    "tests/integration/test_tou_dispatch.py",
-    "tests/integration/test_tariff_integration.py",
-    "tests/integration/test_ev_fleet.py",
+    "tests/integration/test_pv_performance_ratio.py",
 ]
+
+# Integration modules that run offline from a seeded weather cache, so the verify must run every test in them.
+OFFLINE_INTEGRATION_FILES = [
+    "tests/integration/test_fleet_simulation.py",
+    "tests/integration/test_ev_fleet.py",
+    "tests/integration/test_home_simulation.py",
+    "tests/integration/test_dispatch_strategies.py",
+    "tests/integration/test_tariff_integration.py",
+    "tests/integration/test_tou_dispatch.py",
+]
+
+# The mark expression of the verify's test_command in dark-factory-orchestrator.yaml.
+VERIFY_MARK_EXPRESSION = "not slow and not e2e"
 
 
 class TestMarkerRegistration:
@@ -70,10 +85,10 @@ class TestMarkerRegistration:
 
 
 class TestIntegrationSuiteExcludedUnderNotSlow:
-    """Verify that all integration test classes are deselected by ``-m 'not slow'``."""
+    """Verify that every test in INTEGRATION_FILES is deselected by ``-m 'not slow'``."""
 
     def test_integration_suite_excluded_under_not_slow(self):
-        """No integration test should be collected under ``-m 'not slow'``.
+        """No test in INTEGRATION_FILES should be collected under ``-m 'not slow'``.
 
         This check is intentionally dynamic — it does not enumerate class names.
         Instead it verifies that the unfiltered collection finds *something*
@@ -136,13 +151,30 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
         )
 
 
+class TestOfflineIntegrationFilesSelectedByTheVerify:
+    """Verify that the verify's mark expression selects every test of the integration modules that run offline."""
+
+    @pytest.mark.parametrize("path", OFFLINE_INTEGRATION_FILES)
+    def test_the_verify_selects_every_test(self, path: str) -> None:
+        dropped = suite_node_ids_matching(REPO_ROOT, path, f"not ({VERIFY_MARK_EXPRESSION})")
+        assert not dropped, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` drops {len(dropped)} of the tests in {path}, "
+            f"though they run offline from a seeded weather cache: {list(dropped)}"
+        )
+        selected = suite_node_ids_matching(REPO_ROOT, path, VERIFY_MARK_EXPRESSION)
+        assert selected, (
+            f"the verify's ``-m {VERIFY_MARK_EXPRESSION!r}`` selects no test in {path}, "
+            "so the check that it drops none holds vacuously"
+        )
+
+
 class TestNetworkedUnitClassesExcludedButPureKept:
     """Verify selective ``slow`` marking in the home and fleet unit tests.
 
     NOTE — hand-maintained allowlists: UNIT_TEST_FILES, NETWORKED_UNIT_CLASSES and
     PURE_UNIT_CLASSES are enumerated here rather than derived dynamically because
-    test_home_heat_pump.py and test_fleet.py mix slow and fast classes in the same
-    file, so a whole-file "count must be zero" assertion is not possible.  The
+    test_home_heat_pump.py mixes slow and fast classes in the same file, so a
+    whole-file "count must be zero" assertion is not possible.  The
     trade-off is that a newly added network-touching class that lacks
     ``@pytest.mark.slow`` will NOT be detected unless someone also adds it to
     NETWORKED_UNIT_CLASSES.  Reviewers adding new simulation-driven test classes to
@@ -157,20 +189,20 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     ]
 
     # Network-touching classes in the unit suite — must be deselected.
-    NETWORKED_UNIT_CLASSES = [
-        "TestHeatPumpIntegration",
+    NETWORKED_UNIT_CLASSES = ["TestHeatPumpIntegration"]
+
+    # Classes that run offline, as pure logic or from a seeded weather cache — must remain
+    # selected (guard against over-marking).
+    PURE_UNIT_CLASSES = [
+        "TestCalculateSummary",  # test_home.py
+        "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
+        "TestFleetSummary",      # test_fleet.py
+        # test_fleet.py — these simulate from the Bristol TMY that bristol_june_tmy seeds, no network
         "TestSimulateFleetIter",
         "TestParallelMatchesSequential",
         "TestSimulateHomeWeatherData",
         "TestMultiSweepIter",
         "TestCollectMultiSweepResults",
-    ]
-
-    # Pure-logic classes — must remain selected (guard against over-marking).
-    PURE_UNIT_CLASSES = [
-        "TestCalculateSummary",  # test_home.py
-        "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
-        "TestFleetSummary",      # test_fleet.py
     ]
 
     def _collected_classes(self, *pytest_args: str) -> set[str]:
@@ -202,7 +234,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
         return set(re.findall(r"<Class (\w+)>", result.stdout))
 
     def test_networked_unit_classes_excluded_but_pure_kept(self):
-        """Networked unit classes deselected; pure-logic classes still collected."""
+        """Networked unit classes deselected; offline classes still collected."""
         # Positive control: collect WITHOUT the filter, so a listed class that moved out
         # of UNIT_TEST_FILES or was renamed fails here instead of passing vacuously below.
         collected = self._collected_classes()
@@ -223,9 +255,9 @@ class TestNetworkedUnitClassesExcludedButPureKept:
                 "``-m 'not slow'`` — add ``@pytest.mark.slow`` to that class."
             )
 
-        # Pure-logic classes must still be COLLECTED.
+        # Offline classes must still be COLLECTED.
         for class_name in self.PURE_UNIT_CLASSES:
             assert class_name in not_slow, (
-                f"Pure unit class {class_name!r} was NOT collected under "
+                f"Offline unit class {class_name!r} was NOT collected under "
                 "``-m 'not slow'`` — do NOT mark it slow."
             )

@@ -3,6 +3,7 @@
 import dataclasses
 import math
 import re
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -10,16 +11,22 @@ import pvlib
 import pytest
 from solar_challenge.location import Location
 from solar_challenge.pv import (
+    DEFAULT_CEC_MODULE,
+    CecInverter,
     PVConfig,
     apply_degradation,
     calculate_degradation_factor,
+    candidate_cec_inverters,
+    cec_module_params,
     create_model_chain,
+    create_model_chain_picking_from,
     create_pv_system,
     create_pvwatts_inverter_params,
     create_simple_inverter_params,
     create_simple_module_params,
     interpolate_to_minute_resolution,
     simulate_pv_output,
+    usable_cec_inverters,
     wired_dc_capacity_kw,
 )
 
@@ -163,6 +170,27 @@ class TestPVConfigValidation:
         PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
 
 
+class TestSystemLossesConfig:
+    """PVConfig.system_losses is the fraction of each array's DC power lost before the inverter."""
+
+    def test_the_default_is_pvwatts_v5s_loss_budget(self) -> None:
+        assert PVConfig(capacity_kw=4.0).system_losses == pytest.approx(
+            pvlib.pvsystem.pvwatts_losses() / 100
+        )
+
+    @pytest.mark.parametrize("value", [-0.01, 1.0, 14.0, math.nan, math.inf, -math.inf])
+    def test_a_loss_outside_zero_to_one_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"System losses must be a fraction in [0, 1), got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), system_losses=value)
+
+    @pytest.mark.parametrize("value", [0.0, 0.05, 0.99])
+    def test_a_loss_in_zero_to_one_is_kept(self, value: float) -> None:
+        assert PVConfig(capacity_kw=4.0, system_losses=value).system_losses == value
+
+
 class TestCreatePVSystem:
     """Test PV-002: pvlib PVSystem creation from config."""
 
@@ -180,14 +208,6 @@ class TestCreatePVSystem:
         array = system.arrays[0]
         assert array.mount.surface_azimuth == 170.0
         assert array.mount.surface_tilt == 30.0
-
-    def test_uses_cec_module_params(self):
-        """PVSystem uses CEC module parameters."""
-        config = PVConfig(capacity_kw=4.0)
-        system = create_pv_system(config)
-        array = system.arrays[0]
-        # CEC modules have these parameters
-        assert "STC" in array.module_parameters or "a_ref" in array.module_parameters
 
     def test_uses_cec_inverter_params(self):
         """PVSystem uses CEC inverter parameters."""
@@ -217,15 +237,66 @@ class TestCECLibraryReuse:
         assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
 
     def test_customised_system_leaves_later_default_systems_unchanged(self):
-        baseline = create_pv_system(PVConfig(capacity_kw=4.0))
-        create_pv_system(
-            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, inverter_efficiency=0.90)
-        )
+        create_pv_system(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003))
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
         assert "gamma_pdc" not in later.arrays[0].module_parameters
-        assert later.inverter_parameters["Pdco"] == baseline.inverter_parameters["Pdco"]
+
+    def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
+        configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
+        systems = [create_pv_system(config) for config in configs]
+
+        for config, system in zip(configs, systems, strict=True):
+            inverter = system.inverter_parameters
+            efficiency = inverter["Paco"] / inverter["Pdco"]
+            assert efficiency == pytest.approx(config.inverter_efficiency), (
+                f"a system configured at {config.inverter_efficiency} runs its inverter "
+                f"at Paco/Pdco = {efficiency:.4f}"
+            )
+
+
+class TestTheDefaultModuleIsANamedCecLibraryRow:
+    """A PVConfig without custom_module_params wires the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names; cec_module_params reads a row by name."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_module_library(cls) -> pd.DataFrame:
+        """pvlib's CEC module library, read once for this class's tests."""
+        return pvlib.pvsystem.retrieve_sam("CECMod")
+
+    def test_a_default_system_wires_the_row_default_cec_module_names(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        system = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        for array in system.arrays:
+            pd.testing.assert_series_equal(
+                pd.Series(array.module_parameters),
+                cec_module_library[DEFAULT_CEC_MODULE],
+                check_names=False,
+            )
+
+    def test_cec_module_params_is_the_named_row_of_pvlibs_cec_module_library(
+        self, cec_module_library: pd.DataFrame
+    ) -> None:
+        for name in (
+            DEFAULT_CEC_MODULE,
+            cec_module_library.columns[0],
+            cec_module_library.columns[-1],
+        ):
+            pd.testing.assert_series_equal(
+                pd.Series(cec_module_params(name)),
+                cec_module_library[name],
+                check_names=False,
+            )
+
+    def test_a_name_with_no_row_in_pvlibs_cec_module_library_is_refused(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape("pvlib's CECMod library has no row named 'Not a CEC module'"),
+        ):
+            cec_module_params("Not a CEC module")
 
 
 class TestCreateModelChain:
@@ -693,7 +764,7 @@ def _dc_per_array(chain: pvlib.modelchain.ModelChain) -> tuple[pd.DataFrame, ...
     return dc if isinstance(dc, tuple) else (dc,)
 
 
-def _usable_cec_inverters() -> pd.DataFrame:
+def _usable_cec_inverter_numbers() -> pd.DataFrame:
     """The CEC catalogue's inverters with a positive finite rating, start-up power, nominal voltage and MPPT window, as numbers."""
     catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
     numbers = catalogue.loc[["Paco", "Pso", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(
@@ -783,7 +854,7 @@ class TestInverterMatchesStringVoltage:
         string_vmp = array.modules_per_string * array.module_parameters["V_mp_ref"]
         chosen = system.inverter_parameters
 
-        usable = _usable_cec_inverters()
+        usable = _usable_cec_inverter_numbers()
         equally_rated = usable[
             (usable["Paco"] == chosen["Paco"])
             & (usable["Mppt_low"] <= string_vmp)
@@ -894,6 +965,112 @@ class TestBatteryInverterChargersAreNotPicked:
             f"{MODULE_LEVEL_INVERTER_MAX_W:.0f} W"
         )
 
+    def test_the_candidates_are_the_usable_inverters_less_the_battery_inverter_chargers(
+        self,
+    ) -> None:
+        """docs/pv-inverter-string-matching.md §1 and §7."""
+        candidates = set(candidate_cec_inverters())
+        usable = set(usable_cec_inverters())
+        left_out = usable - candidates
+
+        assert sorted(inverter.name for inverter in candidates - usable) == []
+        assert left_out, "every usable CEC inverter is a candidate, battery inverter/chargers too"
+        assert sorted(
+            inverter.name for inverter in left_out if not inverter.is_battery_inverter
+        ) == []
+        assert sorted(
+            inverter.name for inverter in candidates if inverter.is_battery_inverter
+        ) == []
+
+
+class TestPickingFromGivenCandidates:
+    """create_model_chain_picking_from voltage-matches the CEC inverter from the candidates it is given; scripts/measure_mppt_window.py moves their MPPT windows with it."""
+
+    @pytest.fixture
+    def other(self) -> CecInverter:
+        """The first candidate whose MPPT window takes the default array's string and whose rating is not that of the inverter create_pv_system picks."""
+        default = create_pv_system(PVConfig.default_4kw())
+        (array,) = default.arrays
+        string_v = array.modules_per_string * array.module_parameters["V_mp_ref"]
+        return next(
+            candidate
+            for candidate in candidate_cec_inverters()
+            if candidate.admits(string_v)
+            and candidate.paco_w != default.inverter_parameters["Paco"]
+        )
+
+    def test_picks_its_inverter_from_the_given_candidates(self, other: CecInverter) -> None:
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [other])
+
+        picked = chain.system.inverter_parameters
+        assert (picked["Paco"], picked["Vdco"], picked["Mppt_low"], picked["Mppt_high"]) == (
+            other.paco_w,
+            other.vdco_v,
+            other.mppt_low_v,
+            other.mppt_high_v,
+        )
+
+    def test_the_system_takes_the_picked_inverters_catalogue_parameters_not_its_candidate_numbers(
+        self, other: CecInverter
+    ) -> None:
+        moved = dataclasses.replace(other, mppt_high_v=2 * other.mppt_high_v)
+
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [moved])
+
+        assert chain.system.inverter_parameters["Mppt_high"] == other.mppt_high_v
+
+    def test_a_candidate_must_name_a_row_of_pvlibs_cec_inverter_library(
+        self, other: CecInverter
+    ) -> None:
+        """The system takes the picked inverter's parameters from that row."""
+        with pytest.raises(
+            ValueError,
+            match=re.escape("pvlib's CECInverter library has no row named 'Not a CEC inverter'"),
+        ):
+            dataclasses.replace(other, name="Not a CEC inverter")
+
+    def test_the_system_names_the_inverter_it_picks(self, other: CecInverter) -> None:
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [other])
+
+        assert chain.system.inverter == other.name
+
+
+class TestTheSystemNamesItsInverter:
+    """create_pv_system names, as PVSystem.inverter, the CEC library row its voltage-matched inverter comes from; custom and PVWatts inverters name none."""
+
+    def test_the_name_is_the_candidate_whose_numbers_the_inverter_carries(self) -> None:
+        system = create_pv_system(PVConfig.default_4kw())
+        named = {candidate.name: candidate for candidate in candidate_cec_inverters()}.get(
+            system.inverter
+        )
+
+        assert named is not None, (
+            f"create_pv_system named its inverter {system.inverter!r}, which is not a candidate"
+        )
+        picked = system.inverter_parameters
+        assert (picked["Paco"], picked["Vdco"], picked["Mppt_low"], picked["Mppt_high"]) == (
+            named.paco_w,
+            named.vdco_v,
+            named.mppt_low_v,
+            named.mppt_high_v,
+        )
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_inverter_params=create_simple_inverter_params()),
+                id="custom-inverter-parameters",
+            ),
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=create_simple_module_params()),
+                id="pvwatts-module",
+            ),
+        ],
+    )
+    def test_custom_and_pvwatts_inverters_name_no_cec_row(self, config: PVConfig) -> None:
+        assert create_pv_system(config).inverter is None
+
 
 class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
@@ -951,6 +1128,46 @@ class TestPVWattsModule:
         assert kwh_at_90_percent / kwh_at_96_percent == pytest.approx(0.90 / 0.96, rel=0.01), (
             f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
             f"{kwh_at_96_percent:.3f} kWh at 96%"
+        )
+
+
+class TestCecInverterEfficiency:
+    """The voltage-matched CEC inverter runs at PVConfig.inverter_efficiency at its rated output, not at its catalogue efficiency."""
+
+    @pytest.mark.parametrize("capacity_kw", [3.0, 3.68, 4.0, 5.0, 6.0])
+    @pytest.mark.parametrize(
+        "efficiency_kwargs",
+        [{}, {"inverter_efficiency": 0.96}, {"inverter_efficiency": 0.90}, {"inverter_efficiency": 0.98}],
+        ids=["default", "explicit-0.96", "0.90", "0.98"],
+    )
+    def test_rated_output_efficiency_is_the_configured_one(
+        self, capacity_kw: float, efficiency_kwargs: dict[str, float]
+    ) -> None:
+        config = PVConfig(capacity_kw=capacity_kw, **efficiency_kwargs)
+        inverter = create_pv_system(config).inverter_parameters
+        efficiency = inverter["Paco"] / inverter["Pdco"]
+
+        assert efficiency == pytest.approx(config.inverter_efficiency), (
+            f"{capacity_kw} kW configured at {config.inverter_efficiency} runs its inverter "
+            f"at Paco/Pdco = {efficiency:.4f}"
+        )
+
+    @pytest.mark.parametrize("capacity_kw", [3.68, 5.0])
+    def test_ac_energy_rises_with_the_configured_efficiency_through_the_default(
+        self, capacity_kw: float, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        efficiencies = (0.95, 0.955, 0.96, 0.965, 0.97)
+        kwh = [
+            simulate_pv_output(
+                PVConfig(capacity_kw=capacity_kw, inverter_efficiency=efficiency),
+                Location.bristol(),
+                clear_june_daytime,
+            ).sum()
+            for efficiency in efficiencies
+        ]
+
+        assert all(lower < higher for lower, higher in zip(kwh, kwh[1:])), ", ".join(
+            f"{efficiency:.3f} -> {energy:.3f} kWh" for efficiency, energy in zip(efficiencies, kwh)
         )
 
 
@@ -1029,3 +1246,135 @@ class TestWiredDcCapacity:
         )
 
         assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)
+
+
+LINEAR_INVERTER_CONFIG = PVConfig(
+    capacity_kw=4.0,
+    custom_inverter_params=create_simple_inverter_params(efficiency=0.96, capacity_w=8000.0),
+)
+
+CHAIN_BUILDERS = [
+    pytest.param(
+        lambda config: create_model_chain(config, Location.bristol()),
+        id="create_model_chain",
+    ),
+    pytest.param(
+        lambda config: create_model_chain_picking_from(
+            config, Location.bristol(), candidate_cec_inverters()
+        ),
+        id="create_model_chain_picking_from",
+    ),
+]
+
+
+class TestSystemLossesReachTheInverterAsDCPower:
+    """Each array's DC power falls by PVConfig.system_losses before the inverter, at unchanged voltage."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(LINEAR_INVERTER_CONFIG, id="default-losses"),
+            pytest.param(
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05), id="5%-losses"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    def test_a_linear_inverter_passes_on_exactly_the_kept_fraction(
+        self, request: pytest.FixtureRequest, config: PVConfig, day: str
+    ) -> None:
+        """The simple inverter's AC is (Paco / Pdco) x DC power whatever the voltage, and 4 kW of modules never reach its 8 kW rating."""
+        weather = request.getfixturevalue(day)
+        lossless = dataclasses.replace(config, system_losses=0.0)
+
+        lossless_kwh = simulate_pv_output(lossless, Location.bristol(), weather).sum()
+        kwh = simulate_pv_output(config, Location.bristol(), weather).sum()
+
+        assert lossless_kwh > 0
+        assert kwh / lossless_kwh == pytest.approx(1 - config.system_losses, rel=1e-9), (
+            f"{config.system_losses:.4%} system losses on the {day} kept {kwh:.4f} kWh "
+            f"of the lossless {lossless_kwh:.4f} kWh"
+        )
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize("build", CHAIN_BUILDERS)
+    @pytest.mark.parametrize(
+        ("capacity_kw", "array_count"), [(4.0, 1), (7.6, 2)], ids=["one-array", "two-arrays"]
+    )
+    def test_every_chain_builder_lowers_dc_power_not_voltage(
+        self,
+        build: Callable[[PVConfig], pvlib.modelchain.ModelChain],
+        capacity_kw: float,
+        array_count: int,
+        clear_june_daytime: pd.DataFrame,
+    ) -> None:
+        """The Sandia and ADR inverters read v_mp, and create_pv_system matches the strings' voltage to the inverter's MPPT window."""
+        config = PVConfig(capacity_kw=capacity_kw)
+        lossy = build(config)
+        lossless = build(dataclasses.replace(config, system_losses=0.0))
+        assert len(lossy.system.arrays) == array_count, (
+            f"{capacity_kw} kW was wired as {_wiring(lossy.system)} (modules per string, "
+            f"strings), not as the {array_count} array(s) this case covers"
+        )
+
+        lossy.run_model(clear_june_daytime)
+        lossless.run_model(clear_june_daytime)
+
+        kept = 1 - config.system_losses
+        for lossy_dc, lossless_dc in zip(_dc_per_array(lossy), _dc_per_array(lossless), strict=True):
+            np.testing.assert_allclose(lossy_dc["p_mp"], lossless_dc["p_mp"] * kept)
+            np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
+            pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig(capacity_kw=4.0), id="default-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), id="no-losses"),
+        ],
+    )
+    def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
+        chain = create_model_chain(config, Location.bristol())
+
+        chain.run_model(clear_june_daytime)
+
+        assert chain.results.losses == pytest.approx(1 - config.system_losses)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(
+                    capacity_kw=6.0,
+                    inverter_capacity_kw=3.0,
+                    custom_module_params=create_simple_module_params(),
+                ),
+                id="pvwatts-6kw-on-3kw",
+            ),
+            pytest.param(PVConfig(capacity_kw=8.0, inverter_capacity_kw=3.68), id="cec-8kw-on-3.68kw"),
+        ],
+    )
+    def test_an_inverter_limited_array_still_reaches_its_rating(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        """A derate of the AC instead would cap the peak below the rating and take the whole fraction of the energy."""
+        lossy = simulate_pv_output(config, Location.bristol(), clear_june_daytime)
+        lossless = simulate_pv_output(
+            dataclasses.replace(config, system_losses=0.0), Location.bristol(), clear_june_daytime
+        )
+        system = f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter"
+
+        assert lossy.max() == pytest.approx(lossless.max()), (
+            f"{system} peaked at {lossy.max():.3f} kW with system losses "
+            f"and at {lossless.max():.3f} kW without"
+        )
+        kept = 1 - config.system_losses
+        assert kept * lossless.sum() < lossy.sum() < lossless.sum(), (
+            f"{system} kept {lossy.sum() / lossless.sum():.4f} of its lossless energy on the clear "
+            f"June day; with the inverter clipping, it should keep more than its DC's {kept:.4f} "
+            "and less than all of it"
+        )

@@ -13,8 +13,6 @@ import pytest
 
 pytest.importorskip("jinja2")
 from tests._css_classes import (
-    applied_classes_in_script,
-    applied_classes_in_template,
     custom_property_references,
     declared_custom_properties,
     keyframes_names,
@@ -22,6 +20,7 @@ from tests._css_classes import (
 )
 from tests._dashboard_sources import (
     HAND_WRITTEN_STYLESHEET_KEY,
+    dashboard_applied_classes_by_source,
     dashboard_script_sources,
     dashboard_template_sources,
     hand_written_stylesheet_source,
@@ -30,10 +29,7 @@ from tests._dashboard_sources import (
 
 
 def test_every_class_the_hand_written_stylesheet_styles_is_applied_by_the_dashboard() -> None:
-    applied = set().union(
-        *map(applied_classes_in_template, dashboard_template_sources().values()),
-        *map(applied_classes_in_script, dashboard_script_sources().values()),
-    )
+    applied = set().union(*dashboard_applied_classes_by_source().values())
     unapplied = selector_classes(hand_written_stylesheet_source()) - applied
 
     assert unapplied == set(), (

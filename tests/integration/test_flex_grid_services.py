@@ -5,8 +5,7 @@
 Tests the cross-task seam: board scenario YAML → parse_finance_config →
 project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
-Step-1 (RED) → Step-2 (GREEN): field-fill assertion on the YAML literal.
-Steps 3–6 (GREEN on arrival): seam-verification that the consuming math
+Field-fill assertion on the YAML literal, then seam verification that the consuming math
 (W2-CR2, project_multi_year._simulate_age) propagates the band value into project surplus.
 """
 from __future__ import annotations
@@ -14,7 +13,23 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import pandas as pd
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import (
+    ScenarioConfig,
+    SimulationPeriod,
+    load_config,
+    load_fleet_config,
+    parse_finance_config,
+)
+from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
+from solar_challenge.fleet import FleetResults
+from solar_challenge.flex import resolve_grid_services_band
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 
 pytestmark = pytest.mark.integration
 
@@ -22,7 +37,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 
 
 # ---------------------------------------------------------------------------
-# Step-1 RED / Step-2 GREEN: field-fill assertion
+# Field-fill assertion
 # ---------------------------------------------------------------------------
 
 
@@ -30,15 +45,11 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     """Board scenario finance.grid_services_income_per_kw_per_year_gbp must equal
     resolve_grid_services_band("central") == £12.0/kW.
 
-    RED on base: YAML field is currently 0.0 != 12.0.
-    GREEN after step-2 YAML edit (12.0 written directly with provenance comment).
+    The YAML writes 12.0 directly, with a provenance comment.
 
     Also asserts the scenario's flex_band key lowers to "central" to document
     provenance: the value derives from this band.
     """
-    from solar_challenge.config import load_config, parse_finance_config
-    from solar_challenge.flex import resolve_grid_services_band
-
     cfg = load_config(SCENARIO)
 
     # Provenance: the YAML's flex_band must be "central"
@@ -57,23 +68,22 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers for steps 3–6 seam-verification
+# Shared helpers for the seam-verification tests
 # ---------------------------------------------------------------------------
 
 
-def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # type: ignore[name-defined]
+def _make_synthetic_sim_results(n_steps: int = 8760) -> SimulationResults:
     """Build a single deterministic, age-independent SimulationResults.
 
-    Uses hourly resolution (n_steps=8760) — energy = sum*(1/60) still correct.
+    Uses hourly resolution (n_steps=8760): each kW row counts for the hour it
+    lasts, so the year totals 2,000 kWh of self-consumption, 800 kWh of export
+    and 1,400 kWh of import.
     All arrays are constant scalars; no PVGIS, no stochastic load.
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = 2000.0 / (n_steps / 60.0)
-    exp_kw = 800.0 / (n_steps / 60.0)
-    imp_kw = 1400.0 / (n_steps / 60.0)
+    sc_kw = 2000.0 / n_steps
+    exp_kw = 800.0 / n_steps
+    imp_kw = 1400.0 / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
@@ -94,10 +104,8 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     )
 
 
-def _synthetic_fleet_results(homes: list) -> "FleetResults":  # type: ignore[name-defined]
+def _synthetic_fleet_results(homes: list) -> FleetResults:
     """Build a deterministic FleetResults with one SimulationResults per home."""
-    from solar_challenge.fleet import FleetResults
-
     per_home = [_make_synthetic_sim_results() for _ in homes]
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
@@ -107,20 +115,12 @@ def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-d
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:  # type: ignore[return]
+def _board_econ_scenario() -> tuple:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py:
       load_config → parse_finance_config → load_fleet_config → ScenarioConfig
     """
-    from solar_challenge.config import (
-        ScenarioConfig,
-        SimulationPeriod,
-        load_config,
-        load_fleet_config,
-        parse_finance_config,
-    )
-
     cfg = load_config(SCENARIO)
     finance = parse_finance_config(cfg.get("finance"))
     # The board YAML ships capacity_at_events after task-76 ε flip; pin flat
@@ -138,19 +138,17 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
 
 
 def _surplus_at(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
     simulate: "Callable",  # type: ignore[name-defined]
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
-    from solar_challenge.finance import project_economics, project_multi_year
-
     curve = project_multi_year(scenario, finance, simulate=simulate)
     return project_economics(curve, scenario, finance).mean_fleet_surplus_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
-# Step-3 (GREEN on arrival): board surplus carries the central increment
+# Board surplus carries the central increment
 # ---------------------------------------------------------------------------
 
 
@@ -161,8 +159,6 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     Uses constant simulate (PVGIS-free, age-independent) → exact delta to rel=1e-9.
     The board fleet has 100 homes × 2.5 kW battery → Σ = 250 kW.
     """
-    from solar_challenge.flex import resolve_grid_services_band
-
     scenario, finance_loaded = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -195,7 +191,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-4 (GREEN on arrival): each band moves surplus by its increment
+# Each band moves surplus by its increment
 # ---------------------------------------------------------------------------
 
 
@@ -205,8 +201,6 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
     Additionally asserts strict monotonicity: surplus(low) < surplus(central) < surplus(high).
     """
-    from solar_challenge.flex import resolve_grid_services_band
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -248,7 +242,7 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-5 (GREEN on arrival): unset grid_services is θ-safe no-op
+# Unset grid_services is a θ-safe no-op
 # ---------------------------------------------------------------------------
 
 
@@ -268,12 +262,6 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     from 0.0, or that has the parser supply its own value for an omitted key,
     would be caught here.
     """
-    from solar_challenge.config import (
-        FinanceConfig,
-        load_config,
-        parse_finance_config,
-    )
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -336,7 +324,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-6 (GREEN on arrival): battery vs no-battery home differ by flex increment
+# Battery vs no-battery home differ by flex increment
 # ---------------------------------------------------------------------------
 
 
@@ -346,16 +334,6 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     With central grid_services: surplus − surplus(0.0) == central × 2.5 == £30.
     Proves only the battery home contributes to Σ max_discharge_kw.
     """
-    from solar_challenge.battery import BatteryConfig  # type: ignore[attr-defined]
-    from solar_challenge.config import (  # type: ignore[attr-defined]
-        ScenarioConfig,
-        SimulationPeriod,
-    )
-    from solar_challenge.flex import resolve_grid_services_band
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.pv import PVConfig
-
     # Build a 2-home scenario: home_a has battery, home_b does not
     pv = PVConfig(capacity_kw=5.0, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
@@ -377,7 +355,6 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     simulate = _constant_simulate(fr)
 
     # Finance config: board-like but with controllable grid_services
-    from solar_challenge.config import load_config, parse_finance_config
     cfg = load_config(SCENARIO)
     finance_base = parse_finance_config(cfg.get("finance"))
     assert finance_base is not None

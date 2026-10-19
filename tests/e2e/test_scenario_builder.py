@@ -1,18 +1,21 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 import yaml
-from playwright.sync_api import Locator, Page, Response, expect
+from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
+from pytest_playwright import CreateContextCallback
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 pytestmark = pytest.mark.e2e
 
@@ -54,6 +57,16 @@ def test_builder_no_js_errors(
 # ── Accordion sections ───────────────────────────────────────────────
 
 
+_ACCORDION_SECTIONS: dict[str, tuple[str, str]] = {
+    "General": ("textbox", "Description"),
+    "Period": ("textbox", "Start Date"),
+    "Location": ("combobox", "Location Preset"),
+    "Fleet Distribution": ("spinbutton", "Number of Homes"),
+    "Tariff": ("spinbutton", "Import Rate (GBP/kWh)"),
+}
+"""The accordion's sections in page order, each by its header's name, with the role and name of one control its panel holds."""
+
+
 def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     """The accordion should have General, Period, Location, Fleet Distribution,
     and Tariff sections.
@@ -61,17 +74,77 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     page.goto(live_server + "/scenarios/builder")
     page.wait_for_load_state("networkidle")
 
-    expected_sections = ["General", "Period", "Location", "Fleet Distribution", "Tariff"]
-
-    for section_name in expected_sections:
-        accordion_btn = page.locator(
-            "button",
-            has_text=section_name,
-        ).first
+    for section_name in _ACCORDION_SECTIONS:
         expect(
-            accordion_btn,
+            page.get_by_role("button", name=section_name, exact=True),
             f"Accordion section '{section_name}' should be visible",
         ).to_be_visible()
+
+
+def _expect_expanded_headers(page: Page, open_section: str | None, *, message: str | None = None) -> None:
+    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed. A failure reports *message*, if given."""
+    for section in _ACCORDION_SECTIONS:
+        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section), message).to_be_visible()
+
+
+def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_server: str) -> None:
+    """General's header alone is exposed as expanded when the page loads; opening Period moves that to Period's header, and closing Period leaves every header collapsed."""
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(page, "General")
+
+    _open_section(page, "Period")
+    _expect_expanded_headers(page, "Period")
+
+    page.get_by_role("button", name="Period", exact=True).click()
+    _expect_expanded_headers(page, None)
+
+
+def _sections_shown_with_javascript_off(new_context: CreateContextCallback, live_server: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control the builder shows with JavaScript off, as it shows them until Alpine starts."""
+    page = new_context(java_script_enabled=False).new_page()
+    page.goto(live_server + "/scenarios/builder")
+    return {
+        section
+        for section, (role, name) in _ACCORDION_SECTIONS.items()
+        if page.get_by_role(role, name=name, exact=True).is_visible()
+    }
+
+
+def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
+    new_context: CreateContextCallback, page: Page, live_server: str
+) -> None:
+    """With JavaScript off, as until Alpine starts, the builder shows one section's control, and once Alpine has started that section's header alone is exposed as expanded, so no other section's panel shows while the page loads."""
+    shown = _sections_shown_with_javascript_off(new_context, live_server)
+    assert len(shown) == 1, f"with JavaScript off the builder shows the controls of {sorted(shown)}, not of exactly one section"
+    (shown_section,) = shown
+
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        shown_section,
+        message=f"the builder shows {shown_section}'s control before Alpine starts, so {shown_section}'s header alone should be exposed as expanded once Alpine has",
+    )
+
+
+def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+    panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
+    assert panel_id, f"the {header} header names no element in aria-controls"
+    panel = page.locator(f"id={panel_id}")
+    return {
+        section
+        for section, (role, name) in _ACCORDION_SECTIONS.items()
+        if panel.get_by_role(role, name=name, exact=True, include_hidden=True).count() > 0
+    }
+
+
+def test_each_section_header_controls_the_panel_that_holds_that_sections_controls(page: Page, live_server: str) -> None:
+    """The element each accordion header names in aria-controls holds that section's control, shown or not, and no other section's."""
+    page.goto(live_server + "/scenarios/builder")
+
+    assert {header: _sections_whose_control_the_panel_holds(page, header) for header in _ACCORDION_SECTIONS} == {
+        header: {header} for header in _ACCORDION_SECTIONS
+    }
 
 
 # ── YAML Preview pane ────────────────────────────────────────────────
@@ -200,11 +273,25 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
     }
 
 
-_DISTRIBUTION_CARDS = (
-    pytest.param("PV Capacity (kW)", "pv", id="pv"),
-    pytest.param("Battery Capacity (kWh)", "battery", id="battery"),
-    pytest.param("Annual Consumption (kWh)", "load", id="load"),
+class _Card(NamedTuple):
+    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, a fixed value for that field that differs from the card's default and lies within the card's min and max, and the value its add buttons start a new row at."""
+
+    heading: str
+    prefix: str
+    fixed_field: str
+    non_default_fixed_value: float
+    new_row_value: float
+
+
+_CARDS = (
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 6.5, 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 9.5, 5.0),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 4200, 3500),
 )
+
+_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
+
+_DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
 """(card heading, the prefix of its form fields)."""
 
 
@@ -214,8 +301,8 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
 ) -> None:
     """The group named by a distribution card's heading holds that heading, and one combobox, Distribution Type.
 
-    Choosing Normal Distribution there shows four spinbuttons, Mean, Std Dev, Min and Max,
-    which set that card's fields of the form the builder sends.
+    Choosing Normal (Gaussian) there shows four spinbuttons, Mean, Std Dev, Min (clamp) and Max (clamp),
+    which set that card's fields of the form the builder sends, as numbers.
     """
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
@@ -224,9 +311,9 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     expect(card_group.get_by_role("combobox")).to_have_count(1)
     expect(card_group.get_by_role("heading", name=card, exact=True)).to_be_visible()
     card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
-        label="Normal Distribution"
+        label="Normal (Gaussian)"
     )
-    for caption, value in {"Mean": "7", "Std Dev": "3", "Min": "1", "Max": "9"}.items():
+    for caption, value in {"Mean": "7", "Std Dev": "3", "Min (clamp)": "1", "Max (clamp)": "9"}.items():
         card_group.get_by_role("spinbutton", name=caption, exact=True).fill(value)
     expect(card_group.get_by_role("spinbutton")).to_have_count(4)
 
@@ -234,18 +321,55 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
 
     assert {field: value for field, value in sent.items() if field.startswith(prefix + "_")} == {
         f"{prefix}_distribution_type": "normal",
-        f"{prefix}_mean": "7",
-        f"{prefix}_std": "3",
-        f"{prefix}_min": "1",
-        f"{prefix}_max": "9",
+        f"{prefix}_mean": 7,
+        f"{prefix}_std": 3,
+        f"{prefix}_min": 1,
+        f"{prefix}_max": 9,
     }
 
 
-def _rendered_width(control: Locator) -> float:
-    """The width in pixels that *control* is laid out at."""
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_fixed_field(
+    page: Page, live_server: str, card: _Card
+) -> None:
+    """At Fixed Value, as every card opens, the card's group shows one spinbutton, named Fixed Value, which sets the card's fixed field of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    fixed_value = card_group.get_by_role("spinbutton", name="Fixed Value", exact=True)
+
+    expect(fixed_value).to_have_count(1)
+    expect(card_group.get_by_role("spinbutton")).to_have_count(1)
+    fixed_value.fill(str(card.non_default_fixed_value))
+
+    assert _form_sent_on_validate(page)[card.fixed_field] == card.non_default_fixed_value
+
+
+def test_a_card_at_uniform_shows_two_spinbuttons_min_and_max_that_set_its_range(page: Page, live_server: str) -> None:
+    """Choosing Uniform in a card's Distribution Type shows two spinbuttons in its group, Min and Max, which set the card's min and max of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+
+    card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(label="Uniform")
+    card_group.get_by_role("spinbutton", name="Min", exact=True).fill("2.5")
+    card_group.get_by_role("spinbutton", name="Max", exact=True).fill("7.5")
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2)
+
+    sent = _form_sent_on_validate(page)
+
+    assert (sent["pv_distribution_type"], sent["pv_min"], sent["pv_max"]) == ("uniform", 2.5, 7.5)
+
+
+def _layout_box(control: Locator) -> FloatRect:
+    """The box *control* is laid out in."""
     box = control.bounding_box()
     assert box is not None, "the control has no layout box"
-    return box["width"]
+    return box
+
+
+_PHONE_VIEWPORT: ViewportSize = {"width": 375, "height": 800}
+"""The viewport of a phone."""
 
 
 def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
@@ -256,18 +380,277 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
     its content unless it resets that, which would widen the combobox beyond the card's edge.
     """
-    page.set_viewport_size({"width": 375, "height": 800})
+    page.set_viewport_size(_PHONE_VIEWPORT)
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
     card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
     distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
     expect(distribution_type).to_be_visible()
-    width_before = _rendered_width(distribution_type)
+    width_before = _layout_box(distribution_type)["width"]
 
     distribution_type.select_option(label="Weighted Discrete")
-    expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
+    expect(card_group.get_by_role("button", name="Add Row", exact=True)).to_be_visible()
 
-    assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
+    assert _layout_box(distribution_type)["width"] == pytest.approx(width_before, abs=0.5)
+
+
+# ── Distribution cards: the fields and rows each card sends ──────────
+
+
+def _choose_in_every_card(page: Page, distribution_type: str) -> None:
+    """Open Fleet Distribution and choose *distribution_type* in every card's Distribution Type combobox."""
+    _open_section(page, "Fleet Distribution")
+    for card in _CARDS:
+        page.get_by_role("group", name=card.heading, exact=True).get_by_role(
+            "combobox", name="Distribution Type", exact=True
+        ).select_option(label=distribution_type)
+
+
+def _card_fields(sent: dict[str, Any], card: _Card) -> set[str]:
+    """The fields of the form *sent* that give *card*: those named with its prefix, and its fixed field."""
+    return {field for field in sent if field.startswith(card.prefix + "_") or field == card.fixed_field}
+
+
+def test_a_card_at_fixed_value_sends_only_its_fixed_value(page: Page, live_server: str) -> None:
+    """Every card opens at Fixed Value, and the form the builder previews on opening gives each card's fixed value alone."""
+    sent = open_builder(page, live_server).request.post_data_json
+
+    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
+        card.prefix: {card.fixed_field} for card in _CARDS
+    }
+
+
+@pytest.mark.parametrize(
+    ("distribution_type", "type_value", "parameters"),
+    [
+        pytest.param("Normal (Gaussian)", "normal", ("mean", "std", "min", "max"), id="normal"),
+        pytest.param("Uniform", "uniform", ("mean", "std", "min", "max"), id="uniform"),
+        pytest.param("Weighted Discrete", "weighted_discrete", ("wd_values",), id="weighted_discrete"),
+        pytest.param("Shuffled Pool", "shuffled_pool", ("sp_entries",), id="shuffled_pool"),
+    ],
+)
+def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_reads(
+    page: Page, live_server: str, distribution_type: str, type_value: str, parameters: tuple[str, ...]
+) -> None:
+    """With *distribution_type* chosen in every card, the form the builder sends gives each card that type and its *parameters*, and not its fixed value.
+
+    Uniform sends all four parameters as normal does; builder_form.py reads only min and max of it.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, distribution_type)
+
+    sent = _form_sent_on_validate(page)
+
+    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
+        card.prefix: {f"{card.prefix}_distribution_type", *(f"{card.prefix}_{name}" for name in parameters)}
+        for card in _CARDS
+    }
+    assert {sent[f"{card.prefix}_distribution_type"] for card in _CARDS} == {type_value}
+
+
+class _RowList(NamedTuple):
+    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, and the number paired with each row's value and that number's caption."""
+
+    distribution_type: str
+    rows_field: str
+    column: str
+    column_caption: str
+
+
+_ROW_LISTS = (
+    pytest.param(_RowList("Weighted Discrete", "wd_values", "weight", "Weight"), id="weighted_discrete"),
+    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "Count"), id="shuffled_pool"),
+)
+
+_REMOVE_ROW_BUTTONS = re.compile(r"^Remove Row \d+$")
+"""The names of a card's remove buttons: Remove Row and the number of the row it removes, counted from 1 within the card."""
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_add_and_remove_buttons_change_only_its_rows(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, a card's add button appends a row holding the card's new-row value and 10, and its Remove Row 1 button then removes its first row.
+
+    The card shows each change, and no other field of the form the builder sends changes.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    rows = sent_before[rows_field]
+    new_row = {"value": card.new_row_value, row_list.column: 10}
+
+    card_group.get_by_role("button", name="Add Row", exact=True).click()
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * (len(rows) + 1))
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows, new_row]}
+
+    card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(rows))
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows[1:], new_row]}
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row_list: _RowList) -> None:
+    """Removing each card's first row until one is left leaves that row without a remove button, and the form the builder sends keeps it."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    sent_before = _form_sent_on_validate(page)
+    rows_before = {card.prefix: sent_before[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS}
+    assert all(len(rows) > 1 for rows in rows_before.values()), (
+        f"every card must open with more than one row, or the test removes none: {rows_before}"
+    )
+
+    for card in _CARDS:
+        card_group = page.get_by_role("group", name=card.heading, exact=True)
+        for remaining in range(len(rows_before[card.prefix]) - 1, 0, -1):
+            card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
+            expect(card_group.get_by_role("spinbutton")).to_have_count(2 * remaining)
+        expect(card_group.get_by_role("button", name=_REMOVE_ROW_BUTTONS)).to_have_count(0)
+
+    sent_after = _form_sent_on_validate(page)
+    assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
+        prefix: rows[-1:] for prefix, rows in rows_before.items()
+    }
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_rows_have_spinbuttons_named_for_their_row_that_set_that_row(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, row n of a card has two spinbuttons in its group, Value n and Weight n (or Count n), which set row n of the rows the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    typed = [{"value": 100 + n, row_list.column: n} for n in range(1, len(sent_before[rows_field]) + 1)]
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(typed))
+
+    for n, row in enumerate(typed, start=1):
+        card_group.get_by_role("spinbutton", name=f"Value {n}", exact=True).fill(str(row["value"]))
+        card_group.get_by_role("spinbutton", name=f"{row_list.column_caption} {n}", exact=True).fill(
+            str(row[row_list.column])
+        )
+
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: typed}
+
+
+def _expect_remove_buttons_numbered(card_group: Locator, rows: int) -> None:
+    """Expect *card_group* to show *rows* remove buttons, named Remove Row 1 to Remove Row <rows> in order."""
+    remove_buttons = card_group.get_by_role("button", name=_REMOVE_ROW_BUTTONS)
+    expect(remove_buttons).to_have_count(rows)
+    for n in range(1, rows + 1):
+        expect(remove_buttons.nth(n - 1)).to_have_accessible_name(f"Remove Row {n}")
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_remove_row_n_button_removes_row_n_and_the_rows_after_it_are_renumbered(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, each of a card's rows has a remove button named for it; Remove Row 2 removes the second row alone, and the rows after it take the numbers before theirs."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    rows = sent_before[rows_field]
+    assert len(rows) > 2, f"the card must open with more than two rows, or Remove Row 2 renumbers none: {rows}"
+    _expect_remove_buttons_numbered(card_group, len(rows))
+
+    card_group.get_by_role("button", name="Remove Row 2", exact=True).click()
+
+    _expect_remove_buttons_numbered(card_group, len(rows) - 1)
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [rows[0], *rows[2:]]}
+
+
+def test_a_cards_shuffled_pool_shows_the_total_of_its_counts(page: Page, live_server: str) -> None:
+    """With Shuffled Pool chosen in every card, each card shows the total of its counts, and changing one card's count changes that card's total alone."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, "Shuffled Pool")
+    sent = _form_sent_on_validate(page)
+    totals = {card.heading: sum(row["count"] for row in sent[f"{card.prefix}_sp_entries"]) for card in _CARDS}
+    card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
+    for heading, card_group in card_groups.items():
+        expect(card_group.get_by_text("Total:")).to_have_text(f"Total: {totals[heading]} homes")
+
+    pv_heading = _CARDS[0].heading
+    first_count = card_groups[pv_heading].get_by_role("spinbutton", name="Count 1", exact=True)
+    first_count.fill(str(int(first_count.input_value()) + 7))
+
+    for heading, card_group in card_groups.items():
+        total = totals[heading] + (7 if heading == pv_heading else 0)
+        expect(card_group.get_by_text("Total:")).to_have_text(f"Total: {total} homes")
+
+
+def _phone_card_groups_with_rows(page: Page, live_server: str, row_list: _RowList) -> dict[str, Locator]:
+    """Open the builder at phone width with *row_list*'s distribution chosen in every card, and return each card's group by its heading, once each shows its add button."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
+    for card_group in card_groups.values():
+        expect(card_group.get_by_role("button", name="Add Row", exact=True)).to_be_visible()
+    return card_groups
+
+
+def _controls_outside(card_group: Locator) -> list[str]:
+    """The comboboxes, spinbuttons and buttons *card_group* shows whose box leaves the group's by more than half a pixel, each as its role, its number among those of its role, and its left and right edges."""
+    group = _layout_box(card_group)
+    left, right = group["x"], group["x"] + group["width"]
+    outside = []
+    for role in ("combobox", "spinbutton", "button"):
+        for number, control in enumerate(card_group.get_by_role(role).all(), start=1):
+            box = _layout_box(control)
+            if box["x"] < left - 0.5 or box["x"] + box["width"] > right + 0.5:
+                outside.append(f"{role} {number} spans x={box['x']:.1f} to {box['x'] + box['width']:.1f}")
+    return outside
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_every_control_a_card_shows_with_its_rows_lies_within_the_card(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, each combobox, spinbutton and button a card's group shows lies within the group's box, to within half a pixel."""
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
+
+    assert {heading: _controls_outside(card_group) for heading, card_group in card_groups.items()} == {
+        heading: [] for heading in card_groups
+    }
+
+
+def _columns_out_of_line(card_group: Locator, captions: tuple[str, ...]) -> list[str]:
+    """The columns of *card_group*, each named by its caption, whose spinbutton in the second row starts more than half a pixel from the first row's, each as its caption and the two left edges."""
+    out_of_line = []
+    for caption in captions:
+        first, second = (
+            _layout_box(card_group.get_by_role("spinbutton", name=f"{caption} {row}", exact=True))["x"]
+            for row in (1, 2)
+        )
+        if abs(second - first) > 0.5:
+            out_of_line.append(f"{caption} 1 starts at x={first:.1f} and {caption} 2 at x={second:.1f}")
+    return out_of_line
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_does(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, a card's second row starts its Value column and its Weight (or Count) column where its first row does, to within half a pixel.
+
+    Only the first row shows the captions, above its spinbuttons, so the columns must stay
+    in line with the rows below it, which show none.
+    """
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
+
+    assert {
+        heading: _columns_out_of_line(card_group, ("Value", row_list.column_caption))
+        for heading, card_group in card_groups.items()
+    } == {heading: [] for heading in card_groups}
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
@@ -282,10 +665,7 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     payload of getFormData(), which tests/unit/test_web_scenarios.py's
     TestBuilderScenarioYaml._DEFAULT_FORM mirrors.
     """
-    with page.expect_response("**/api/scenarios/preview-yaml") as preview:
-        page.goto(live_server + "/scenarios/builder")
-
-    response = preview.value
+    response = open_builder(page, live_server)
     assert response.status == 200
     path = tmp_path / "builder.yaml"
     path.write_text(response.json()["yaml"], encoding="utf-8")
@@ -296,17 +676,138 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
 
 
+def _form_previewed_after(page: Page, action: Callable[[], None]) -> dict[str, Any]:
+    """Run *action* and return the form of the preview the builder requests after it."""
+    with page.expect_response("**/api/scenarios/preview-yaml") as previewed:
+        action()
+    return previewed.value.request.post_data_json
+
+
+def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page: Page, live_server: str) -> None:
+    """Choosing a card's distribution type, typing in one of its rows, adding a row and removing one each make the builder preview the form with that edit."""
+    open_builder(page, live_server)
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+
+    chosen = _form_previewed_after(
+        page,
+        lambda: card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
+            label="Weighted Discrete"
+        ),
+    )
+    rows = chosen["pv_wd_values"]
+    typed = _form_previewed_after(
+        page, lambda: card_group.get_by_role("spinbutton", name="Value 1", exact=True).fill("3.5")
+    )
+    added = _form_previewed_after(page, lambda: card_group.get_by_role("button", name="Add Row", exact=True).click())
+    removed = _form_previewed_after(
+        page, lambda: card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
+    )
+
+    new_row = {"value": 4.0, "weight": 10}
+    assert chosen["pv_distribution_type"] == "weighted_discrete"
+    assert typed["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:]]
+    assert added["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:], new_row]
+    assert removed["pv_wd_values"] == [*rows[1:], new_row]
+
+
+@pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
+def test_each_edit_to_a_section_control_previews_the_form_with_that_edit(
+    page: Page, live_server: str, section: str, role: str, caption: str, field: str, value: str
+) -> None:
+    """Typing into the control with *role* named *caption* in *section* makes the builder preview the form with *field* set to the value typed."""
+    open_builder(page, live_server)
+    _open_section(page, section)
+
+    previewed = _form_previewed_after(page, lambda: page.get_by_role(role, name=caption, exact=True).fill(value))
+
+    assert previewed[field] == value
+
+
+def test_each_edit_to_the_general_textboxes_a_period_preset_and_the_location_previews_the_form_with_that_edit(
+    page: Page, live_server: str
+) -> None:
+    """Typing a name or a description, choosing the 1 Month period, choosing Custom Location and typing each of its coordinates make the builder preview the form with that edit."""
+    open_builder(page, live_server)
+
+    named = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Scenario Name", exact=True).fill("Bristol Phase 1")
+    )
+    described = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Description", exact=True).fill("First 100 homes")
+    )
+    _open_section(page, "Period")
+    month = _form_previewed_after(page, lambda: page.get_by_role("button", name="1 Month", exact=True).click())
+    _open_section(page, "Location")
+    custom = _form_previewed_after(
+        page,
+        lambda: page.get_by_role("combobox", name="Location Preset", exact=True).select_option(
+            label="Custom Location"
+        ),
+    )
+    north = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Latitude", exact=True).fill("53.4")
+    )
+    west = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Longitude", exact=True).fill("-2.2")
+    )
+    high = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Altitude (m)", exact=True).fill("38")
+    )
+
+    assert (named["name"], described["description"]) == ("Bristol Phase 1", "First 100 homes")
+    assert (month["start_date"], month["end_date"]) == ("2024-06-01", "2024-06-30")
+    assert custom["location_preset"] == "custom"
+    assert (north["latitude"], west["longitude"], high["altitude"]) == ("53.4", "-2.2", "38")
+
+
+_DISTRIBUTIONS_YAML = yaml.safe_dump(
+    {
+        "name": "Uploaded distributions",
+        "period": {"start_date": "2024-06-01", "end_date": "2024-06-30"},
+        "fleet_distribution": {
+            "n_homes": 12,
+            "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [2.5, 7.5], "weights": [1, 3]}},
+            "battery": {"capacity_kwh": {"type": "normal", "mean": 6.0, "std": 1.5, "min": 0, "max": 12.0}},
+            "load": {"annual_consumption_kwh": {"type": "shuffled_pool", "values": [2500, 4100], "counts": [5, 7]}},
+        },
+    }
+)
+"""A fleet scenario giving each component a distribution of a different type."""
+
+
+def test_uploading_a_scenario_shows_each_distribution_in_its_card(page: Page, live_server: str, tmp_path: Path) -> None:
+    """Upload YAML shows each component's distribution in its card: its type, and its rows or parameters."""
+    open_builder(page, live_server)
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        upload_scenario(page, tmp_path / "scenario.yaml", _DISTRIBUTIONS_YAML)
+    _open_section(page, "Fleet Distribution")
+    pv, battery, load = (page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS)
+
+    for card_group, role, name, value in (
+        (pv, "combobox", "Distribution Type", "weighted_discrete"),
+        (pv, "spinbutton", "Value 1", "2.5"),
+        (pv, "spinbutton", "Weight 1", "1"),
+        (pv, "spinbutton", "Value 2", "7.5"),
+        (pv, "spinbutton", "Weight 2", "3"),
+        (battery, "combobox", "Distribution Type", "normal"),
+        (battery, "spinbutton", "Mean", "6"),
+        (battery, "spinbutton", "Std Dev", "1.5"),
+        (load, "combobox", "Distribution Type", "shuffled_pool"),
+        (load, "spinbutton", "Value 2", "4100"),
+        (load, "spinbutton", "Count 2", "7"),
+    ):
+        expect(card_group.get_by_role(role, name=name, exact=True)).to_have_value(value)
+
+
 def _preview_after_uploading(
     page: Page, live_server: str, tmp_path: Path, yaml_text: str
 ) -> Response:
     """The preview the builder, freshly opened, requests once *yaml_text* is uploaded to it."""
-    with page.expect_response("**/api/scenarios/preview-yaml"):
-        page.goto(live_server + "/scenarios/builder")
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
+    open_builder(page, live_server)
 
     with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
-        page.set_input_files('input[type="file"]', path)
+        upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
     return after_upload.value
 
 
@@ -406,6 +907,27 @@ def test_uploading_a_scenario_whose_location_omits_altitude_previews_that_scenar
     assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
 
 
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scenario_loads_into_the_form(
+    page: Page, live_server: str, tmp_path: Path, key: str
+) -> None:
+    """Tab moves focus from the Load Preset button to the Upload YAML button, and pressing *key* there opens a file chooser; the scenario chosen in it sets the form the builder previews."""
+    open_builder(page, live_server)
+    path = tmp_path / "scenario.yaml"
+    path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
+    page.get_by_role("button", name="Load Preset", exact=True).focus()
+
+    # The Tab and the focus check stay inside the with: they let the chooser listener register before the key press
+    with page.expect_file_chooser() as chooser:
+        page.keyboard.press("Tab")
+        expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
+        page.keyboard.press(key)
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        chooser.value.set_files(path)
+
+    assert after_upload.value.request.post_data_json["name"] == "Hand-written location"
+
+
 _RUN_EXPORT_YAML = scenario_yaml(
     fleet_scenario(
         [HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
@@ -442,13 +964,9 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     A run-history export has no fleet_distribution: block for the form to edit, and a
     weighted_discrete distribution without values has no rows to show.
     """
-    with page.expect_response("**/api/scenarios/preview-yaml") as opened:
-        page.goto(live_server + "/scenarios/builder")
-    form_before_upload = opened.value.request.post_data_json
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
+    form_before_upload = open_builder(page, live_server).request.post_data_json
 
-    page.set_input_files('input[type="file"]', path)
+    upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
 
     expect(page.locator("pre")).to_have_text(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")

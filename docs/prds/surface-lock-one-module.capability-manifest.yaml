@@ -1,0 +1,203 @@
+# Machine-readable twin of surface-lock-one-module.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# Code anchors verified against main c06d12b115ed (2026-10-17); checks are pattern-anchored.
+# task_id stays null until commit_planning stamps it. α depends on task 700 and δ on task 785
+# (both out of batch). η is held for S29 (x_seam_wait) and excluded from commit_planning.
+prd: docs/prds/surface-lock-one-module.md
+schema_version: 1
+signal_leaves: ["β", "ζ"]
+tasks:
+  - label: "α"
+    task_id: 913
+    title: "One surface-contract module by behaviour; no count literal; the import-time check covers every runtime pair"
+    capabilities:
+      - name: "lazy-module-merged-and-deleted"
+        binding: "grep: tests/unit/test_init_lazy_surface.py exists on main with 8 tests, 3 of them duplicated in test_public_api_surface.py"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_init_lazy_surface.py"]
+          expect: absent
+      - name: "count-literal-gone"
+        binding: "grep: test_all_equals_frozen_set asserts `== len(FROZEN_SET) == 69` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "== 69\\b"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "ownership-prose-gone"
+        binding: "grep: the module docstring names `T4 contract file`, `Relationship to T3` and `Bounded overlap` on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "T4 contract|Relationship to T3|Bounded overlap"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "derived-all-premise"
+        binding: "probe: a computed __all__ fails a mypy --strict consumer's star import (name-defined per name); a literal list passes. Premise correction to the stream row: derivation FAILS, so __all__ and the TYPE_CHECKING block stay literal and the all-pairs check replaces it"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a design premise, not a deliverable; recorded so the decompose re-walk does not re-propose derivation"
+      - name: "import-time-check-all-pairs"
+        binding: "grep: __init__.py's RuntimeError compares set(_SYMBOL_MODULE) with set(__all__) only; _SOURCE_NAME keys and duplicates are unchecked on main"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "B2/B3 are behavioural subprocess tests α writes (a stale alias and a duplicate each refuse import, naming the name); their verdict is the verify's"
+  - label: "β"
+    task_id: 915
+    title: "Constants by their value's structure; Enum aliases shown; nested public classes refused"
+    capabilities:
+      - name: "seg-presets-pinned-by-keys"
+        binding: "grep: FROZEN_SURFACE pins \"SEG_PRESETS\": \"dict\" on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"SEG_PRESETS\": \"dict\""
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "sequence-constant-pinned-by-items"
+        binding: "grep: FROZEN_SURFACE pins \"ELEXON_PROFILE_CLASS_1\": \"list\" and \"DEFAULT_EVENT_WINDOWS\": \"tuple\" on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"(ELEXON_PROFILE_CLASS_1\": \"list|DEFAULT_EVENT_WINDOWS\": \"tuple)\""
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "enum-members-with-aliases"
+        binding: "probe: Enum __members__ lists aliases and iteration skips them; surface_form iterates the Enum on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "for member in obj\\)"
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "nested-class-refused"
+        binding: "bound in-leaf: B9's fixture; no pinned class has a nested public class today (probe over 42 classes)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a behavioural rule test β writes; its verdict is the verify's"
+  - label: "γ"
+    task_id: 918
+    title: "The helper models only the typing constructs the surface uses"
+    capabilities:
+      - name: "type-variable-and-new-type-rules-gone"
+        binding: "grep: def _parsed_type_variable and def _parsed_new_type in tests/_surface_forms.py on main; no src annotation uses either construct"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _parsed_(type_variable|new_type)\\("
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "typeshed-gap-ignores-gone"
+        binding: "grep: `# type: ignore[union-attr]` on __default__ in the helper on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "type: ignore\\[union-attr\\]"
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "init-var-rule-gone"
+        binding: "grep: `isinstance(annotation, dataclasses.InitVar)` in _parsed on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "dataclasses\\.InitVar"
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "dropped-construct-fails-closed"
+        binding: "grep: _parsed's final raise TypeError (task 602); bound in-leaf by B5's parametrised test"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behavioural; B5 is RED today for the raising direction because each construct is spelled"
+  - label: "δ"
+    task_id: 920
+    title: "A generated __init__ read from the documented rule"
+    capabilities:
+      - name: "co-qualname-artefact-gone"
+        binding: "grep: _holds_generated_init compares init.__code__.co_qualname with init.__qualname__ on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "co_qualname"
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "module-keyed-cache"
+        binding: "producer: task 785 (pending, out of batch) re-keys _type_checking_imports by module; δ depends on it"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "delivered and checked by task 785's own rule test"
+      - name: "b12-compiler-change"
+        binding: "bound in-leaf: B12 replaces a generated __init__'s code with co_qualname set to its __qualname__ (CodeType.replace, 3.11+)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a behavioural rule test δ writes; its verdict is the verify's"
+  - label: "ε"
+    task_id: 924
+    title: "One reading per annotation: strings evaluated where they are parsed"
+    capabilities:
+      - name: "unevaluated-construct-gone"
+        binding: "grep: class _Unevaluated, whose text() returns the source as written, on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class _Unevaluated\\b"
+          paths: ["tests/_surface_forms.py"]
+          expect: absent
+      - name: "rows-respelled"
+        binding: "grep: 11 FROZEN_SURFACE rows (finance 6, community 5) hold Optional[...] or quoted class names on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Optional\\[|: 'FinanceConfig'"
+          paths: ["tests/unit/test_public_api_surface.py"]
+          expect: absent
+      - name: "source-style-invariance"
+        binding: "bound in-leaf: B6's two fixture modules (with and without future annotations) spell one form"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a behavioural rule test ε writes; its verdict is the verify's"
+  - label: "ζ"
+    task_id: 926
+    title: "The lock labels each drift additive or breaking and names the doc line"
+    capabilities:
+      - name: "classification-exists"
+        binding: "grep: neither `additive` nor `breaking` appears in the module or the helper on main; probe: re-rendering without dropped parameters reproduces a frozen dataclass row byte for byte"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def is_additive(_member)?_change\\("
+          paths: ["tests/_surface_forms.py"]
+          expect: present
+      - name: "message-labels-drift"
+        binding: "grep: _drift_message prints frozen and current forms only on main"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\badditive\\b"
+          paths: ["tests/unit/test_public_api_surface.py", "tests/_surface_forms.py"]
+          expect: present
+      - name: "b10-fixtures"
+        binding: "bound in-leaf: B10's eight fixture pairs and the table-level cases"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behavioural rule tests ζ writes; their verdict is the verify's"
+  - label: "η"
+    task_id: 927
+    title: "The released snapshot and the executable Unreleased-line obligation (held for S29)"
+    note: "Held: x_seam_wait = {stream: S29, contract: the release commit that bumps the version and writes the one release section}; excluded from the batch's commit_planning; released by S29's session. Filed held per lead ruling L32."
+    capabilities:
+      - name: "released-snapshot-test"
+        binding: "producer: S29's release commit (held); ζ upstream in batch"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "its names and module are decided at S29's release; no pattern can be bound before then"

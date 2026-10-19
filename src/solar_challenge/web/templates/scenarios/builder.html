@@ -1,11 +1,47 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
+{% from "components/distribution-editor.html" import distribution_editor %}
+
+{# One fleet component's distribution card: a group, named by its heading, editing scenarioBuilder's dists.<key> #}
+{% macro distribution_card(component) %}
+<div class="border-t border-slate-200 dark:border-slate-700 pt-4">
+    <fieldset class="min-w-0">
+        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">{{ component.heading }}</h4></legend>
+        {{ distribution_editor('dists.' ~ component.key, component) }}
+    </fieldset>
+</div>
+{% endmacro %}
+
+{# The accordion section open when the page loads; every other panel is cloaked, so it stays out of view until Alpine starts #}
+{% set initial_section = 'general' %}
+
+{# One accordion section: its header button opens the panel, closing whichever section was open, and exposes that open state and the panel it controls to assistive technology #}
+{% macro accordion_section(key, title, spacing_class='space-y-4') %}
+<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+    <button type="button"
+        @click="accordionOpen = accordionOpen === '{{ key }}' ? '' : '{{ key }}'"
+        :aria-expanded="accordionOpen === '{{ key }}'"
+        aria-controls="builder_section_{{ key }}"
+        class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+    >
+        <span>{{ title }}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === '{{ key }}'}" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+        </svg>
+    </button>
+    <div id="builder_section_{{ key }}" x-show="accordionOpen === '{{ key }}'"{% if key != initial_section %} x-cloak{% endif %} x-collapse class="px-5 pb-5 {{ spacing_class }}">
+        {{ caller() }}
+    </div>
+</div>
+{% endmacro %}
 
 {% block title %}Scenario Builder{% endblock %}
 
 {% block head %}
+{# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_page_scripts.py #}
 <!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
-<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/js-yaml/js-yaml-4.1.0.min.js') }}" integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"></script>
+<script src="{{ url_for('static', filename='js/distribution-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/scenario-builder.js') }}" defer></script>
 {% endblock %}
 
@@ -18,87 +54,52 @@
 ) }}
 
 <div
-    x-data="scenarioBuilder()"
+    x-data='scenarioBuilder({{ initial_section|tojson }}, {{ script_components|tojson }})'
     class="grid grid-cols-1 lg:grid-cols-5 gap-6"
 >
     <!-- Left Pane: Structured Form (60%) -->
     <div class="lg:col-span-3 space-y-4">
 
-        <!-- General Section -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <button
-                @click="accordionOpen = accordionOpen === 'general' ? '' : 'general'"
-                class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <span>General</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === 'general'}" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-            <div x-show="accordionOpen === 'general'" x-collapse class="px-5 pb-5 space-y-4">
+        {% call accordion_section('general', 'General') %}
                 <div>
                     <label for="builder_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Scenario Name</label>
-                    <input id="builder_name" type="text" x-model="name" @input="updatePreview()" placeholder="e.g. Bristol Phase 1"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    <input id="builder_name" type="text" x-model="name" placeholder="e.g. Bristol Phase 1"
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
                 <div>
                     <label for="builder_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
-                    <textarea id="builder_description" x-model="description" @input="updatePreview()" rows="2" placeholder="Optional description"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"></textarea>
+                    <textarea id="builder_description" x-model="description" rows="2" placeholder="Optional description"
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"></textarea>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
 
-        <!-- Period Section -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <button
-                @click="accordionOpen = accordionOpen === 'period' ? '' : 'period'"
-                class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <span>Period</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === 'period'}" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-            <div x-show="accordionOpen === 'period'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
+        {% call accordion_section('period', 'Period') %}
                 <div class="flex flex-wrap gap-2 mb-3">
-                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Full Year</button>
-                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Summer</button>
-                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Winter</button>
-                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">1 Month</button>
-                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">1 Week</button>
+                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Full Year</button>
+                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Summer</button>
+                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Winter</button>
+                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Month</button>
+                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Week</button>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label for="builder_start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
-                        <input id="builder_start_date" type="date" x-model="start_date" @change="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_start_date" type="date" x-model="start_date"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_end_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">End Date</label>
-                        <input id="builder_end_date" type="date" x-model="end_date" @change="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_end_date" type="date" x-model="end_date"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
 
-        <!-- Location Section -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <button
-                @click="accordionOpen = accordionOpen === 'location' ? '' : 'location'"
-                class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <span>Location</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === 'location'}" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-            <div x-show="accordionOpen === 'location'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
+        {% call accordion_section('location', 'Location') %}
                 <div>
                     <label for="builder_location_preset" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
-                    <select id="builder_location_preset" x-model="location_preset" @change="updatePreview()"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    <select id="builder_location_preset" x-model="location_preset"
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                         <option value="bristol">Bristol, UK</option>
                         <option value="london">London, UK</option>
                         <option value="edinburgh">Edinburgh, UK</option>
@@ -109,302 +110,53 @@
                 <div x-show="location_preset === 'custom'" x-cloak class="grid grid-cols-3 gap-4">
                     <div>
                         <label for="builder_latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
-                        <input id="builder_latitude" type="number" step="0.01" x-model="latitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_latitude" type="number" step="0.01" x-model="latitude"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
-                        <input id="builder_longitude" type="number" step="0.01" x-model="longitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_longitude" type="number" step="0.01" x-model="longitude"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_altitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Altitude (m)</label>
-                        <input id="builder_altitude" type="number" step="1" x-model="altitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_altitude" type="number" step="1" x-model="altitude"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
 
-        <!-- Fleet Distribution Section -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <button
-                @click="accordionOpen = accordionOpen === 'fleet' ? '' : 'fleet'"
-                class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <span>Fleet Distribution</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === 'fleet'}" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-            <div x-show="accordionOpen === 'fleet'" x-cloak x-collapse class="px-5 pb-5 space-y-5">
+        {% call accordion_section('fleet', 'Fleet Distribution', spacing_class='space-y-5') %}
                 <div>
                     <label for="builder_n_homes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
-                    <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes" @input="updatePreview()"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes"
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
 
-                <!-- PV Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">PV Capacity (kW)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_pv_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_pv_distribution_type" x-model="pv_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!pv_distribution_type">
-                                <input type="number" step="0.1" min="0.5" max="20" x-model="pv_capacity_kw" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="pv_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_pv_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_pv_mean" type="number" step="0.1" x-model="pv_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_pv_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_pv_std" type="number" step="0.1" x-model="pv_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="pv_distribution_type === 'normal' || pv_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_pv_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_pv_min" type="number" step="0.1" x-model="pv_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_pv_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_pv_max" type="number" step="0.1" x-model="pv_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="pv_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in pv_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="pv_wd_values.splice(idx, 1); updatePreview()" x-show="pv_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="pv_wd_values.push({value: 4.0, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="pv_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in pv_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="pv_sp_entries.splice(idx, 1); updatePreview()" x-show="pv_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="pv_sp_entries.push({value: 4.0, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
+                {% for component in fleet_components.values() %}
+                {{ distribution_card(component) }}
+                {% endfor %}
+        {% endcall %}
 
-                <!-- Battery Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Battery Capacity (kWh)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_battery_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_battery_distribution_type" x-model="battery_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!battery_distribution_type">
-                                <input type="number" step="0.1" min="0" max="100" x-model="battery_capacity_kwh" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="battery_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_battery_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_battery_mean" type="number" step="0.1" x-model="battery_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_battery_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_battery_std" type="number" step="0.1" x-model="battery_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="battery_distribution_type === 'normal' || battery_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_battery_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_battery_min" type="number" step="0.1" x-model="battery_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_battery_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_battery_max" type="number" step="0.1" x-model="battery_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="battery_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in battery_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="battery_wd_values.splice(idx, 1); updatePreview()" x-show="battery_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="battery_wd_values.push({value: 5.0, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="battery_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in battery_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="battery_sp_entries.splice(idx, 1); updatePreview()" x-show="battery_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="battery_sp_entries.push({value: 5.0, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-
-                <!-- Load Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Annual Consumption (kWh)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_load_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_load_distribution_type" x-model="load_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!load_distribution_type">
-                                <input type="number" step="100" min="500" max="20000" x-model="annual_consumption_kwh" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="load_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_load_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_load_mean" type="number" step="100" x-model="load_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_load_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_load_std" type="number" step="100" x-model="load_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="load_distribution_type === 'normal' || load_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_load_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_load_min" type="number" step="100" x-model="load_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_load_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_load_max" type="number" step="100" x-model="load_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="load_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in load_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="load_wd_values.splice(idx, 1); updatePreview()" x-show="load_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="load_wd_values.push({value: 3500, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="load_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in load_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="load_sp_entries.splice(idx, 1); updatePreview()" x-show="load_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="load_sp_entries.push({value: 3500, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-            </div>
-        </div>
-
-        <!-- Tariff Section -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <button
-                @click="accordionOpen = accordionOpen === 'tariff' ? '' : 'tariff'"
-                class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <span>Tariff</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="{'rotate-180': accordionOpen === 'tariff'}" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-            <div x-show="accordionOpen === 'tariff'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
+        {% call accordion_section('tariff', 'Tariff') %}
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label for="builder_import_rate" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Import Rate (GBP/kWh)</label>
-                        <input id="builder_import_rate" type="number" step="0.001" x-model="import_rate" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_import_rate" type="number" step="0.001" x-model="import_rate"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_seg_rate_pence_per_kwh" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SEG Export Rate (p/kWh)</label>
-                        <input id="builder_seg_rate_pence_per_kwh" type="number" step="0.1" min="0" x-model="seg_rate_pence_per_kwh" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        <input id="builder_seg_rate_pence_per_kwh" type="number" step="0.1" min="0" x-model="seg_rate_pence_per_kwh"
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
 
         <!-- Action Buttons -->
         <div class="flex flex-wrap gap-3">
             <button @click="validateScenario()"
-                class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
+                class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
                 Validate
             </button>
 
@@ -425,10 +177,11 @@
                 </div>
             </div>
 
-            <label class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors cursor-pointer">
+            <button type="button" @click="$refs.yamlFileInput.click()"
+                class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
                 Upload YAML
-                <input type="file" accept=".yaml,.yml" @change="uploadYaml($event)" class="hidden">
-            </label>
+            </button>
+            <input type="file" accept=".yaml,.yml" x-ref="yamlFileInput" @change="uploadYaml($event)" class="hidden">
 
             <button @click="downloadYaml()"
                 class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
@@ -468,7 +221,7 @@
                     <input type="text" id="save_name" x-model="saveName"
                         @keydown.enter="doSave()"
                         x-ref="saveNameInput"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
                 <div class="flex justify-end gap-3">
                     <button @click="showSaveModal = false"

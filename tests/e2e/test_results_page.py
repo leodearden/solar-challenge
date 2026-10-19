@@ -1,15 +1,31 @@
 """End-to-end tests for the Results page (/results/home/<id>).
 
 Uses seeded data fixtures (no live simulation needed) to verify
-page rendering, chart containers, tab switching, stat cards,
-download links and error handling, and that the daily balance
-chart agrees with the stat cards.
+page rendering, that each tab shows only its own charts, stat
+cards, download links and error handling, that the daily balance
+chart agrees with the stat cards, how a chart whose figure
+cannot be drawn is reported, that a hidden tab's chart is drawn
+only once its tab is shown, and that showing every tab logs no
+errors.
 """
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._results_page import open_chart_tab, show_chart_tab
+
 pytestmark = pytest.mark.e2e
+
+
+# -- The page's chart tabs --------------------------------------------------
+
+# The charts each tab shows for seeded_home_run, the tab selected on load last.
+_CHART_IDS_BY_TAB = {
+    "Power Flow": ("chart-power-flow",),
+    "Battery & Finance": ("chart-battery-soc", "chart-financial"),
+    "Analysis": (),
+    "Overview": ("chart-sankey", "chart-daily-balance"),
+}
 
 
 # -- Results page loads with seeded data ------------------------------------
@@ -29,41 +45,55 @@ def test_results_page_loads(
     expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
-# -- Chart containers exist ------------------------------------------------
+# -- Each tab shows only its own charts -------------------------------------
 
 
-def test_results_chart_containers_exist(
+def test_results_tabs_each_show_only_their_own_charts(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Overview tab shows both chart containers: #chart-sankey, #chart-daily-balance."""
-    run_id, _ = seeded_home_run
-    page.goto(live_server + f"/results/home/{run_id}")
-
-    for chart_id in ("#chart-sankey", "#chart-daily-balance"):
-        expect(page.locator(chart_id)).to_be_visible()
-
-
-# -- Tab switching ----------------------------------------------------------
-
-
-def test_results_tab_switching(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """Clicking each chart tab makes it the only selected tab.
+    """Clicking each chart tab selects it alone and shows only its own charts, drawn by Plotly.
 
     Overview is selected on load, so it is clicked last: only then does
     its click have to move the selection.
     """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
 
-    for name in ("Power Flow", "Battery & Finance", "Analysis", "Overview"):
-        page.get_by_role("tab", name=name, exact=True).click()
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(selected_tab).to_have_accessible_name(tab_name)
+        expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
+
+
+# -- Showing every tab logs no errors ---------------------------------------
+
+
+def test_results_page_shows_every_tab_without_errors(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Loading the page and showing each of its tabs logs no console error and throws no uncaught exception.
+
+    chart-renderer.js draws a hidden tab's charts only once the tab is shown, so every tab is shown.
+    """
+    run_id, _ = seeded_home_run
+    response = page.goto(live_server + f"/results/home/{run_id}")
+    assert response is not None
+    assert response.status == 200
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+
+    assert page_errors == [], f"Errors on /results/home/{run_id}: {page_errors}"
 
 
 # -- Stat card labels not truncated ----------------------------------------
@@ -134,6 +164,117 @@ def test_results_daily_balance_bars_add_up_to_the_stat_cards(
         bars = daily_bars[flow]
         assert len(bars) > 1, f"a multi-day run has several daily {flow} bars to add up, but the chart shows {len(bars)}"
         expect(_stat_card_value(page, card_label)).to_have_text(f"{sum(bars):.1f}")
+
+
+# -- A chart whose figure cannot be drawn is reported ----------------------
+
+_UNDRAWABLE_CHART_ID = "chart-undrawable"
+_POWER_FLOW_CHART_ID = "chart-power-flow"
+_POWER_FLOW_CONTAINER = f'<div id="{_POWER_FLOW_CHART_ID}"'
+_CHART_RENDERER_SCRIPT = '<script src="/static/js/chart-renderer.js"'
+_FAILED_DRAWING = "the drawing failed after Plotly.newPlot returned"
+_PLOTLY_REJECTS_THE_POWER_FLOW_DRAWING = (
+    "<script>(function () {"
+    " var newPlot = Plotly.newPlot;"
+    " Plotly.newPlot = function (container) {"
+    f" if (container.id === '{_POWER_FLOW_CHART_ID}') return Promise.reject(new Error('{_FAILED_DRAWING}'));"
+    " return newPlot.apply(this, arguments);"
+    " };"
+    "}());</script>"
+)
+
+
+def _serve_with(page: Page, url: str, insertion: str, anchor: str) -> None:
+    """Answer page's requests for url with the page served there, insertion just ahead of anchor, which it must hold once."""
+    served = page.request.get(url)
+    assert served.status == 200, f"GET {url} answered {served.status}"
+    html = served.text()
+    anchors = html.count(anchor)
+    assert anchors == 1, f"expected {anchor!r} once on the page, as the anchor for {insertion!r}; found {anchors}"
+    modified = html.replace(anchor, insertion + anchor)
+    page.route(
+        url,
+        lambda route: route.fulfill(
+            status=200, content_type="text/html; charset=utf-8", body=modified
+        ),
+    )
+
+
+def _errors_naming(page_errors: list[str], element_id: str) -> list[str]:
+    """The entries of page_errors that contain element_id, so an unrelated entry, such as a resource the browser failed to load, cannot change a verdict about the chart."""
+    return [error for error in page_errors if element_id in error]
+
+
+def test_a_chart_whose_figure_cannot_be_drawn_logs_one_error_naming_its_id_and_its_tabs_other_chart_still_draws(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Showing the Power Flow tab draws its charts together, the undrawable one first, so its failure must not stop chart-power-flow."""
+    run_id, _ = seeded_home_run
+    url = live_server + f"/results/home/{run_id}"
+    _serve_with(
+        page,
+        url,
+        f'<div id="{_UNDRAWABLE_CHART_ID}" class="w-full" data-chart-figure="not a figure"></div>',
+        _POWER_FLOW_CONTAINER,
+    )
+    page.goto(url)
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
+
+    with page.expect_console_message(lambda message: _UNDRAWABLE_CHART_ID in message.text):
+        open_chart_tab(page, "Power Flow")
+
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
+    errors_naming_the_chart = _errors_naming(page_errors, _UNDRAWABLE_CHART_ID)
+    assert len(errors_naming_the_chart) == 1, (
+        f"expected one error naming {_UNDRAWABLE_CHART_ID!r}, but the page logged: {page_errors}"
+    )
+
+
+def test_a_chart_whose_drawing_fails_after_plotly_newplot_returns_logs_one_error_naming_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Plotly.newPlot returns a promise, which rejects when a draw fails after its synchronous part; that failure is one error naming the chart, not an uncaught rejection."""
+    run_id, _ = seeded_home_run
+    url = live_server + f"/results/home/{run_id}"
+    _serve_with(page, url, _PLOTLY_REJECTS_THE_POWER_FLOW_DRAWING, _CHART_RENDERER_SCRIPT)
+    page.goto(url)
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
+
+    with page.expect_console_message(lambda message: _POWER_FLOW_CHART_ID in message.text):
+        open_chart_tab(page, "Power Flow")
+
+    errors_naming_the_chart = _errors_naming(page_errors, _POWER_FLOW_CHART_ID)
+    uncaught_failures = [
+        error for error in page_errors if _FAILED_DRAWING in error and _POWER_FLOW_CHART_ID not in error
+    ]
+    assert (len(errors_naming_the_chart), uncaught_failures) == (1, []), (
+        f"expected one error naming {_POWER_FLOW_CHART_ID!r} and no other carrying {_FAILED_DRAWING!r}, but the page logged: {page_errors}"
+    )
+
+
+# -- A hidden tab's chart is drawn once its tab is shown -------------------
+
+
+def test_a_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Power Flow's chart, in a tab hidden on load, is not drawn until its tab is shown (AC3)."""
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_have_count(0)
+
+    open_chart_tab(page, "Power Flow")
+
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
 
 
 # -- Download CSV returns 200 ----------------------------------------------

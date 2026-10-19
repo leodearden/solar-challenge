@@ -156,6 +156,30 @@ demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at 
   surplus generation as export (`docs/cost-recovery-finance-model.md` §3, *Override
   (spreadsheet-assumption) path*).
 
+### 4.2 Specific Yield: Physics vs inp_kWhPerkWp
+
+The sheet's named yield, `inp_kWhPerkWp` = 1,050 kWh/kWp, gives each home
+5.5 × 1,050 = 5,775 kWh/yr. Since task 252 the physics path's PV model deducts PVWatts
+v5's default 14.08% system losses from each array's DC power
+([pv-system-losses.md](pv-system-losses.md)).
+
+This is a dated record: measured 2026-10-09 on task 252's branch from main 5325093
+(CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6), over the calibration
+scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
+`system_losses=0.0`.
+
+- **Specific yield.** `simulate_home` gives home 0 (5.5 kWp) 5,575.9 kWh with the
+  losses, 1,013.8 kWh per nameplate kWp against the sheet's 1,050; without them,
+  6,500.5 kWh, 1,181.9 per nameplate kWp. Per the 5.61 kWp of modules the model wires,
+  that is 994.6 and 1,159.6.
+- **Cost-recovery solve.** On the scenario's first five homes, with the grant scaled to
+  them (£12,500 of £250,000) so that they carry the fleet's per-home capex, grant and
+  debt, the solved own-use rate under the 0.70 override rises from 2.34 to 3.90 p/kWh
+  with the losses. The override caps own-use at each home's demand both ways (§4.1), so
+  the losses reach the CBS as export it no longer sells at 6 p: all of the 924.6 kWh
+  home 0 no longer generates in 2024.
+- The H6 hard asserts (§3.3) are analytic, so the losses leave them unchanged.
+
 ---
 
 ## 5. Summary
@@ -172,3 +196,6 @@ demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at 
   `spreadsheet_revenue_curve` keeps it uncapped for method-agreement; the simulator's
   override path caps own-use at demand (`docs/cost-recovery-finance-model.md` §3,
   *Override (spreadsheet-assumption) path*)
+- With task 252's system losses the calibration home's physics yield is 1,013.8 kWh per
+  nameplate kWp against the sheet's 1,050 (1,181.9 without them), and the 5-home
+  cost-recovery solve under the 0.70 override rises from 2.34 to 3.90 p/kWh (§4.2)

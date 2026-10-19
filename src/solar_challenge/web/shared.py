@@ -56,25 +56,32 @@ LOCATION_PRESETS: dict[str, Location] = {
 }
 
 
-def resolve_location(preset_str: str) -> Location:
-    """Map a location string to a Location instance.
+def resolve_location(location: object) -> Location:
+    """The Location *location* names: a LOCATION_PRESETS key, in any case and with surrounding whitespace, or 'lat,lon' coordinates.
 
-    Accepts preset names (bristol, london, edinburgh, manchester) or
-    a 'lat,lon' string.  Falls back to Bristol on parse errors.
+    Raises:
+        ValueError: For any other value, a non-string included, naming location,
+            the value and the accepted forms; or, from Location, for
+            coordinates outside its range.
     """
-    key = preset_str.strip().lower()
-    if key in LOCATION_PRESETS:
-        return LOCATION_PRESETS[key]
+    if isinstance(location, str):
+        key = location.strip().lower()
+        if key in LOCATION_PRESETS:
+            return LOCATION_PRESETS[key]
+        coordinates = _lat_lon(location)
+        if coordinates is not None:
+            latitude, longitude = coordinates
+            return Location(latitude=latitude, longitude=longitude)
+    raise ValueError(
+        "location must be 'lat,lon' coordinates or one of "
+        f"{', '.join(map(repr, LOCATION_PRESETS))}, got {location!r}"
+    )
+
+
+def _lat_lon(text: str) -> tuple[float, float] | None:
+    """The latitude and longitude of 'lat,lon' *text*, two numbers float() reads either side of one comma; None for any other text."""
     try:
-        lat, lon = map(float, key.split(","))
-        return Location(latitude=lat, longitude=lon)
+        latitude, longitude = map(float, text.split(","))
     except ValueError:
-        return Location.bristol()
-
-
-# Built-in configuration presets for home simulations.
-BUILTIN_PRESETS: list[dict[str, Any]] = [
-    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
-    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
-    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
-]
+        return None
+    return latitude, longitude

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts and headings.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts and the figure each chart container carries.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -8,11 +8,14 @@ letting a page test that uses it pass vacuously.
 import pytest
 
 from tests._html_page import (
+    chart_figures,
+    counts_of,
     doctype,
     element_attributes,
     element_count,
     element_ids,
     headings,
+    script_texts,
     texts,
     texts_after,
 )
@@ -273,3 +276,97 @@ def test_a_heading_left_open_raises_rather_than_guessing_where_it_ends(
 ) -> None:
     with pytest.raises(ValueError, match="closed by its end tag.*; 1 left open"):
         headings(page)
+
+
+def test_counts_of_counts_the_items_equal_to_each_key() -> None:
+    items = ["Simulate", "History", "Simulate"]
+
+    assert counts_of(items, ("Simulate", "History")) == {"Simulate": 2, "History": 1}
+
+
+def test_counts_of_counts_a_key_no_item_equals_as_0() -> None:
+    items = ["Simulate"]
+
+    assert counts_of(items, ("Simulate", "Scenarios")) == {
+        "Simulate": 1,
+        "Scenarios": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "near_miss",
+    [
+        pytest.param("PV Capacity (kW)", id="longer-text"),
+        pytest.param("PV capacity", id="other-case"),
+    ],
+)
+def test_counts_of_counts_only_an_item_exactly_equal_to_the_key(near_miss: str) -> None:
+    assert counts_of([near_miss], ("PV Capacity",)) == {"PV Capacity": 0}
+
+
+def test_counts_of_refuses_no_keys_rather_than_equal_an_empty_expectation() -> None:
+    with pytest.raises(ValueError, match="at least one key"):
+        counts_of(["Simulate"], ())
+
+
+def test_counts_of_refuses_a_str_rather_than_count_each_key_as_its_substring() -> None:
+    page = "<h3>PV Capacity</h3>"
+
+    with pytest.raises(ValueError, match="got a str of 20 characters"):
+        counts_of(page, ("PV Capacity",))
+
+
+def test_script_texts_lists_the_text_of_each_script_in_document_order() -> None:
+    page = (
+        '<script src="/static/js/chart-renderer.js"></script>'
+        "<p>Overview</p>"
+        "<script>renderChart('chart-sankey', figure);</script>"
+    )
+
+    assert script_texts(page) == ["", "renderChart('chart-sankey', figure);"]
+
+
+def test_style_text_is_not_a_script_text() -> None:
+    page = "<script>draw();</script><style>.chart { min-height: 400px; }</style>"
+
+    assert script_texts(page) == ["draw();"]
+
+
+def test_chart_figures_reads_the_figure_each_chart_container_carries_keyed_by_its_id() -> (
+    None
+):
+    page = (
+        '<div id="chart-sankey" class="w-full" data-chart-figure="{&#34;data&#34;: []}"></div>'
+        '<div id="chart-comparison-bar" class="w-full"></div>'
+        '<section id="chart-financial" data-chart-figure="{&#34;layout&#34;:'
+        ' {&#34;title&#34;: &#34;Import &amp; export: today&#39;s &lt;tariff&gt;&#34;}}"></section>'
+    )
+
+    assert chart_figures(page) == {
+        "chart-sankey": '{"data": []}',
+        "chart-financial": """{"layout": {"title": "Import & export: today's <tariff>"}}""",
+    }
+
+
+@pytest.mark.parametrize(
+    ("page", "named"),
+    [
+        pytest.param('<div data-chart-figure="{}"></div>', "carries no id", id="no-id"),
+        pytest.param(
+            '<div id="chart-sankey" data-chart-figure></div>',
+            "'chart-sankey' to carry a figure",
+            id="valueless-figure",
+        ),
+        pytest.param(
+            '<div id="chart-sankey" data-chart-figure="{}"></div>'
+            '<div id="chart-sankey" data-chart-figure="{}"></div>',
+            "'chart-sankey' is on more than one",
+            id="repeated-id",
+        ),
+    ],
+)
+def test_chart_figures_raises_rather_than_drop_or_overwrite_a_chart_container(
+    page: str, named: str
+) -> None:
+    with pytest.raises(ValueError, match=named):
+        chart_figures(page)

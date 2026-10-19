@@ -1,24 +1,25 @@
 """Tests for the Flask web dashboard module."""
 
-import re
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
-import pandas as pd
-from flask import Flask
+from flask import Flask, render_template
 from flask.testing import FlaskClient
 
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.database import RunStatus, get_db
 from solar_challenge.web.storage import RunStorage
+from tests._finance_builders import make_sim_results
 from tests._html_page import (
+    chart_figures,
+    counts_of,
+    current_page_links,
     doctype,
     element_count,
     element_ids,
@@ -26,7 +27,10 @@ from tests._html_page import (
     texts,
     texts_after,
 )
+from tests._plotly_figure import annotations_by_text
+from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 @pytest.fixture
@@ -41,38 +45,18 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
-@pytest.fixture
-def mock_job_manager(app: Flask) -> MagicMock:
-    """Replace the real JobManager on the app with a MagicMock (opt-in per-test).
-
-    This fixture is NOT wired into the module-level ``client`` fixture so that
-    tests exercising real DB/JobManager-backed paths (dashboard, history, jobs)
-    are unaffected.  Request it alongside ``client`` only in tests that want to
-    avoid spawning real background simulations.
-    """
-    jm = MagicMock()
-    jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
-    jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
-    app.extensions["job_manager"] = jm
-    return jm
-
-
-def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
-    """How many times each of *keys* occurs in *items*; a key that does not occur counts 0."""
-    return {key: items.count(key) for key in keys}
-
-
 def _run_storage(app: Flask) -> RunStorage:
     """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
     storage: RunStorage = app.extensions["storage"]
     return storage
 
 
-def _home_config(name: str) -> HomeConfig:
-    """The 4 kW PV, 3500 kWh home named *name* that the page tests save."""
+def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> HomeConfig:
+    """The 4 kW PV, 3500 kWh home named *name* that the page tests save, with *battery_config*'s battery, none by default."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3500),
+        battery_config=battery_config,
         name=name,
     )
 
@@ -83,19 +67,21 @@ def _save_home_run(
     results: SimulationResults,
     *,
     created_at: str | None = None,
-    status: str = "completed",
+    status: RunStatus = "completed",
+    battery_config: BatteryConfig | None = None,
 ) -> str:
     """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
 
+    The run's home is _home_config's, with *battery_config*'s battery, none by default.
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     *status* is the status the run is recorded with; it defaults to completed.
     """
     run_id = str(uuid.uuid4())
-    _run_storage(app).save_home_run(
-        run_id=run_id,
-        config=_home_config(name),
-        results=results,
-        summary=calculate_summary(results),
+    store_home_run(
+        _run_storage(app),
+        run_id,
+        _home_config(name, battery_config=battery_config),
+        results,
         name=name,
         status=status,
         created_at=created_at,
@@ -115,15 +101,13 @@ def _save_fleet_run(
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
-    fleet = FleetResults(
-        per_home_results=per_home_results,
-        home_configs=[_home_config(f"{name} home {number}") for number in range(1, len(per_home_results) + 1)],
-    )
-    _run_storage(app).save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet,
-        fleet_summary=calculate_fleet_summary(fleet),
-        per_home_summaries=[calculate_summary(results) for results in per_home_results],
+    store_fleet_run(
+        _run_storage(app),
+        run_id,
+        FleetResults(
+            per_home_results=per_home_results,
+            home_configs=[_home_config(f"{name} home {number}") for number in range(1, len(per_home_results) + 1)],
+        ),
         name=name,
         created_at=created_at,
     )
@@ -168,21 +152,21 @@ class TestDashboardRoute:
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Simulate", "Scenarios", "History")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
 
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
         """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         titles = ("Run Single Home", "Run Fleet Simulation", "Build Scenario")
-        assert _counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
+        assert counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
 
     def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
         """GET / renders one label per aggregate stat: Total Runs, Homes Simulated and Energy Modelled."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Total Runs", "Homes Simulated", "Energy Modelled")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
 
     def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
         """GET / with no saved runs renders the Recent Runs heading and its empty-state message."""
@@ -197,19 +181,19 @@ class TestDashboardRoute:
         """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
         run_names = ("North Roof", "South Roof")
         for run_name in run_names:
-            _save_home_run(app, run_name, _make_sim_results(days=1))
+            _save_home_run(app, run_name, make_sinusoidal_sim_results(days=1))
         response = client.get("/")
         page = response.get_data(as_text=True)
         page_texts = texts(page)
         assert "recent-runs-table" in element_ids(page)
-        assert _counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
+        assert counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
         assert "No simulation runs yet." not in page_texts
 
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
             app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
         )
@@ -236,7 +220,7 @@ class TestDashboardRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         _save_home_run(app, "North Roof", results)
         _save_fleet_run(app, "Community Fleet", [results, results])
         _save_home_run(app, "South Roof", results, status="failed")
@@ -249,216 +233,94 @@ class TestDashboardRoute:
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
 
 
-class TestSimulateHomeRoute:
-    """Tests for the GET /simulate/home route."""
+class TestSidebarCurrentPage:
+    """Which sidebar link each page marks as the current page, with aria-current="page", in each of its two sidebars, desktop and mobile."""
 
-    def test_simulate_home_page_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /simulate/home returns HTTP 200."""
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-
-    def test_simulate_home_page_contains_form(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders the PV capacity, battery capacity and annual consumption inputs, and one submit button."""
-        response = client.get("/simulate/home")
-        page = response.get_data(as_text=True)
-        assert {"pv_kw", "battery_kwh", "consumption_kwh"} <= element_ids(page)
-        assert element_count(page, "button", {"type": "submit"}) == 1
-
-    def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
-        response = client.get("/simulate/home")
-        page = response.get_data(as_text=True)
-        assert element_count(page, "nav", {"role": "tablist"}) == 1
-        tab_ids = ("pv", "battery", "load", "heat_pump", "tariff", "location", "period")
-        panels_per_tab = {
-            tab_id: element_count(
-                page, "div", {"role": "tabpanel", "x-show": f"activeTab === '{tab_id}'"}
-            )
-            for tab_id in tab_ids
-        }
-        assert panels_per_tab == dict.fromkeys(tab_ids, 1)
-
-
-# ---------------------------------------------------------------------------
-# Helpers for chart / results tests
-# ---------------------------------------------------------------------------
-
-def _make_sim_results(days: int = 3) -> SimulationResults:
-    """Create a minimal SimulationResults object for testing.
-
-    Builds synthetic 1-minute resolution time series spanning the
-    requested number of days, suitable for exercising chart functions.
-
-    Args:
-        days: Number of simulation days.
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
-    import numpy as np
-
-    freq = "min"
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
-
-    # Simple synthetic profiles (sinusoidal generation, flat demand)
-    hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-    demand = np.full(len(index), 0.5)
-    self_consumption = np.minimum(generation, demand)
-    grid_import = np.maximum(0, demand - generation)
-    grid_export = np.maximum(0, generation - demand)
-    battery_charge = np.zeros(len(index))
-    battery_discharge = np.zeros(len(index))
-    battery_soc = np.zeros(len(index))
-
-    def _series(values: np.ndarray, name: str) -> pd.Series:
-        return pd.Series(values, index=index, name=name)
-
-    return SimulationResults(
-        generation=_series(generation, "generation_kw"),
-        demand=_series(demand, "demand_kw"),
-        self_consumption=_series(self_consumption, "self_consumption_kw"),
-        battery_charge=_series(battery_charge, "battery_charge_kw"),
-        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
-        battery_soc=_series(battery_soc, "battery_soc_kwh"),
-        grid_import=_series(grid_import, "grid_import_kw"),
-        grid_export=_series(grid_export, "grid_export_kw"),
-        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
-        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
-        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
-        strategy_name="self_consumption",
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("/", id="dashboard"),
+            pytest.param("/simulate/home", id="single-home"),
+            pytest.param("/simulate/fleet", id="fleet"),
+            pytest.param("/scenarios/builder", id="builder"),
+            pytest.param("/scenarios/sweep", id="sweeps"),
+            pytest.param("/history/runs", id="runs"),
+            pytest.param("/history/compare", id="compare"),
+            pytest.param("/assistant/", id="ai-assistant"),
+        ],
     )
+    def test_each_sidebar_page_marks_its_own_link_current_in_both_sidebars(
+        self, client: FlaskClient, url: str
+    ) -> None:
+        """GET of each page the sidebar links to marks that page's link, and no other link, as the current page in each of its two sidebars, desktop and mobile."""
+        response = client.get(url)
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == [url, url]
 
+    def test_the_layout_marks_the_link_of_the_endpoint_the_request_is_routed_to_with_nothing_from_the_view(
+        self, app: Flask
+    ) -> None:
+        """base.html, rendered with no context for a request routed to the fleet page, marks the Fleet link in both sidebars: the sidebar takes the current page from the request, needing no identifier from the view that renders it."""
+        with app.test_request_context("/simulate/fleet"):
+            page = render_template("base.html")
+        assert current_page_links(page) == ["/simulate/fleet", "/simulate/fleet"]
 
-def _make_summary_dict() -> dict:
-    """Return a minimal summary dictionary for testing sankey_diagram."""
-    return {
-        "total_generation_kwh": 100.0,
-        "total_demand_kwh": 80.0,
-        "total_self_consumption_kwh": 50.0,
-        "total_grid_import_kwh": 30.0,
-        "total_grid_export_kwh": 40.0,
-        "total_battery_charge_kwh": 10.0,
-        "total_battery_discharge_kwh": 8.0,
-        "peak_generation_kw": 4.0,
-        "peak_demand_kw": 2.5,
-        "self_consumption_ratio": 0.5,
-        "grid_dependency_ratio": 0.375,
-        "export_ratio": 0.4,
-        "simulation_days": 3,
-    }
+    def test_the_404_page_marks_no_link_current(self, client: FlaskClient) -> None:
+        """GET of a URL no page is routed to answers the 404 page, which marks no sidebar link as the current page."""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        assert current_page_links(response.get_data(as_text=True)) == []
 
+    def test_the_500_page_marks_the_link_of_the_page_the_failed_request_was_routed_to(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """When the dashboard cannot read its runs, GET / answers the 500 page, which marks the Dashboard link as the current page in both sidebars: the request was routed to the dashboard, and the browser is still at its URL."""
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute("DROP TABLE runs")
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+        response = client.get("/")
+        assert response.status_code == 500
+        assert current_page_links(response.get_data(as_text=True)) == ["/", "/"]
 
-class TestChartFunctions:
-    """Tests for the centralized chart functions in charts.py."""
+    def test_the_home_results_page_marks_no_link_current(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved home run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        response = client.get(f"/results/home/{run_id}")
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == []
 
-    def test_daily_energy_balance_returns_json(self) -> None:
-        """Test daily_energy_balance returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import daily_energy_balance
-
-        results = _make_sim_results(days=3)
-        output = daily_energy_balance(results)
-        assert isinstance(output, str)
-        assert len(output) > 2  # more than just "{}"
-        parsed = _json.loads(output)
-        assert "data" in parsed
-
-    def test_sankey_returns_json(self) -> None:
-        """Test sankey_diagram returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import sankey_diagram
-
-        summary = _make_summary_dict()
-        output = sankey_diagram(summary)
-        assert isinstance(output, str)
-        assert len(output) > 2
-        parsed = _json.loads(output)
-        assert "data" in parsed
-
-    def test_power_flow_timeline_returns_json(self) -> None:
-        """Test power_flow_timeline returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import power_flow_timeline
-
-        results = _make_sim_results(days=2)
-        output = power_flow_timeline(results)
-        assert isinstance(output, str)
-        parsed = _json.loads(output)
-        assert "data" in parsed
-
-    def test_battery_soc_chart_returns_json(self) -> None:
-        """Test battery_soc_chart returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import battery_soc_chart
-
-        results = _make_sim_results(days=2)
-        output = battery_soc_chart(results, battery_capacity_kwh=10.0)
-        assert isinstance(output, str)
-        parsed = _json.loads(output)
-        assert "data" in parsed
-
-    def test_financial_breakdown_returns_json(self) -> None:
-        """Test financial_breakdown returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import financial_breakdown
-
-        results = _make_sim_results(days=3)
-        output = financial_breakdown(results)
-        assert isinstance(output, str)
-        parsed = _json.loads(output)
-        assert "data" in parsed
-
-    def test_monthly_summary_returns_none_for_short_sim(self) -> None:
-        """Test monthly_summary returns None when simulation < 90 days."""
-        from solar_challenge.web.charts import monthly_summary
-
-        results = _make_sim_results(days=30)
-        output = monthly_summary(results)
-        assert output is None
-
-    def test_seasonal_comparison_returns_none_for_short_sim(self) -> None:
-        """Test seasonal_comparison returns None when simulation < 180 days."""
-        from solar_challenge.web.charts import seasonal_comparison
-
-        results = _make_sim_results(days=60)
-        output = seasonal_comparison(results)
-        assert output is None
-
-    def test_heat_pump_analysis_returns_none_without_hp(self) -> None:
-        """Test heat_pump_analysis returns None when no heat pump data."""
-        from solar_challenge.web.charts import heat_pump_analysis
-
-        results = _make_sim_results(days=2)
-        output = heat_pump_analysis(results)
-        assert output is None
-
-    def test_adaptive_downsample_preserves_small_data(self) -> None:
-        """Test _adaptive_downsample returns data unchanged when small."""
-        from solar_challenge.web.charts import _adaptive_downsample
-
-        index = pd.date_range("2024-01-01", periods=100, freq="min")
-        df = pd.DataFrame({"a": range(100)}, index=index)
-        result = _adaptive_downsample(df, max_points=200)
-        assert len(result) == 100
-
-    def test_adaptive_downsample_reduces_large_data(self) -> None:
-        """Test _adaptive_downsample reduces rows for large data."""
-        from solar_challenge.web.charts import _adaptive_downsample
-
-        index = pd.date_range("2024-01-01", periods=10000, freq="min")
-        df = pd.DataFrame({"a": range(10000)}, index=index)
-        result = _adaptive_downsample(df, max_points=500)
-        assert len(result) < 10000
+    def test_the_fleet_results_page_marks_no_link_current(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved fleet run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
+        results = make_sinusoidal_sim_results(days=1)
+        run_id = _save_fleet_run(app, "Community Fleet", [results, results])
+        response = client.get(f"/results/fleet/{run_id}")
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == []
 
 
 class TestHomeResultsRoute:
     """Tests for the GET /results/home/<run_id> route."""
 
-    def test_home_results_unknown_run_redirects(self, client: FlaskClient) -> None:
-        """Test accessing results for a non-existent run redirects."""
-        response = client.get("/results/home/nonexistent-id")
-        assert response.status_code in (302, 404)
+    @pytest.mark.parametrize(
+        "run_id",
+        [
+            pytest.param("nonexistent-id", id="an-id-no-run-has"),
+            pytest.param("bad.id", id="an-id-the-store-refuses"),
+        ],
+    )
+    def test_home_results_unknown_run_redirects(self, client: FlaskClient, run_id: str) -> None:
+        """The page of an id no run has redirects to the dashboard, which flashes Run not found.
+
+        'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
+        """
+        response = client.get(f"/results/home/{run_id}", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+        assert "Run not found." in texts(response.get_data(as_text=True))
 
     def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
         """A saved run's results page renders its Overview charts and energy totals.
@@ -466,7 +328,7 @@ class TestHomeResultsRoute:
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         run_id = _save_home_run(app, "Test Run", results)
         summary = calculate_summary(results)
 
@@ -480,6 +342,37 @@ class TestHomeResultsRoute:
         ):
             assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
 
+    def test_home_results_stat_cards_round_each_saved_total_and_ratio_once(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each stat card rounds its saved value once, to the card's own precision.
+
+        The run self-consumes 10 kWh, exports 9.046 kWh and imports 5.749 kWh in its one day.
+        Each card below sits where rounding its value to 2 dp first (a ratio to 4 dp) would
+        move the card's last digit: 9.046 kWh would show 9.1.
+        """
+        run_id = _save_home_run(
+            app,
+            "North Roof",
+            make_sim_results(self_kwh=10.0, export_kwh=9.046, import_kwh=5.749, days=1),
+        )
+        response = client.get(f"/results/home/{run_id}")
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        expected_cards = {
+            "Total Generation": ["19.0", "kWh"],
+            "Total Demand": ["15.7", "kWh"],
+            "Grid Import": ["5.7", "kWh"],
+            "Grid Export": ["9.0", "kWh"],
+            "Self-Consumption Ratio": ["53", "%"],
+            "Grid Dependency": ["37", "%"],
+            "Export Ratio": ["47", "%"],
+        }
+        assert {
+            label: texts_after(page, label, len(card))
+            for label, card in expected_cards.items()
+        } == expected_cards
+
     def test_home_results_page_title_follows_a_run_history_rename(
         self, app: Flask, client: FlaskClient
     ) -> None:
@@ -487,7 +380,7 @@ class TestHomeResultsRoute:
 
         The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
         """
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
@@ -502,7 +395,7 @@ class TestHomeResultsRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         with get_db(app.config["DATABASE"]) as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
@@ -511,711 +404,27 @@ class TestHomeResultsRoute:
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
 
+    def test_home_results_battery_soc_chart_marks_the_saved_batterys_soc_limits(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """10% and 95% of an 8 kWh battery at 90% SoH are 0.72 and 6.84 kWh, where 10% and 90% of its nameplate would be 0.8 and 7.2."""
+        run_id = _save_home_run(
+            app,
+            "North Roof",
+            make_sinusoidal_sim_results(days=1),
+            battery_config=BatteryConfig(
+                capacity_kwh=8.0, min_soc_fraction=0.1, max_soc_fraction=0.95, soh=0.9
+            ),
+        )
 
-class TestFleetConfigRoute:
-    """Tests for the GET /simulate/fleet route."""
+        response = client.get(f"/results/home/{run_id}")
 
-    def test_fleet_page_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet returns HTTP 200."""
-        response = client.get("/simulate/fleet")
         assert response.status_code == 200
-
-    def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders three distribution editors, one per card, and the n_homes input."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        assert element_count(page, "select", {"x-model": "dist.type"}) == 3
-        assert "n_homes" in element_ids(page)
-
-    def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders one heading per distribution card: PV Capacity, Battery Capacity and Annual Consumption."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        subjects = ("PV Capacity", "Battery Capacity", "Annual Consumption")
-        assert _counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
-
-    def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders the Import YAML and Export YAML controls and one button that runs the fleet simulation."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        page_texts = texts(page)
-        assert page_texts.count("Import YAML") == 1
-        assert element_count(page, "input", {"type": "file", "@change": "importYaml($event)"}) == 1
-        assert page_texts.count("Export YAML") == 1
-        assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
-        assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
-
-    def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders the sidebar with the simulate-fleet page identifier, so the Simulate group's links show on this page."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        simulate_links_condition = (
-            "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
-        )
-        assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
-
-
-VALID_DISTRIBUTION_FORM: dict = {
-    "n_homes": 2,
-    "seed": 1,
-    "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
-    "battery": {"capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0}},
-    "load": {"annual_consumption_kwh": 3500.0},
-}
-
-
-class TestFleetConfigHelpers:
-    """Tests for fleet_config.py helper functions."""
-
-    def test_sample_distribution_normal(self) -> None:
-        """Test normal distribution sampling produces correct count and bounds."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        samples = sample_distribution(
-            "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}
-        )
-        assert len(samples) == 100
-        assert all(1.0 <= s <= 8.0 for s in samples)
-
-    def test_sample_distribution_normal_custom_count(self) -> None:
-        """Test normal distribution with custom n_samples."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        samples = sample_distribution(
-            "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}, n_samples=50
-        )
-        assert len(samples) == 50
-
-    def test_sample_distribution_uniform(self) -> None:
-        """Test uniform distribution sampling produces correct count and bounds."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        samples = sample_distribution("uniform", {"min": 2.0, "max": 6.0})
-        assert len(samples) == 100
-        assert all(2.0 <= s <= 6.0 for s in samples)
-
-    def test_sample_distribution_weighted_discrete(self) -> None:
-        """Test weighted discrete distribution sampling."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        samples = sample_distribution(
-            "weighted_discrete",
-            {"values": [{"value": 3.0, "weight": 50}, {"value": 5.0, "weight": 50}]},
-        )
-        assert len(samples) == 100
-        assert all(s in (3.0, 5.0) for s in samples)
-
-    def test_sample_distribution_shuffled_pool(self) -> None:
-        """Test shuffled pool distribution sampling."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        samples = sample_distribution(
-            "shuffled_pool",
-            {"entries": [{"value": 3.0, "count": 30}, {"value": 5.0, "count": 70}]},
-        )
-        assert len(samples) == 100
-        assert all(s in (3.0, 5.0) for s in samples)
-
-    def test_sample_distribution_unknown_type_raises(self) -> None:
-        """Test that unknown distribution type raises ValueError."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        with pytest.raises(ValueError, match="Unknown distribution type"):
-            sample_distribution("bogus", {})
-
-    @pytest.mark.parametrize(
-        ("dist_type", "params", "message"),
-        [
-            pytest.param(
-                "normal", "x", "params must be a mapping, got str", id="normal-str-params"
-            ),
-            pytest.param(
-                "uniform",
-                [2.0, 6.0],
-                "params must be a mapping, got list",
-                id="uniform-list-params",
-            ),
-            pytest.param(
-                "normal", None, "params must be a mapping, got NoneType", id="normal-null-params"
-            ),
-            pytest.param(
-                "weighted_discrete",
-                {"values": ["x"]},
-                "values[0] must be a mapping, got str",
-                id="weighted-discrete-str-row",
-            ),
-            pytest.param(
-                "shuffled_pool",
-                {"entries": [{"value": 3.0, "count": 1}, 1]},
-                "entries[1] must be a mapping, got int",
-                id="shuffled-pool-int-row-after-a-valid-one",
-            ),
-            pytest.param(
-                "weighted_discrete",
-                {"values": "ab"},
-                "values must be a list, got str",
-                id="weighted-discrete-str-values",
-            ),
-            pytest.param(
-                "shuffled_pool",
-                {"entries": {"value": 3.0}},
-                "entries must be a list, got dict",
-                id="shuffled-pool-object-entries",
-            ),
-        ],
-    )
-    def test_sample_distribution_refuses_malformed_params(
-        self, dist_type: str, params: object, message: str
-    ) -> None:
-        """Params that are not a mapping, a row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        with pytest.raises(ValueError, match=re.escape(message)):
-            sample_distribution(dist_type, params)
-
-    @pytest.mark.parametrize(
-        "n_samples",
-        [
-            pytest.param("x", id="str"),
-            pytest.param(None, id="null"),
-            pytest.param(float("inf"), id="infinity"),
-            pytest.param(float("-inf"), id="negative-infinity"),
-            pytest.param(float("nan"), id="nan"),
-            pytest.param([100], id="list"),
-            pytest.param("2.5", id="decimal-str"),
-        ],
-    )
-    def test_sample_distribution_refuses_an_n_samples_int_cannot_read(
-        self, n_samples: object
-    ) -> None:
-        """An n_samples that int() cannot read is refused, naming n_samples and the value sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        with pytest.raises(
-            ValueError, match=re.escape(f"n_samples must be an integer, got {n_samples!r}")
-        ):
-            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
-
-    @pytest.mark.parametrize(
-        "n_samples",
-        [
-            pytest.param(0, id="zero"),
-            pytest.param(-1, id="negative"),
-            pytest.param(0.5, id="fraction-read-as-zero"),
-            pytest.param(1e300, id="huge-float"),
-            pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
-        ],
-    )
-    def test_sample_distribution_refuses_an_n_samples_outside_1_to_max_fleet_homes(
-        self, n_samples: float
-    ) -> None:
-        """An n_samples below 1 or above the dashboard's fleet limit is refused, naming n_samples, the range and the value sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        with pytest.raises(
-            ValueError,
-            match=re.escape(
-                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {n_samples!r}"
-            ),
-        ):
-            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
-
-    @pytest.mark.parametrize("n_samples", [1, MAX_FLEET_HOMES])
-    def test_sample_distribution_draws_n_samples_from_1_to_max_fleet_homes(
-        self, n_samples: int
-    ) -> None:
-        """A preview draws any number of samples from 1 to the dashboard's fleet limit."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        result = sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
-
-        assert len(result) == n_samples
-
-    @pytest.mark.parametrize(
-        ("count", "message"),
-        [
-            pytest.param(
-                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
-            ),
-            pytest.param(
-                1e300,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
-                id="huge-float",
-            ),
-            pytest.param(
-                -1,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
-                id="negative",
-            ),
-            pytest.param(
-                MAX_FLEET_HOMES - 1,
-                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
-                id="pool-total-one-above-the-fleet-limit",
-            ),
-        ],
-    )
-    def test_sample_distribution_refuses_a_shuffled_pool_count_it_cannot_use(
-        self, count: float, message: str
-    ) -> None:
-        """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
-        with pytest.raises(ValueError, match=re.escape(message)):
-            sample_distribution(
-                "shuffled_pool",
-                {"entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}]},
-            )
-
-    def test_form_to_fleet_distribution_config(self) -> None:
-        """Test converting form data to fleet distribution config."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        form_data = {
-            "n_homes": 50,
-            "pv": {
-                "capacity_kw": {
-                    "type": "normal",
-                    "mean": 4.0,
-                    "std": 1.0,
-                    "min": 2.0,
-                    "max": 8.0,
-                }
-            },
-            "load": {
-                "annual_consumption_kwh": {
-                    "type": "uniform",
-                    "min": 2000,
-                    "max": 5000,
-                }
-            },
-        }
-        config = form_to_fleet_distribution_config(form_data)
-        assert config["n_homes"] == 50
-        assert "pv" in config
-        assert "load" in config
-
-    @pytest.mark.parametrize(
-        ("key", "value", "message"),
-        [
-            pytest.param(
-                "n_homes", float("inf"), "n_homes must be an integer, got inf", id="n_homes-infinity"
-            ),
-            pytest.param("n_homes", "x", "n_homes must be an integer, got 'x'", id="n_homes-str"),
-            pytest.param("n_homes", None, "n_homes must be an integer, got None", id="n_homes-null"),
-            pytest.param(
-                "n_homes",
-                0,
-                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 0",
-                id="n_homes-zero",
-            ),
-            pytest.param(
-                "n_homes",
-                MAX_FLEET_HOMES + 1,
-                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
-                id="n_homes-one-above-the-fleet-limit",
-            ),
-            pytest.param(
-                "n_homes",
-                1e300,
-                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 1e+300",
-                id="n_homes-huge-float",
-            ),
-            pytest.param("seed", float("inf"), "seed must be an integer, got inf", id="seed-infinity"),
-            pytest.param(
-                "seed", float("-inf"), "seed must be an integer, got -inf", id="seed-negative-infinity"
-            ),
-            pytest.param("seed", "x", "seed must be an integer, got 'x'", id="seed-str"),
-            pytest.param("seed", None, "seed must be an integer, got None", id="seed-null"),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_refuses_an_n_homes_or_seed_it_cannot_use(
-        self, key: str, value: object, message: str
-    ) -> None:
-        """An n_homes or seed that int() cannot read, or an n_homes outside 1 to the dashboard's fleet limit, is refused, naming the field and the value sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        with pytest.raises(ValueError, match=re.escape(message)):
-            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
-
-    def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
-        """A fleet form may ask for as many homes as a dashboard fleet holds."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "n_homes": MAX_FLEET_HOMES}
-        )
-
-        assert config["n_homes"] == MAX_FLEET_HOMES
-
-    @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            pytest.param("pv", "x", id="pv-str"),
-            pytest.param("pv", [4.0], id="pv-list"),
-            pytest.param("battery", "x", id="battery-str"),
-            pytest.param("battery", True, id="battery-bool"),
-            pytest.param("load", "x", id="load-str"),
-            pytest.param("load", 3500, id="load-int"),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_refuses_a_non_mapping_component_block(
-        self, key: str, value: object
-    ) -> None:
-        """A truthy pv/battery/load block that is not a mapping is refused, naming the block and the type sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        with pytest.raises(
-            ValueError, match=re.escape(f"{key} must be a mapping, got {type(value).__name__}")
-        ):
-            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
-
-    @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            pytest.param("pv", None, id="pv-null"),
-            pytest.param("pv", "", id="pv-empty-string"),
-            pytest.param("battery", None, id="battery-null"),
-            pytest.param("battery", False, id="battery-false"),
-            pytest.param("load", None, id="load-null"),
-            pytest.param("load", [], id="load-empty-list"),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_reads_a_falsy_component_block_as_absent(
-        self, key: str, value: object
-    ) -> None:
-        """A falsy pv/battery/load block converts exactly as if the block were left out."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
-        assert form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, key: value}
-        ) == form_to_fleet_distribution_config(without_block)
-
-    @pytest.mark.parametrize(
-        ("spec", "converted"),
-        [
-            pytest.param(
-                {
-                    "type": "weighted_discrete",
-                    "values": [{"value": 3.0, "weight": 2}, {"value": 5.0}],
-                },
-                {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [2.0, 1.0]},
-                id="weighted-discrete",
-            ),
-            pytest.param(
-                {
-                    "type": "shuffled_pool",
-                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0}],
-                },
-                {"type": "shuffled_pool", "values": [3.0, 5.0], "counts": [2, 1]},
-                id="shuffled-pool",
-            ),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_converts_distribution_rows(
-        self, spec: dict, converted: dict
-    ) -> None:
-        """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists, a missing weight or count reading as 1."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
-        )
-        assert config["pv"] == {"capacity_kw": converted}
-
-    @pytest.mark.parametrize(
-        ("spec", "message"),
-        [
-            pytest.param(
-                {"type": "weighted_discrete", "values": ["x"]},
-                "values[0] must be a mapping, got str",
-                id="weighted-discrete-str-row",
-            ),
-            pytest.param(
-                {"type": "weighted_discrete", "values": [{"value": 4.0, "weight": 1}, 3500]},
-                "values[1] must be a mapping, got int",
-                id="weighted-discrete-int-row-after-a-valid-one",
-            ),
-            pytest.param(
-                {"type": "shuffled_pool", "entries": [1]},
-                "entries[0] must be a mapping, got int",
-                id="shuffled-pool-int-row",
-            ),
-            pytest.param(
-                {"type": "shuffled_pool", "entries": [[4.0, 2]]},
-                "entries[0] must be a mapping, got list",
-                id="shuffled-pool-list-row",
-            ),
-            pytest.param(
-                {"type": "weighted_discrete", "values": "ab"},
-                "values must be a list, got str",
-                id="weighted-discrete-str-values",
-            ),
-            pytest.param(
-                {"type": "weighted_discrete", "values": {"value": 4.0}},
-                "values must be a list, got dict",
-                id="weighted-discrete-object-values",
-            ),
-            pytest.param(
-                {"type": "shuffled_pool", "entries": None},
-                "entries must be a list, got NoneType",
-                id="shuffled-pool-null-entries",
-            ),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_refuses_malformed_distribution_rows(
-        self, spec: dict, message: str
-    ) -> None:
-        """A weighted_discrete/shuffled_pool row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        with pytest.raises(ValueError, match=re.escape(message)):
-            form_to_fleet_distribution_config(
-                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
-            )
-
-    @pytest.mark.parametrize(
-        ("count", "message"),
-        [
-            pytest.param(
-                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
-            ),
-            pytest.param(
-                float("-inf"),
-                "entries[1].count must be an integer, got -inf",
-                id="negative-infinity",
-            ),
-            pytest.param(float("nan"), "entries[1].count must be an integer, got nan", id="nan"),
-            pytest.param("x", "entries[1].count must be an integer, got 'x'", id="str"),
-            pytest.param(None, "entries[1].count must be an integer, got None", id="null"),
-            pytest.param(
-                -1,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
-                id="negative",
-            ),
-            pytest.param(
-                MAX_FLEET_HOMES + 1,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}",
-                id="one-above-the-fleet-limit",
-            ),
-            pytest.param(
-                1e300,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
-                id="huge-float",
-            ),
-            pytest.param(
-                MAX_FLEET_HOMES - 1,
-                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
-                id="pool-total-one-above-the-fleet-limit",
-            ),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_it_cannot_use(
-        self, count: object, message: str
-    ) -> None:
-        """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        spec = {
-            "type": "shuffled_pool",
-            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
-        }
-        with pytest.raises(ValueError, match=re.escape(message)):
-            form_to_fleet_distribution_config(
-                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
-            )
-
-    def test_form_to_fleet_distribution_config_accepts_shuffled_pool_counts_from_0_to_max_fleet_homes(
-        self,
-    ) -> None:
-        """A shuffled_pool row may assign its value to no home, or to as many homes as a dashboard fleet holds; the pool may total exactly that many values."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
-        spec = {
-            "type": "shuffled_pool",
-            "entries": [{"value": 3.0, "count": 0}, {"value": 5.0, "count": MAX_FLEET_HOMES}],
-        }
-        config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
-        )
-
-        assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
-
-    def test_fleet_distribution_to_yaml(self) -> None:
-        """Test converting fleet config to YAML string."""
-        from solar_challenge.web.fleet_config import fleet_distribution_to_yaml
-
-        config = {
-            "n_homes": 100,
-            "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
-            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2000, "max": 5000}},
-        }
-        yaml_str = fleet_distribution_to_yaml(config)
-        assert "n_homes: 100" in yaml_str
-        assert isinstance(yaml_str, str)
-
-    def test_yaml_to_fleet_distribution(self) -> None:
-        """Test parsing YAML string to fleet distribution config."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        yaml_str = """
-fleet_distribution:
-  n_homes: 100
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-  load:
-    annual_consumption_kwh:
-      type: uniform
-      min: 2000
-      max: 5000
-"""
-        config = yaml_to_fleet_distribution(yaml_str)
-        assert config["n_homes"] == 100
-        assert "pv" in config
-        assert "load" in config
-
-    def test_yaml_to_fleet_distribution_invalid_raises(self) -> None:
-        """Test that invalid YAML raises ValueError."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        with pytest.raises(ValueError):
-            yaml_to_fleet_distribution("not: a: valid: fleet: config")
-
-    def test_yaml_roundtrip(self) -> None:
-        """Test that export/import YAML round-trips correctly."""
-        from solar_challenge.web.fleet_config import (
-            fleet_distribution_to_yaml,
-            yaml_to_fleet_distribution,
-        )
-
-        original = {
-            "n_homes": 50,
-            "seed": 42,
-            "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
-            "load": {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}},
-        }
-        yaml_str = fleet_distribution_to_yaml(original)
-        restored = yaml_to_fleet_distribution(yaml_str)
-        assert restored["n_homes"] == 50
-        assert restored["pv"]["capacity_kw"]["type"] == "uniform"
-        assert restored["load"]["annual_consumption_kwh"]["type"] == "normal"
-
-
-class TestFleetApiEndpoints:
-    """Tests for fleet-related API endpoints."""
-
-    def test_preview_distribution_normal(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/preview-distribution with normal distribution."""
-        response = client.post(
-            "/api/fleet/preview-distribution",
-            json={
-                "type": "normal",
-                "params": {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0},
-                "n_samples": 50,
-            },
-        )
-        assert response.status_code == 200
-        data = response.get_json()
-        assert "samples" in data
-        assert len(data["samples"]) == 50
-
-    def test_preview_distribution_invalid_type(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/preview-distribution with invalid type returns 400."""
-        response = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "invalid_type", "params": {}},
-        )
-        assert response.status_code == 400
-
-    def test_simulate_fleet_from_distribution(
-        self, client: FlaskClient, mock_job_manager: MagicMock
-    ) -> None:
-        """Test POST /api/simulate/fleet-from-distribution returns 201 with job_id/run_id.
-
-        Uses mock_job_manager to avoid spawning a real 10-home background simulation
-        (PVGIS network I/O, DB writes) that would race with tmp_path teardown.
-        """
-        response = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={
-                "n_homes": 10,
-                "pv": {
-                    "capacity_kw": {
-                        "type": "normal",
-                        "mean": 4.0,
-                        "std": 1.0,
-                        "min": 2.0,
-                        "max": 8.0,
-                    }
-                },
-                "load": {
-                    "annual_consumption_kwh": {
-                        "type": "uniform",
-                        "min": 2000,
-                        "max": 5000,
-                    }
-                },
-            },
-        )
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data["job_id"] == "job-fleet-001"
-        assert data["run_id"] == "run-fleet-001"
-        mock_job_manager.submit_fleet_job.assert_called_once()
-
-    def test_simulate_fleet_from_distribution_empty_body(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/fleet-from-distribution with empty body returns 400."""
-        response = client.post(
-            "/api/simulate/fleet-from-distribution",
-            content_type="application/json",
-        )
-        assert response.status_code == 400
-
-    def test_export_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/export-yaml returns YAML content."""
-        response = client.post(
-            "/api/fleet/export-yaml",
-            json={
-                "n_homes": 100,
-                "pv": {"capacity_kw": {"type": "uniform", "min": 3, "max": 6}},
-            },
-        )
-        assert response.status_code == 200
-        assert "text/yaml" in response.content_type
-        assert b"n_homes" in response.data
-
-    def test_import_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml parses YAML correctly."""
-        yaml_content = """
-fleet_distribution:
-  n_homes: 50
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-"""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data=yaml_content,
-            content_type="text/yaml",
-        )
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["n_homes"] == 50
-
-    def test_import_fleet_yaml_invalid(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml with invalid YAML returns 400."""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data="just: some: random: yaml",
-            content_type="text/yaml",
-        )
-        assert response.status_code == 400
+        figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
+        assert {
+            text: annotation["y"]
+            for text, annotation in annotations_by_text(figure).items()
+        } == pytest.approx({"Min SOC": 0.72, "Max SOC": 6.84})
 
 
 # ---------------------------------------------------------------------------
@@ -1281,53 +490,3 @@ class TestErrorPages:
                 assert page_texts.count("Back to Dashboard") == 1
         finally:
             app.config["TESTING"] = True
-
-
-class TestSimulateHomePageRendering:
-    """Tests for the /simulate/home page rendering quality."""
-
-    def test_simulate_home_no_raw_js_in_body(self, client: FlaskClient) -> None:
-        """Test /simulate/home does not expose raw JavaScript in the page body.
-
-        JavaScript should be contained within <script> tags, not visible
-        as text content in the rendered HTML body.
-        """
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-        html = response.data.decode("utf-8")
-
-        # The page uses Alpine.js. Check that raw JS function bodies are not
-        # leaked outside of <script> tags. We do this by checking that certain
-        # JS-only patterns don't appear outside <script> blocks.
-
-        # Remove all script blocks first, then check remaining HTML body
-        import re
-        # Remove all script tag contents
-        body_without_scripts = re.sub(
-            r"<script[^>]*>.*?</script>",
-            "",
-            html,
-            flags=re.DOTALL,
-        )
-
-        # These are JS-specific patterns that should NOT appear in visible body text
-        assert "function()" not in body_without_scripts, (
-            "Raw 'function()' found outside <script> tags"
-        )
-        assert "async () =>" not in body_without_scripts, (
-            "Raw arrow function found outside <script> tags"
-        )
-        assert "addEventListener" not in body_without_scripts, (
-            "Raw 'addEventListener' found outside <script> tags"
-        )
-
-    def test_simulate_home_has_proper_html_structure(self, client: FlaskClient) -> None:
-        """Test /simulate/home has proper HTML document structure."""
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-        html = response.data.decode("utf-8")
-
-        # Should have a proper HTML document
-        assert doctype(html) == "html"
-        assert element_count(html, "head") == 1
-        assert element_count(html, "body") == 1

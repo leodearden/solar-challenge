@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
-from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -13,6 +12,24 @@ from flask import (
 )
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.charts import (
+    battery_soc_chart,
+    daily_energy_balance,
+    financial_breakdown,
+    fleet_aggregate_timeline,
+    fleet_box_plots,
+    fleet_distribution_histograms,
+    fleet_grid_impact,
+    fleet_heatmap,
+    heat_pump_analysis,
+    monthly_summary,
+    power_flow_timeline,
+    sankey_diagram,
+    seasonal_comparison,
+)
+from solar_challenge.web.database import get_db
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
 
@@ -30,8 +47,6 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     Returns:
         Dict with total_runs, total_homes, and total_energy_mwh.
     """
-    from solar_challenge.web.database import get_db  # noqa: PLC0415
-
     with get_db(storage.db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -85,7 +100,6 @@ def index() -> str:
         "dashboard.html",
         runs=runs,
         stats=stats,
-        page="dashboard",
     ))
 
 
@@ -94,7 +108,7 @@ def simulate_home_page() -> str:
     """Render the enhanced home simulation configuration page."""
     return str(render_template(
         "simulate/home.html",
-        page="simulate-home",
+        fleet_components=FLEET_COMPONENTS,
         seg_presets=SEG_PRESETS,
     ))
 
@@ -119,41 +133,14 @@ def home_results(run_id: str) -> Any:
         flash("Run not found.", "error")
         return redirect(url_for("main.index"))
 
-    from solar_challenge.web.charts import (  # noqa: PLC0415
-        battery_soc_chart,
-        daily_energy_balance,
-        financial_breakdown,
-        heat_pump_analysis,
-        monthly_summary,
-        power_flow_timeline,
-        sankey_diagram,
-        seasonal_comparison,
-    )
-
-    summary_dict: dict[str, Any] = {
-        "total_generation_kwh": round(summary.total_generation_kwh, 2),
-        "total_demand_kwh": round(summary.total_demand_kwh, 2),
-        "total_self_consumption_kwh": round(summary.total_self_consumption_kwh, 2),
-        "total_grid_import_kwh": round(summary.total_grid_import_kwh, 2),
-        "total_grid_export_kwh": round(summary.total_grid_export_kwh, 2),
-        "total_battery_charge_kwh": round(summary.total_battery_charge_kwh, 2),
-        "total_battery_discharge_kwh": round(summary.total_battery_discharge_kwh, 2),
-        "peak_generation_kw": round(summary.peak_generation_kw, 2),
-        "peak_demand_kw": round(summary.peak_demand_kw, 2),
-        "self_consumption_ratio": round(summary.self_consumption_ratio, 4),
-        "grid_dependency_ratio": round(summary.grid_dependency_ratio, 4),
-        "export_ratio": round(summary.export_ratio, 4),
-        "simulation_days": summary.simulation_days,
-    }
-
     has_battery = config.battery_config is not None
 
     charts: dict[str, Any] = {
-        "sankey": sankey_diagram(summary_dict),
+        "sankey": sankey_diagram(summary),
         "daily_balance": daily_energy_balance(sim_results),
         "power_flow": power_flow_timeline(sim_results),
         "battery_soc": (
-            battery_soc_chart(sim_results, config.battery_config.capacity_kwh)
+            battery_soc_chart(sim_results, config.battery_config)
             if has_battery and config.battery_config is not None
             else None
         ),
@@ -165,47 +152,21 @@ def home_results(run_id: str) -> Any:
 
     return render_template(
         "results/home.html",
-        summary=summary_dict,
+        summary=summary,
         charts=charts,
         has_battery=has_battery,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Home Simulation",
-        page="results",
     )
-
-
-def _load_scenario_presets() -> list[str]:
-    """Scan the scenarios/ directory for YAML files and return preset names.
-
-    Searches in the project root ``scenarios/`` directory for files
-    ending in ``.yaml`` or ``.yml``.
-
-    Returns:
-        Sorted list of scenario file names (without extension).
-    """
-    import importlib.resources  # noqa: PLC0415
-
-    presets: list[str] = []
-
-    # Try the project-level scenarios/ directory
-    project_root = Path(__file__).resolve().parents[3]
-    scenarios_dir = project_root / "scenarios"
-    if scenarios_dir.is_dir():
-        for path in sorted(scenarios_dir.iterdir()):
-            if path.suffix in (".yaml", ".yml") and path.is_file():
-                presets.append(path.stem)
-
-    return presets
 
 
 @bp.route("/simulate/fleet", methods=["GET"])
 def simulate_fleet_page() -> str:
-    """Render the fleet simulation configuration page."""
-    presets = _load_scenario_presets()
+    """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads."""
     return str(render_template(
         "simulate/fleet.html",
-        presets=presets,
-        page="simulate-fleet",
+        fleet_components=FLEET_COMPONENTS,
+        presets=fleet_preset_names(),
         seg_presets=SEG_PRESETS,
     ))
 
@@ -231,75 +192,18 @@ def fleet_results(run_id: str) -> Any:
         flash("Fleet run not found.", "error")
         return redirect(url_for("main.index"))
 
-    from solar_challenge.web.charts import (  # noqa: PLC0415
-        fleet_aggregate_timeline,
-        fleet_box_plots,
-        fleet_distribution_histograms,
-        fleet_grid_impact,
-        fleet_heatmap,
-    )
-
-    summary_dict: dict[str, Any] = {
-        "n_homes": fleet_summary.n_homes,
-        "total_generation_kwh": round(fleet_summary.total_generation_kwh, 2),
-        "total_demand_kwh": round(fleet_summary.total_demand_kwh, 2),
-        "total_self_consumption_kwh": round(fleet_summary.total_self_consumption_kwh, 2),
-        "total_grid_import_kwh": round(fleet_summary.total_grid_import_kwh, 2),
-        "total_grid_export_kwh": round(fleet_summary.total_grid_export_kwh, 2),
-        "fleet_self_consumption_ratio": round(fleet_summary.fleet_self_consumption_ratio, 4),
-        "fleet_grid_dependency_ratio": round(fleet_summary.fleet_grid_dependency_ratio, 4),
-        "simulation_days": fleet_summary.simulation_days,
-    }
-
-    home_summaries = [
-        {
-            "total_generation_kwh": s.total_generation_kwh,
-            "total_demand_kwh": s.total_demand_kwh,
-            "total_self_consumption_kwh": s.total_self_consumption_kwh,
-            "total_grid_import_kwh": s.total_grid_import_kwh,
-            "total_grid_export_kwh": s.total_grid_export_kwh,
-            "self_consumption_ratio": s.self_consumption_ratio,
-            "grid_dependency_ratio": s.grid_dependency_ratio,
-            "export_ratio": s.export_ratio,
-        }
-        for s in per_home_summaries
-    ]
-
-    # Build aggregate SimulationResults for timeline/grid charts
-    # by summing per-home time series
-    aggregate = fleet_results_data.per_home_results[0]
-    if len(fleet_results_data.per_home_results) > 1:
-        from solar_challenge.home import SimulationResults as SR  # noqa: PLC0415
-
-        aggregate = SR(
-            generation=fleet_results_data.total_generation,
-            demand=fleet_results_data.total_demand,
-            self_consumption=fleet_results_data.total_self_consumption,
-            battery_charge=fleet_results_data.get_aggregate_series("battery_charge"),
-            battery_discharge=fleet_results_data.get_aggregate_series("battery_discharge"),
-            battery_soc=fleet_results_data.get_aggregate_series("battery_soc"),
-            grid_import=fleet_results_data.total_grid_import,
-            grid_export=fleet_results_data.total_grid_export,
-            import_cost=fleet_results_data.get_aggregate_series("import_cost"),
-            export_revenue=fleet_results_data.get_aggregate_series("export_revenue"),
-            tariff_rate=fleet_results_data.per_home_results[0].tariff_rate,
-            strategy_name="fleet_aggregate",
-        )
-
     charts: dict[str, Any] = {
-        "aggregate_timeline": fleet_aggregate_timeline(aggregate),
-        "grid_impact": fleet_grid_impact(aggregate),
-        "heatmap": fleet_heatmap(home_summaries),
-        "box_plots": fleet_box_plots(home_summaries),
-        "distribution_histograms": fleet_distribution_histograms(home_summaries),
+        "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),
+        "grid_impact": fleet_grid_impact(fleet_results_data),
+        "heatmap": fleet_heatmap(per_home_summaries),
+        "box_plots": fleet_box_plots(per_home_summaries),
+        "distribution_histograms": fleet_distribution_histograms(per_home_summaries),
     }
 
     return render_template(
         "results/fleet.html",
-        summary=summary_dict,
+        summary=fleet_summary,
         charts=charts,
-        n_homes=fleet_summary.n_homes,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Fleet Simulation",
-        page="results",
     )

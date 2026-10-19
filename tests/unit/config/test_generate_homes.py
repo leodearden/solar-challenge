@@ -2,21 +2,28 @@
 """Tests for generate_homes_from_distribution, which samples a FleetDistributionConfig into the fleet's HomeConfigs."""
 
 import json
+import math
 from pathlib import Path
+from typing import Optional
+
+import pytest
 
 from solar_challenge.config import (
     BatteryDistributionConfig,
+    DistributionSpec,
     FleetDistributionConfig,
     GridChargeConfig,
     HeatPumpDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
     PVDistributionConfig,
+    ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
     generate_homes_from_distribution,
     load_fleet_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.tariff import TariffConfig
 
@@ -153,6 +160,74 @@ class TestGenerateHomesFromDistribution:
         assert len(with_battery) > 0
         assert len(without_battery) > 0
 
+    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -1.0])
+    def test_a_sampled_battery_capacity_that_is_not_one_is_refused_naming_it(
+        self, capacity_kwh: float
+    ) -> None:
+        """A sampled battery capacity that is negative or not finite is refused naming battery.capacity_kwh, never read as no battery."""
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(
+                capacity_kwh=ShuffledPoolDistribution(values=(5.0, capacity_kwh), counts=(2, 1))
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            generate_homes_from_distribution(config, Location.bristol())
+        assert str(exc_info.value) == (
+            f"battery.capacity_kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -1.0])
+    def test_a_fixed_battery_capacity_that_is_not_one_is_refused_before_any_home_is_generated(
+        self, capacity_kwh: float
+    ) -> None:
+        """A fixed battery capacity that is negative or not finite is refused when the battery distribution is configured, naming battery.capacity_kwh."""
+        with pytest.raises(ValueError) as exc_info:
+            BatteryDistributionConfig(capacity_kwh=capacity_kwh)
+        assert str(exc_info.value) == (
+            f"battery.capacity_kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+    def test_a_sampled_null_or_zero_battery_capacity_is_no_battery(self) -> None:
+        """A null or 0 sampled battery capacity is no battery, and every other home has the battery it sampled."""
+        config = FleetDistributionConfig(
+            n_homes=30,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(
+                capacity_kwh=ShuffledPoolDistribution(
+                    values=(None, 0.0, 5.0), counts=(10, 10, 10)
+                )
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        batteries = [h.battery_config for h in generate_homes_from_distribution(config, Location.bristol())]
+
+        assert sum(battery is None for battery in batteries) == 20
+        assert [b.capacity_kwh for b in batteries if b is not None] == [5.0] * 10
+
+    @pytest.mark.parametrize("capacity_kwh", [None, 0.0])
+    def test_a_fixed_null_or_zero_battery_capacity_is_no_battery(
+        self, capacity_kwh: Optional[float]
+    ) -> None:
+        """A fixed null or 0 battery capacity is configured without complaint and gives every home no battery."""
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(capacity_kwh=capacity_kwh),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        assert [home.battery_config for home in homes] == [None, None, None]
+
     def test_generate_reproducibility_with_seed(self) -> None:
         """Test that same seed produces same results."""
         config = FleetDistributionConfig(
@@ -201,6 +276,38 @@ class TestGenerateHomesFromDistribution:
             "Home 4",
             "Home 5",
         ]
+
+
+class TestGenerationRefusesAPoolNotSizedToTheFleet:
+    """generate_homes_from_distribution refuses a fleet whose shuffled pool does not hold one value per home."""
+
+    @pytest.mark.parametrize(
+        "resized_n_homes",
+        [pytest.param(4, id="grown past its pool"), pytest.param(2, id="shrunk below its pool")],
+    )
+    def test_a_fleet_resized_after_construction_is_refused_as_construction_refuses_it(
+        self, resized_n_homes: int
+    ) -> None:
+        """A fleet built with 3 pool values for 3 homes, then given another n_homes, is refused in the words construction uses for that size."""
+
+        def fleet_of(n_homes: int) -> FleetDistributionConfig:
+            return FleetDistributionConfig(
+                n_homes=n_homes,
+                pv=PVDistributionConfig(
+                    capacity_kw=ShuffledPoolDistribution(values=(4.0,), counts=(3,))
+                ),
+                load=LoadDistributionConfig(),
+            )
+
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            fleet_of(resized_n_homes)
+        config = fleet_of(3)
+        config.n_homes = resized_n_homes
+
+        with pytest.raises(ConfigurationError) as use_refusal:
+            generate_homes_from_distribution(config, Location.bristol())
+
+        assert str(use_refusal.value) == str(construction_refusal.value)
 
 
 class TestHeatPumpDistribution:
@@ -517,17 +624,137 @@ class TestGenerateHomesFromDistributionDegradation:
         )
 
 
-class TestGenerateHomesFromDistributionFlex:
-    """Tests for fleet_tariff and fleet_grid_charging threading in generate_homes_from_distribution."""
+class TestGenerateHomesFromDistributionInverterEfficiency:
+    """Each home's PVConfig takes the inverter efficiency sampled for it, 0.96 included."""
 
-    def _base_config(self) -> FleetDistributionConfig:
-        """A small fixed fleet with a battery on every home (capacity_kwh fixed value)."""
+    def test_each_home_takes_its_sampled_inverter_efficiency(self) -> None:
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(
+                capacity_kw=3.68,
+                inverter_efficiency=ShuffledPoolDistribution(
+                    values=(0.955, 0.96, 0.965), counts=(1, 1, 1)
+                ),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
+
+
+class TestGenerateHomesHouseholdOccupants:
+    """How generate_homes_from_distribution draws each home's household occupants for LoadConfig's rule to read."""
+
+    @staticmethod
+    def _fleet(household_occupants: DistributionSpec, n_homes: int = 2) -> FleetDistributionConfig:
+        """A seeded fleet of *n_homes* homes with deterministic loads, whose household occupants are drawn from *household_occupants*."""
+        return FleetDistributionConfig(
+            n_homes=n_homes,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(household_occupants=household_occupants, use_stochastic=False),
+            seed=42,
+        )
+
+    @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=3.0, std=1.0, min=2.6, max=3.4), id="normal"),
+            pytest.param(UniformDistribution(min=2.6, max=3.4), id="uniform"),
+        ],
+    )
+    def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw from 2.6 to 3.4 gives its home 3 occupants, the nearest whole number, where truncation gives 2 to every draw below 3.
+
+        The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3] * 20
+
+    @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=1.0, std=0.1, min=2.5), id="normal-clamped-to-its-min"),
+            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-bounds"),
+        ],
+    )
+    def test_a_draw_halfway_between_two_whole_numbers_rounds_up(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw is 2.5 and gives its home 3 occupants, where rounding a half to even gives 2.
+
+        The normal spec's mean lies 15 standard deviations below its min, so every draw is clamped to the min whatever the seed.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3, 3]
+
+    @pytest.mark.parametrize(
+        ("household_occupants", "refusal"),
+        [
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="fixed-boolean"),
+            pytest.param(
+                WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
+                "Household occupants must be a whole number, got True",
+                id="weighted-discrete-boolean",
+            ),
+            pytest.param(
+                ShuffledPoolDistribution(values=(2, 0), counts=(1, 1)),
+                "Household occupants must be at least 1, got 0",
+                id="shuffled-pool-zero",
+            ),
+            pytest.param(
+                UniformDistribution(min=-1.7e308, max=1.7e308),
+                "Household occupants seems unrealistic: inf",
+                id="uniform-draws-overflowing-to-infinity",
+            ),
+        ],
+    )
+    def test_a_count_load_config_refuses_is_refused_as_it_refuses_it(
+        self, household_occupants: DistributionSpec, refusal: str
+    ) -> None:
+        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, replaced by the default 3, or left to raise OverflowError.
+
+        The uniform spec's max - min overflows, so every draw from it is inf whatever the seed.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+        assert str(exc_info.value) == refusal
+
+    def test_a_null_draw_takes_load_configs_default_and_a_whole_number_float_is_held_as_its_int(self) -> None:
+        """A null draw gives its home LoadConfig's default of 3 occupants, and a draw of 4.0 gives its home the int 4."""
+        homes = generate_homes_from_distribution(
+            self._fleet(ShuffledPoolDistribution(values=(None, 4.0), counts=(1, 1))), Location.bristol()
+        )
+
+        occupants = sorted(home.load_config.household_occupants for home in homes)
+        assert [(type(count), count) for count in occupants] == [(int, 3), (int, 4)]
+
+
+class TestGenerateHomesFromDistributionFlex:
+    """How generate_homes_from_distribution gives every home the fleet's tariff and dispatch strategy, and every battery the fleet's grid charging."""
+
+    def _base_config(
+        self,
+        *,
+        grid_charging: Optional[GridChargeConfig] = None,
+        dispatch_strategy: Optional[str] = None,
+    ) -> FleetDistributionConfig:
+        """A small fixed fleet with a battery on every home, with the given battery grid charging and fleet dispatch strategy."""
         return FleetDistributionConfig(
             n_homes=5,
             pv=PVDistributionConfig(capacity_kw=4.0),
-            battery=BatteryDistributionConfig(capacity_kwh=5.0),
+            battery=BatteryDistributionConfig(capacity_kwh=5.0, grid_charging=grid_charging),
             load=LoadDistributionConfig(),
             seed=42,
+            dispatch_strategy=dispatch_strategy,
         )
 
     def test_fleet_tariff_threaded_to_all_homes(self) -> None:
@@ -541,65 +768,50 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config is not None
             assert home.tariff_config == tariff
 
-    def test_fleet_grid_charging_threaded_to_all_battery_homes(self) -> None:
-        """fleet_grid_charging=GridChargeConfig(...) threads grid_charging to every battery home."""
+    def test_battery_grid_charging_reaches_every_battery(self) -> None:
+        """BatteryDistributionConfig.grid_charging is the grid charging of every generated battery."""
         gc = GridChargeConfig(target_soc_fraction=0.9)
         homes = generate_homes_from_distribution(
-            self._base_config(), Location.bristol(), fleet_grid_charging=gc
+            self._base_config(grid_charging=gc), Location.bristol()
         )
         for home in homes:
-            assert home.battery_config is not None  # all homes have batteries
-            assert home.battery_config.grid_charging is not None
-            assert home.battery_config.grid_charging.target_soc_fraction == 0.9
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging == gc
 
-    def test_both_fleet_tariff_and_grid_charging_threaded(self) -> None:
-        """Both fleet_tariff and fleet_grid_charging are threaded simultaneously."""
+    def test_fleet_tariff_and_battery_grid_charging_both_reach_every_home(self) -> None:
+        """The fleet_tariff keyword and the battery's grid_charging reach every home together."""
         tariff = TariffConfig.economy_7()
         gc = GridChargeConfig(target_soc_fraction=0.85)
         homes = generate_homes_from_distribution(
-            self._base_config(),
+            self._base_config(grid_charging=gc),
             Location.bristol(),
             fleet_tariff=tariff,
-            fleet_grid_charging=gc,
         )
         for home in homes:
             assert home.tariff_config is not None
             assert home.tariff_config == tariff
             assert home.battery_config is not None
-            assert home.battery_config.grid_charging is not None
-            assert home.battery_config.grid_charging.target_soc_fraction == 0.85
+            assert home.battery_config.grid_charging == gc
 
-    def test_calibration_guard_no_new_kwargs(self) -> None:
-        """No new kwargs: tariff_config=None and grid_charging=None on every home (bit-identical)."""
+    def test_calibration_guard_without_tariff_or_grid_charging(self) -> None:
+        """Neither a fleet_tariff nor a battery grid_charging: every home has tariff_config=None and grid_charging=None (bit-identical)."""
         homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
         for home in homes:
             assert home.tariff_config is None
             assert home.battery_config is not None
             assert home.battery_config.grid_charging is None
 
-    def test_fleet_dispatch_strategy_threaded_to_all_homes(self) -> None:
-        """fleet_dispatch_strategy='tou_optimized' sets dispatch_strategy on every home."""
+    def test_config_dispatch_strategy_reaches_every_home(self) -> None:
+        """FleetDistributionConfig.dispatch_strategy='tou_optimized' is the dispatch strategy of every home."""
         homes = generate_homes_from_distribution(
-            self._base_config(), Location.bristol(), fleet_dispatch_strategy="tou_optimized"
+            self._base_config(dispatch_strategy="tou_optimized"), Location.bristol()
         )
         assert len(homes) == 5
         for home in homes:
             assert home.dispatch_strategy == "tou_optimized"
 
     def test_dispatch_strategy_defaults_to_greedy(self) -> None:
-        """No fleet_dispatch_strategy kwarg: every home defaults to dispatch_strategy='greedy'."""
+        """A config without a dispatch_strategy: every home dispatches greedy."""
         homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
-        for home in homes:
-            assert home.dispatch_strategy == "greedy"
-
-    def test_dispatch_strategy_empty_string_defaults_to_greedy(self) -> None:
-        """Empty-string fleet_dispatch_strategy='': every home falls back to 'greedy'.
-
-        Documents the `fleet_dispatch_strategy or "greedy"` contract so future
-        editors cannot silently break the empty-string case.
-        """
-        homes = generate_homes_from_distribution(
-            self._base_config(), Location.bristol(), fleet_dispatch_strategy=""
-        )
         for home in homes:
             assert home.dispatch_strategy == "greedy"

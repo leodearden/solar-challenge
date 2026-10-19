@@ -7,10 +7,11 @@ import dataclasses
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
+    make_fleet_results_of,
     make_home_config,
     make_scenario,
     make_scenario_and_finance,
@@ -101,6 +102,45 @@ def test_fleet_results_refuse_both_homes_and_n_homes() -> None:
         make_fleet_results(n_homes=2, homes=[make_home_config()])
 
 
+def test_fleet_results_of_pair_each_given_result_in_order_with_a_default_home() -> None:
+    per_home_results = [make_sim_results(self_kwh=18.0, days=1), make_sim_results(self_kwh=6.0, days=1)]
+
+    fleet = make_fleet_results_of(per_home_results)
+
+    assert fleet.home_configs == [make_home_config()] * 2
+    assert [
+        calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
+    ] == pytest.approx([18.0, 6.0])
+
+
+def test_fleet_results_of_pair_the_given_results_in_order_with_the_given_homes() -> None:
+    homes = [make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))]
+    per_home_results = [make_sim_results(self_kwh=18.0, days=1), make_sim_results(self_kwh=6.0, days=1)]
+
+    fleet = make_fleet_results_of(per_home_results, homes=homes)
+
+    assert fleet.home_configs == homes
+    assert [
+        calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
+    ] == pytest.approx([18.0, 6.0])
+
+
+@pytest.mark.parametrize(
+    "n_homes",
+    [pytest.param(1, id="fewer-homes-than-results"), pytest.param(3, id="more-homes-than-results")],
+)
+def test_fleet_results_of_refuse_unpaired_homes_as_fleet_results_does(n_homes: int) -> None:
+    per_home_results = [make_sim_results(days=1), make_sim_results(days=1)]
+    homes = [make_home_config()] * n_homes
+
+    with pytest.raises(ValueError) as fleet_refusal:
+        FleetResults(per_home_results=per_home_results, home_configs=homes)
+    with pytest.raises(ValueError) as builder_refusal:
+        make_fleet_results_of(per_home_results, homes=homes)
+
+    assert str(builder_refusal.value) == str(fleet_refusal.value)
+
+
 def test_home_config_is_the_default_home_with_the_given_battery() -> None:
     battery = BatteryConfig(capacity_kwh=5.0)
 
@@ -121,16 +161,6 @@ def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
 
     assert default_scenario.homes == [make_home_config()]
     assert default_scenario.seg_tariff_pence_per_kwh is None
-
-
-def test_scenario_carries_the_given_finance_block() -> None:
-    finance = FinanceConfig(standing_charge_pence_per_day=28.0)
-
-    scenario = make_scenario(n_homes=2, finance=finance)
-
-    assert scenario.finance is finance
-    assert scenario.homes == [make_home_config()] * 2
-    assert make_scenario().finance is None
 
 
 def test_scenario_builders_give_every_home_the_given_battery() -> None:

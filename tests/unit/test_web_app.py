@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the web dashboard's application factory."""
 
+import gc
 import importlib
+import importlib.util
 import re
 import shutil
 import sys
+import weakref
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.web.jobs import live_managers
 from tests._web_app import build_test_app
 
 
@@ -51,6 +55,7 @@ def _import_app_from_a_web_package_lacking(
         "solar_challenge.web.scenarios",
         "solar_challenge.web.api",
         "solar_challenge.web.assistant",
+        "solar_challenge.web.plotly_js",
     ],
     ids=lambda module: module.rpartition(".")[2],
 )
@@ -75,6 +80,24 @@ def test_building_the_app_fails_naming_a_dashboard_folder_the_installed_package_
     with pytest.raises(FileNotFoundError, match=re.escape(str(web_dir / missing))):
         build_test_app(tmp_path / "data")
     assert not (web_dir / missing).exists()
+
+
+def test_building_the_app_fails_naming_the_plotly_js_the_installed_plotly_package_lacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installed plotly package that lacks the plotly.js it bundles fails the app build with a FileNotFoundError naming the file's path, instead of each chart page's request for the script."""
+    importlib.import_module("solar_challenge.web.app")
+    plotly_dir = tmp_path / "plotly"
+    plotly_dir.mkdir()
+    (plotly_dir / "__init__.py").touch()
+    plotly_spec = importlib.util.spec_from_file_location("plotly", plotly_dir / "__init__.py")
+    monkeypatch.setitem(sys.modules, "plotly", importlib.util.module_from_spec(plotly_spec))
+    _uncache_module(monkeypatch, "solar_challenge.web.plotly_js")
+    _uncache_module(monkeypatch, "solar_challenge.web.app")
+
+    bundled = plotly_dir / "package_data" / "plotly.min.js"
+    with pytest.raises(FileNotFoundError, match=re.escape(str(bundled))):
+        build_test_app(tmp_path / "data")
 
 
 def test_building_the_app_does_not_import_the_anthropic_sdk(
@@ -135,3 +158,21 @@ def test_the_session_cookie_is_not_marked_secure(
     cookie = client.get_cookie(app.config["SESSION_COOKIE_NAME"])
     assert cookie is not None
     assert not cookie.secure
+
+
+def test_dropping_the_app_frees_its_job_manager(tmp_path: Path) -> None:
+    """Nothing outside the app keeps its job manager alive, so the manager is freed along with the app."""
+    app = build_test_app(tmp_path)
+    job_manager_ref = weakref.ref(app.extensions["job_manager"])
+
+    del app
+    gc.collect()
+
+    assert job_manager_ref() is None
+
+
+def test_a_live_apps_job_manager_is_among_the_live_managers(tmp_path: Path) -> None:
+    """While the app lives, live_managers() reports its job manager, so shutdown code that walks that registry reaches it."""
+    app = build_test_app(tmp_path)
+
+    assert app.extensions["job_manager"] in live_managers()

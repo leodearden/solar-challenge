@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from solar_challenge.config import (
-    ConfigurationError,
     FleetDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -16,11 +15,23 @@ from solar_challenge.config import (
     WeightedDiscreteDistribution,
     parse_fleet_distribution_config,
 )
+from solar_challenge.errors import ConfigurationError
 
 
-def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
-    """Parse a one-home ``fleet_distribution:`` block holding *sections*."""
-    return parse_fleet_distribution_config({"n_homes": 1, **sections})
+def _parsed_fleet_distribution(n_homes: int = 1, **sections: Any) -> FleetDistributionConfig:
+    """Parse a ``fleet_distribution:`` block of *n_homes* homes, one unless given, holding *sections*."""
+    return parse_fleet_distribution_config({"n_homes": n_homes, **sections})
+
+
+def _pool_size_refusal(path: str, n_homes: int, total: int) -> str:
+    """The refusal of the shuffled pool at *path* whose counts total *total* in a fleet of *n_homes* homes."""
+    return (
+        f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
+        f"({n_homes}), got {total}"
+    )
+
+
+_TWO_VALUE_POOL: dict[str, Any] = {"type": "shuffled_pool", "values": [1.0, 2.0], "counts": [1, 1]}
 
 
 class TestDistributionDataclasses:
@@ -181,7 +192,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0, 6.0],
             "counts": [20, 40, 30, 10],
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (3.0, 4.0, 5.0, 6.0)
         assert result.counts == (20, 40, 30, 10)
@@ -193,16 +204,9 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "counts": [40, 40, 20],
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (None, 5.0, 10.0)
-
-    def test_parse_shuffled_pool_missing_counts_raises(self) -> None:
-        """Test parsing shuffled_pool without counts raises."""
-        with pytest.raises(ConfigurationError, match="requires 'values' and 'counts'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "shuffled_pool", "values": [1, 2, 3]}}
-            )
 
     def test_parse_normal(self) -> None:
         """Test parsing normal distribution."""
@@ -250,37 +254,6 @@ class TestDistributionParsing:
         }
         result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert result == 4.5
-
-    def test_parse_missing_type_raises(self) -> None:
-        """Test parsing dict without type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'type'"):
-            _parsed_fleet_distribution(pv={"capacity_kw": {"values": [1, 2, 3]}})
-
-    def test_parse_unknown_type_raises(self) -> None:
-        """Test parsing unknown type raises error."""
-        with pytest.raises(ConfigurationError, match="Unknown distribution type"):
-            _parsed_fleet_distribution(pv={"capacity_kw": {"type": "unknown"}})
-
-    def test_parse_weighted_discrete_missing_values_raises(self) -> None:
-        """Test parsing weighted_discrete without values raises."""
-        with pytest.raises(ConfigurationError, match="requires 'values' and 'weights'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "weighted_discrete", "weights": [1, 2]}}
-            )
-
-    def test_parse_normal_missing_std_raises(self) -> None:
-        """Test parsing normal without std raises."""
-        with pytest.raises(ConfigurationError, match="requires 'mean' and 'std'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "normal", "mean": 100}}
-            )
-
-    def test_parse_uniform_missing_max_raises(self) -> None:
-        """Test parsing uniform without max raises."""
-        with pytest.raises(ConfigurationError, match="requires 'min' and 'max'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "uniform", "min": 0}}
-            )
 
 
 class TestFleetDistributionConfig:
@@ -358,6 +331,89 @@ class TestFleetDistributionConfig:
                 pv=PVDistributionConfig(capacity_kw=4.0),
                 load=LoadDistributionConfig(),
             )
+
+
+class TestShuffledPoolHoldsOneValuePerHome:
+    """A fleet distribution's shuffled pool holds exactly one value per home, so its counts total n_homes."""
+
+    @pytest.mark.parametrize(
+        ("n_homes", "values", "counts", "total"),
+        [
+            pytest.param(100, [3.0, 4.0, 5.0], [20, 40, 30], 90, id="90 values for 100 homes"),
+            pytest.param(4, [3.0, 4.0], [50, 50], 100, id="100 values for 4 homes"),
+        ],
+    )
+    def test_a_pool_not_sized_to_n_homes_is_refused_naming_its_path_n_homes_and_its_size(
+        self, n_homes: int, values: list[float], counts: list[int], total: int
+    ) -> None:
+        """A pool short of n_homes would run dry, and one beyond it would leave values undrawn: both are refused."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config(
+                {
+                    "n_homes": n_homes,
+                    "pv": {
+                        "capacity_kw": {"type": "shuffled_pool", "values": values, "counts": counts}
+                    },
+                }
+            )
+        assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", n_homes, total)
+
+    @pytest.mark.parametrize(
+        ("sections", "path"),
+        [
+            pytest.param({"pv": {"capacity_kw": 4.0, "tilt": _TWO_VALUE_POOL}}, "pv.tilt", id="pv"),
+            pytest.param(
+                {"load": {"household_occupants": _TWO_VALUE_POOL}},
+                "load.household_occupants",
+                id="load",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "max_discharge_kw": _TWO_VALUE_POOL}},
+                "battery.max_discharge_kw",
+                id="battery",
+            ),
+            pytest.param(
+                {"heat_pump": {"heat_pump_type": "ASHP", "annual_heat_demand_kwh": _TWO_VALUE_POOL}},
+                "heat_pump.annual_heat_demand_kwh",
+                id="heat_pump",
+            ),
+            pytest.param(
+                {"ev": {"charger_type": {"type": "shuffled_pool", "values": ["7kW"], "counts": [2]}}},
+                "ev.charger_type",
+                id="ev",
+            ),
+        ],
+    )
+    def test_a_pool_not_sized_to_n_homes_is_refused_in_every_component(
+        self, sections: dict[str, Any], path: str
+    ) -> None:
+        """The rule holds for every component's parameters, including those only battery or heat-pump homes draw."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config({"n_homes": 3, "pv": {"capacity_kw": 4.0}, **sections})
+        assert str(refusal.value) == _pool_size_refusal(path, 3, 2)
+
+    def test_a_fleet_distribution_built_in_code_is_refused_as_a_parsed_one_is(self) -> None:
+        """The refusal comes from FleetDistributionConfig itself, not only from the parser."""
+        with pytest.raises(ConfigurationError) as refusal:
+            FleetDistributionConfig(
+                n_homes=3,
+                pv=PVDistributionConfig(
+                    capacity_kw=ShuffledPoolDistribution(values=(4.0,), counts=(2,))
+                ),
+                load=LoadDistributionConfig(),
+            )
+        assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", 3, 2)
+
+    def test_a_pool_of_exactly_n_homes_values_is_accepted(self) -> None:
+        config = parse_fleet_distribution_config(
+            {
+                "n_homes": 3,
+                "pv": {
+                    "capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": [1, 2]}
+                },
+            }
+        )
+        assert config.pv.capacity_kw == ShuffledPoolDistribution(values=(3.0, 4.0), counts=(1, 2))
 
 
 class TestPVDistributionDegradationParsing:

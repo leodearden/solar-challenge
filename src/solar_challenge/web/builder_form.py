@@ -10,42 +10,32 @@ a scenario with no tariff, or no SEG.
 """
 
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Optional
 
 from solar_challenge.config import (
-    ConfigurationError,
     SimulationPeriod,
     load_fleet_config,
     parse_seg_rate,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.scenario_writer import location_block, scenario_yaml
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, read_pool_counts
+from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
 
 _BUILDER_FORM = "Builder form"
 
-
-class _Component(NamedTuple):
-    """A fleet component the builder distributes: its form keys, and where its spec goes in the grammar."""
-
-    prefix: str
-    fixed_field: str
-    block: str
-    grammar_key: str
+#: Reads a column of distribution rows, given as (field, value sent) cells, as its numbers.
+_ColumnReader = Callable[[list[tuple[str, Any]]], Sequence[float]]
 
 
 def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
     """Each of *keys*, mapped to the form field that carries it for the component with *prefix*."""
     return {key: f"{prefix}_{key}" for key in keys}
 
-
-_COMPONENTS = (
-    _Component("pv", "pv_capacity_kw", "pv", "capacity_kw"),
-    _Component("battery", "battery_capacity_kwh", "battery", "capacity_kwh"),
-    _Component("load", "annual_consumption_kwh", "load", "annual_consumption_kwh"),
-)
 
 _DISTRIBUTION_FIELDS = (
     "distribution_type",
@@ -73,11 +63,11 @@ _RECOGNISED_KEYS = frozenset(
         "import_rate",
         "seg_rate_pence_per_kwh",
     }
-    | {component.fixed_field for component in _COMPONENTS}
+    | {component.fixed_field for component in FLEET_COMPONENTS.values()}
     | {
         form_key
-        for component in _COMPONENTS
-        for form_key in _prefixed(component.prefix, *_DISTRIBUTION_FIELDS).values()
+        for component in FLEET_COMPONENTS.values()
+        for form_key in _prefixed(component.key, *_DISTRIBUTION_FIELDS).values()
     }
 )
 
@@ -88,7 +78,9 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     Raises:
         ValueError: naming the form field at fault, for a form that is not an object, a
             key the builder does not send, a value that is not the number it should be,
-            an unknown location preset or distribution type, or a malformed distribution row.
+            an unknown location preset or distribution type, a malformed distribution row,
+            or a shuffled pool too large for a dashboard fleet: a count outside 0 to
+            MAX_FLEET_HOMES, or counts totalling more.
     """
     form = require_json_object(form, _BUILDER_FORM)
     _refuse_unrecognised_keys(form)
@@ -140,18 +132,23 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and a fixed PV size of 0.5-20 kW.
+    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its fixed_range.
 
-    A value that does not read as a number is left to scenario_from_builder_form to report.
+    A value its number reader refuses is left to scenario_from_builder_form to report.
     """
     errors: list[str] = []
     if "name" not in fields:
         errors.append("Scenario name is required.")
-    if not _home_count_allowed(_readable(fields, "n_homes", _as_count)):
+    if not _home_count_allowed(_readable(fields, "n_homes", as_whole_number)):
         errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
-    pv_capacity_kw = _readable(fields, "pv_capacity_kw", _as_float)
-    if pv_capacity_kw is not None and not 0.5 <= pv_capacity_kw <= 20.0:
-        errors.append("PV capacity must be between 0.5 and 20 kW.")
+    for component in FLEET_COMPONENTS.values():
+        fixed_value = _readable(fields, component.fixed_field, as_finite_float)
+        if fixed_value is not None and not component.admits_fixed_value(fixed_value):
+            low, high = component.fixed_range
+            errors.append(
+                f"{component.heading} must be between {low:g} and {high:g}, "
+                f"got {fields[component.fixed_field]!r}."
+            )
     return errors
 
 
@@ -176,8 +173,8 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
 
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and a shuffled pool smaller than the fleet with IndexError.
-    Anything else it raises is a defect in the loader, not a refusal, so it propagates.
+    a config it builds.  Anything else it raises is a defect in the loader, not a refusal,
+    so it propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
@@ -185,7 +182,7 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
         path.write_text(scenario_yaml(document), encoding="utf-8")
         try:
             load_fleet_config(path)
-        except (ConfigurationError, ValueError, IndexError) as exc:
+        except (ConfigurationError, ValueError) as exc:
             errors.append(str(exc))
     try:
         parse_seg_rate(document["seg"])
@@ -232,7 +229,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
     Raises:
         ValueError: for any other preset, naming it, or for a custom coordinate that is
-            not a number.
+            not a finite number.
     """
     preset = fields["location_preset"]
     if preset == "custom":
@@ -249,15 +246,15 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     """The fleet_distribution: block: the number of homes, then each component's block."""
     block: dict[str, Any] = {}
     if "n_homes" in fields:
-        block["n_homes"] = _as_count(fields["n_homes"], "n_homes")
-    for component in _COMPONENTS:
-        block[component.block] = _component_block(fields, component)
+        block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
+    for component in FLEET_COMPONENTS.values():
+        block[component.key] = _component_block(fields, component)
     return block
 
 
-def _component_block(fields: Mapping[str, Any], component: _Component) -> dict[str, Any]:
+def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
     """*component*'s block: the distribution the form sets a type for, else the form's fixed value."""
-    form_keys = _prefixed(component.prefix, *_DISTRIBUTION_FIELDS)
+    form_keys = _prefixed(component.key, *_DISTRIBUTION_FIELDS)
     if form_keys["distribution_type"] in fields:
         return {component.grammar_key: _distribution_spec(fields, form_keys)}
     return _present_numbers(fields, {component.grammar_key: component.fixed_field})
@@ -281,9 +278,18 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
     elif distribution_type == "uniform":
         parameters = _present_numbers(fields, {key: form_keys[key] for key in ("min", "max")})
     elif distribution_type == "weighted_discrete":
-        parameters = _row_lists(fields, form_keys["wd_values"], "weight", "weights", _as_float)
+        parameters = _row_lists(
+            fields, form_keys["wd_values"], "weight", "weights", _finite_floats
+        )
     elif distribution_type == "shuffled_pool":
-        parameters = _row_lists(fields, form_keys["sp_entries"], "count", "counts", _as_count)
+        entries_field = form_keys["sp_entries"]
+        parameters = _row_lists(
+            fields,
+            entries_field,
+            "count",
+            "counts",
+            lambda counts: read_pool_counts(counts, entries_field),
+        )
     else:
         raise ValueError(
             f"{type_field} must be one of normal, uniform, weighted_discrete or "
@@ -294,13 +300,13 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
 
 def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
     """The form's *form_key* as a number; None when the form leaves it out."""
-    return _as_float(fields[form_key], form_key) if form_key in fields else None
+    return as_finite_float(fields[form_key], form_key) if form_key in fields else None
 
 
 def _present_numbers(fields: Mapping[str, Any], form_keys: Mapping[str, str]) -> dict[str, float]:
     """Each grammar key of *form_keys* whose form field the form gives, with that field as a number."""
     return {
-        grammar_key: _as_float(fields[form_key], form_key)
+        grammar_key: as_finite_float(fields[form_key], form_key)
         for grammar_key, form_key in form_keys.items()
         if form_key in fields
     }
@@ -311,16 +317,18 @@ def _row_lists(
     rows_field: str,
     column: str,
     grammar_key: str,
-    as_number: Callable[[Any, str], float],
+    read_column: _ColumnReader,
 ) -> dict[str, list[float]]:
     """The values, and the *grammar_key* list of each row's *column*, of the form's *rows_field* rows.
 
     Each row is an object holding a value and its *column*.  A form without the rows
-    gives neither list.
+    gives neither list.  Each value is read by as_finite_float.  The column is read whole,
+    by *read_column*, from each row's cell with its field, ``rows_field[index].column``,
+    so its rule may bound each cell or the column's total.
 
     Raises:
         ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or hold something other than numbers.
+            of such objects or a value is not a finite number; or *read_column*'s refusal.
     """
     if rows_field not in fields:
         return {}
@@ -328,36 +336,17 @@ def _row_lists(
     if not isinstance(rows, list):
         raise ValueError(f"{rows_field} must be a list of rows, got {rows!r}")
     values: list[float] = []
-    column_values: list[float] = []
+    cells: list[tuple[str, Any]] = []
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping) or not {"value", column} <= row.keys():
             raise ValueError(
                 f"{rows_field}[{index}] must be an object with 'value' and {column!r}, got {row!r}"
             )
-        values.append(_as_float(row["value"], f"{rows_field}[{index}].value"))
-        column_values.append(as_number(row[column], f"{rows_field}[{index}].{column}"))
-    return {"values": values, grammar_key: column_values}
+        values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
+        cells.append((f"{rows_field}[{index}].{column}", row[column]))
+    return {"values": values, grammar_key: list(read_column(cells))}
 
 
-def _as_float(value: Any, field: str) -> float:
-    """*value*, the form's *field*, as a number.
-
-    Raises:
-        ValueError: naming *field*, when *value* is not a number.
-    """
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{field} must be a number, got {value!r}") from exc
-
-
-def _as_count(value: Any, field: str) -> int:
-    """*value*, the form's *field*, as a whole number.
-
-    Raises:
-        ValueError: naming *field*, when *value* is not a whole number.
-    """
-    number = _as_float(value, field)
-    if not number.is_integer():
-        raise ValueError(f"{field} must be a whole number, got {value!r}")
-    return int(number)
+def _finite_floats(cells: list[tuple[str, Any]]) -> list[float]:
+    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
+    return [as_finite_float(value, field) for field, value in cells]

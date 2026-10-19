@@ -4,7 +4,10 @@
 import calendar
 import hashlib
 import json
-from collections.abc import Mapping
+import os
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
@@ -51,12 +54,41 @@ class WeatherDataError(RuntimeError):
     """PVGIS could not supply usable weather for a point: a request failed, or what it returned could not be used."""
 
 
+@contextmanager
+def _staged_beside(entry_file: Path) -> Iterator[Path]:
+    """A fresh path beside entry_file, for the block to write entry_file's replacement to and os.replace onto it.
+
+    Beside it, so that the replace is atomic. The block creates the file, so it has the mode a plain write
+    gives, which tempfile's owner-only files would not. If the block raises, KeyboardInterrupt included, the
+    path is removed; after an os.replace there is nothing left to remove.
+    """
+    staged = entry_file.with_name(f".{entry_file.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        yield staged
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _require_timezone_name(name: str) -> None:
+    """Refuse a name pandas resolves to no timezone: put records a frame's timezone as its str, and get restores the timezone from it."""
+    try:
+        pd.DatetimeIndex([], tz="UTC").tz_convert(name)
+    except (LookupError, ValueError) as e:
+        raise ValueError(
+            "A cached frame's timezone must have a str that names it, such as 'Europe/London', 'UTC' or "
+            f"'UTC+01:00', for WeatherCache to restore it, got {name!r}"
+        ) from e
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
     Stores each DataFrame as a CSV file, with a JSON sidecar recording its
     timezone and frequency, keyed by prefix, location and an optional date range.
     """
+
+    cache_dir: Path
 
     _KEY_VERSION = 2
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
@@ -103,7 +135,7 @@ class WeatherCache:
     def get(self, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-        """Retrieve cached data if available.
+        """Retrieve the frame put stored under the key: its values exactly, and its index in the timezone and frequency it was put in.
 
         Args:
             prefix: Data type prefix (e.g., 'tmy')
@@ -112,21 +144,25 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            Cached DataFrame or None if not found
+            The cached DataFrame, or None if not found
+
+        Raises:
+            ValueError: If the entry records its timezone as a str that names none; put refuses such a timezone
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
         if cache_file.exists():
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True, float_precision="round_trip")
             # Restore timezone from metadata if available
             if meta_file.exists():
                 with open(meta_file) as f:
                     metadata = json.load(f)
                 tz = metadata.get("timezone")
-                if tz and df.index.tz is None:
-                    df.index = df.index.tz_localize(tz)
+                if tz:
+                    _require_timezone_name(tz)
+                    df.index = pd.to_datetime(df.index, utc=True).tz_convert(tz)
                 freq = metadata.get("freq")
                 if freq:
                     df = df.asfreq(freq)
@@ -136,7 +172,12 @@ class WeatherCache:
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> None:
-        """Store data in cache.
+        """Store data in cache, replacing any entry under the same key whole.
+
+        A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
+        never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
+        as it was. Both hold while every put under one key stores the same timezone and frequency, since
+        the CSV and its metadata are replaced one after the other.
 
         Args:
             data: DataFrame to cache
@@ -144,16 +185,18 @@ class WeatherCache:
             location: Location for the data
             start_date: Optional start of a date-ranged entry (part of the key)
             end_date: Optional end of a date-ranged entry (part of the key)
+
+        Raises:
+            ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
+                zone; nothing is then written
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
-        # Save data
-        data.to_csv(cache_file)
-
-        # Save metadata including timezone info
         tz_str = str(data.index.tz) if data.index.tz else None
+        if tz_str is not None:
+            _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
         metadata = {
             "prefix": prefix,
@@ -164,8 +207,15 @@ class WeatherCache:
             "timezone": tz_str,
             "freq": freq_str,
         }
-        with open(meta_file, "w") as f:
-            json.dump(metadata, f)
+
+        with _staged_beside(cache_file) as staged_csv, _staged_beside(meta_file) as staged_meta:
+            data.to_csv(staged_csv)
+            staged_meta.write_text(json.dumps(metadata))
+            # Meta first: get takes the CSV as the entry, so a get that finds the new CSV also finds the new
+            # meta. A put killed between the two replaces leaves a miss in an empty cache, else the old CSV
+            # under the new meta (see the caveat in the docstring).
+            os.replace(staged_meta, meta_file)
+            os.replace(staged_csv, cache_file)
 
     def clear(self) -> int:
         """Clear all cached data.
@@ -261,7 +311,8 @@ def get_tmy_data(
         - dni: Direct normal irradiance (W/m²)
         - dhi: Diffuse horizontal irradiance (W/m²)
         - wind_speed: Wind speed at 10m (m/s)
-        Index is DatetimeIndex in UTC.
+        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+        the timezone it was put in.
 
     Raises:
         WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks

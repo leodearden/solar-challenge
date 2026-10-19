@@ -8,19 +8,25 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
+import warnings
+from typing import Callable
+
+import pytest
+
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
 from tests._finance_builders import make_fleet_results, make_home_config
 
 
-def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignore[name-defined]
+def _make_curved_simulate(curvature: float = 0.35) -> Callable:
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
-    fleet_self_consumption_kwh declines as base * exp(-curvature * age).
+    fleet_billed_own_use_kwh declines as base * exp(-curvature * age).
     With only 3 seed nodes, PCHIP will have large midpoint errors for high
     curvature values (the function is far from piecewise-cubic on wide intervals).
     """
-    import math
-    from typing import Callable
-
     BASE_SC = 12_000.0
     BASE_EXP = 3_000.0
 
@@ -38,10 +44,29 @@ def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignor
     return _simulate
 
 
+def _make_seg_income_simulate(seg_income_at_age_0_gbp: float) -> Callable:
+    """Return a synthetic simulate whose homes earn SEG income seg_income_at_age_0_gbp × exp(-0.05 × age).
+
+    Every home's energy is the same at every age, so revenue is the only metric
+    that varies with age.
+    """
+
+    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        homes = fleet_config.homes
+        mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+        return make_fleet_results(
+            homes=homes,
+            self_kwh=100.0,
+            export_kwh=800.0,
+            import_kwh=300.0,
+            export_revenue_gbp=seg_income_at_age_0_gbp * math.exp(-0.05 * mean_age),
+        )
+
+    return _simulate
+
+
 def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     """Build a scenario+finance pair for adaptive refinement tests."""
-    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-
     homes = [make_home_config()]
     finance = FinanceConfig(
         standing_charge_pence_per_day=28.0,
@@ -71,8 +96,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_adaptive_adds_nodes_beyond_seeds_with_tight_target(self) -> None:
         """With a curved simulate and tight error target, more than 3 nodes are sampled."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)  # steep exponential — large PCHIP error
         n_seeds = len({0, self._ASSET_LIFE // 2, self._ASSET_LIFE - 1})  # == 3
@@ -86,8 +109,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_tighter_target_yields_strictly_more_nodes(self) -> None:
         """A tighter error_target_pct produces strictly more sampled_ages than a loose target."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)
 
@@ -107,8 +128,6 @@ class TestProjectMultiYearAdaptive:
         An impossibly tight target causes the adaptive loop to run until capped.
         MAX_NODES is the hard bound.
         """
-        from solar_challenge.finance import MAX_NODES, project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.5)
 
@@ -120,8 +139,6 @@ class TestProjectMultiYearAdaptive:
 
     def test_interp_error_estimate_non_negative(self) -> None:
         """interp_error_estimate is always >= 0 (convergence invariant)."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.3)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)
@@ -133,8 +150,6 @@ class TestProjectMultiYearAdaptive:
         A loose enough target (50%) lets adaptive bisection converge quickly;
         the surfaced error estimate must be <= that target.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.3)
         curve = project_multi_year(scenario, finance, error_target_pct=50.0, simulate=sim)
@@ -142,18 +157,40 @@ class TestProjectMultiYearAdaptive:
             f"interp_error_estimate {curve.interp_error_estimate:.4f} > target 50.0"
         )
 
+    def test_a_negative_revenue_converges_as_its_positive_mirror_does(self) -> None:
+        """Revenue error is a percentage of the age-0 revenue's magnitude, whatever its sign.
+
+        Over a 25-year life, one fleet earns SEG income of £50 × exp(-0.05 × age)
+        and its mirror loses that much; at an own-use rate of 0 p neither earns
+        anything else, so their revenues differ only in sign.  A caller's simulate
+        may report such a loss.  The losing fleet's projection samples the ages
+        the earning fleet's does, with the same error estimate, within the default
+        1 % target and without the MAX_NODES warning.
+        """
+        scenario, finance = _make_adaptive_scenario(asset_life=25)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        earning = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(50.0))
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            losing = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(-50.0))
+
+        assert losing.points[0].fleet_revenue_gbp == pytest.approx(-50.0), "premise: the fleet loses £50 at age 0"
+        assert [str(w.message) for w in record if issubclass(w.category, UserWarning)] == []
+        assert losing.sampled_ages == earning.sampled_ages
+        assert losing.interp_error_estimate == pytest.approx(earning.interp_error_estimate)
+        assert losing.interp_error_estimate <= 1.0
+
     def test_per_year_curves_monotone_after_adaptive(self) -> None:
         """Per-year curves remain monotone non-increasing after adaptive refinement."""
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
         sim = _make_curved_simulate(curvature=0.4)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)
         for i in range(1, len(curve.points)):
-            assert curve.points[i].fleet_self_consumption_kwh <= (
-                curve.points[i - 1].fleet_self_consumption_kwh + 1e-6
+            assert curve.points[i].fleet_billed_own_use_kwh <= (
+                curve.points[i - 1].fleet_billed_own_use_kwh + 1e-6
             ), (
-                f"fleet_self_consumption not monotone at year {i}: "
-                f"{curve.points[i].fleet_self_consumption_kwh:.3f} > "
-                f"{curve.points[i-1].fleet_self_consumption_kwh:.3f}"
+                f"fleet_billed_own_use_kwh not monotone at year {i}: "
+                f"{curve.points[i].fleet_billed_own_use_kwh:.3f} > "
+                f"{curve.points[i-1].fleet_billed_own_use_kwh:.3f}"
             )

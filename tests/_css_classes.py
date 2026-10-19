@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the CSS names the dashboard and its stylesheets share:
 the classes templates and scripts apply and selectors name, the custom properties
-stylesheets declare and var() reads, the @keyframes stylesheets define, and the
-properties lone-class rules declare and inline style attributes set.
+stylesheets declare and var() reads, the @keyframes stylesheets define, the properties
+lone-class rules declare and inline style attributes set, and the colour palettes
+classes name.
 
 Usage::
 
@@ -21,8 +22,10 @@ A template applies classes through:
 - ``className`` assignments and ``classList`` add/remove/toggle/replace calls in
   inline ``<script>`` blocks, the same channel applied_classes_in_script reads
   in a standalone script;
-- Jinja string constants bound to macro parameters or call keywords named
-  ``classes`` or ending ``_class``.
+- Jinja string constants bound to a macro parameter, a call keyword or a
+  ``{% set %}`` variable named ``classes`` or ending ``_class`` or ``_classes``;
+  of a dict, only its values, since a key picks a class list rather than naming
+  one.
 
 Two gaps are known and unchecked: classes returned by Alpine methods or getters
 defined in JS, and classes composed inside other Jinja expressions. Both make
@@ -65,6 +68,8 @@ from html.parser import HTMLParser
 import jinja2
 from jinja2 import nodes
 
+from tests._html_page import script_texts
+
 _JINJA = jinja2.Environment()
 
 _CLASS_LIST_ATTRIBUTES = frozenset(
@@ -105,10 +110,11 @@ _IMPORTANT = re.compile(r"!\s*important", re.IGNORECASE)
 
 def applied_classes_in_template(source: str) -> set[str]:
     """Classes the Jinja template *source* applies, through every channel the module docstring lists."""
+    literal_markup = _markup(source)
     markup = _TemplateMarkup()
-    markup.feed(_markup(source))
+    markup.feed(literal_markup)
     markup.close()
-    inline_scripts = [applied_classes_in_script(body) for body in markup.script_bodies]
+    inline_scripts = [applied_classes_in_script(text) for text in script_texts(literal_markup)]
     return _split([*markup.class_lists, *_jinja_class_arguments(source)]).union(*inline_scripts)
 
 
@@ -201,28 +207,26 @@ def linked_stylesheets(template_source: str) -> list[str]:
     return [name for name in filenames if name is not None and name.endswith(".css")]
 
 
+def names_palette(css_class: str, palette: str) -> bool:
+    """Whether *css_class* names a shade of the colour *palette*, whatever its variants.
+
+    It does when it ends with ``-<palette>-<shade>``, optionally followed by an opacity
+    modifier: ``bg-primary-500``, ``dark:[&::-webkit-slider-thumb]:bg-primary-400`` and
+    ``dark:bg-primary-900/20`` each name primary. A palette's DEFAULT shade, written
+    ``bg-<palette>``, is not recognised: a bare ``-<palette>`` suffix would also match
+    hand-written classes such as ``btn--primary``."""
+    return re.search(rf"-{re.escape(palette)}-\w+(?:/\S+)?$", css_class) is not None
+
+
 class _TemplateMarkup(HTMLParser):
-    """Collects the class lists and the inline script bodies of a template's literal markup."""
+    """Collects the class lists of a template's literal markup."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.class_lists: list[str] = []
-        self.script_bodies: list[str] = []
-        self._in_script = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.class_lists.extend(_element_class_lists(attrs))
-        if tag == "script":
-            self.script_bodies.append("")
-            self._in_script = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "script":
-            self._in_script = False
-
-    def handle_data(self, data: str) -> None:
-        if self._in_script:
-            self.script_bodies[-1] += data
 
 
 class _InlineStyledMarkup(HTMLParser):
@@ -293,14 +297,19 @@ def _split(class_lists: Iterable[str]) -> set[str]:
 
 
 def _jinja_class_arguments(source: str) -> list[str]:
-    """String constants *source* binds to Jinja parameters named ``classes`` or ending ``_class``."""
+    """String constants *source* binds to Jinja names that name classes."""
     tree = _JINJA.parse(source)
     return [
         constant
-        for parameter, value in [*_call_keywords(tree), *_macro_defaults(tree)]
-        if parameter == "classes" or parameter.endswith("_class")
+        for name, value in [*_call_keywords(tree), *_macro_defaults(tree), *_set_variables(tree)]
+        if _names_classes(name)
         for constant in _string_constants(value)
     ]
+
+
+def _names_classes(name: str) -> bool:
+    """Whether a macro parameter, call keyword or ``{% set %}`` variable named *name* carries classes."""
+    return name == "classes" or name.endswith(("_class", "_classes"))
 
 
 def _call_keywords(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
@@ -316,10 +325,28 @@ def _macro_defaults(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
     ]
 
 
-def _string_constants(expression: nodes.Expr) -> list[str]:
-    """Every string constant in *expression*, itself included, so both branches of a conditional count."""
-    candidates = [expression, *expression.find_all(nodes.Const)]
-    return [value for node in candidates if (value := _string_value(node)) is not None]
+def _set_variables(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
+    """(name, value) for every ``{% set name = value %}``; a tuple target and a
+    ``{% set %}...{% endset %}`` block are not read."""
+    return [
+        (assignment.target.name, assignment.node)
+        for assignment in tree.find_all(nodes.Assign)
+        if isinstance(assignment.target, nodes.Name)
+    ]
+
+
+def _string_constants(expression: nodes.Node) -> list[str]:
+    """Every string constant in *expression*, itself included, so both branches of a conditional
+    count; of a dict, only its values."""
+    value = _string_value(expression)
+    if value is not None:
+        return [value]
+    children: list[nodes.Node]
+    if isinstance(expression, nodes.Dict):
+        children = [pair.value for pair in expression.items]
+    else:
+        children = list(expression.iter_child_nodes())
+    return [constant for child in children for constant in _string_constants(child)]
 
 
 def _string_value(node: nodes.Node) -> str | None:

@@ -1,0 +1,369 @@
+# Machine-readable twin of chart-panels-and-theme-tokens.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it. The fk-657669b23e71 acceptance is not a
+# producer and has no block. Out-of-batch producers (S19 gamma, tasks 780, 714, 752, 691, 736)
+# are wired as dependencies at decompose.
+prd: docs/prds/chart-panels-and-theme-tokens.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: 829
+    title: "Theme token file; Tailwind and charts read it"
+    capabilities:
+      - name: "tailwind-config-reads-token-file"
+        binding: "probe: scratch build with require('./static/src/theme-tokens.json') and colors[tokens.tailwind.primary] succeeded (tailwindcss 3.4.19)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "require\\('\\./static/src/theme-tokens\\.json'\\)"
+          paths: ["src/solar_challenge/web/tailwind.config.js"]
+          expect: present
+      - name: "tailwind-config-writes-no-hex"
+        binding: "grep:tailwind.config.js primary 50-900 hex copy of amber today; probe: primary by name rebuilds style.css byte-identical"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "#[0-9a-fA-F]{6}"
+          paths: ["src/solar_challenge/web/tailwind.config.js"]
+          expect: absent
+      - name: "charts-load-palette-from-token-file"
+        binding: "producer:α — COLOUR_PALETTE (role -> hex) loaded from static/src/theme-tokens.json at import"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "theme-tokens\\.json"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: present
+      - name: "charts-write-no-hex"
+        binding: "grep:charts.py _AMBER/_RED/_GREEN/_BLUE/_PURPLE constants, '#9b9b9b', '#50e3c2', '#888888' today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "#[0-9a-fA-F]{6}"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "style-css-rebuild-byte-identical"
+        binding: "probe: cmp of the rebuilt and committed static/dist/style.css identical for the token-reading config (B2)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "needs npm; the leaf rebuilds and the css-build lane re-checks after merge"
+      - name: "token-load-refusals-fire"
+        binding: "rejection-mechanism — producer:α authors the loader refusals (missing hue, non-#rrggbb hue); B1 observes both"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content (role, hue, value) is asserted by B1's tests"
+  - label: "β"
+    task_id: 830
+    title: "Role palettes replace amber outside the accent"
+    capabilities:
+      - name: "no-amber-class-in-templates-or-scripts"
+        binding: "grep:_AMBER_ROLES lists 5 amber roles today (chat banner, running badge, progress bar, Run Single Home card, PV card); probe: nested role palette compiles to amber's rgb"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "amber-[0-9]"
+          paths: ["src/solar_challenge/web/templates", "src/solar_challenge/web/static/js"]
+          expect: absent
+      - name: "amber-allow-list-deleted"
+        binding: "grep:tests/unit/test_web_theme_colours.py::_AMBER_ROLES today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_AMBER_ROLES|_AmberRole"
+          paths: ["tests/"]
+          expect: absent
+      - name: "status-role-palette-applied-by-badges"
+        binding: "producer:β — _run_status_badge_classes uses status-* classes"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "status-running-[0-9]"
+          paths: ["src/solar_challenge/web/templates/components/macros.html"]
+          expect: present
+      - name: "tailwind-config-regexes-deleted"
+        binding: "grep:test_web_theme_colours.py::_PRIMARY_500_ENTRY, test_web_theme_palettes.py::_PALETTE read tailwind.config.js by regex today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_PRIMARY_500_ENTRY"
+          paths: ["tests/"]
+          expect: absent
+      - name: "unknown-palette-name-fails-build"
+        binding: "rejection-mechanism — producer:β adds a throw naming the role and name; without it colors['ambr'] is undefined and Tailwind drops the palette silently; B2 observes the non-zero exit"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "needs npm; asserted in the leaf by a scratch build"
+  - label: "γ"
+    task_id: 831
+    title: "No colour outside the token file: chart chrome from computed style"
+    note: "Supersedes tasks 735 and 737 (their measurements are B6's postconditions). Upstream out-of-batch: 691, 736 (serialisation of chart-renderer.js)."
+    capabilities:
+      - name: "scripts-write-no-hex"
+        binding: "grep:chart-renderer.js _darkOverrides/_lightOverrides (10 hexes), parameter-sweep.js _renderChart (2) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "#[0-9a-fA-F]{6}"
+          paths: ["src/solar_challenge/web/static/js"]
+          expect: absent
+      - name: "renderer-reads-computed-style"
+        binding: "probe: [--chart-grid:theme(colors.slate.200)] / dark: variant compile to --chart-grid per theme; producer:γ reads computed color and --chart-grid"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "getComputedStyle"
+          paths: ["src/solar_challenge/web/static/js/chart-renderer.js"]
+          expect: present
+      - name: "chart-js-dead-path-deleted"
+        binding: "grep:parameter-sweep.js::_renderChart returns at typeof Chart === 'undefined'; no template loads Chart.js"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "new Chart\\(|typeof Chart"
+          paths: ["src/solar_challenge/web/static/js/parameter-sweep.js"]
+          expect: absent
+      - name: "hex-home-scan-finds-only-token-file"
+        binding: "identity: hexes today in charts.py 8, tailwind.config.js 10, chart-renderer.js 10, parameter-sweep.js 2; α removes the first two, γ the rest (B5)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the scan is a test over every web source; its pass is B5"
+      - name: "theme-reaches-secondary-and-polar-axes"
+        binding: "producer:γ applies chrome to every xaxis*/yaxis*/polar* key; tasks 735/737 measured the gaps (yaxis2 grid, zero lines, polar disc rgb(229,236,246))"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "e2e (B6), run locally; the per-task verify never runs e2e"
+  - label: "δ"
+    task_id: 832
+    title: "Chart panels: one typed description per chart, tabs as data, named absences"
+    note: "Priority high (fk-42c0053b9a2b); dependency of trigger-chain gate 772. Supersedes 456 and 129; carries fk-8f26d000b68d with x_supersedes_task 674. Upstream out-of-batch: 780 (S10 gamma2), 714, 752, and 454 if esc-454-3 is closed."
+    capabilities:
+      - name: "chart-panel-type-defined"
+        binding: "producer:δ — new in charts.py; absent at 9625529"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class ChartPanel[(:]"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: present
+      - name: "no-empty-figure-sentinel-in-builders"
+        binding: "grep:charts.py sankey_diagram and sweep_parameter_chart return \"{}\" today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "return \"\\{\\}\""
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "no-empty-figure-guard-in-templates"
+        binding: "grep:components/macros.html::chart_panel figure != '{}' today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "!= '\\{\\}'"
+          paths: ["src/solar_challenge/web/templates"]
+          expect: absent
+      - name: "heat-pump-charts-type-retired"
+        binding: "grep:charts.py::HeatPumpCharts today; δ returns two ChartPanels"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class HeatPumpCharts"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "chart-imports-at-module-top"
+        binding: "grep:routes.py home_results/fleet_results and history.py compare_page import web.charts in-function today (noqa PLC0415 in routes.py)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^ +from solar_challenge\\.web\\.charts import"
+          paths: ["src/solar_challenge/web/routes.py", "src/solar_challenge/web/history.py"]
+          expect: absent
+      - name: "compare-page-swallows-no-chart-error"
+        binding: "grep:history.py::compare_page except Exception: logger.warning(...) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "except Exception"
+          paths: ["src/solar_challenge/web/history.py"]
+          expect: absent
+      - name: "plotly-loaded-only-through-chart-scripts"
+        binding: "grep:cdn.plot.ly/plotly-2.27.0 in results/home.html, results/fleet.html, history/compare.html today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "cdn\\.plot\\.ly"
+          paths: ["src/solar_challenge/web/templates/results", "src/solar_challenge/web/templates/history", "src/solar_challenge/web/templates/scenarios"]
+          expect: absent
+      - name: "gates-read-window-days"
+        binding: "producer:task-780 (S10 gamma2) makes the 90/180 gates read results.window.days; edge wired at decompose"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\\.days \\+ 1"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "named-absences-render"
+        binding: "producer:δ — monthly/seasonal/Sankey reasons; B7 renders the 61-day run's page"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "page content asserted by B7's Flask-client tests"
+      - name: "chart-panel-refusals-fire"
+        binding: "rejection-mechanism — producer:δ authors ChartPanel.__post_init__; B8 observes each refusal"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content asserted by B8's tests"
+  - label: "ε"
+    task_id: 833
+    title: "Chart facts from the run: flow properties and the pricing note"
+    note: "Additive frozen members (D29): FROZEN_MEMBERS entries and an Unreleased-on-main line in-leaf. Supersedes 628. Upstream out-of-batch: 714."
+    capabilities:
+      - name: "summary-pv-charge-property"
+        binding: "grep:flow.py::simulate_timestep battery_charge = pv + grid; producer:ε adds the property"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def total_pv_charge_kwh\\("
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "summary-direct-self-consumption-property"
+        binding: "grep:flow.py::simulate_timestep self_consumption = min(direct + discharge, demand); identity exact while discharge <= shortfall"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def total_direct_self_consumption_kwh\\("
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "summary-grid-to-demand-property"
+        binding: "grep:home.py::SummaryStatistics.__post_init__ bounds grid charge by grid import"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def total_grid_to_demand_kwh\\("
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "sankey-reconstructs-no-split"
+        binding: "grep:charts.py::sankey_diagram pv_to_battery = summary.total_battery_charge_kwh - grid_charge today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "total_battery_charge_kwh - grid_charge"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "pricing-note-reads-config"
+        binding: "grep:charts.py::_unpriced_import_note infers from results.tariff_rate.gt(0) today; grep:home.py::HomeConfig tariff_config, seg_tariff are stored with the run"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "tariff_rate\\.gt\\(0\\)"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "self-consumption-docstring-corrected"
+        binding: "grep:home.py::SimulationResults docstring 'self_consumption: Direct PV consumption in kW' today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "self_consumption: Direct PV consumption"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+  - label: "ζ"
+    task_id: 834
+    title: "Typed comparison: runs, not decoded dicts"
+    note: "Supersedes 565, 575, 492 and 629. Upstream out-of-batch: S19 gamma (RunRecord.summary(), RunHeadline, run_headline per D-S19-8)."
+    capabilities:
+      - name: "comparison-reads-no-dict-get"
+        binding: "grep:charts.py::comparison_bar_chart/comparison_radar summary.get(key, 0) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "summary\\.get\\("
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "comparison-takes-typed-runs"
+        binding: "grep:charts.py comparison builders take list[dict[str, Any]] today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "list\\[dict\\[str, Any\\]\\]"
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "headline-widened-with-pv-stored-share"
+        binding: "producer:S19-γ defines RunHeadline (edge at decompose); producer:ζ widens it per D-S19-8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "pv_stored_share"
+          paths: ["src/solar_challenge/web/storage.py"]
+          expect: present
+      - name: "fleet-radar-draws-real-ratios"
+        binding: "identity: 18/72 = 0.25, 27/45 = 0.6 for make_fleet_results(n_homes=2, self 18, export 54, import 27); task 565 measured today's r [0,0,0,0,0]"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "route-level assertion in B11's test"
+  - label: "η"
+    task_id: 835
+    title: "The sweep chart, drawn from the sweep's runs"
+    note: "Supersedes 123 (stale branch not rebased) and 135. Upstream out-of-batch: S19 gamma (RunRecord.summary())."
+    capabilities:
+      - name: "sweep-panels-builder"
+        binding: "grep:charts.py::sweep_parameter_chart has no src caller today; producer:η wires it through sweep_panels"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def sweep_panels\\("
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: present
+      - name: "optimum-by-direction"
+        binding: "grep:charts.py::sweep_parameter_chart best_idx = max(...) today"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "best_idx = max\\("
+          paths: ["src/solar_challenge/web/charts.py"]
+          expect: absent
+      - name: "sweep-chart-route"
+        binding: "grep:scenarios.py Blueprint registered at /scenarios (app.py); producer:η adds POST /scenarios/sweep/chart"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"/sweep/chart\""
+          paths: ["src/solar_challenge/web/scenarios.py"]
+          expect: present
+      - name: "renderer-draws-late-containers"
+        binding: "producer:η — MutationObserver on data-chart-figure; B12's e2e observes a .js-plotly-plot"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "MutationObserver"
+          paths: ["src/solar_challenge/web/static/js/chart-renderer.js"]
+          expect: present
+      - name: "unknown-run-refused"
+        binding: "rejection-mechanism — producer:η answers 400 naming the run id; B12 observes it"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "response body asserted by B12's route test"
+  - label: "θ"
+    task_id: 836
+    title: "One card macro"
+    capabilities:
+      - name: "card-triple-only-in-macros"
+        binding: "grep: the exact triple has 16 copies at 9625529 (dashboard 3, simulate/fleet 7, results/home 1, results/fleet 1, history/compare 1, macros 3)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
+          paths: ["src/solar_challenge/web/templates/dashboard.html", "src/solar_challenge/web/templates/simulate", "src/solar_challenge/web/templates/results", "src/solar_challenge/web/templates/history", "src/solar_challenge/web/templates/scenarios", "src/solar_challenge/web/templates/assistant", "src/solar_challenge/web/templates/partials", "src/solar_challenge/web/templates/base.html"]
+          expect: absent
+      - name: "pages-render-unchanged-card-classes"
+        binding: "B13 — rendered card class sets equal before and after"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "rendered-output comparison in B13's tests"

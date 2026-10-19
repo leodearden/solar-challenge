@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from solar_challenge.config import (
-    ConfigurationError,
     OutputConfig,
     ScenarioConfig,
     SimulationPeriod,
@@ -17,6 +16,7 @@ from solar_challenge.config import (
     load_scenarios,
     parse_location_block,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location

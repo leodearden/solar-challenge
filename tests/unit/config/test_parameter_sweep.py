@@ -1,18 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for parameter sweeps: the values a ParameterSweepConfig yields and the scenarios run_parameter_sweep simulates."""
 
+import math
+from collections.abc import Iterator
 from dataclasses import replace
 
 import pandas as pd
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
-    ConfigurationError,
     ParameterSweepConfig,
     ScenarioConfig,
     SimulationPeriod,
+    SweepResult,
     run_parameter_sweep,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -135,3 +139,102 @@ class TestPVParameterSweepPreservesDegradation:
         assert point.parameter_value == value
         assert isinstance(point.results, SimulationResults)
         pd.testing.assert_series_equal(point.results.generation, expected.generation)
+
+
+class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
+    """A battery_capacity_kwh sweep refuses a value that is negative or not finite, naming the parameter, instead of simulating it as no battery."""
+
+    _DAY = "2024-06-21"
+
+    @pytest.fixture
+    def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
+        """Serve a clear June day as Bristol's TMY, so a sweep that simulates a value as no battery fails its assertion instead of reaching PVGIS."""
+        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+
+    @pytest.mark.usefixtures("synthetic_tmy")
+    @pytest.mark.parametrize(
+        "battery",
+        [
+            pytest.param(None, id="no-battery"),
+            pytest.param(BatteryConfig(capacity_kwh=5.0), id="battery"),
+        ],
+    )
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -1.0])
+    def test_a_value_that_is_not_a_capacity_is_refused_naming_the_parameter(
+        self, value: float, battery: BatteryConfig | None
+    ) -> None:
+        scenario = ScenarioConfig(
+            name="battery sweep",
+            period=SimulationPeriod(start_date=self._DAY, end_date=self._DAY),
+            home=HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+                battery_config=battery,
+            ),
+        )
+        sweep = run_parameter_sweep(
+            scenario, ParameterSweepConfig(parameter_name="battery_capacity_kwh", values=[value])
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            next(sweep)
+        assert str(exc_info.value) == (
+            f"battery_capacity_kwh must be >= 0 and finite (0 for no battery), got {value} kWh"
+        )
+
+
+class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
+    """A household_occupants sweep holds each value, as given, to LoadConfig's occupant rule: it refuses a fraction or a boolean, which the sweep truncated to an int, and reads a whole-number float as the int it equals."""
+
+    _DAY = "2024-06-21"
+
+    @pytest.fixture
+    def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
+        """Serve a clear June day as Bristol's TMY, so a sweep that simulates a truncated count fails its assertion instead of reaching PVGIS."""
+        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+
+    @staticmethod
+    def _home(household_occupants: int) -> HomeConfig:
+        """A 4 kW home whose deterministic load follows Ofgem's TDCV for *household_occupants*."""
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(household_occupants=household_occupants, use_stochastic=False),
+        )
+
+    def _sweep(self, value: float) -> Iterator[SweepResult]:
+        """Sweep a 3-occupant home's household_occupants over the one *value*, for one June day."""
+        return run_parameter_sweep(
+            ScenarioConfig(
+                name="occupants sweep",
+                period=SimulationPeriod(start_date=self._DAY, end_date=self._DAY),
+                home=self._home(3),
+            ),
+            ParameterSweepConfig(parameter_name="household_occupants", values=[value]),
+        )
+
+    @pytest.mark.usefixtures("synthetic_tmy")
+    @pytest.mark.parametrize(
+        ("value", "refusal"),
+        [
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+        ],
+    )
+    def test_a_value_that_is_not_a_whole_number_is_refused_as_load_config_refuses_it(
+        self, value: float, refusal: str
+    ) -> None:
+        """The sweep point is refused with LoadConfig's message, never simulated with a truncated count."""
+        with pytest.raises(ValueError) as exc_info:
+            next(self._sweep(value))
+        assert str(exc_info.value) == refusal
+
+    @pytest.mark.usefixtures("synthetic_tmy")
+    def test_a_whole_number_float_simulates_that_many_occupants(self) -> None:
+        """A swept 2.0, as a linear sweep's points are floats, simulates the 2-occupant home: its demand follows TDCV's 2700 kWh/yr, not the base home's 3200."""
+        [point] = self._sweep(2.0)
+
+        period = SimulationPeriod(start_date=self._DAY, end_date=self._DAY)
+        expected = simulate_home(self._home(2), period.get_start_timestamp(), period.get_end_timestamp())
+        assert point.parameter_value == 2.0
+        assert isinstance(point.results, SimulationResults)
+        pd.testing.assert_series_equal(point.results.demand, expected.demand)

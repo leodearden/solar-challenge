@@ -9,13 +9,24 @@ solve_cost_recovery_rate honour the scenario rate.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
+import math
+import re
+from typing import Callable
 
 import pandas as pd
 import pytest
 
-from solar_challenge.fleet import FleetConfig, FleetResults
-from tests._finance_builders import make_home_config, make_sim_results
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import (
+    FinanceConfig,
+    _reconcile_seg_homes,
+    project_multi_year,
+    solve_cost_recovery_rate,
+)
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import SimulationResults
+from solar_challenge.seg import SEGTariff
+from tests._finance_builders import make_home_config
 
 
 class TestReconcileSegHomes:
@@ -23,8 +34,6 @@ class TestReconcileSegHomes:
 
     def test_none_scenario_rate_returns_homes_unchanged(self) -> None:
         """(a) When scenario_seg_rate is None, return the homes list unchanged."""
-        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
-
         home = make_home_config()
         result = _reconcile_seg_homes([home], scenario_seg_rate=None)
         assert result == [home]
@@ -36,9 +45,6 @@ class TestReconcileSegHomes:
         Other HomeConfig fields (pv_config, load_config, location, battery_config)
         are preserved unchanged via dataclasses.replace semantics.
         """
-        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
-        from solar_challenge.seg import SEGTariff
-
         home = make_home_config()
         assert home.seg_tariff is None  # pre-condition
 
@@ -59,9 +65,6 @@ class TestReconcileSegHomes:
 
     def test_home_with_existing_seg_and_none_scenario_rate_unchanged(self) -> None:
         """(c) Home with seg_tariff=SEGTariff(4.0) + scenario_seg_rate=None → unchanged."""
-        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
-        from solar_challenge.seg import SEGTariff
-
         tariff = SEGTariff(name="export", rate_pence_per_kwh=4.0)
         home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
         result = _reconcile_seg_homes([home], scenario_seg_rate=None)
@@ -70,9 +73,6 @@ class TestReconcileSegHomes:
 
     def test_consistent_rate_no_raise_home_unchanged(self) -> None:
         """(d) Home seg=SEGTariff(6.0) + scenario_seg_rate=6.0 (CLI-style) → no raise, same home."""
-        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
-        from solar_challenge.seg import SEGTariff
-
         tariff = SEGTariff(name="", rate_pence_per_kwh=6.0)
         home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
         # Must not raise; home is returned as-is (rates match)
@@ -82,12 +82,8 @@ class TestReconcileSegHomes:
 
     def test_inconsistent_rate_raises_value_error(self) -> None:
         """(e) Home seg=SEGTariff(4.0) + scenario_seg_rate=6.0 → raises ValueError naming both rates."""
-        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
-        from solar_challenge.seg import SEGTariff
-
         tariff = SEGTariff(name="", rate_pence_per_kwh=4.0)
         home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
-        import re
 
         with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
             _reconcile_seg_homes([home], scenario_seg_rate=6.0)
@@ -97,35 +93,52 @@ def _seg_aware_fleet_results_factory(
     self_kwh: float = 5.0,
     export_kwh: float = 5.0,
     import_kwh: float = 3.0,
-    days: int = 1,
-) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
-    """Return a simulate that prices each home's export at that home's own seg_tariff.
+    n_minutes: int = 1440,
+) -> Callable:
+    """Return a simulate closure that prices export_revenue from each home's seg_tariff.
 
-    Every home self-consumes *self_kwh*, exports *export_kwh* and imports
-    *import_kwh* over *days* days.  A home with a tariff earns export_kwh × rate/100,
-    and a home without one earns nothing, as in simulate_home.  _annualise_physics
-    scales the totals to 365 days.  Callers write
-    ``simulate=_seg_aware_fleet_results_factory()``.
+    Mirrors home.py:336-349 (Task-85 zeroing): export_revenue is non-zero only
+    when home.seg_tariff is set, summing to export_kwh × rate/100 per home.
+    The kWh arguments are for the simulated period; _annualise_physics handles
+    scaling to 365 days.  Use as ``simulate=lambda fc, s, e: factory(fc)``.
     """
+    def _simulate(
+        fleet_config: "FleetConfig",  # type: ignore[name-defined]
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+    ) -> FleetResults:
+        idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
+        sc_kw = self_kwh / (n_minutes / 60.0)
+        exp_kw = export_kwh / (n_minutes / 60.0)
+        imp_kw = import_kwh / (n_minutes / 60.0)
+        gen_kw = sc_kw + exp_kw
+        demand_kw = sc_kw + imp_kw
+        zeros = pd.Series(0.0, index=idx)
 
-    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-        return FleetResults(
-            per_home_results=[
-                make_sim_results(
-                    self_kwh=self_kwh,
-                    export_kwh=export_kwh,
-                    import_kwh=import_kwh,
-                    export_revenue_gbp=(
-                        0.0
-                        if home.seg_tariff is None
-                        else export_kwh * home.seg_tariff.rate_pence_per_kwh / 100.0
-                    ),
-                    days=days,
-                )
-                for home in fleet_config.homes
-            ],
-            home_configs=list(fleet_config.homes),
-        )
+        per_home = []
+        for home in fleet_config.homes:
+            # Price export_revenue from seg_tariff if set (mirrors Task-85 zeroing in home.py)
+            if home.seg_tariff is not None:
+                rev_per_min = exp_kw / 60.0 * home.seg_tariff.rate_pence_per_kwh / 100.0
+                export_rev: pd.Series = pd.Series(rev_per_min, index=idx)
+            else:
+                export_rev = zeros.copy()
+
+            per_home.append(SimulationResults(
+                generation=pd.Series(gen_kw, index=idx),
+                demand=pd.Series(demand_kw, index=idx),
+                self_consumption=pd.Series(sc_kw, index=idx),
+                battery_charge=zeros.copy(),
+                battery_discharge=zeros.copy(),
+                battery_soc=zeros.copy(),
+                grid_import=pd.Series(imp_kw, index=idx),
+                grid_export=pd.Series(exp_kw, index=idx),
+                import_cost=zeros.copy(),
+                export_revenue=export_rev,
+                tariff_rate=zeros.copy(),
+            ))
+
+        return FleetResults(per_home_results=per_home, home_configs=list(fleet_config.homes))
 
     return _simulate
 
@@ -146,9 +159,6 @@ class TestProjectHonoursScenarioLevelSeg:
         - baseline_none: homes have seg_tariff=None, scenario rate=None
         - finance: shared FinanceConfig with default grant/loan params
         """
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-        from solar_challenge.seg import SEGTariff
-
         homes_no_seg = [make_home_config() for _ in range(self._N_HOMES)]
         homes_with_seg = [
             dataclasses.replace(h, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=self._SEG_RATE))
@@ -192,8 +202,6 @@ class TestProjectHonoursScenarioLevelSeg:
         Both must exceed baseline_none (no SEG at all) — proving the SEG
         income is load-bearing.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-
         scenario_seg, home_ref, baseline_none, finance = self._make_three_scenarios()
         sim = _seg_aware_fleet_results_factory()
 
@@ -225,10 +233,6 @@ class TestProjectHonoursScenarioLevelSeg:
         of the binding regime (no tuned numeric threshold needed; equality is
         two code paths computing export_kwh × rate / 100).
         """
-        import math
-
-        from solar_challenge.finance import solve_cost_recovery_rate  # type: ignore[attr-defined]
-
         scenario_seg, home_ref, baseline_none, finance = self._make_three_scenarios()
         sim = _seg_aware_fleet_results_factory()
 
@@ -294,12 +298,6 @@ class TestProjectHonoursScenarioLevelSeg:
 
     def test_inconsistent_seg_inputs_raise_through_projection(self) -> None:
         """project_multi_year raises ValueError when per-home seg_tariff != scenario rate."""
-        import re
-
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-        from solar_challenge.seg import SEGTariff
-
         homes_inconsistent = [
             dataclasses.replace(
                 make_home_config(),

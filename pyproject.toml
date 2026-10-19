@@ -8,7 +8,8 @@ version = "0.5.0"
 description = "Energy flow simulator for domestic PV and battery systems"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
-license = "AGPL-3.0-or-later"
+license = "AGPL-3.0-or-later AND MIT"
+license-files = ["LICENSE", "src/solar_challenge/web/static/vendor/*/LICENSE*", "src/solar_challenge/web/static/dist/LICENSE*"]
 authors = [
     {name = "Leo Dawn"}
 ]
@@ -41,8 +42,10 @@ solar-challenge = "solar_challenge.cli:app"
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "mypy>=1.0.0",
+    "mypy>=1.11.0",
     "packaging>=22.0",
+    "pytest-rerunfailures>=16.7",
+    "ruff>=0.15.9",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
@@ -53,7 +56,7 @@ web = [
 ]
 e2e = [
     "playwright>=1.51.0",
-    "pytest-playwright>=0.4.0",
+    "pytest-playwright>=0.6.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -69,6 +72,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short --ignore=tests/e2e"
+# Every pytest deprecation is an error; tests/unit/test_pytest_deprecations_are_errors.py says why.
+filterwarnings = ["error::pytest.PytestDeprecationWarning"]
 markers = [
     "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
@@ -95,3 +100,7 @@ ignore_missing_imports = true
 # (strict = true), as everywhere else in the package.
 module = ["solar_challenge.web.*"]
 disallow_untyped_decorators = false
+
+[tool.ruff.lint]
+# The rules tests/unit/test_lint.py holds the package to.
+select = ["F"]

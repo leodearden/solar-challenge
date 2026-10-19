@@ -2,6 +2,8 @@
 
 These tests run full simulations with different dispatch strategies
 and verify that strategy selection produces measurably different results.
+
+The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
 """
 
 import pytest
@@ -18,6 +20,8 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
+from tests._seeded_tmy import ClearJuneDays
 
 
 def _make_config(
@@ -41,11 +45,17 @@ def _make_config(
 
 
 # Short simulation period to keep tests fast
-START = pd.Timestamp("2024-06-21")
-END = pd.Timestamp("2024-06-23")  # 3 days
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
+START, END = _JUNE_DAYS.window(_JUNE_DAYS.count)
 
 
-@pytest.mark.slow
+@pytest.fixture
+def bristol_june_tmy(weather_cache: WeatherCache) -> None:
+    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
+    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestSelfConsumptionStrategy:
     """Integration tests for self-consumption dispatch strategy."""
@@ -87,7 +97,7 @@ class TestSelfConsumptionStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestTOUOptimizedStrategy:
     """Integration tests for TOU-optimized dispatch strategy."""
@@ -131,7 +141,7 @@ class TestTOUOptimizedStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestPeakShavingStrategy:
     """Integration tests for peak-shaving dispatch strategy."""
@@ -174,7 +184,7 @@ class TestPeakShavingStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestStrategyComparison:
     """Compare results across different dispatch strategies."""
@@ -304,7 +314,7 @@ class TestStrategyComparison:
             assert 0 <= summary.export_ratio <= 1
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestDefaultStrategyBackwardCompatibility:
     """Verify that no strategy config gives same results as explicit self-consumption."""
