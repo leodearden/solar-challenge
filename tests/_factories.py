@@ -139,7 +139,10 @@ def make_cost_recovery_solution(
             else _one_home_paying(representative_outlay_gbp)
         )
     elif representative_outlay_gbp is not None:
-        raise TypeError("make_cost_recovery_solution takes outlay or representative_outlay_gbp, not both")
+        raise TypeError(
+            "pass outlay or representative_outlay_gbp, not both; "
+            f"got outlay={outlay!r} and representative_outlay_gbp={representative_outlay_gbp!r}"
+        )
     representative = outlay.representative
     return CostRecoverySolution(
         own_use_rate_pence_per_kwh=own_use_rate_pence_per_kwh,
