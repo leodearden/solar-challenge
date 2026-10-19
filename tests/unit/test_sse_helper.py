@@ -109,6 +109,17 @@ def test_event_name_with_surrounding_whitespace_is_rejected(line: str) -> None:
     assert repr(line) in str(raised.value)
 
 
+def test_event_name_with_an_inner_space_is_kept_as_written() -> None:
+    """EventSource and the chat client both keep an inner space, so the reader does not refuse it.
+
+    web/sse.py's SseEvent refuses any whitespace in a name it writes. The reader refuses
+    only what clients decode differently, not everything the encoder would not write.
+    """
+    body = "event: fail ed\ndata: {}\n\n"
+
+    assert parse_sse_events(body) == [SseFrame(event="fail ed", data={})]
+
+
 @pytest.mark.parametrize(
     ("body", "field"),
     [
