@@ -25,7 +25,7 @@ from solar_challenge.finance import (
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.seg import SEGTariff
-from tests._finance_builders import make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 
 
 class TestReconcileSegHomes:
@@ -104,8 +104,8 @@ def _seg_aware_fleet_results_factory(
     """
 
     def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-        return FleetResults(
-            per_home_results=[
+        return make_fleet_results_of(
+            [
                 make_sim_results(
                     self_kwh=self_kwh,
                     export_kwh=export_kwh,
@@ -119,7 +119,7 @@ def _seg_aware_fleet_results_factory(
                 )
                 for home in fleet_config.homes
             ],
-            home_configs=list(fleet_config.homes),
+            homes=fleet_config.homes,
         )
 
     return _simulate
