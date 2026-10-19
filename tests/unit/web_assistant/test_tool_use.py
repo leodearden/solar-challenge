@@ -7,6 +7,7 @@ tool calls.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -74,19 +75,17 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
 class TestToolSurface:
     """Tests for the TOOLS surface and the dispatch_tool router."""
 
-    def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
-        names = [t["name"] for t in TOOLS]
-        assert names == [
-            "explain_metric",
-            "suggest_config",
-            "get_run_results",
-            "list_recent_runs",
-            "run_home_simulation",
-            "run_fleet_simulation",
-        ], (
-            f"Expected the fixed tool order, got {names}"
-        )
+    def test_tools_is_a_tuple_of_plain_dicts_the_sdk_can_json_encode(self) -> None:
+        """TOOLS is a tuple, so the order of the tools in the cached prompt prefix cannot change
+        at runtime, and its schemas come back from a JSON round trip unchanged, so none holds a
+        read-only mapping, which the SDK's JSON encoding rejects."""
+        assert isinstance(TOOLS, tuple), f"Expected TOOLS to be a tuple; got {type(TOOLS).__name__}"
+        assert json.loads(json.dumps(TOOLS)) == list(TOOLS)
+
+    def test_tool_names_are_unique(self) -> None:
+        """No two tools in TOOLS share a name: the name is all a tool call carries to reach its tool."""
+        names = [tool["name"] for tool in TOOLS]
+        assert len(names) == len(set(names)), f"Expected unique tool names; got {names}"
 
     def test_every_tool_entry_has_required_keys(self) -> None:
         """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
@@ -107,6 +106,20 @@ class TestToolSurface:
             assert isinstance(schema["required"], list) and schema["required"], (
                 f"input_schema.required must be non-empty list for {tool['name']!r}"
             )
+
+    @pytest.mark.parametrize("schema", TOOLS, ids=lambda schema: schema["name"])
+    def test_each_offered_tool_refuses_a_call_without_its_required_fields_naming_them(
+        self, tmp_path: Path, schema: Mapping[str, Any]
+    ) -> None:
+        """A call to a tool TOOLS offers that sends none of its fields is answered with an error
+        naming every field its schema requires, and nothing else: the name reaches the tool that
+        holds this schema, and that tool applies the schema's required list."""
+        result = dispatch_tool(schema["name"], {}, tool_context(tmp_path))
+
+        assert list(result) == ["error"], f"Expected an error and nothing else; got {result!r}"
+        assert "Unknown tool" not in result["error"], f"Expected the tool to be found; got {result!r}"
+        unnamed = [field for field in schema["input_schema"]["required"] if field not in result["error"]]
+        assert not unnamed, f"Expected the error to name {unnamed}; got {result['error']!r}"
 
     def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
         """dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
@@ -132,20 +145,15 @@ class TestToolSurface:
             f"dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
-    def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
-        """dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
-        try:
-            result = dispatch_tool(
-                "nonexistent_tool",
-                {},
-                tool_context(tmp_path),
-            )
-        except Exception as exc:
-            raise AssertionError(
-                f"dispatch_tool should not raise for unknown tool; got: {exc!r}"
-            ) from exc
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key in result: {result}"
+    def test_an_unknown_tool_name_is_answered_with_the_available_tools_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        """A call naming no tool is answered, not raised, with an error that lists the tools
+        TOOLS offers, in TOOLS' order, so the model can call one it was offered instead."""
+        result = dispatch_tool("nonexistent_tool", {}, tool_context(tmp_path))
+
+        available = ", ".join(tool["name"] for tool in TOOLS)
+        assert result == {"error": f"Unknown tool 'nonexistent_tool'. Available tools: {available}."}
 
 
 class TestToolUseLoop:
@@ -253,7 +261,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """stream() receives TOOLS as its 'tools' kwarg; TestToolSurface pins TOOLS' order."""
+        """stream() receives TOOLS, in TOOLS' order, as its 'tools' kwarg."""
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
         ])
