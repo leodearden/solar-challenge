@@ -16,7 +16,7 @@ from tests._surface_forms import (
     undeclared_attributes,
     unset_attributes,
 )
-from tests.unit.surface_forms_helper._fixtures import Preset
+from tests.unit.surface_forms_helper._fixtures import Preset, imported_module
 
 
 def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
@@ -185,6 +185,40 @@ def test_a_class_body_string_annotation_naming_a_name_its_module_does_not_bind_r
 
     with pytest.raises(NameError, match="Nowhere"):
         member_forms(Meter)
+
+
+def test_a_class_body_string_annotation_of_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sys_modules_raises_a_lookup_error(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        member_forms(earlier.Plain)
+
+    assert later.__file__ in str(raised.value)
 
 
 def test_private_and_dunder_names_are_not_members() -> None:

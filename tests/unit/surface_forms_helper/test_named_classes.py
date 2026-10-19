@@ -258,6 +258,48 @@ def test_a_routine_whose_module_another_module_of_the_same_name_has_since_replac
     assert later.__file__ in str(raised.value)
 
 
+def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_name_replaced_it_in_sys_modules_raises_a_lookup_error_naming_it_and_the_replacement(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n"
+        "\n"
+        "class Lone:\n"
+        "    share: 'Share'\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n",
+    )
+
+    with pytest.raises(LookupError) as replaced:
+        named_classes(earlier.Plain)
+    with pytest.raises(LookupError) as unbound:
+        named_classes(earlier.Lone)
+
+    assert "auditing.Plain" in str(replaced.value)
+    assert later.__file__ in str(replaced.value)
+    assert "auditing.Lone" in str(unbound.value)
+    assert later.__file__ in str(unbound.value)
+
+
 def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_once_dropped(
     tmp_path: pathlib.Path,
 ) -> None:
