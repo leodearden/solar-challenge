@@ -10,6 +10,7 @@ import pytest
 
 from solar_challenge.config import (
     BatteryDistributionConfig,
+    DistributionSpec,
     FleetDistributionConfig,
     GridChargeConfig,
     HeatPumpDistributionConfig,
@@ -642,6 +643,99 @@ class TestGenerateHomesFromDistributionInverterEfficiency:
         homes = generate_homes_from_distribution(config, Location.bristol())
 
         assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
+
+
+class TestGenerateHomesHouseholdOccupants:
+    """How generate_homes_from_distribution draws each home's household occupants for LoadConfig's rule to read."""
+
+    @staticmethod
+    def _fleet(household_occupants: DistributionSpec, n_homes: int = 2) -> FleetDistributionConfig:
+        """A seeded fleet of *n_homes* homes with deterministic loads, whose household occupants are drawn from *household_occupants*."""
+        return FleetDistributionConfig(
+            n_homes=n_homes,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(household_occupants=household_occupants, use_stochastic=False),
+            seed=42,
+        )
+
+    @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=3.0, std=1.0, min=2.6, max=3.4), id="normal"),
+            pytest.param(UniformDistribution(min=2.6, max=3.4), id="uniform"),
+        ],
+    )
+    def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw from 2.6 to 3.4 gives its home 3 occupants, the nearest whole number, where truncation gives 2 to every draw below 3.
+
+        The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3] * 20
+
+    @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=1.0, std=0.1, min=2.5), id="normal-clamped-to-its-min"),
+            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-bounds"),
+        ],
+    )
+    def test_a_draw_halfway_between_two_whole_numbers_rounds_up(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw is 2.5 and gives its home 3 occupants, where rounding a half to even gives 2.
+
+        The normal spec's mean lies 15 standard deviations below its min, so every draw is clamped to the min whatever the seed.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3, 3]
+
+    @pytest.mark.parametrize(
+        ("household_occupants", "refusal"),
+        [
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="fixed-boolean"),
+            pytest.param(
+                WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
+                "Household occupants must be a whole number, got True",
+                id="weighted-discrete-boolean",
+            ),
+            pytest.param(
+                ShuffledPoolDistribution(values=(2, 0), counts=(1, 1)),
+                "Household occupants must be at least 1, got 0",
+                id="shuffled-pool-zero",
+            ),
+            pytest.param(
+                UniformDistribution(min=-1.7e308, max=1.7e308),
+                "Household occupants seems unrealistic: inf",
+                id="uniform-draws-overflowing-to-infinity",
+            ),
+        ],
+    )
+    def test_a_count_load_config_refuses_is_refused_as_it_refuses_it(
+        self, household_occupants: DistributionSpec, refusal: str
+    ) -> None:
+        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, replaced by the default 3, or left to raise OverflowError.
+
+        The uniform spec's max - min overflows, so every draw from it is inf whatever the seed.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+        assert str(exc_info.value) == refusal
+
+    def test_a_null_draw_takes_load_configs_default_and_a_whole_number_float_is_held_as_its_int(self) -> None:
+        """A null draw gives its home LoadConfig's default of 3 occupants, and a draw of 4.0 gives its home the int 4."""
+        homes = generate_homes_from_distribution(
+            self._fleet(ShuffledPoolDistribution(values=(None, 4.0), counts=(1, 1))), Location.bristol()
+        )
+
+        occupants = sorted(home.load_config.household_occupants for home in homes)
+        assert [(type(count), count) for count in occupants] == [(int, 3), (int, 4)]
 
 
 class TestGenerateHomesFromDistributionFlex:
