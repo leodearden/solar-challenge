@@ -17,17 +17,20 @@ errors a page reports. release_held_simulations holds the live server's
 jobs inside their simulations until the test releases them.
 
 Every browser context a test opens refuses each request to another origin
-than the live server's, as if the network were down, and the test fails at
-teardown naming each refused URL.
+than the live server's, as if the network were down, and the test errors at
+teardown, naming each refused URL.
 
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
 
-It imports nothing from playwright: tests/unit/test_e2e_job_wait.py and
-tests/unit/test_e2e_network_change_reruns.py run copies of this module in
-the verify environment, which lacks the e2e extra.
+It imports playwright's and pytest-playwright's types for annotations only,
+so nothing from the e2e extra when it loads: tests/unit/test_e2e_job_wait.py
+and tests/unit/test_e2e_network_change_reruns.py run copies of this module
+in the verify environment, which lacks that extra.
 """
+
+from __future__ import annotations
 
 import functools
 import json
@@ -40,7 +43,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -60,6 +63,10 @@ from tests._finance_builders import make_fleet_results, make_home_config, make_s
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext, Route
+    from pytest_playwright import CreateContextCallback
 
 
 def _find_free_port() -> int:
@@ -201,20 +208,20 @@ def _urls_outside(origin: str) -> re.Pattern[str]:
 
 @pytest.fixture
 def new_context(
-    new_context, live_server: str, request: pytest.FixtureRequest
-) -> Iterator[Callable[..., Any]]:
+    new_context: CreateContextCallback, live_server: str, request: pytest.FixtureRequest
+) -> Iterator[Callable[..., BrowserContext]]:
     """Wrap pytest-playwright's new_context so that each browser context it opens refuses every request to another origin than the live server's, as if the network were down.
 
     It opens the context fixture's browser context, and so the page fixture's, as well as each one a test opens itself.
-    At teardown the test fails, naming each URL refused.
+    At teardown the test errors, naming each URL refused.
     """
     refused: list[str] = []
 
-    def _refuse(route) -> None:
+    def _refuse(route: Route) -> None:
         refused.append(route.request.url)
         route.abort("internetdisconnected")
 
-    def new_context_refusing_other_origins(**kwargs: Any):
+    def new_context_refusing_other_origins(**kwargs: Any) -> BrowserContext:
         context = new_context(**kwargs)
         context.route(_urls_outside(live_server), _refuse)
         return context
