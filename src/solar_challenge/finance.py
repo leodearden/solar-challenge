@@ -1,19 +1,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Per-householder bill computation, fleet bill distribution, and multi-year
-projection (ζ surface).
+"""Householder bills, fleet bill distributions, multi-year projection, project
+appraisal and the cost-recovery own-use-rate solve for the community PV/battery
+project, from simulation results and a :class:`FinanceConfig`.
 
 Provides:
+  - ``FinanceConfig`` — frozen dataclass of the financial parameters.
   - ``BillBreakdown`` — frozen dataclass of per-householder financial line items.
-  - ``BillDistribution`` — frozen dataclass with fleet-level bill statistics.
-  - ``householder_bill`` — pure function mapping simulation outputs to a bill.
+  - ``BillDistribution`` — frozen dataclass with fleet-level outlay statistics.
+  - ``CostRecoverySolution`` — frozen dataclass result of the cost-recovery solve.
+  - ``bill`` — period-native billing core mapping simulation outputs to a bill.
+  - ``householder_bill`` — annual-period wrapper around ``bill``.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
   - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
-  - ``MultiYearCurve`` — frozen dataclass for a full 25-yr projection curve.
+  - ``MultiYearCurve`` — frozen dataclass for a full multi-year projection curve.
+  - ``ProjectEconomics`` — frozen dataclass of project-level economics.
   - ``project_multi_year`` — forward-march driver for adaptive PCHIP projection.
+  - ``project_economics`` — project-level financial appraisal of a curve.
+  - ``spreadsheet_revenue_curve`` — analytic revenue curve from spreadsheet inputs.
+  - ``solve_cost_recovery_rate`` — own-use rate that meets the retained-cash floor.
 
-All monetary values are in GBP (£); energy in kWh.  The module is fully
-deterministic and has no side-effects: suitable for use in parallel fleet runs.
+All monetary values are in GBP (£); energy in kWh.  The model behind these
+functions is set out in ``docs/cost-recovery-finance-model.md``.
 """
 from __future__ import annotations
 
@@ -40,7 +48,7 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# FinanceConfig — relocated from config.py (T2)
+# FinanceConfig — financial parameters
 # ---------------------------------------------------------------------------
 
 
@@ -84,7 +92,7 @@ class FinanceConfig:
             surplus per home per year in GBP (default 27.0; 0 permitted).
         grid_services_income_per_kw_per_year_gbp: Exogenous DFS/DNO grid-services income
             per kW of installed battery discharge power per year, net of aggregator share
-            (default 0.0; W1 cross-PRD seam — W1-delta fills the value cross-batch).
+            (default 0.0; see docs/cost-recovery-finance-model.md §8.1).
         grid_services_model: Grid-services pricing model selector.  ``"flat"`` uses
             the legacy flat per-kW rate (``grid_services_income_per_kw_per_year_gbp``);
             ``"capacity_at_events"`` uses the structured events-based model configured
@@ -92,7 +100,7 @@ class FinanceConfig:
             behaviour bit-unchanged.
         grid_services_events: Optional :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
             used when ``grid_services_model == "capacity_at_events"``.  May be ``None``
-            even for that model (α only validates the selector field; γ/δ consume it).
+            even for that model; only the selector field is validated here.
     """
 
     standing_charge_pence_per_day: float
@@ -189,7 +197,7 @@ class FinanceConfig:
 
 @dataclass(frozen=True)
 class BillBreakdown:
-    """One householder's cost-recovery outlay for the billed period, in line items (CR3).
+    """One householder's cost-recovery outlay for the billed period, in line items.
 
     The CBS owns the PV/battery assets and the export MPAN.  The householder
     pays the CBS an own-use rate for self-consumed solar, and pays the retailer
@@ -316,43 +324,42 @@ class BillDistribution:
     is closest to the median (median-total-outlay home).  Per-home outlay values
     are stored as an immutable tuple so the dataclass remains hashable.
 
-    Note: ``per_home_net_bill_gbp`` retains its name for back-compat (§12-Q4)
-    but now holds per-home ``total_outlay_gbp`` values (CR3 redefinition).
+    Note: ``per_home_net_bill_gbp`` holds per-home ``total_outlay_gbp`` values,
+    not net bills, whatever its name says.
 
     .. deprecated::
         ``per_home_net_bill_gbp`` will be renamed to ``per_home_total_outlay_gbp``
-        once the back-compat window closes.  Track this via the §12-Q4 deprecation
-        list and do not add new consumers that depend on the misleading name.
+        at the program's surface bump.  Do not add new consumers that depend on
+        the misleading name.
     """
 
     representative: BillBreakdown
-    """Representative (median-net-bill) home's full BillBreakdown."""
+    """Representative (median-total-outlay) home's full BillBreakdown."""
 
     per_home_net_bill_gbp: tuple[float, ...]
     """Per-home total annual outlay (£).
 
     .. note::
-        The name is retained for back-compat (§12-Q4); the values are
-        ``total_outlay_gbp`` per home (CR3 redefinition), NOT the old
-        W2 net-annual-bill.  Rename to ``per_home_total_outlay_gbp`` is
-        tracked on the §12-Q4 deprecation list.
+        The values are ``total_outlay_gbp`` per home, not net bills.
+        The field is renamed to ``per_home_total_outlay_gbp`` at the
+        program's surface bump.
     """
 
     min_gbp: float
-    """Minimum net annual bill across the fleet (£)."""
+    """Minimum total annual outlay across the fleet (£)."""
 
     mean_gbp: float
-    """Mean net annual bill across the fleet (£)."""
+    """Mean total annual outlay across the fleet (£)."""
 
     median_gbp: float
-    """Median net annual bill across the fleet (£)."""
+    """Median total annual outlay across the fleet (£)."""
 
     max_gbp: float
-    """Maximum net annual bill across the fleet (£)."""
+    """Maximum total annual outlay across the fleet (£)."""
 
 
 # ---------------------------------------------------------------------------
-# CostRecoverySolution — solve_cost_recovery_rate output (CR4 §3.1)
+# CostRecoverySolution — solve_cost_recovery_rate output
 # ---------------------------------------------------------------------------
 
 #: Allowed string values for :attr:`CostRecoverySolution.binding`.
@@ -372,9 +379,10 @@ class CostRecoverySolution:
     minimum rate that keeps project net surplus per home ≥
     ``FinanceConfig.retained_cash_floor_per_home_per_year_gbp``.
 
-    **W3 primary key**: ``representative_outlay_gbp`` (= outlay.representative.total_outlay_gbp)
+    **Primary key**: ``representative_outlay_gbp`` (= outlay.representative.total_outlay_gbp)
     is the householder annual outlay at the solved rate for the median-outlay home.
-    The discrete-install config sweep (task 64–68) uses this field to rank configs.
+    The discrete-install config sweep (:mod:`solar_challenge.optimize`) uses this
+    field to rank configs.
 
     Attributes:
         own_use_rate_pence_per_kwh: Solved own-use rate (p/kWh, ∈ [0, retail_baseline]).
@@ -406,7 +414,7 @@ class CostRecoverySolution:
     """Fleet bill distribution at the solved rate, computed from an age-0 simulation."""
 
     representative_outlay_gbp: float
-    """Representative (median-outlay) home's total annual outlay (£, W3 primary key).
+    """Representative (median-outlay) home's total annual outlay (£, the primary key).
 
     Invariant: representative_outlay_gbp == outlay.representative.total_outlay_gbp.
     """
@@ -635,7 +643,7 @@ def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float)
 
 
 # ---------------------------------------------------------------------------
-# _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
+# _seg_export_income_gbp — CBS SEG revenue helper
 # ---------------------------------------------------------------------------
 
 
@@ -645,11 +653,11 @@ def _seg_export_income_gbp(
 ) -> float:
     """Compute the SEG export income for a single home (CBS-revenue side).
 
-    This is the export-income logic that was removed from the householder bill
-    in CR3 (the CBS owns the export MPAN, so export revenue flows to the CBS,
-    not the householder).  It is used by :func:`project_multi_year._simulate_age`
+    The CBS owns the export MPAN, so export revenue flows to the CBS, not the
+    householder; the householder bill carries no export income
+    (docs/cost-recovery-finance-model.md §4).  It is used by :func:`project_multi_year._simulate_age`
     to compute ``seg_revenue = Σ _seg_export_income_gbp(phys, ...)`` as part of
-    the CBS fleet revenue formula (PRD §3.2), from the same annualised physics
+    the CBS fleet revenue formula (model doc §4), from the same annualised physics
     the home's own-use reads.
 
     * **Physics path** (``finance.self_consumption_override`` is None):
@@ -736,7 +744,7 @@ def _cbs_own_use_kwh(summary: "SummaryStatistics") -> float:
 
 
 # ---------------------------------------------------------------------------
-# bill() — period-native billing core (task 83 §1)
+# bill() — period-native billing core
 # ---------------------------------------------------------------------------
 
 
@@ -890,7 +898,7 @@ def householder_bill(
       * Always call bill(period_days=365, ...) so standing charge is
         annual regardless of the original simulation length.
 
-    H3 board identity (holds when import is retail-priced, import_kwh = demand − sc):
+    Board identity (docs/cost-recovery-finance-model.md §3; holds when import is retail-priced, import_kwh = demand − sc):
       saving_vs_baseline == sc × (retail − own_use) × (1+vat) / 100
 
     Args:
@@ -927,8 +935,8 @@ def householder_bill(
     demand_kwh = phys.demand_kwh
     import_kwh = phys.import_kwh
     import_cost_physics = _physics_import_cost_gbp(phys, retail_rate_pence)
-    # export_kwh / export_rev_physics not needed here: SEG moved to
-    # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
+    # export_kwh / export_rev_physics not needed here: export income is the CBS's
+    # and is computed by _seg_export_income_gbp, not by the householder bill.
 
     # ---- Self-consumption switch (§2.3 / §3.2) ------------------------------
     energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
@@ -1093,7 +1101,7 @@ class MultiYearCurve:
 
 
 # ---------------------------------------------------------------------------
-# ProjectEconomics — project-level economics result (§3.1, η)
+# ProjectEconomics — project-level economics result
 # ---------------------------------------------------------------------------
 
 
@@ -1237,14 +1245,14 @@ def bill_distribution(
     finance: "FinanceConfig",
     simulation_days: int,
 ) -> BillDistribution:
-    """Aggregate per-home bills into a fleet-level BillDistribution (CR3).
+    """Aggregate per-home bills into a fleet-level BillDistribution.
 
     Maps ``householder_bill`` over each home's SummaryStatistics, selects the
     median-**total-outlay** home as representative, and computes min / mean /
     median / max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
 
-    Note: ``BillDistribution.per_home_net_bill_gbp`` retains its name for
-    back-compat (§12-Q4) but now holds per-home ``total_outlay_gbp`` values.
+    Note: ``BillDistribution.per_home_net_bill_gbp`` holds per-home
+    ``total_outlay_gbp`` values, not net bills.
 
     Args:
         summaries: Sequence of per-home SummaryStatistics.  Must contain at
@@ -1272,7 +1280,7 @@ def bill_distribution(
         )
         for s in summaries
     ]
-    # CR3: key distribution on total_outlay_gbp (not the old net_annual_bill_gbp)
+    # Key the distribution on total_outlay_gbp
     outlays = [b.total_outlay_gbp for b in bills]
     series = pd.Series(outlays, dtype=float)
 
@@ -1292,7 +1300,7 @@ def bill_distribution(
 
 
 # ---------------------------------------------------------------------------
-# project_multi_year — forward-march driver (step-8 skeleton, extended later)
+# project_multi_year — forward-march driver
 # ---------------------------------------------------------------------------
 
 #: Maximum number of simulation nodes before the adaptive loop is capped.
@@ -1382,7 +1390,7 @@ def _aged_homes(
     since installation), battery SOH at that age is computed via
     :func:`battery.compute_soh` and injected into the battery config via
     ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`Battery`
-    uses it directly at construction time (β seam).
+    uses it directly at construction time.
 
     Args:
         homes: Original fleet home configs.
@@ -1453,7 +1461,7 @@ def project_multi_year(
 
     Performs a forward-march over the asset lifetime, simulating the fleet at
     a set of *sampled ages* (seeded at 0, asset_life//2, asset_life-1 and
-    adaptively refined via bisection in step-16), then interpolating the
+    adaptively refined by the bisection below), then interpolating the
     resulting per-year curves with PCHIP.  Each sampled age is simulated with
     every home's battery SOH counting its battery throughput from installation
     to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
@@ -1559,16 +1567,15 @@ def project_multi_year(
         fleet_imp = sum(phys.import_kwh for _, phys in annualised_homes)
         per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
 
-        # CBS fleet revenue (PRD §3.2), every term per 365-day year:
+        # CBS fleet revenue (model doc §4), every term per 365-day year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
         #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
-        # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
-        # self_consumption_override and seg scaling automatically); householder_bill
-        # is no longer called here since seg_export_income_gbp was removed from it.
+        # SEG revenue comes from _seg_export_income_gbp, which honours
+        # self_consumption_override and seg scaling.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
         if finance.grid_services_model == "capacity_at_events":
@@ -1632,7 +1639,7 @@ def project_multi_year(
             stacklevel=2,
         )
 
-    # ---- Adaptive bisection (H4, §3.3) --------------------------------------
+    # ---- Adaptive bisection --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
     # to percentages by the magnitude of each metric's age-0 value.  This ensures
     # interp_error_estimate bounds ALL interpolated curves (own-use, export, import,
@@ -1762,7 +1769,7 @@ def project_multi_year(
 
 
 # ---------------------------------------------------------------------------
-# project_economics — project-level financial appraisal (η)
+# project_economics — project-level financial appraisal
 # ---------------------------------------------------------------------------
 
 
@@ -1796,7 +1803,7 @@ def _reconcile_seg_homes(homes: List[Any], scenario_seg_rate: Optional[float]) -
     This is the single-SEG-source reconciliation that makes per-home
     ``HomeConfig.seg_tariff`` the definitive input for all SEG maths inside
     :func:`project_multi_year`.  It mirrors the threading workaround in
-    ``cli/finance.py:162-169`` so the public library API self-reconciles.
+    the SEG-threading block of :func:`solar_challenge.cli.finance.run` so the public library API self-reconciles.
 
     Args:
         homes: List of ``HomeConfig`` objects as returned by :func:`_resolve_homes`.
@@ -2051,7 +2058,7 @@ def project_economics(
 
 
 # ---------------------------------------------------------------------------
-# spreadsheet_revenue_curve — [FIN]-assumption analytic revenue curve (θ)
+# spreadsheet_revenue_curve — [FIN]-assumption analytic revenue curve
 # ---------------------------------------------------------------------------
 
 
@@ -2090,8 +2097,8 @@ def spreadsheet_revenue_curve(
     The curve is *flat* — SOH fractions are pinned at 1.0 for every year because
     the spreadsheet's revenue projection does not model PV/battery degradation
     (verified via Capital_Stack!B6 arithmetic).  This makes the curve suitable as
-    the *spreadsheet-input column* fed into :func:`project_economics` for the H6
-    calibration gate.
+    the *spreadsheet-input column* fed into :func:`project_economics` for the [FIN]
+    calibration (model doc §7).
 
     Do **not** use this curve for real simulation output — use
     :func:`project_multi_year` for physics-backed projections.
@@ -2158,7 +2165,7 @@ def spreadsheet_revenue_curve(
 
 
 # ---------------------------------------------------------------------------
-# solve_cost_recovery_rate — CR4 near-closed-form own-use-rate solve
+# solve_cost_recovery_rate — near-closed-form own-use-rate solve
 # ---------------------------------------------------------------------------
 
 #: Minimum absolute slope (kWh-weighted / pence) below which we treat the
@@ -2181,11 +2188,15 @@ def solve_cost_recovery_rate(
 
     **Mechanism** (no re-sim per trial rate):
 
-    ``net_surplus_per_home_per_year_gbp`` is *exactly affine* in *r*:
-    ``fleet_revenue_y = r × own_use_y / 100 + C_y`` where *C_y* is
-    rate-independent.  PCHIP interpolation is a linear operator on node values;
-    ``project_economics`` is affine in per-year revenue.  Hence two trial rates
-    (r=0, r=retail) recover the exact affine line, and the solve is closed-form:
+    ``surplus_at(r)`` is affine in *r* by construction: it shifts each year's
+    revenue by ``(r − r0)/100 × own_use_y`` and ``project_economics`` is affine
+    in per-year revenue.  Two trial rates (r=0, r=retail) therefore recover the
+    line, and the solve is closed-form.  The line equals a re-projection at rate
+    *r* exactly at the simulated nodes, and between them when the rate-independent
+    income nodes (SEG + grid services) are proportional to the own-use nodes (for
+    example zero).  PCHIP is not linear in its node values, so otherwise the
+    reconstruction can differ from a re-projection at *r* between the nodes
+    (docs/cost-recovery-finance-model.md §5).
 
     1. Run ``project_multi_year`` **once** at the configured rate ``r0`` → base curve.
     2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via
@@ -2201,17 +2212,6 @@ def solve_cost_recovery_rate(
     like-for-like against the annual opex, debt and floor, but carries that
     window's seasonal bias.
 
-    **Cost note** (Suggestion 4 / performance):
-
-    ``project_multi_year`` already simulates the fleet at age 0 internally
-    (age 0 is always in the seed-age set) but discards per-home results.
-    Step 5 therefore re-runs an independent age-0 fleet simulation to obtain
-    the per-home ``SummaryStatistics`` needed for ``bill_distribution``.  With
-    the real ``simulate_fleet`` this doubles the age-0 simulation cost per
-    ``solve_cost_recovery_rate`` call.  If this becomes a bottleneck,
-    consider refactoring ``project_multi_year`` to surface the age-0 per-home
-    results so the second simulation can be avoided.
-
     **Clamp / binding convention**:
 
     * ``r* < 0``: ``rate_clamped_zero`` (feasible=True, surplus > floor).
@@ -2223,7 +2223,7 @@ def solve_cost_recovery_rate(
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
-        finance: FinanceConfig with cost-recovery fields populated (CR1).
+        finance: FinanceConfig with cost-recovery fields populated.
         simulate: Optional inject for testing.  Defaults to None → lazy import
             ``fleet.simulate_fleet``.  Signature must match
             ``(FleetConfig, pd.Timestamp, pd.Timestamp) → FleetResults``.

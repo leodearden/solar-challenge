@@ -393,7 +393,7 @@ each grid-charged kWh twice.
 
 Source: `finance.py:solve_cost_recovery_rate()`.
 
-The CBS net surplus per home is **exactly affine** in the own-use rate `r`:
+The solve reconstructs the CBS net surplus per home as an **affine** function of the own-use rate `r`:
 
 ```
 net_surplus(r) = [Σ_years (r × own_use_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
@@ -409,8 +409,21 @@ while the sum runs over all `N_years = asset_life_years`.  With the defaults
 (`loan_term_years` = 15, `asset_life_years` = 25) debt service is therefore paid in
 15 of the 25 years and enters the mean at 15/25 of its annual value (worked in §7.4).
 Source: `project_economics` (algorithm steps 5, 6 and 10 in its docstring).
-PCHIP interpolation and `project_economics` are both linear in per-year revenue,
-so the affine form is preserved end-to-end.
+`project_economics` is affine in per-year revenue, so shifting each year's revenue
+by `(r − r0)/100 × own_use_y` gives a surplus that is affine in `r` by construction.
+
+**Exactness.**  PCHIP interpolation is positively homogeneous but **not linear** in
+its node values.  The reconstruction (`rev_y + (r − r0)/100 × own_use_y`, applied to
+the interpolated per-year curve) therefore equals a full re-projection at rate `r`:
+
+- exactly at the simulated nodes, and
+- between them whenever the rate-independent income nodes (SEG + grid services)
+  are proportional to the own-use nodes, for example zero.
+
+Otherwise the two can differ between the nodes.  A synthetic case (own-use
+10,000 / 9,000 / 6,000 kWh and `C` of 500 / 800 / 820 at ages 0 / 12 / 24, `r0` = 15 p,
+solved to `r` = 0) differs by £38.74 in one year.  The solve's closed form is
+exact for the reconstructed line, which is what `solve_cost_recovery_rate` solves.
 
 The solver uses this affine structure to avoid re-simulating for each trial rate:
 
