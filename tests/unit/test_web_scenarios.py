@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 import yaml
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.config import (
@@ -29,19 +28,6 @@ from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import traces
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 class TestScenarioBuilderRoute:
