@@ -4,9 +4,8 @@
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected
 constant synthetic simulate stands in for the real fleet simulator.
-The module imports no other test module: its home, scenario and finance
-builders are adaptations of tests/integration/test_optimize_sweep.py's, and
-its constant simulation results come from tests/_finance_builders.
+The synthetic homes, scenarios and simulation results come from
+tests/_finance_builders.py.
 """
 from __future__ import annotations
 
@@ -15,13 +14,10 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
+from solar_challenge.home import SimulationResults
 from solar_challenge.optimize import (
     ConfigPoint,
     SensitivityAxis,
@@ -30,9 +26,8 @@ from solar_challenge.optimize import (
     run_sweep,
     sensitivity_panel,
 )
-from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from tests._finance_builders import make_fleet_results, make_sim_results
+from tests._finance_builders import make_fleet_results, make_scenario, make_sim_results
 
 
 # ---------------------------------------------------------------------------
@@ -41,50 +36,9 @@ from tests._finance_builders import make_fleet_results, make_sim_results
 
 _N_HOMES = 5  # default fleet size for all sensitivity tests
 
-
-def _make_load_config() -> LoadConfig:
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config(
-    capacity_kw: float = 4.0,
-    system_age_years: float = 0.0,
-    with_battery: bool = False,
-) -> HomeConfig:
-    """Build a HomeConfig; pass with_battery=True to include a BatteryConfig."""
-    pv = PVConfig(
-        capacity_kw=capacity_kw,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-    battery_config = BatteryConfig(capacity_kwh=5.0) if with_battery else None
-    return HomeConfig(
-        pv_config=pv,
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-        battery_config=battery_config,
-    )
-
-
 _SELF_KWH = 2000.0
 _EXPORT_KWH = 800.0
 _IMPORT_KWH = 1200.0
-
-
-def _make_fleet_results(n_homes: int = _N_HOMES) -> FleetResults:
-    """*n_homes* _make_home_config homes, each with a year of constant power at the module's kWh totals.
-
-    The results are tests/_finance_builders.make_sim_results', whose docstring
-    says why hourly steps give exact totals.
-    """
-    return make_fleet_results(
-        homes=[_make_home_config() for _ in range(n_homes)],
-        self_kwh=_SELF_KWH,
-        export_kwh=_EXPORT_KWH,
-        import_kwh=_IMPORT_KWH,
-    )
 
 
 def _make_finance(
@@ -112,23 +66,9 @@ def _make_finance(
     )
 
 
-def _make_scenario(
-    n_homes: int = _N_HOMES,
-    start: str = "2020-01-01",
-    end: str = "2020-12-31",
-    seg_tariff_pence: float = 5.0,
-    finance: Optional[FinanceConfig] = None,
-    with_battery: bool = False,
-) -> ScenarioConfig:
-    homes = [_make_home_config(with_battery=with_battery) for _ in range(n_homes)]
-    return ScenarioConfig(
-        name="sensitivity-test",
-        period=SimulationPeriod(start_date=start, end_date=end),
-        description="W3 sensitivity integration test scenario",
-        homes=homes,
-        seg_tariff_pence_per_kwh=seg_tariff_pence,
-        finance=finance,
-    )
+def _make_scenario(n_homes: int = _N_HOMES, finance: FinanceConfig | None = None) -> ScenarioConfig:
+    """make_scenario's *n_homes* default homes carrying *finance*, pinned to a 5 p/kWh scenario SEG rate."""
+    return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0, finance=finance)
 
 
 def _interior_finance() -> FinanceConfig:
@@ -144,7 +84,9 @@ def _interior_finance() -> FinanceConfig:
     )
 
 
-_CONST_FLEET_RESULTS: FleetResults = _make_fleet_results(n_homes=_N_HOMES)
+_CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
+    n_homes=_N_HOMES, self_kwh=_SELF_KWH, export_kwh=_EXPORT_KWH, import_kwh=_IMPORT_KWH
+)
 
 
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
@@ -169,7 +111,7 @@ def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-
 
 def _make_seg_priced_scenario(seg_rate: float, finance) -> ScenarioConfig:  # type: ignore[no-untyped-def]
     """Build the fleet shape `optimize configs` produces: the seg: rate on the scenario AND on every home."""
-    scenario = _make_scenario(n_homes=_N_HOMES, seg_tariff_pence=seg_rate, finance=finance)
+    scenario = make_scenario(n_homes=_N_HOMES, seg_tariff_pence_per_kwh=seg_rate, finance=finance)
     tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
     return dataclasses.replace(
         scenario,
