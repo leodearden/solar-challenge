@@ -29,7 +29,7 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
-from solar_challenge.web.database import DEFAULT_JOB_STATUS, Database, JobStatus, RunStatus, RunType, get_db
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, Database, JobStatus, RunStatus, RunType
 from solar_challenge.web.storage import RunStorage
 
 logger = logging.getLogger(__name__)
@@ -424,7 +424,7 @@ class JobManager:
             created_at=created_at,
         )
 
-        with get_db(db_path) as conn:
+        with Database(Path(db_path)).transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO runs (
@@ -505,7 +505,7 @@ class JobManager:
         """Erase every record of a job that the executor refused to schedule."""
         with self._lock:
             self._jobs.pop(job_id, None)
-        with get_db(db_path) as conn:
+        with Database(Path(db_path)).transaction() as conn:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 

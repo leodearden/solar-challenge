@@ -25,7 +25,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import JobStatus, PresetType, get_db
+from solar_challenge.web.database import JobStatus, PresetType
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -642,9 +642,7 @@ def history_list_runs() -> Response:
 
     order_dir = "ASC" if order.lower() == "asc" else "DESC"
 
-    db_path = current_app.config["DATABASE"]
-
-    with get_db(db_path) as conn:
+    with get_database().transaction() as conn:
         cursor = conn.cursor()
 
         # Build WHERE clause
@@ -951,9 +949,8 @@ def scenarios_list_presets() -> tuple[Response, int]:
         presets.append({"name": name, "source": "builtin", "filename": path.name})
 
     # Saved presets from database
-    db_path = current_app.config["DATABASE"]
     try:
-        with get_db(db_path) as conn:
+        with get_database().transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
@@ -996,9 +993,8 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
     # Try database
-    db_path = current_app.config["DATABASE"]
     try:
-        with get_db(db_path) as conn:
+        with get_database().transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",

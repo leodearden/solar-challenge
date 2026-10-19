@@ -13,7 +13,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import RunStatus, get_db
+from solar_challenge.web.database import Database, RunStatus
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
@@ -275,7 +275,7 @@ class TestSidebarCurrentPage:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """When the dashboard cannot read its runs, GET / answers the 500 page, which marks the Dashboard link as the current page in both sidebars: the request was routed to the dashboard, and the browser is still at its URL."""
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DROP TABLE runs")
         app.config["PROPAGATE_EXCEPTIONS"] = False
         response = client.get("/")
@@ -396,7 +396,7 @@ class TestHomeResultsRoute:
     ) -> None:
         """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
         run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         response = client.get(f"/results/home/{run_id}")

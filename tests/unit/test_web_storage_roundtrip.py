@@ -43,7 +43,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.database import Database, get_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._run_storage_layout import stored_run_dir

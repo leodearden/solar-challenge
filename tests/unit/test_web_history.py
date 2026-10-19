@@ -29,7 +29,7 @@ from solar_challenge.web.charts import (
     comparison_radar,
     overlaid_power_flows,
 )
-from solar_challenge.web.database import Database, get_db, init_db
+from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
@@ -88,7 +88,7 @@ def _insert_test_run(
     }
     config = config or {"pv_config": {"capacity_kw": 4.0}}
 
-    with get_db(db_path) as conn:
+    with Database(Path(db_path)).transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -321,7 +321,7 @@ class TestRunDetailAPI:
 
         The row is the placeholder JobManager.submit_fleet_job writes when it queues a fleet run.
         """
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, n_homes)"
                 " VALUES ('running-run', 'Still Running', 'fleet', 'running', '2025-06-02T09:00:00', 3)"
@@ -348,7 +348,7 @@ class TestRunDetailAPI:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
                 " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"

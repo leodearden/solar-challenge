@@ -21,7 +21,7 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import Database, get_db, init_db
+from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.storage import RunStorage
 
@@ -318,7 +318,7 @@ class TestGetRunResults:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
         db_path = tmp_path / "grr_null_summary.db"
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -482,7 +482,7 @@ class TestListRecentRuns:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
         db_path = tmp_path / "lrr_null_summary.db"
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",

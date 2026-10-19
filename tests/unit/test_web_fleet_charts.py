@@ -19,7 +19,7 @@ from solar_challenge.web.charts import (
     fleet_heatmap,
     power_flow_timeline,
 )
-from solar_challenge.web.database import Database, get_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
@@ -315,7 +315,7 @@ class TestFleetResultsRoute:
         run_id = _save_fleet_run(
             app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         response = client.get(f"/results/fleet/{run_id}")

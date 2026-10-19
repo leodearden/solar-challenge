@@ -16,7 +16,7 @@ Schema migration strategy:
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -258,8 +258,3 @@ def get_chat_history(
             }
         )
     return result
-
-
-def get_db(db_path: str | Path) -> AbstractContextManager[sqlite3.Connection]:
-    """A transaction on the dashboard database at *db_path*, from Database.transaction()."""
-    return Database(Path(db_path)).transaction()

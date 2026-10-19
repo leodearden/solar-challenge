@@ -18,7 +18,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, get_db, init_db
+from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
@@ -147,7 +147,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_runs_table(self, db_path):
         """Test init_db creates runs table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
@@ -157,7 +157,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_jobs_table(self, db_path):
         """Test init_db creates jobs table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
@@ -167,7 +167,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_chat_messages_table(self, db_path):
         """Test init_db creates chat_messages table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'"
@@ -177,7 +177,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_config_presets_table(self, db_path):
         """Test init_db creates config_presets table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='config_presets'"
@@ -187,7 +187,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_indexes(self, db_path):
         """Test init_db creates indexes."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
@@ -202,7 +202,7 @@ class TestDatabaseInitialization:
         """Test init_db can be called multiple times safely."""
         init_db(db_path)
         init_db(db_path)  # Should not raise
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
@@ -223,7 +223,7 @@ class TestDatabaseInitialization:
     def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
         """The runs table stores each run type or NULL as a run's type, and each run status or NULL as its status."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
             stored = conn.execute(f"SELECT {column} FROM runs WHERE id = 'probe'").fetchone()[0]
 
@@ -233,14 +233,14 @@ class TestDatabaseInitialization:
     def test_init_db_runs_table_refuses_a_type_or_status_outside_its_definition(self, db_path, column, value):
         """The runs table refuses a type that is not a run type, and a status that is not a run status."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
 
     def test_init_db_gives_a_run_inserted_without_a_status_the_status_running(self, db_path):
         """A run inserted without a status has the status 'running'."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute("INSERT INTO runs (id) VALUES ('no-status')")
             status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
 
@@ -254,7 +254,7 @@ class TestDatabaseInitialization:
     def test_init_db_jobs_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
         """The jobs table stores each job status or NULL as a job's status, chat_messages each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             rowid = conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,)).lastrowid
             stored = conn.execute(f"SELECT {column} FROM {table} WHERE rowid = ?", (rowid,)).fetchone()[0]
 
@@ -264,14 +264,14 @@ class TestDatabaseInitialization:
     def test_init_db_jobs_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
         """The jobs table refuses a status that is not a job status, chat_messages a role that is not a chat role, and config_presets a type that is not a preset type."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,))
 
     def test_init_db_gives_a_job_inserted_without_a_status_the_status_queued(self, db_path):
         """A job inserted without a status has the status 'queued'."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute("INSERT INTO jobs (id) VALUES ('no-status')")
             status = conn.execute("SELECT status FROM jobs WHERE id = 'no-status'").fetchone()[0]
 
@@ -1206,7 +1206,7 @@ class TestDatabasePragmas:
     def test_wal_mode_enabled_after_init(self, db_path):
         """Test that WAL journal mode is active after init_db."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA journal_mode")
             mode = cursor.fetchone()[0]

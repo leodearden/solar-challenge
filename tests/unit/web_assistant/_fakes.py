@@ -38,7 +38,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import Database, init_db
 
 
 class FakeAnthropic:
@@ -278,7 +278,7 @@ def seed_run(
     a minimal runs row with summary_json=json.dumps(summary).
     """
     init_db(db_path)
-    with get_db(db_path) as conn:
+    with Database(Path(db_path)).transaction() as conn:
         conn.execute(
             """
             INSERT INTO runs (id, name, type, status, created_at, summary_json)
