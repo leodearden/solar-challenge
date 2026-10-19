@@ -201,7 +201,7 @@ def _serve_with(page: Page, url: str, insertion: str, anchor: str) -> None:
 
 
 def _errors_naming(page_errors: list[str], element_id: str) -> list[str]:
-    """The entries of page_errors that contain element_id, so an unrelated entry, such as a Plotly CDN failure, cannot change a verdict about the chart."""
+    """The entries of page_errors that contain element_id, so an unrelated entry, such as a resource the browser failed to load, cannot change a verdict about the chart."""
     return [error for error in page_errors if element_id in error]
 
 
