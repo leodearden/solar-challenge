@@ -548,7 +548,7 @@ The correct statement is:
 ### 7.2 [FIN] Synthetic No-Flex Calibration
 
 The calibration test uses a 100-home synthetic fleet (5.5 kWp + 5 kWh, Bristol
-period 2024-01-01 to 2024-12-31) with injected energy aggregates and no PVGIS
+period 2020-01-01 to 2020-12-31) with injected energy aggregates and no PVGIS
 (fast, deterministic, no-network):
 
 ```

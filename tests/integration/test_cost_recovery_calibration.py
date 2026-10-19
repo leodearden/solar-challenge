@@ -27,7 +27,6 @@ import dataclasses
 import pandas as pd
 import pytest
 
-from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import (
     CostRecoverySolution,
@@ -42,9 +41,9 @@ from solar_challenge.finance import (
     spreadsheet_revenue_curve,
 )
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
+from tests._finance_builders import make_scenario_of, make_sized_home
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +65,8 @@ _FIN_GOLDEN = {
 }
 
 _FIN_SCF = 0.70  # spreadsheet with-battery self-consumption fraction assumption
+
+_FIN_HOME = make_sized_home(pv_kwp=5.5, battery_kwh=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ def _make_fleet_results_fin_cr6(
 
     No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    homes = [_FIN_HOME] * n_homes
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
         for _ in range(n_homes)
@@ -148,27 +149,9 @@ def _make_fleet_results_fin_cr6(
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
-def _make_home_config_fin_cr6(
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> HomeConfig:
-    """Build a [FIN]-aligned HomeConfig for CR6 tests (Bristol defaults)."""
-    pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
-    load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
-    batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
-    return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
-
-
-def _make_scenario_fin_cr6(
-    n_homes: int = 100,
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> ScenarioConfig:
-    """Build a homogeneous [FIN]-aligned ScenarioConfig (100 homes, 2024 full year)."""
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-    homes = [_make_home_config_fin_cr6(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
-             for _ in range(n_homes)]
-    return ScenarioConfig(name="CR6-Calibration", period=period, homes=homes)
+def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
+    """The [FIN] fleet: make_scenario_of's scenario of *n_homes* _FIN_HOME homes."""
+    return make_scenario_of([_FIN_HOME] * n_homes)
 
 
 def _make_finance_cr6(
@@ -547,7 +530,7 @@ def _make_arbitrage_fleet_cr6(
     a lower r*.  Grid-charge energy is paid by the householder inside grid import
     (docs/cost-recovery-finance-model.md §4 and §8.2); it is not a CBS term.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    homes = [_FIN_HOME] * n_homes
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
         for _ in range(n_homes)
@@ -585,7 +568,7 @@ def _make_interior_fleet_cr6(
 
     No-flex: no grid charging, export_revenue=0.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    homes = [_FIN_HOME] * n_homes
     per_home = [
         _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
         for _ in range(n_homes)
@@ -636,9 +619,7 @@ class TestStructuralInvariants:
         retail_rate: float = 30.0,
     ) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, simulate) for an interior 'floor' regime."""
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Interior", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=retained_cash_floor,
             pv_cost_per_kwp=pv_cost_per_kwp,
@@ -748,9 +729,7 @@ class TestFlexLowersSolvedRate:
     def _build_base_interior(self) -> tuple:  # type: ignore[type-arg]
         """Base interior fleet (no flex, same fleet used for both directional tests)."""
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Flex-Base", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         return scenario, n_homes
 
     def test_grid_services_lowers_solved_rate(self) -> None:
@@ -867,7 +846,7 @@ class TestThetaStaysGreen:
 
     def _build_theta_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
         """Build [FIN]-assumption ProjectEconomics via spreadsheet_revenue_curve."""
-        scenario = _make_scenario_fin_cr6(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin_cr6(n_homes=100)
         return _spreadsheet_economics_cr6(scenario, _make_finance_fin_cr6())
 
     def test_spreadsheet_path_capex_and_dscr_unchanged(self) -> None:
@@ -957,7 +936,7 @@ def _make_grid_charge_fleet_cr6(
         _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    homes = [_FIN_HOME] * n_homes
     per_home = [
         _make_grid_charge_sim_results_cr6(
             self_kwh=self_kwh,
@@ -994,9 +973,7 @@ class TestArbitrageBasisCReconciliation:
 
     def _build_grid_charge(self) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, fr, summaries) for the grid-charging fleet."""
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(self._N_HOMES)]
-        scenario = ScenarioConfig(name="CR6-Arb-BasisC", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=self._N_HOMES)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1068,9 +1045,7 @@ class TestArbitrageBasisCReconciliation:
         → binding='floor', feasible=True.
         """
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Arb-Interior", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1149,9 +1124,7 @@ class TestArbitrageBasisCReconciliation:
         """Flat-rate fleet control: solve still binding='floor' with same finance."""
         # Use the no-grid-charge interior fleet with the same finance config
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Flat-Control", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1262,8 +1235,15 @@ class TestCbsOwnUseKwhHelper:
 
 
 def _make_physics_column_scenario_cr6() -> ScenarioConfig:
-    """The scenario TestPhysicsReconciliationColumn simulates: 2 homes × 5.5 kWp + 5 kWh, 3 days."""
-    homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
+    """The scenario TestPhysicsReconciliationColumn simulates: 2 homes over 3 days.
+
+    Each home is the [FIN] install, 5.5 kWp + 5 kWh, on a deterministic 3,400 kWh load.
+    """
+    home = dataclasses.replace(
+        _FIN_HOME,
+        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1),
+    )
+    homes = [home] * 2
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
     return ScenarioConfig(name="CR6-Physics-Test", period=period, homes=homes)
 
