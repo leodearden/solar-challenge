@@ -241,7 +241,7 @@ def suggest_config(
 ) -> dict[str, Any]:
     """Return rule-of-thumb PV and battery sizing for a household.
 
-    Uses the PRD §11.4 heuristics:
+    Uses the heuristics of docs/prds/web-ai-assistant.md §11, open question 4:
     - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
     - Battery kWh ≈ daily_demand × 0.5 × 1.2  (≈ 50 % of daily demand with 1.2× usable-capacity headroom)
 
@@ -262,7 +262,7 @@ def suggest_config(
         - ``note``                    (str)   — indicative-estimate disclaimer
         Never raises.
     """
-    # Base heuristics (PRD §11.4)
+    # Base heuristics
     pv_kwp: float = annual_consumption_kwh / _UK_YIELD_KWH_PER_KWP
 
     # Battery: cover a share of daily demand (rule-of-thumb shortfall for a typical
@@ -690,11 +690,12 @@ def run_fleet_simulation(
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
-    # The fleet is homogeneous by design (PRD §4, "Fleet trigger scope"): every
-    # home gets the same parameters; fleets that vary per home come from
-    # distribution configs, which this tool does not take.  HomeConfig is a frozen
-    # dataclass, so all N entries can share one immutable object — re-parsing N
-    # times would add no diversity and only waste CPU.
+    # The fleet is homogeneous by design (docs/prds/web-ai-assistant.md §4,
+    # "Fleet trigger scope"): every home gets the same parameters; fleets that
+    # vary per home come from distribution configs, which this tool does not
+    # take.  HomeConfig is a frozen dataclass, so all N entries can share one
+    # immutable object — re-parsing N times would add no diversity and only
+    # waste CPU.
     configs: list[Any] = [home_config_0] * n_homes
 
     try:

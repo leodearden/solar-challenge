@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any
 __version__ = "0.5.0"
 
 # ---------------------------------------------------------------------------
-# Frozen public surface — PRD §3.1
+# Frozen public surface — docs/prds/domain-library-extraction.md §3.1
 # Adding a name is additive/back-compat; removing/renaming is a breaking change.
 # CLI (get_cli_app) is deliberately excluded — shipped but unfrozen.
 # ---------------------------------------------------------------------------
 __all__: list[str] = [
-    # --- finance / bill engine (finance.py; FinanceConfig relocated there, T2) ---
+    # --- finance / bill engine (finance.py) ---
     "bill",              # period-native billing core; bare name is intentional — mirrors householder_bill brevity, primary platform import target
     "householder_bill",
     "solve_cost_recovery_rate",
