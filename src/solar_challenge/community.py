@@ -20,7 +20,7 @@ from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig, calculate_bill
-from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
+from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -103,7 +103,7 @@ class CommunityConfig:
 class CommunityResults:
     """Output of :func:`simulate_community`.
 
-    All series are in **kW** on the fleet's 1-minute DatetimeIndex
+    All series are in **kW** on the fleet's DatetimeIndex
     (``battery_soc`` is in kWh, matching the per-home convention).
 
     Attributes
@@ -152,8 +152,8 @@ def _price_grid_flows(
 ) -> tuple[float, float]:
     """Price grid import and export flows using canonical billing primitives.
 
-    Each row's energy is its kW times :func:`~solar_challenge.timebase.step_hours`
-    of the index, so it prices any cadence.
+    Each row's energy is its kW times the hours its row lasts on import_kw's
+    window, which export_kw shares, so it prices any cadence.
 
     Parameters
     ----------
@@ -172,26 +172,20 @@ def _price_grid_flows(
     -------
     (import_cost_gbp, export_revenue_gbp)
         Both values in GBP.
+
+    Raises
+    ------
+    ValueError
+        As :meth:`~solar_challenge.timebase.SimulationWindow.of_index` does, for
+        an import_kw index no window describes.
     """
-    # PRECONDITION: import_kw must have a uniformly-spaced DatetimeIndex.
-    # step_hours reads only the first gap, so an uneven index would misprice
-    # later rows.  A first-vs-last check catches dropped rows, DST gaps and
-    # hour-boundary aggregates at O(1) cost.
-    dt_h = step_hours(import_kw.index)
-    if len(import_kw) >= 3:
-        dt_last_h = step_hours(import_kw.index[-2:])
-        if abs(dt_h - dt_last_h) > 1e-9:
-            raise ValueError(
-                f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
-                f"first interval={dt_h:.9f} h but last={dt_last_h:.9f} h differ."
-            )
+    window = SimulationWindow.of_index(import_kw.index)
 
     # Import cost: per-timestep TOU-aware pricing via the canonical loop.
-    import_cost_gbp: float = calculate_bill(import_kw * dt_h, tariff)
+    import_cost_gbp: float = calculate_bill(window.row_energy_kwh(import_kw), tariff)
 
     # Export revenue: flat SEG rate → sum kWh first, then price once (exact).
-    export_energy_kwh: float = float((export_kw * dt_h).sum())
-    export_revenue_gbp: float = calculate_seg_revenue(export_energy_kwh, seg)
+    export_revenue_gbp: float = calculate_seg_revenue(window.energy_kwh(export_kw), seg)
 
     return import_cost_gbp, export_revenue_gbp
 
@@ -214,6 +208,10 @@ def simulate_community(
     * ``net_surplus = max(0, total_grid_export[t] - total_grid_import[t])``
     * ``net_deficit = max(0, total_grid_import[t] - total_grid_export[t])``
 
+    Each row lasts the cadence of the fleet's window,
+    :meth:`~solar_challenge.timebase.SimulationWindow.of_index` of
+    ``total_grid_export``'s index, in either mode and whether or not it bills.
+
     Two dispatch branches are selected by *config.sharing_mode*:
 
     **p2p** (vectorised):
@@ -223,13 +221,13 @@ def simulate_community(
 
     **community_battery** (sequential):
         A shared :class:`~solar_challenge.battery.Battery` is instantiated once
-        and each net surplus/deficit step is dispatched in order via
+        and each net surplus/deficit step, the fleet window's ``step_minutes``
+        long, is dispatched in order via
         :func:`~solar_challenge.flow.simulate_timestep` with
         :class:`~solar_challenge.dispatch.SelfConsumptionStrategy`.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
-        dividing by :func:`~solar_challenge.timebase.step_hours` of the fleet
-        index.
+        dividing by the fleet window's ``step_hours``.
 
     Parameters
     ----------
@@ -248,12 +246,19 @@ def simulate_community(
     Returns
     -------
     CommunityResults
+
+    Raises
+    ------
+    ValueError
+        If :meth:`~solar_challenge.timebase.SimulationWindow.of_index` refuses
+        the fleet's index: it is not a DatetimeIndex, it is empty, it has one
+        row and no fixed-duration freq, or its rows are not evenly spaced,
+        naming the first position whose gap differs and both gaps.
     """
     surplus: pd.Series = fleet_results.total_grid_export
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
-    dt_h = step_hours(index)
-    timestep_minutes = dt_h / HOURS_PER_MINUTE
+    window = SimulationWindow.of_index(index)
 
     # Branch on the community battery config; using a local variable so mypy
     # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
@@ -286,7 +291,8 @@ def simulate_community(
         # (~525 k iterations for a full-year, 1-min, 100-home fleet run).
         surplus_arr = surplus.to_numpy()
         deficit_arr = deficit.to_numpy()
-        scale = 1 / dt_h  # kWh/step → kW
+        step_minutes = window.step_minutes
+        scale = 1 / window.step_hours  # kWh/step → kW
 
         cg_imp_vals: list[float] = []
         cg_exp_vals: list[float] = []
@@ -301,7 +307,7 @@ def simulate_community(
                 generation_kw=net_surplus,
                 demand_kw=net_deficit,
                 battery=battery,
-                timestep_minutes=timestep_minutes,
+                timestep_minutes=step_minutes,
                 timestamp=t.to_pydatetime(),
                 strategy=strategy,
             )
@@ -372,7 +378,7 @@ def validate_community_balance(
 ) -> bool:
     """Validate the COMMUNITY-BALANCE invariant at every timestep.
 
-    The invariant (in kW on the 1-minute index) is::
+    The invariant (in kW on the fleet's index) is::
 
         Σgen + cg_imp == Σdem + cg_exp + Σ(bch_i − bdis_i) + (cb_ch − cb_dis)
 
