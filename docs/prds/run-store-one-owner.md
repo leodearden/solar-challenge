@@ -479,6 +479,11 @@ class JobManager:
   makes the lock testable without subprocesses.
 - **D-S19-11 Old results URLs answer 301** to `/results/<run_id>`, so existing bookmarks and the
   e2e suite's literal hrefs keep resolving. The e2e tests that assert hrefs are updated in ε.
+- **D-S19-12 Durability: `synchronous` stays FULL (ruled by Leo, 2026-10-19, esc-859-3 option C).**
+  A write through today's per-operation connection costs 5 syncs, about 7 ms, against 2-5 ms with
+  a held connection (measured at `ede1d99`); `synchronous=NORMAL` alone gains nothing measurable.
+  Nothing board-facing reads the store, so the gain does not justify giving up durability or
+  adding app-lifetime connection state. α's `Database` keeps today's policy. Task 859 is cancelled.
 
 ## 6. Pre-conditions and the tasks this stream subsumes
 

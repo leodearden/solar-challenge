@@ -982,6 +982,9 @@ Keys: fk-b7241e0ce122
 - The quality definition is dark-factory's docs/code-quality.md (this repo carries no copy); the contract is docs/quality-findings-contract.md in the dark-factory checkout.
 - Weakened findings (D28) are re-measured by the session before decomposition; a measurement that fails is recorded on the task, not silently dropped.
 - The frozen public surface changes only through S29's one bump (D4): a stream that retires or renames a public name files its surface edit as a held leaf waiting on S29.
+- 2026-10-19 (L2 watcher, Q4 relay): S3 /prd states task 729's figure change. Lifting P4 moves export by 30-47 kWh/yr per battery home, about £90/yr across the bristol-phase1 fleet (esc-729-1).
+- 2026-10-19 (L2 watcher, Q4 relay): S23 /prd cross-references task 700's fail-closed ruling (esc-700-3, Leo ruled C 2026-10-17).
+- 2026-10-19 (L2 watcher, Q4 relay): S5 owns tasks 237, 261, 320, 321, 762 and 651. 237 and 320 are cancelled into 945; 762 and 651 are cancelled; 321 is cancelled into 945 under Leo's 2026-10-19 ruling on esc-261-2; 261 was trimmed.
 
 ## Triage briefing
 
