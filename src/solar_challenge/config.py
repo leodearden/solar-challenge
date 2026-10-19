@@ -9,7 +9,7 @@ import json
 import math
 import random
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
@@ -26,7 +26,7 @@ from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
-from solar_challenge.load import LoadConfig
+from solar_challenge.load import LoadConfig, household_occupant_count
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
@@ -120,7 +120,9 @@ class ShuffledPoolDistribution:
 
     Attributes:
         values: List of values (can include None)
-        counts: Number of each value in the pool (must sum to n_homes)
+        counts: Number of each value in the pool.  In a fleet distribution they total
+            n_homes, one value per home, and FleetDistributionConfig refuses any other total;
+            a parameter only some homes draw leaves the other homes' values undrawn.
     """
 
     values: tuple[Optional[float], ...]
@@ -300,7 +302,9 @@ class LoadDistributionConfig:
 
     Attributes:
         annual_consumption_kwh: Distribution for annual consumption (optional)
-        household_occupants: Distribution for occupants (default: 3)
+        household_occupants: Distribution for occupants (default: 3), drawn with
+            _DistributionSampler.sample_count and held to
+            load.household_occupant_count. A null draw takes LoadConfig's default.
         use_stochastic: Whether to use stochastic load profiles (default: True)
     """
 
@@ -438,6 +442,32 @@ class FleetDistributionConfig:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', "
                 f"got '{self.random_order}'"
+            )
+        _refuse_pools_not_sized_to_the_fleet(self)
+
+
+def _shuffled_pools(
+    config: FleetDistributionConfig,
+) -> Iterator[tuple[str, ShuffledPoolDistribution]]:
+    """Each shuffled pool among *config*'s component parameters, with its path, e.g. ('pv.capacity_kw', pool)."""
+    for component_field in fields(config):
+        component = getattr(config, component_field.name)
+        if not is_dataclass(component):
+            continue
+        for parameter in fields(component):
+            spec = getattr(component, parameter.name)
+            if isinstance(spec, ShuffledPoolDistribution):
+                yield f"{component_field.name}.{parameter.name}", spec
+
+
+def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a shuffled pool's counts do not total its n_homes: a pool holds one value per home."""
+    for path, pool in _shuffled_pools(config):
+        total = sum(pool.counts)
+        if total != config.n_homes:
+            raise ConfigurationError(
+                f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
+                f"({config.n_homes}), got {total}"
             )
 
 
@@ -1583,6 +1613,28 @@ class _DistributionSampler:
 
         return _sample_from_distribution(spec, self._rng)
 
+    def sample_count(self, spec: DistributionSpec) -> Optional[float]:
+        """Sample a count from *spec*.
+
+        A finite draw from a normal or uniform distribution is rounded to the
+        nearest whole number, a half rounding up: a draw clamped to a min of 2.5
+        gives 3. The whole number can lie outside the spec's min and max, as 0
+        does for a draw of 0.45 under a min of 0.4. A fixed value is returned as
+        the spec gives it, and any other value as drawn, a draw that is not
+        finite included.
+        """
+        if isinstance(spec, (int, float)):
+            return spec
+        value = self.sample(spec)
+        if (
+            value is not None
+            and isinstance(spec, (NormalDistribution, UniformDistribution))
+            and math.isfinite(value)
+        ):
+            whole = math.floor(value)
+            return whole + 1 if value - whole >= 0.5 else whole
+        return value
+
     def sample_with_context(
         self, spec: DistributionSpec, context: dict[str, Optional[float]]
     ) -> Optional[float]:
@@ -1632,9 +1684,14 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
+        ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
+            naming the pool; if a sampled PV capacity is not positive; or if a sampled
+            heat pump type is not 'ASHP' or 'GSHP'.
         ValueError: If a sampled battery capacity is negative or not finite,
-            naming battery.capacity_kwh; a null or 0 sample is no battery.
+            naming battery.capacity_kwh (a null or 0 sample is no battery), or
+            if load.household_occupant_count refuses a home's household occupants.
     """
+    _refuse_pools_not_sized_to_the_fleet(config)
     rng = random.Random(config.seed)
     sampler = _DistributionSampler(rng)
     homes: list[HomeConfig] = []
@@ -1741,7 +1798,7 @@ def generate_homes_from_distribution(
 
         # Sample load parameters
         annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
-        household_occupants = sampler.sample(config.load.household_occupants)
+        occupants_draw = sampler.sample_count(config.load.household_occupants)
 
         # Derive per-home seed for reproducible stochastic load profiles
         home_seed: Optional[int] = None
@@ -1750,7 +1807,11 @@ def generate_homes_from_distribution(
 
         load_config = LoadConfig(
             annual_consumption_kwh=annual_consumption,
-            household_occupants=int(household_occupants) if household_occupants else 3,
+            household_occupants=(
+                LoadConfig.household_occupants
+                if occupants_draw is None
+                else household_occupant_count(occupants_draw)
+            ),
             use_stochastic=config.load.use_stochastic,
             seed=home_seed,
         )
@@ -2474,6 +2535,8 @@ def run_parameter_sweep(
 
     Raises:
         ConfigurationError: If parameter cannot be swept
+        ValueError: If the swept parameter's config refuses a value (for
+            household_occupants, see load.household_occupant_count).
     """
     values = sweep_config.get_values()
     param_name = sweep_config.parameter_name
@@ -2652,13 +2715,7 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             seed=config.seed,
         )
     elif param_name == "household_occupants":
-        return LoadConfig(
-            annual_consumption_kwh=config.annual_consumption_kwh,
-            household_occupants=int(value),
-            name=config.name,
-            use_stochastic=config.use_stochastic,
-            seed=config.seed,
-        )
+        return replace(config, household_occupants=household_occupant_count(value))
     return config
 
 

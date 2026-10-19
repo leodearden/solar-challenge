@@ -66,9 +66,29 @@ def _steady_run(
     )
 
 
-def _one_day_summary(**totals: float) -> SummaryStatistics:
+def _one_day_summary(
+    *,
+    total_generation_kwh: float,
+    total_demand_kwh: float,
+    total_self_consumption_kwh: float,
+    total_grid_import_kwh: float,
+    total_grid_export_kwh: float,
+    total_battery_charge_kwh: float,
+    total_battery_discharge_kwh: float,
+    total_grid_charge_kwh: float,
+) -> SummaryStatistics:
     """A one-day run's summary with the totals given, so a test writes every total the Sankey reads."""
-    return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
+    return dataclasses.replace(
+        calculate_summary(make_sim_results(days=1)),
+        total_generation_kwh=total_generation_kwh,
+        total_demand_kwh=total_demand_kwh,
+        total_self_consumption_kwh=total_self_consumption_kwh,
+        total_grid_import_kwh=total_grid_import_kwh,
+        total_grid_export_kwh=total_grid_export_kwh,
+        total_battery_charge_kwh=total_battery_charge_kwh,
+        total_battery_discharge_kwh=total_battery_discharge_kwh,
+        total_grid_charge_kwh=total_grid_charge_kwh,
+    )
 
 
 def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:

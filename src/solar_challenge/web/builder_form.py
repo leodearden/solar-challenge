@@ -178,8 +178,8 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
 
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and a shuffled pool smaller than the fleet with IndexError.
-    Anything else it raises is a defect in the loader, not a refusal, so it propagates.
+    a config it builds.  Anything else it raises is a defect in the loader, not a refusal,
+    so it propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
@@ -187,7 +187,7 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
         path.write_text(scenario_yaml(document), encoding="utf-8")
         try:
             load_fleet_config(path)
-        except (ConfigurationError, ValueError, IndexError) as exc:
+        except (ConfigurationError, ValueError) as exc:
             errors.append(str(exc))
     try:
         parse_seg_rate(document["seg"])

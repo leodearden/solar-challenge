@@ -280,7 +280,7 @@ def _surplus_the_bills_fund_cr6(
                 year=year,
                 pv_soh=1.0,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=fleet_revenue_gbp,
@@ -333,7 +333,7 @@ class TestNoFlexAnchorReconciliation:
         return scenario, finance, fr, simulate
 
     def test_no_flex_cbs_revenue_identity(self) -> None:
-        """No-flex identity: fleet_revenue_gbp == own_use_rate × fleet_sc / 100.
+        """No-flex identity: fleet_revenue_gbp == own_use_rate × fleet_billed_own_use_kwh / 100.
 
         With grid_services=0 and export_revenue=0 (SEG=0 in synthetic):
           fleet_revenue = own_use × sc / 100 + 0 + 0 (by construction)
@@ -348,7 +348,7 @@ class TestNoFlexAnchorReconciliation:
         # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0
         expected_revenue = (
             finance.own_use_rate_pence_per_kwh
-            * year0.fleet_self_consumption_kwh
+            * year0.fleet_billed_own_use_kwh
             / 100.0
         )
         assert year0.fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-9), (
@@ -980,7 +980,7 @@ class TestArbitrageBasisCReconciliation:
 
     Verifies three properties on a fleet where grid_charge_kwh > 0:
     (c) _cbs_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
-    (a) project_multi_year().points[0].fleet_self_consumption_kwh == sum(_cbs_own_use_kwh)
+    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh)
         AND strictly < sum(total_self_consumption_kwh)
     Plus a flat/no-grid-charge control showing no gap.
 
@@ -1025,8 +1025,8 @@ class TestArbitrageBasisCReconciliation:
                 s.total_demand_kwh - s.total_grid_import_kwh, rel=1e-9
             )
 
-    def test_a_fleet_sc_is_basis_c(self) -> None:
-        """(a) project_multi_year fleet_sc == sum(_cbs_own_use_kwh) < sum(total_sc).
+    def test_a_fleet_billed_own_use_is_basis_c(self) -> None:
+        """(a) project_multi_year fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh) < sum(total_sc).
 
         RED until step-4: before the fix _simulate_age uses total_self_consumption_kwh.
         """
@@ -1039,14 +1039,14 @@ class TestArbitrageBasisCReconciliation:
         expected_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
         b_style_sum = sum(s.total_self_consumption_kwh for s in summaries)
 
-        # (a) fleet_self_consumption_kwh must equal the basis-C sum (not B-style)
-        assert year0.fleet_self_consumption_kwh == pytest.approx(expected_basis_c, rel=1e-9), (
-            f"fleet_sc should be basis-C {expected_basis_c:.1f} kWh "
-            f"but got {year0.fleet_self_consumption_kwh:.1f} kWh "
+        # (a) fleet_billed_own_use_kwh must equal the basis-C sum (not B-style)
+        assert year0.fleet_billed_own_use_kwh == pytest.approx(expected_basis_c, rel=1e-9), (
+            f"fleet_billed_own_use_kwh should be basis-C {expected_basis_c:.1f} kWh "
+            f"but got {year0.fleet_billed_own_use_kwh:.1f} kWh "
             f"(B-style = {b_style_sum:.1f} kWh)"
         )
         # And must be strictly less than B-style
-        assert year0.fleet_self_consumption_kwh < b_style_sum
+        assert year0.fleet_billed_own_use_kwh < b_style_sum
 
     def test_flat_control_no_gap(self) -> None:
         """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""

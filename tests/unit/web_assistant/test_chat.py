@@ -296,7 +296,7 @@ class TestChatEndpointHappyPath:
         events = parse_sse_events(resp.get_data(as_text=True))
 
         event_types = [e.event for e in events]
-        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {events}"
         assert event_types[-1] == "done"
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [m["role"] for m in messages] == ["user", "assistant"]
@@ -338,7 +338,7 @@ class TestChatEndpointHappyPath:
         events = parse_sse_events(resp.get_data(as_text=True))
 
         event_types = [e.event for e in events]
-        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {events}"
         assert event_types[-1] == "done"
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [m["role"] for m in messages] == ["user", "assistant"]
@@ -349,58 +349,36 @@ class TestChatEndpointHappyPath:
 
 
 class TestChatDegradation:
-    """Graceful degradation: a chat that cannot start returns an error SSE frame, never a 500."""
+    """Graceful degradation: a chat that cannot start is answered with a lone ``failed`` SSE frame, never a 500."""
 
-    def test_missing_api_key_returns_error_frame(
+    def test_missing_api_key_answers_one_failed_frame_naming_the_key(
         self,
         client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """POST /chat without ANTHROPIC_API_KEY returns 200 with an error SSE frame."""
+        """Without ANTHROPIC_API_KEY, POST /chat answers 200 with exactly one ``failed`` frame: its
+        data is just the message naming the key, and it carries no id or retry."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         resp = client.post("/assistant/chat", json={"message": "hi"})
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert "text/event-stream" in resp.content_type
 
-        body = resp.get_data(as_text=True)
-        events = parse_sse_events(body)
-        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
-
-    def test_missing_api_key_error_frame_has_message_field(
-        self,
-        client: FlaskClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The error SSE frame carries a JSON data payload whose 'message' names ANTHROPIC_API_KEY."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-        resp = client.post("/assistant/chat", json={"message": "hi"})
-        body = resp.get_data(as_text=True)
-
-        events = parse_sse_events(body)
-        error_frames = [e for e in events if e.event == "error"]
-        assert error_frames, f"Could not find error data payload; events: {events}"
-        error_data = error_frames[0].data
-        assert isinstance(error_data, dict) and "message" in error_data, (
-            f"Error payload missing 'message': {error_data}"
-        )
-        assert "ANTHROPIC_API_KEY" in error_data["message"], (
-            f"Expected the error message to name ANTHROPIC_API_KEY; got: {error_data['message']!r}"
-        )
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame("failed", {"message": "AI assistant is not configured: set ANTHROPIC_API_KEY."})
+        ]
 
     @pytest.mark.parametrize(
         "body",
         [{"message": ""}, {"message": " \n"}, {}],
         ids=["empty", "whitespace", "absent"],
     )
-    def test_a_message_without_text_returns_error_frame_and_saves_no_turn(
+    def test_a_message_without_text_returns_failed_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
         body: dict[str, str],
     ) -> None:
-        """A message without text gets a lone error frame saying so; the model is not called and no chat turn is saved."""
+        """A message without text gets a lone failed frame saying so; the model is not called and no chat turn is saved."""
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "empty-message-sid"
 
@@ -408,18 +386,18 @@ class TestChatDegradation:
 
         assert resp.status_code == 200
         assert parse_sse_events(resp.get_data(as_text=True)) == [
-            SseFrame(event="error", data={"message": "Message cannot be empty."})
+            SseFrame(event="failed", data={"message": "Message cannot be empty."})
         ]
         assert anthropic_api.calls == []
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
-    def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
+    def test_client_construction_failure_returns_failed_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A client the SDK cannot construct, as from a malformed ANTHROPIC_BASE_URL,
-        yields an error frame naming that failure and saves no chat turn."""
+        yields a failed frame naming that failure and saves no chat turn."""
         malformed_port = "notaport"
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
         monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://localhost:{malformed_port}")
@@ -432,25 +410,52 @@ class TestChatDegradation:
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
         events = parse_sse_events(body)
-        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
+        assert [e.event for e in events] == ["failed"], f"Expected a lone failed frame; got: {events}"
         assert malformed_port in events[0].data["message"], (
             f"Expected the error message to name {malformed_port!r}; got: {events[0].data}"
         )
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
-    def test_body_that_is_not_a_json_object_returns_error_frame_naming_its_type_and_saves_no_turn(
+    def test_body_that_is_not_a_json_object_returns_failed_frame_naming_its_type_and_saves_no_turn(
         self, client: FlaskClient, anthropic_api: FakeAnthropic
     ) -> None:
-        """A body that is not a JSON object gets a lone error frame naming its type, and no chat turn is saved."""
+        """A body that is not a JSON object gets a lone failed frame naming its type, and no chat turn is saved."""
         resp = client.post("/assistant/chat", json=[1])
 
         assert resp.status_code == 200
         assert "text/event-stream" in resp.content_type
         events = parse_sse_events(resp.get_data(as_text=True))
-        assert [e.event for e in events] == ["error"]
+        assert [e.event for e in events] == ["failed"]
         assert events[0].data == {"message": "Request body must be a JSON object, got list"}
         assert anthropic_api.calls == []  # the model is never called
         assert client.get("/assistant/history").get_json() == {"messages": []}
+
+
+class TestChatResponsePolicy:
+    """POST /assistant/chat answers a chat it streams and one it refuses as the same uncached, unbuffered event stream."""
+
+    @pytest.mark.parametrize(
+        ("body", "model_called"),
+        [({"message": "hi"}, True), ([1], False)],
+        ids=["answered", "refused"],
+    )
+    def test_a_chat_is_served_with_the_event_stream_response_policy(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        body: object,
+        model_called: bool,
+    ) -> None:
+        anthropic_api.set_chunks(["ok"])
+
+        resp = client.post("/assistant/chat", json=body)
+        resp.get_data()
+
+        assert bool(anthropic_api.calls) is model_called
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        assert resp.headers["Cache-Control"] == "no-cache"
+        assert resp.headers["X-Accel-Buffering"] == "no"
 
 
 class TestChatPageWiring:
@@ -561,7 +566,7 @@ class TestChatLiveSmoke:
         event_types = [e.event for e in events]
         assert "delta" in event_types, "Expected at least one delta frame"
         assert "done" in event_types, "Expected done frame"
-        assert "error" not in event_types, f"Unexpected error frame: {body[:500]}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {body[:500]}"
 
         reconstructed = reply_text(events)
         assert len(reconstructed) > 0, "Expected non-empty reconstructed reply"
@@ -656,7 +661,7 @@ class TestEveryTurnStoresAReplyWithText:
         )
         client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
 
-        assert [f.event for f in failed] == ["error"]
+        assert [f.event for f in failed] == ["failed"]
         notice = failed[0].data["message"]
         assert anthropic_api.calls[1]["messages"] == [
             {"role": "user", "content": "hello"},
@@ -682,7 +687,7 @@ class TestEveryTurnStoresAReplyWithText:
             client.post("/assistant/chat", json={"message": "hi"}).get_data(as_text=True)
         )
 
-        assert [f.event for f in frames] == ["delta", "error"]
+        assert [f.event for f in frames] == ["delta", "failed"]
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
         assert messages[1]["metadata"] == {"error": "overloaded_error: Overloaded", "truncated": True}
@@ -910,7 +915,7 @@ class TestRunContextInjection:
         app: Flask,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """POST with an unknown run_id streams normally (delta+done, no error/500)."""
+        """POST with an unknown run_id streams normally (delta+done, no failed frame, no 500)."""
         anthropic_api.set_chunks(["normal reply"])
 
         resp = client.post(
@@ -923,7 +928,7 @@ class TestRunContextInjection:
         event_types = [e.event for e in parse_sse_events(body)]
         assert "delta" in event_types, "Expected delta frames for unknown run_id"
         assert "done" in event_types, "Expected done frame for unknown run_id"
-        assert "error" not in event_types, f"Unexpected error frame for unknown run_id: {body[:300]}"
+        assert "failed" not in event_types, f"Unexpected failed frame for unknown run_id: {body[:300]}"
 
         # Messages sent to API must NOT contain injected run context for unknown id
         msgs = anthropic_api.last_kwargs["messages"]

@@ -12,7 +12,6 @@ import dataclasses
 import math
 from typing import Optional
 
-import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
@@ -25,7 +24,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.optimize import (
@@ -38,6 +37,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.pv import PVConfig
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
@@ -77,57 +77,25 @@ def _make_home_config(
     )
 
 
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-    n_minutes: int = 525600,  # 365 days
-) -> SimulationResults:
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-
-    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
-    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=export_revenue_series,
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
 def _make_fleet_results(
     n_homes: int = 5,
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
+    export_revenue_gbp: float = 0.0,
     capacity_kw: float = 4.0,
 ) -> FleetResults:
-    homes = [_make_home_config(capacity_kw=capacity_kw) for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(self_kwh, export_kwh, import_kwh,
-                          export_revenue_gbp_per_year=export_revenue_gbp_per_year)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=homes,
+    """*n_homes* homes of *capacity_kw* kWp, each with a year of constant power at these totals.
+
+    The results are tests/_finance_builders.make_sim_results', whose docstring
+    says why hourly steps give exact totals.
+    """
+    return make_fleet_results(
+        homes=[_make_home_config(capacity_kw=capacity_kw) for _ in range(n_homes)],
+        self_kwh=self_kwh,
+        export_kwh=export_kwh,
+        import_kwh=import_kwh,
+        export_revenue_gbp=export_revenue_gbp,
     )
 
 
@@ -810,7 +778,7 @@ class TestRunSweepRateClampedZero:
             retail_baseline_rate=30.0,
         )
         scenario = _make_scenario(n_homes=5, finance=finance)
-        fr = _make_fleet_results(n_homes=5, export_revenue_gbp_per_year=200.0)
+        fr = _make_fleet_results(n_homes=5, export_revenue_gbp=200.0)
         configs = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
         )

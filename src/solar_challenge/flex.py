@@ -3,14 +3,15 @@
 
 Encodes the canonical Low/Central/High banded flexibility-value decomposition
 from the consulting model (2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4)
-and the companion buildability note (docs/flexibility-buildability.md §ε).
+and the companion buildability note (docs/flexibility-buildability.md).
 
 The two revenue streams modelled here are:
 
 * **Time-shift / arbitrage** — buying cheap overnight electricity and displacing
   peak imports; from consulting §1.1.
 * **Grid services (firm flex capacity)** — payments for contracted kW of dispatchable
-  discharge power; from PRD §6 (resolved decision 2: per-kW basis).
+  discharge power; from docs/prds/flexibility-value-finance-integration.md §6,
+  resolved decision 2 (per-kW basis).
 
 Three uncertainty bands (Low / Central / High) bound the plausible range for
 a 2-kW-ish domestic battery in the Bristol context.  The ``total_gbp`` headline
@@ -35,7 +36,7 @@ class FlexibilityValueBand:
 
     All monetary fields are in **£ / battery-home / yr** (per-home figures),
     except ``grid_services_per_kw_gbp`` which is **£ / kW of max-discharge /
-    yr** and is the rate consumed by the W2 grid-services income formula
+    yr** and is the rate consumed by finance's grid-services income formula
     (Σ max_discharge_kw × rate).
 
     Attributes:
@@ -45,7 +46,8 @@ class FlexibilityValueBand:
         grid_services_per_home_gbp: Grid-services capacity payment in
             £/home/yr for a representative 2.5-kW battery (consulting §1.1).
         grid_services_per_kw_gbp: Grid-services rate in £/kW-discharge/yr
-            (PRD §6; rate × 2.5 ≈ per_home within the doc's banding tolerance).
+            (docs/prds/flexibility-value-finance-integration.md §6; rate × 2.5 ≈
+            per_home within the doc's banding tolerance).
         total_gbp: Documented headline total increment in £/home/yr
             (consulting §1.1).  Not necessarily the arithmetic sum of the two
             streams — consulting §1.1 warns against simple column-maxima
@@ -53,7 +55,7 @@ class FlexibilityValueBand:
             only for the low band (100 + 4 = 104 ≠ 120); central and high
             happen to sum exactly.
         provenance: Source reference for the numbers in this band, e.g.
-            ``"consulting §1.1 + PRD §6"``.
+            ``"consulting §1.1 + docs/prds/flexibility-value-finance-integration.md §6"``.
     """
 
     name: str
@@ -91,15 +93,18 @@ class FlexibilityValueBand:
 
 # Representative battery discharge power in kW — matches BatteryConfig.max_discharge_kw
 # default (config.py:264).  Used to anchor the per-kW ↔ per-home cross-check in the
-# consulting §1.1 table.  The W2 consuming formula uses each home's ACTUAL
+# consulting §1.1 table.  Finance's grid-services formula uses each home's ACTUAL
 # max_discharge_kw; 2.5 is the consulting model's representative figure only.
 REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; config.py:264 default
 
-_PROVENANCE = "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4 + PRD §6"
+_PROVENANCE = (
+    "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4"
+    " + docs/prds/flexibility-value-finance-integration.md §6"
+)
 
 # Canonical band presets keyed "low"/"central"/"high".
 # Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total)
-# and PRD §6 (grid-services per-kW rate).
+# and docs/prds/flexibility-value-finance-integration.md §6 (grid-services per-kW rate).
 #
 # NOTE: total_gbp is the DOCUMENTED HEADLINE INCREMENT, not necessarily the
 # arithmetic sum of time_shift_gbp + grid_services_per_home_gbp.  Consulting
@@ -166,7 +171,7 @@ def resolve_grid_services_band(band: str) -> float:
     Delegates to :func:`resolve_flex_band` (single validation path) and
     returns the ``grid_services_per_kw_gbp`` field.
 
-    The W2 grid-services income formula is: income = Σ max_discharge_kw × rate,
+    Finance's grid-services income formula is: income = Σ max_discharge_kw × rate,
     where *rate* is the value returned here (central exactly £12.0/kW/yr).
 
     Args:

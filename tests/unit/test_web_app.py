@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the web dashboard's application factory."""
 
+import gc
 import importlib
 import re
 import shutil
 import sys
+import weakref
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.web.jobs import live_managers
 from tests._web_app import build_test_app
 
 
@@ -135,3 +138,21 @@ def test_the_session_cookie_is_not_marked_secure(
     cookie = client.get_cookie(app.config["SESSION_COOKIE_NAME"])
     assert cookie is not None
     assert not cookie.secure
+
+
+def test_dropping_the_app_frees_its_job_manager(tmp_path: Path) -> None:
+    """Nothing outside the app keeps its job manager alive, so the manager is freed along with the app."""
+    app = build_test_app(tmp_path)
+    job_manager_ref = weakref.ref(app.extensions["job_manager"])
+
+    del app
+    gc.collect()
+
+    assert job_manager_ref() is None
+
+
+def test_a_live_apps_job_manager_is_among_the_live_managers(tmp_path: Path) -> None:
+    """While the app lives, live_managers() reports its job manager, so shutdown code that walks that registry reaches it."""
+    app = build_test_app(tmp_path)
+
+    assert app.extensions["job_manager"] in live_managers()

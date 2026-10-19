@@ -208,9 +208,6 @@ _FIGURES: dict[str, _FigureCase] = {
     "heat_pump_share": _FigureCase(
         charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_share_chart
     ),
-    "overlaid_power_flows": _FigureCase(
-        charts.overlaid_power_flows, lambda build: build([_year()] * 5, _FIVE_RUNS)
-    ),
     "comparison_bar_chart": _FigureCase(
         charts.comparison_bar_chart, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
     ),

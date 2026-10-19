@@ -7,8 +7,10 @@ tests/, and a suite by its explicit path under a mark expression.
 Usage::
 
     from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
+    from tests._orchestrator_config import sole_offline_lane_job
 
-    collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
+    command = sole_offline_lane_job(project_root, "e2e")["command"]
+    collection = collect_lane_job(project_root, "e2e", env=shared_uv_probe_environments.for_command(command))
     assert collection.node_ids, f"{collection.command!r} collected no tests\n{collection.outcome}"
     assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 

@@ -32,7 +32,7 @@ def _make_degrading_simulate(
 
     The injected simulate reads pv_config.system_age_years from each home in
     the FleetConfig, computes a degradation factor, and scales the energy
-    output accordingly.  This makes fleet_self_consumption_kwh decline with age
+    output accordingly.  This makes fleet_billed_own_use_kwh decline with age
     in a controlled, verifiable way.
     """
     def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
@@ -142,8 +142,8 @@ class TestProjectMultiYearSOH:
         expected_age0 = calculate_degradation_factor(0.0, rate)
         assert curve.points[0].pv_soh == pytest.approx(expected_age0, rel=1e-6)
 
-        # Check fleet_self_consumption declines from year 0 to year 24
-        assert curve.points[24].fleet_self_consumption_kwh < curve.points[0].fleet_self_consumption_kwh
+        # Check fleet_billed_own_use_kwh declines from year 0 to year 24
+        assert curve.points[24].fleet_billed_own_use_kwh < curve.points[0].fleet_billed_own_use_kwh
 
     def test_no_battery_soh_defaults_to_one(self) -> None:
         """battery_soh == 1.0 for all years when the fleet has no batteries."""

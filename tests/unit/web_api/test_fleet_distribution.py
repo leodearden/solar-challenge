@@ -764,6 +764,26 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        "count",
+        [pytest.param(1, id="short of n_homes"), pytest.param(3, id="beyond n_homes")],
+    )
+    def test_shuffled_pool_not_sized_to_n_homes_returns_400_carrying_the_grammars_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, count: int
+    ) -> None:
+        """A shuffled_pool whose count is not the body's 2 homes reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
+        body = {
+            **self._VALID_BODY,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [{"value": 4.0, "count": count}]}},
+        }
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "pv.capacity_kw" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
         ("patch", "message"),
         [
             pytest.param(

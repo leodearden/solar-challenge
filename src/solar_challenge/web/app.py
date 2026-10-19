@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import atexit
 import logging
 import os
 from pathlib import Path
@@ -130,9 +129,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     recovered = recover_stale_jobs(db_path)
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
-
-    # Register shutdown handler
-    atexit.register(job_manager.shutdown)
 
     _register_blueprints(app)
 

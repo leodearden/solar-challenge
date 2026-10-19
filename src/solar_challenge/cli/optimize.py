@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Optimize CLI commands for W3 discrete install-config sweep (task E / PRD §3.6 / §10-E)."""
+"""Optimize CLI commands for the discrete install-config sweep.
+
+The command and its report are specified in
+docs/prds/discrete-install-config-sweep.md §3.6.
+"""
 
 import dataclasses
 from pathlib import Path
@@ -28,7 +32,7 @@ from solar_challenge.optimize import (
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.seg import SEGTariff
 
-app = typer.Typer(help="Discrete install-config sweep and optimisation commands (W3)")
+app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
 # --sensitivity alias → the knob it sweeps, over that knob's optimize.SENSITIVITY_BANDS values.
 _SENSITIVITY_ALIAS_MAP: dict[str, str] = {
@@ -151,7 +155,7 @@ def configs(
         ),
     ] = None,
 ) -> None:
-    """Run a W3 discrete install-config sweep and produce a board-readable ranking report.
+    """Run a discrete install-config sweep and produce a board-readable ranking report.
 
     Enumerates homogeneous-install scenarios over the cartesian product of
     PV/battery/inverter capacity dimensions, solves the CBS cost-recovery rate

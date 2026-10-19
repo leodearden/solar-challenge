@@ -326,7 +326,7 @@ tasks:
           kind: manual
           reason: "the three refusals and their messages judged by β's own tests (PRD §9 C5)"
       - name: "cli-refusals-fire-before-simulating"
-        binding: "silent paths observed in cli/finance.run, cli/optimize.configs and optimize._build_axis_configs; invoke_cli takes an injectable simulator"
+        binding: "silent paths observed in cli/finance.run, cli/optimize.configs and optimize.apply_knob; invoke_cli takes an injectable simulator"
         verdict: PASS
         delivered_check:
           kind: manual

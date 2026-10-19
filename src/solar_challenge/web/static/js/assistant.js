@@ -145,7 +145,7 @@
             } catch (_e) { /* ignore malformed */ }
           } else if (eventType === 'done') {
             // Stream complete
-          } else if (eventType === 'error') {
+          } else if (eventType === 'failed') {
             try {
               const payload = JSON.parse(dataLine);
               replyBubble.remove();

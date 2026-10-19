@@ -36,7 +36,7 @@ class TestYearPoint:
             year=5,
             pv_soh=0.975,
             battery_soh=0.900,
-            fleet_self_consumption_kwh=10_000.0,
+            fleet_billed_own_use_kwh=10_000.0,
             fleet_export_kwh=3_000.0,
             fleet_import_kwh=5_000.0,
             fleet_revenue_gbp=1_200.0,
@@ -48,7 +48,7 @@ class TestYearPoint:
         assert yp.year == 5
         assert yp.pv_soh == pytest.approx(0.975)
         assert yp.battery_soh == pytest.approx(0.900)
-        assert yp.fleet_self_consumption_kwh == pytest.approx(10_000.0)
+        assert yp.fleet_billed_own_use_kwh == pytest.approx(10_000.0)
         assert yp.fleet_export_kwh == pytest.approx(3_000.0)
         assert yp.fleet_import_kwh == pytest.approx(5_000.0)
         assert yp.fleet_revenue_gbp == pytest.approx(1_200.0)
@@ -66,7 +66,7 @@ class TestYearPoint:
                 year=0,
                 pv_soh=-0.01,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
@@ -79,7 +79,7 @@ class TestYearPoint:
                 year=0,
                 pv_soh=1.01,
                 battery_soh=1.0,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
@@ -92,7 +92,7 @@ class TestYearPoint:
                 year=0,
                 pv_soh=1.0,
                 battery_soh=1.05,
-                fleet_self_consumption_kwh=0.0,
+                fleet_billed_own_use_kwh=0.0,
                 fleet_export_kwh=0.0,
                 fleet_import_kwh=0.0,
                 fleet_revenue_gbp=0.0,
@@ -118,7 +118,7 @@ class TestYearPoint:
 
     @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -1.0])
     @pytest.mark.parametrize(
-        "field", ["fleet_self_consumption_kwh", "fleet_export_kwh", "fleet_import_kwh"]
+        "field", ["fleet_billed_own_use_kwh", "fleet_export_kwh", "fleet_import_kwh"]
     )
     def test_a_fleet_energy_that_is_negative_or_not_finite_is_refused_naming_it(
         self, field: str, value: float
@@ -148,7 +148,7 @@ class TestYearPoint:
             year=0,
             pv_soh=0.0,
             battery_soh=0.0,
-            fleet_self_consumption_kwh=0.0,
+            fleet_billed_own_use_kwh=0.0,
             fleet_export_kwh=0.0,
             fleet_import_kwh=0.0,
             fleet_revenue_gbp=0.0,
@@ -157,7 +157,7 @@ class TestYearPoint:
             year=0,
             pv_soh=1.0,
             battery_soh=1.0,
-            fleet_self_consumption_kwh=0.0,
+            fleet_billed_own_use_kwh=0.0,
             fleet_export_kwh=0.0,
             fleet_import_kwh=0.0,
             fleet_revenue_gbp=0.0,
@@ -174,7 +174,7 @@ class TestMultiYearCurve:
             year=year,
             pv_soh=max(0.0, 1.0 - year * 0.005),
             battery_soh=max(0.0, 1.0 - year * 0.01),
-            fleet_self_consumption_kwh=val,
+            fleet_billed_own_use_kwh=val,
             fleet_export_kwh=val * 0.3,
             fleet_import_kwh=val * 0.5,
             fleet_revenue_gbp=val * 0.1,
@@ -285,7 +285,7 @@ class TestPerYearInterpolation:
             "the fixture must make PCHIP differ from straight lines between the sampled ages, "
             "or this test cannot tell interpolants apart"
         )
-        assert [point.fleet_self_consumption_kwh for point in curve.points] == pytest.approx(
+        assert [point.fleet_billed_own_use_kwh for point in curve.points] == pytest.approx(
             expected.tolist(), rel=1e-9
         )
 
@@ -299,7 +299,7 @@ class TestPerYearInterpolation:
             "a free cubic must overshoot these sampled values, or this test cannot tell "
             "a shape-preserving interpolant from one that is not"
         )
-        per_year_kwh = [point.fleet_self_consumption_kwh for point in curve.points]
+        per_year_kwh = [point.fleet_billed_own_use_kwh for point in curve.points]
         tolerance_kwh = 1e-6
         rising_years = [
             year
@@ -315,6 +315,6 @@ class TestPerYearInterpolation:
         curve = _project_without_refinement(1)
 
         assert curve.sampled_ages == (0,)
-        assert [point.fleet_self_consumption_kwh for point in curve.points] == pytest.approx(
+        assert [point.fleet_billed_own_use_kwh for point in curve.points] == pytest.approx(
             [_self_consumption_kwh_at(0)]
         )

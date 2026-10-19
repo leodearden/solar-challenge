@@ -11,9 +11,11 @@ import decimal
 import enum
 import fractions
 import functools
+import gc
 import pathlib
 import sys
 import types
+import weakref
 from dataclasses import InitVar, dataclass
 from typing import (
     TYPE_CHECKING,
@@ -191,6 +193,59 @@ def test_a_name_its_module_imports_only_for_type_checking_names_the_class_that_i
     def f(amount: "Decimal") -> None: ...
 
     assert named_classes(f) == {decimal.Decimal}
+
+
+def test_a_name_its_module_imports_only_for_type_checking_names_the_class_its_own_import_binds_whatever_an_earlier_module_of_the_same_name_imported(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+    assert named_classes(earlier.audit) == {fractions.Fraction}
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    assert named_classes(later.audit) == {decimal.Decimal}
+
+
+def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_once_dropped(
+    tmp_path: pathlib.Path,
+) -> None:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        settling = imported_module(
+            tmp_path,
+            monkeypatch,
+            "settling",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from decimal import Decimal\n"
+            "\n"
+            "def settle(amount: 'Decimal') -> None: ...\n",
+        )
+        assert named_classes(settling.settle) == {decimal.Decimal}
+    dropped = weakref.ref(settling)
+    del settling
+    gc.collect()
+
+    assert dropped() is None
 
 
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:

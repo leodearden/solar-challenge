@@ -50,6 +50,7 @@ from solar_challenge.web.shared import (
     require_json_object,
 )
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
+from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
@@ -231,17 +232,10 @@ def get_job_progress(job_id: str) -> Response:
                 return
 
             # Send heartbeat
-            yield ":heartbeat\n\n"
+            yield HEARTBEAT
             time.sleep(2)
 
-    return Response(
-        stream_with_context(generate_events()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return event_stream(stream_with_context(generate_events()))
 
 
 @api_bp.route("/jobs/<job_id>/results", methods=["GET"])

@@ -2050,7 +2050,7 @@ web = [
 requires-dist = [
     { name = "anthropic", marker = "extra == 'web'", specifier = ">=0.40.0" },
     { name = "flask", marker = "extra == 'web'", specifier = ">=3.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "packaging", marker = "extra == 'dev'", specifier = ">=22.0" },
     { name = "pandas", specifier = ">=2.0.0" },
