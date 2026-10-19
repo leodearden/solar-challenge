@@ -370,15 +370,15 @@ def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
 
 
 _Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
-"""One minute of a run's dispatch, which charges and discharges the run's battery, if it has one.
+"""One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
-From that battery and the minute's timestamp, generation in kW and demand in kW, to the minute's flows.
+From that battery and the row's timestamp, generation in kW and demand in kW, to the row's flows.
 """
 
 
 @dataclass(frozen=True)
 class _DispatchPath:
-    """How a run dispatches each minute, and the strategy name its results record."""
+    """How a run dispatches each row, and the strategy name its results record."""
 
     strategy_name: str
     timestep: _Timestep
@@ -436,18 +436,18 @@ def _dispatch_path(config: HomeConfig, step_minutes: float) -> _DispatchPath:
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
 
 
-def _minute_flows(
+def _row_flows(
     timestep: _Timestep,
     battery_config: Optional[BatteryConfig],
     generation_kw: pd.Series,
     demand_kw: pd.Series,
     validate_balance: bool,
 ) -> list[EnergyFlowResult]:
-    """Each minute's flows, in order, from timestep run on that minute's generation and demand.
+    """Each row's flows, in order, from timestep run on that row's generation and demand.
 
     The run's battery, built from battery_config when it is set, carries its state of charge
-    from each minute to the next. With validate_balance, each minute's flows are checked for
-    energy balance before the next minute runs, so an imbalance stops the run at the minute it occurs.
+    from each row to the next. With validate_balance, each row's flows are checked for
+    energy balance before the next row runs, so an imbalance stops the run at the row it occurs.
     """
     battery = None if battery_config is None else Battery(battery_config)
     flows: list[EnergyFlowResult] = []
@@ -461,7 +461,7 @@ def _minute_flows(
 
 @dataclass(frozen=True)
 class _ImportPricing:
-    """Each minute's tariff rate in £/kWh, import cost in £ and grid-charging cost in £, None on an untariffed run."""
+    """Each row's tariff rate in £/kWh, import cost in £ and grid-charging cost in £, None on an untariffed run."""
 
     tariff_rate: pd.Series
     import_cost: pd.Series
@@ -471,26 +471,26 @@ class _ImportPricing:
 def _price_imports(
     tariff: Optional[TariffConfig],
     flows: Sequence[EnergyFlowResult],
-    minutes: pd.DatetimeIndex,
+    rows: pd.DatetimeIndex,
 ) -> _ImportPricing:
-    """Each minute's import priced at the tariff's rate for that minute.
+    """Each row's import priced at the tariff's rate for that row.
 
     An untariffed run's rates and costs are 0.0, and it prices no grid charging.
     """
     if tariff is None:
         return _ImportPricing(
-            tariff_rate=pd.Series([0.0] * len(flows), index=minutes),
-            import_cost=pd.Series([0.0] * len(flows), index=minutes),
+            tariff_rate=pd.Series([0.0] * len(flows), index=rows),
+            import_cost=pd.Series([0.0] * len(flows), index=rows),
             grid_charge_cost=None,
         )
-    rates = [tariff.get_rate(minute) for minute in minutes]
+    rates = [tariff.get_rate(timestamp) for timestamp in rows]
     return _ImportPricing(
-        tariff_rate=pd.Series(rates, index=minutes),
+        tariff_rate=pd.Series(rates, index=rows),
         import_cost=pd.Series(
-            [flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+            [flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=rows
         ),
         grid_charge_cost=pd.Series(
-            [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+            [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=rows
         ),
     )
 
@@ -498,17 +498,17 @@ def _price_imports(
 def _export_revenue(
     seg_tariff: Optional[SEGTariff],
     flows: Sequence[EnergyFlowResult],
-    minutes: pd.DatetimeIndex,
+    rows: pd.DatetimeIndex,
 ) -> pd.Series:
-    """Each minute's export valued at the SEG rate, never the import rate, or at nothing without an SEG."""
+    """Each row's export valued at the SEG rate, never the import rate, or at nothing without an SEG."""
     if seg_tariff is None:
-        return pd.Series([0.0] * len(flows), index=minutes)
-    return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=minutes)
+        return pd.Series([0.0] * len(flows), index=rows)
+    return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=rows)
 
 
 def _results(
     flows: Sequence[EnergyFlowResult],
-    minutes: pd.DatetimeIndex,
+    rows: pd.DatetimeIndex,
     *,
     step_hours: float,
     import_pricing: _ImportPricing,
@@ -516,14 +516,14 @@ def _results(
     heat_pump_load: Optional[pd.Series],
     strategy_name: str,
 ) -> SimulationResults:
-    """The run's results on its minutes, each row lasting step_hours hours.
+    """The run's results on its rows, each lasting step_hours hours.
 
     Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
     """
     kw_per_kwh = 1 / step_hours
 
-    def power_kw(minute_kwh: Callable[[EnergyFlowResult], float]) -> pd.Series:
-        return pd.Series([minute_kwh(flow) * kw_per_kwh for flow in flows], index=minutes)
+    def power_kw(row_kwh: Callable[[EnergyFlowResult], float]) -> pd.Series:
+        return pd.Series([row_kwh(flow) * kw_per_kwh for flow in flows], index=rows)
 
     return SimulationResults(
         strategy_name=strategy_name,
@@ -532,7 +532,7 @@ def _results(
         self_consumption=power_kw(lambda flow: flow.self_consumption),
         battery_charge=power_kw(lambda flow: flow.battery_charge),
         battery_discharge=power_kw(lambda flow: flow.battery_discharge),
-        battery_soc=pd.Series([flow.battery_soc for flow in flows], index=minutes),
+        battery_soc=pd.Series([flow.battery_soc for flow in flows], index=rows),
         grid_import=power_kw(lambda flow: flow.grid_import),
         grid_export=power_kw(lambda flow: flow.grid_export),
         import_cost=import_pricing.import_cost,
@@ -575,13 +575,13 @@ def simulate_home(
     weather = _hourly_weather(config, weather_data)
     minute_generation = interpolate_to_minute_resolution(simulate_pv_output(config.pv_config, config.location, weather))
     demand = _demand(config, weather, start_date, end_date)
-    minutes = demand.total_kw.index
-    window = SimulationWindow.of_index(minutes)
-    generation_kw = align_tmy_to_index(minute_generation, minutes)
+    rows = demand.total_kw.index
+    window = SimulationWindow.of_index(rows)
+    generation_kw = align_tmy_to_index(minute_generation, rows)
     dispatch = _dispatch_path(config, window.step_minutes)
-    flows = _minute_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
-    import_pricing = _price_imports(config.tariff_config, flows, minutes)
-    export_revenue = _export_revenue(config.seg_tariff, flows, minutes)
+    flows = _row_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
+    import_pricing = _price_imports(config.tariff_config, flows, rows)
+    export_revenue = _export_revenue(config.seg_tariff, flows, rows)
     if config.tariff_config is not None and config.seg_tariff is None:
         warnings.warn(
             "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
@@ -591,7 +591,7 @@ def simulate_home(
         )
     return _results(
         flows,
-        minutes,
+        rows,
         step_hours=window.step_hours,
         import_pricing=import_pricing,
         export_revenue=export_revenue,
