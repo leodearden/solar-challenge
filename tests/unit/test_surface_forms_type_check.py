@@ -90,6 +90,25 @@ def test_the_type_check_flags_an_untyped_function_in_the_helper(project_root: Pa
     )
 
 
+def test_the_type_check_flags_an_unused_type_ignore_in_the_helper(project_root: Path, tmp_path: Path) -> None:
+    """The type check reports a `# type: ignore` in the helper that suppresses no error.
+
+    The helper reads attributes its target's typeshed does not declare under ignores
+    scoped to one error code. Once the typeshed declares such an attribute, its ignore
+    suppresses nothing, and warn_unused_ignores, which strict mode in pyproject.toml's
+    [tool.mypy] turns on, is what reports it. The probe is such an ignore: an
+    attr-defined one on the read of an attribute typeshed declares. Without this test,
+    an override that turns warn_unused_ignores off would leave a stale ignore in the
+    helper while test_the_surface_forms_helper_passes_the_type_check passes.
+    """
+    errors = _type_check_probe(project_root, "probe = int.__name__  # type: ignore[attr-defined]\n", tmp_path)
+
+    assert [(error.path, error.line, error.code) for error in errors] == [(_HELPER, 1, "unused-ignore")], (
+        "the type check must report the ignore that suppresses no error in the helper, and nothing else; "
+        "it reported:\n" + "\n".join(map(str, errors))
+    )
+
+
 def test_the_surface_forms_helper_passes_the_type_check(project_root: Path) -> None:
     """The helper has no error under the project's type check, so the verify fails a commit that adds one."""
     errors = _type_check(project_root, _HELPER)
