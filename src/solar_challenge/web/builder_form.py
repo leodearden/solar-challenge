@@ -24,7 +24,12 @@ from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, read_pool_counts
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
-from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
+from solar_challenge.web.shared import (
+    LOCATION_PRESETS,
+    NotAJsonObject,
+    refuse_unrecognised_keys,
+    require_json_object,
+)
 
 _BUILDER_FORM = "Builder form"
 
@@ -83,7 +88,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             MAX_FLEET_HOMES, or counts totalling more.
     """
     form = require_json_object(form, _BUILDER_FORM)
-    _refuse_unrecognised_keys(form)
+    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
     fields = _present_fields(form)
 
     document: dict[str, Any] = {
@@ -210,15 +215,6 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
         except ValueError as exc:
             errors.append(f"period.{key} is not a date: {exc}")
     return errors
-
-
-def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:
-    unrecognised = sorted(form.keys() - _RECOGNISED_KEYS)
-    if unrecognised:
-        raise ValueError(
-            f"Unrecognised builder form keys: {', '.join(map(repr, unrecognised))}; "
-            f"recognised keys: {', '.join(sorted(_RECOGNISED_KEYS))}"
-        )
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:

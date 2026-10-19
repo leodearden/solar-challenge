@@ -187,6 +187,11 @@ class TestExportFleetYAML:
                 "FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
+            pytest.param(
+                {"heat_pump": "ASHP"},
+                "Unrecognised fleet form keys: 'heat_pump';",
+                id="unrecognised-key",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
