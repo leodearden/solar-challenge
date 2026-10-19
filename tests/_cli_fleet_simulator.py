@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Run the CLI in-process with the test's own fleet simulator, so its simulating commands never reach PVGIS.
+"""Run the CLI in-process with the test's own fleet simulator, so the commands that read it never reach PVGIS.
 
-The simulator travels as Click's context object, the CliFleetSimulator each
-simulating command reads its simulator from.
+The simulator travels as Click's context object, a CliFleetSimulator. See
+solar_challenge.cli.utils for which commands read it.
 
 Usage::
 

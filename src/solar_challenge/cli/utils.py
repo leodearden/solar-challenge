@@ -12,9 +12,11 @@ a terminal, Rich routes sys.stdout writes through it to stderr.
 messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
 
-A command that simulates a fleet reads its simulator from Click's context
-object, ctx.ensure_object(CliFleetSimulator).simulate: fleet.simulate_fleet,
-unless whoever invokes the CLI passes another CliFleetSimulator as obj.
+`finance run` and `optimize configs` read their fleet simulator from Click's
+context object, ctx.ensure_object(CliFleetSimulator).simulate:
+fleet.simulate_fleet, unless whoever invokes the CLI passes another
+CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they call
+fleet.simulate_fleet_iter and fleet.simulate_multi_sweep_iter themselves.
 """
 
 import dataclasses
@@ -91,7 +93,7 @@ def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
 
 @dataclasses.dataclass(frozen=True)
 class CliFleetSimulator:
-    """Fleet simulator for the CLI's commands, read from Click's context object."""
+    """Fleet simulator a command reads from Click's context object."""
 
     simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
