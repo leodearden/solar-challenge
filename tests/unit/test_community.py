@@ -8,7 +8,7 @@ Test classes, in file order:
   - TestCommunityBillingTimeOfUse: time-of-use import billing via simulate_community
   - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community
   - TestCommunityResultsSharingMode: sharing_mode carried onto CommunityResults
-  - TestCommunityRowLength: the row length simulate_community bills each row over
+  - TestCommunityRowLength: the row length simulate_community reads from the fleet index's window, and the indexes it refuses
 """
 from __future__ import annotations
 
@@ -812,8 +812,27 @@ class TestCommunityResultsSharingMode:
 # TestCommunityRowLength
 # ---------------------------------------------------------------------------
 
+_CONFIG_FOR_EACH_PATH = (
+    pytest.param(CommunityConfig(sharing_mode="p2p"), id="p2p"),
+    pytest.param(
+        CommunityConfig(
+            sharing_mode="p2p",
+            billing=CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.0),
+        ),
+        id="billed-p2p",
+    ),
+    pytest.param(
+        CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0),
+        ),
+        id="community-battery",
+    ),
+)
+
+
 class TestCommunityRowLength:
-    """Each row lasts the gap between the fleet index's first two rows, or one minute when a single row gives none."""
+    """Each row lasts the fleet index's cadence, as its window reads it: a single row's comes from its freq. An index no window describes is refused before any row is dispatched or billed."""
 
     @pytest.fixture
     def single_row(self) -> pd.DatetimeIndex:
@@ -870,11 +889,25 @@ class TestCommunityRowLength:
         assert cr.battery_charge.iloc[0] == pytest.approx(10.0)
         assert cr.grid_export.iloc[0] == pytest.approx(0.0)
 
-    def test_billing_refuses_an_unevenly_spaced_index(self, billed_p2p: CommunityConfig) -> None:
-        uneven = pd.DatetimeIndex(
-            ["2024-06-21 12:00", "2024-06-21 12:01", "2024-06-21 12:03"]
-        ).tz_localize("Europe/London")
-        fleet = _make_fleet(uneven, [([3.0] * 3, [1.0] * 3), ([0.0] * 3, [1.5] * 3)])
+    @pytest.mark.parametrize("config", _CONFIG_FOR_EACH_PATH)
+    def test_a_fleet_index_with_a_dropped_middle_row_is_refused_naming_the_position_and_both_gaps(
+        self, config: CommunityConfig
+    ) -> None:
+        # The first and last gaps are both one minute; only the gap before position 5 is two.
+        minutes = pd.date_range("2024-06-21 12:00", periods=10, freq="min", tz="Europe/London").delete(5)
+        fleet = _make_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)])
 
-        with pytest.raises(ValueError, match="uniformly-spaced"):
-            simulate_community(fleet, billed_p2p)
+        with pytest.raises(ValueError) as refusal:
+            simulate_community(fleet, config)
+
+        assert "position 5" in str(refusal.value)
+        assert str(pd.Timedelta(minutes=2)) in str(refusal.value)
+        assert str(pd.Timedelta(minutes=1)) in str(refusal.value)
+
+    @pytest.mark.parametrize("config", _CONFIG_FOR_EACH_PATH)
+    def test_a_single_row_without_a_freq_is_refused(self, config: CommunityConfig) -> None:
+        row = pd.DatetimeIndex([pd.Timestamp("2024-06-21 12:00", tz="Europe/London")])
+        fleet = _make_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
+
+        with pytest.raises(ValueError, match="one row"):
+            simulate_community(fleet, config)
