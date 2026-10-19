@@ -93,7 +93,7 @@ def test_config_result_reads_its_solved_fields_from_its_solution() -> None:
     ) == (300.0, 12.5, 35.0, False, "infeasible_above_retail")
 
 
-def test_config_result_over_a_given_outlay_ranks_by_its_representatives_outlay() -> None:
+def test_config_result_over_a_given_outlay_takes_its_representatives_outlay() -> None:
     outlay = make_bill_distribution(
         representative=make_bill_breakdown(total_outlay_gbp=350.0),
         per_home_net_bill_gbp=(300.0, 350.0, 400.0),
