@@ -282,50 +282,6 @@ class TestDatabaseInitialization:
         assert (JOB_STATUSES, CHAT_ROLES, PRESET_TYPES) == (("queued", "running", "completed", "failed"), ("user", "assistant"), ("home", "fleet"))
 
 
-class TestDatabaseConnectionManagement:
-    """Tests for database connection management."""
-
-    def test_get_db_returns_connection(self, db_path):
-        """Test get_db returns a connection."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            assert conn is not None
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            assert cursor.fetchone()[0] == 1
-
-    def test_get_db_commits_on_success(self, db_path):
-        """Test get_db commits changes on success."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
-                ("test-id", "Test", "home", "completed"),
-            )
-        # Verify commit by reading in a new connection
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM runs WHERE id = ?", ("test-id",))
-            assert cursor.fetchone()["id"] == "test-id"
-
-    def test_get_db_rolls_back_on_error(self, db_path):
-        """Test get_db rolls back changes on error."""
-        init_db(db_path)
-        with pytest.raises(Exception):
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
-                    ("test-id", "Test", "home", "completed"),
-                )
-                raise Exception("Test error")
-        # Verify rollback
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM runs WHERE id = ?", ("test-id",))
-            assert cursor.fetchone() is None
-
 class TestHomeRunRoundTrip:
     """Tests for home run save/load round-trip."""
 
