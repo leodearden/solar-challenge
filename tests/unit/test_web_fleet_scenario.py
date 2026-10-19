@@ -120,6 +120,12 @@ _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY: dict[str, Any] = {
 #: _FLEET_FORM with its window set by days rather than by start and end: a form may send one or the other, not both.
 _FLEET_FORM_BY_DAYS: dict[str, Any] = {**_without(_FLEET_FORM, "start", "end"), "days": 10}
 
+#: _FLEET_FORM with a battery drawn from a distribution rather than its shuffled pool: a pool must hold one value per home, so only then can n_homes change alone.
+_FLEET_FORM_WITHOUT_A_POOL: dict[str, Any] = {**_FLEET_FORM, "battery": _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY["battery"]}
+
+#: The form each key's change is made to, where _FLEET_FORM cannot take that change alone.
+_FORM_TO_CHANGE_BY_KEY: dict[str, dict[str, Any]] = {"days": _FLEET_FORM_BY_DAYS, "n_homes": _FLEET_FORM_WITHOUT_A_POOL}
+
 
 def _run(fleet: ParsedFleetForm) -> tuple[Any, ...]:
     """The run of the parsed *fleet*: the name, homes and dates the simulate endpoint submits."""
@@ -152,7 +158,7 @@ class TestParseFleetForm:
     @pytest.mark.parametrize(
         ("form", "key", "value"),
         [
-            pytest.param(_FLEET_FORM_BY_DAYS if key == "days" else _FLEET_FORM, key, value, id=key)
+            pytest.param(_FORM_TO_CHANGE_BY_KEY.get(key, _FLEET_FORM), key, value, id=key)
             for key, value in _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY.items()
         ],
     )
