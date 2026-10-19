@@ -713,23 +713,27 @@ def run_fleet_simulation(
     return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
 
 
-def dispatch_tool(
-    name: str,
-    tool_input: dict[str, Any],
-    *,
-    db_path: "str | Path",
-    job_manager: JobManager,
-    data_dir: "str | Path",
-) -> dict[str, Any]:
+@dataclass(frozen=True)
+class ToolContext:
+    """The collaborators a tool call runs with.
+
+    *db_path* is the database the lookup tools read and submitted jobs record
+    their runs in, *data_dir* the root of submitted runs' artefacts, and
+    *job_manager* the app's JobManager, which the trigger tools submit jobs to.
+    """
+
+    db_path: "str | Path"
+    data_dir: "str | Path"
+    job_manager: JobManager
+
+
+def dispatch_tool(name: str, tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
-        name:        The tool name as sent by the model.
-        tool_input:  The validated input dict from the model's tool_use block.
-        db_path:     The SQLite database that the DB-backed tools read and that
-                     submitted jobs record their runs in.
-        job_manager: The app's JobManager, which the trigger tools submit jobs to.
-        data_dir:    The root directory for submitted runs' artefacts.
+        name:       The tool name as sent by the model.
+        tool_input: The validated input dict from the model's tool_use block.
+        context:    The collaborators the tool runs with.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -747,17 +751,23 @@ def dispatch_tool(
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, RunStorage(db_path=db_path, data_dir=data_dir))
+        return get_run_results(
+            run_id_or_name, RunStorage(db_path=context.db_path, data_dir=context.data_dir)
+        )
     if name == "list_recent_runs":
         try:
             limit: int = int(tool_input.get("limit", 10))
         except (ValueError, TypeError):
             limit = 10
-        return list_recent_runs(limit, db_path)
+        return list_recent_runs(limit, context.db_path)
     if name == "run_home_simulation":
-        return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
+        return run_home_simulation(
+            dict(tool_input), context.job_manager, context.db_path, context.data_dir
+        )
     if name == "run_fleet_simulation":
-        return run_fleet_simulation(dict(tool_input), job_manager, db_path, data_dir)
+        return run_fleet_simulation(
+            dict(tool_input), context.job_manager, context.db_path, context.data_dir
+        )
     all_names = ", ".join(t["name"] for t in TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
@@ -1124,12 +1134,10 @@ def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str
     messages = request_messages(
         database.get_chat_history(db_path, session_id), user_message, _run_context(run_id, get_storage())
     )
-    run_tool = partial(
-        dispatch_tool,
-        db_path=db_path,
-        job_manager=get_job_manager(),
-        data_dir=current_app.config["DATA_DIR"],
+    context = ToolContext(
+        db_path=db_path, data_dir=current_app.config["DATA_DIR"], job_manager=get_job_manager()
     )
+    run_tool = partial(dispatch_tool, context=context)
     return _turn_frames(
         user_message,
         _reply_events(client, _model_request(model, messages), run_tool),
