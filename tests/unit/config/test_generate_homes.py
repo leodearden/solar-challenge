@@ -367,6 +367,22 @@ class TestGenerateHomesRefusesADrawThatIsNotFinite:
             generate_homes_from_distribution(fleet, Location.bristol())
         assert str(exc_info.value) == f"{block}.{field} must draw samples that are finite numbers, got a sample of inf"
 
+    def test_an_overflowing_draw_pre_sampled_in_bristol_legacy_order_is_refused_as_a_fresh_one_is(self) -> None:
+        """random_order bristol_legacy draws every home's annual consumption before it builds the first home; an overflowing one is refused naming its setting and the draw."""
+        fleet = parse_fleet_distribution_config(
+            {
+                **_EVERY_SETTING_DRAWN,
+                "random_order": "bristol_legacy",
+                "load": {**_EVERY_SETTING_DRAWN["load"], "annual_consumption_kwh": _OVERFLOWING_UNIFORM},
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(fleet, Location.bristol())
+        assert str(exc_info.value) == (
+            "load.annual_consumption_kwh must draw samples that are finite numbers, got a sample of inf"
+        )
+
     def test_a_normal_whose_bounds_clamp_its_overflowing_draws_is_accepted(self) -> None:
         """A normal whose draws overflow a float, but whose min and max clamp them, gives each home a finite capacity from its min to its max."""
         config = FleetDistributionConfig(
