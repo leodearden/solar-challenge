@@ -144,6 +144,11 @@ class TestDatabaseInitialization:
         init_db(db_path)
         assert db_path.exists()
 
+    @pytest.mark.parametrize("as_given", [Path, str], ids=["path", "str"])
+    def test_init_db_returns_the_database_whose_schema_it_created(self, db_path, as_given):
+        """init_db returns the Database for the file it initialised, whether that file's path comes as a Path or a str."""
+        assert init_db(as_given(db_path)) == Database(db_path)
+
     def test_init_db_creates_runs_table(self, db_path):
         """Test init_db creates runs table."""
         init_db(db_path)

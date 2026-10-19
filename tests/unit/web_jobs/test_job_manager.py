@@ -18,7 +18,7 @@ from flask import Flask
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import (
     HomeSimulator,
     JobEvent,
@@ -148,9 +148,7 @@ _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
 
 def _run_storage(tmp_path: Path) -> RunStorage:
-    storage = RunStorage(Database(tmp_path / "jobs.db"), tmp_path / "data")
-    init_db(storage.database.path)
-    return storage
+    return RunStorage(init_db(tmp_path / "jobs.db"), tmp_path / "data")
 
 
 def _refuse_new_rows(storage: RunStorage, table: str) -> None:
@@ -864,8 +862,7 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_running_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that running jobs are marked as failed on recovery."""
-        database = Database(tmp_path / "stale.db")
-        init_db(database.path)
+        database = init_db(tmp_path / "stale.db")
 
         # Insert a run and job in 'running' state
         with database.transaction() as conn:
@@ -892,8 +889,7 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_queued_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that queued jobs are also recovered."""
-        database = Database(tmp_path / "stale2.db")
-        init_db(database.path)
+        database = init_db(tmp_path / "stale2.db")
 
         with database.transaction() as conn:
             cursor = conn.cursor()
@@ -911,8 +907,7 @@ class TestRecoverStaleJobs:
 
     def test_recover_no_stale_jobs_returns_zero(self, tmp_path: Path) -> None:
         """Test that recovery returns 0 when no stale jobs exist."""
-        database = Database(tmp_path / "clean.db")
-        init_db(database.path)
+        database = init_db(tmp_path / "clean.db")
 
         recovered = recover_stale_jobs(database)
         assert recovered == 0

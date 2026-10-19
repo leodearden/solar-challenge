@@ -43,9 +43,7 @@ CONNECTION_OPENERS = [
 @pytest.fixture
 def dashboard_database(tmp_path: Path) -> Database:
     """A dashboard database whose schema init_db has created."""
-    database = Database(tmp_path / "dashboard.db")
-    init_db(database.path)
-    return database
+    return init_db(tmp_path / "dashboard.db")
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)

@@ -11,7 +11,7 @@ from flask import Flask, render_template
 
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import init_db
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager, recover_stale_jobs
 from solar_challenge.web.routes import bp as routes_bp
@@ -115,8 +115,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         app.secret_key = _get_secret_key(default_data_dir)
 
     # Initialize database with configured path
-    database = Database(Path(app.config["DATABASE"]))
-    init_db(database.path)
+    database = init_db(Path(app.config["DATABASE"]))
     app.extensions["database"] = database
 
     # Initialize RunStorage singleton

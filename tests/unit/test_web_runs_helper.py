@@ -11,7 +11,7 @@ pytest.importorskip("pyarrow")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
@@ -21,9 +21,7 @@ from tests._web_runs import store_fleet_run, store_home_run
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
     """An empty RunStorage under tmp_path, with the schema init_db creates."""
-    storage = RunStorage(Database(tmp_path / "runs.db"), tmp_path)
-    init_db(storage.database.path)
-    return storage
+    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path)
 
 
 def _two_unlike_homes() -> FleetResults:

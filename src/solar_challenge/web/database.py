@@ -89,8 +89,8 @@ class Database:
             conn.close()
 
 
-def init_db(db_path: str | Path) -> None:
-    """Initialize the SQLite database with the required schema.
+def init_db(db_path: str | Path) -> Database:
+    """Initialize the SQLite database with the required schema, and return the Database for it.
 
     Creates tables for runs, jobs, chat_messages, and config_presets.
     Safe to call multiple times - uses CREATE TABLE IF NOT EXISTS.
@@ -98,11 +98,14 @@ def init_db(db_path: str | Path) -> None:
     Args:
         db_path: Path to the SQLite database file. Parent directory
             will be created if it doesn't exist.
-    """
-    db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = Database(db_path).connect()
+    Returns:
+        The Database for *db_path*, through which its caller opens every connection to it.
+    """
+    database = Database(Path(db_path))
+    database.path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = database.connect()
     conn.execute("PRAGMA journal_mode=WAL")
 
     cursor = conn.cursor()
@@ -184,6 +187,7 @@ def init_db(db_path: str | Path) -> None:
 
     conn.commit()
     conn.close()
+    return database
 
 
 def save_chat_message(
