@@ -6,7 +6,7 @@ from typing import Literal
 
 import pandas as pd
 
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import SimulationWindow
 
 
 # Valid heat pump types
@@ -189,26 +189,29 @@ def generate_heat_pump_load(
     *,
     annual_temperature_c: pd.Series,
 ) -> pd.Series:
-    """Generate a heat pump's electrical load, in kW, over the minutes of temperature_c.
+    """Generate a heat pump's electrical load, in kW, over the rows of temperature_c.
 
-    config.annual_heat_demand_kwh is shared out over the heating degree-minutes
-    of annual_temperature_c, a reference year such as the TMY: each minute of
-    temperature_c gets heat in proportion to its own heating degree-minutes.
+    config.annual_heat_demand_kwh is shared out over the heating degree-hours
+    of annual_temperature_c, a reference year such as the TMY: each row's
+    deficit below the base temperature times the hours its row lasts on the
+    reference's window. Each row of temperature_c gets heat in proportion to
+    its own heating degree-hours, so temperature_c may be at any cadence: a
+    row's load in kW does not depend on how long the row lasts.
     So a window's load does not depend on the window's length, and a run over
     exactly the reference year delivers the whole annual demand wherever the
-    capacity cap does not bind. Each minute's heat is capped at
+    capacity cap does not bind. Each row's heat is capped at
     config.thermal_capacity_kw, and its electrical load is that heat divided by
-    the COP at the minute's outdoor temperature. A reference year with no
-    heating degree-minutes has no heat to share out, so the load is zero.
+    the COP at the row's outdoor temperature. A reference year with no
+    heating degree-hours has no heat to share out, so the load is zero.
 
     Args:
         config: Heat pump configuration (type, capacity, annual demand)
-        temperature_c: Outdoor temperature in degrees Celsius at 1-minute
-            resolution, over the minutes to generate the load for.
+        temperature_c: Outdoor temperature in degrees Celsius, at any cadence,
+            over the rows to generate the load for.
             Must have a DatetimeIndex with timezone info.
         annual_temperature_c: One year of outdoor temperature in degrees
-            Celsius at 1-minute resolution, 365 to 366 days of rows.
-            Only its values are read.
+            Celsius at 1-minute resolution, 365 to 366 days of rows. Its
+            index's window gives the hours each row lasts.
 
     Returns:
         Series of electrical power demand in kW, named heat_pump_load_kw, with
@@ -220,6 +223,8 @@ def generate_heat_pump_load(
         ValueError: If temperature_c index is not timezone-aware
         ValueError: If annual_temperature_c is not one year of minutes, 365 to
             366 days of rows
+        ValueError: If SimulationWindow.of_index refuses annual_temperature_c's
+            index, as it does one that is not a DatetimeIndex or not evenly spaced
 
     Example:
         >>> config = HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=8.0)
@@ -230,7 +235,7 @@ def generate_heat_pump_load(
         >>> load = generate_heat_pump_load(config, year.loc['2023-01-15'], annual_temperature_c=year)
         >>> len(load)
         1440
-        >>> heat_delivered_kwh = float(load.sum()) * HOURS_PER_MINUTE * calculate_cop("ASHP", 10.0)
+        >>> heat_delivered_kwh = SimulationWindow.of_index(load.index).energy_kwh(load) * calculate_cop("ASHP", 10.0)
         >>> round(heat_delivered_kwh, 2)  # one day's share of 8000 kWh: 8000 / 365
         21.92
     """
@@ -248,13 +253,15 @@ def generate_heat_pump_load(
             "minute-interpolated TMY."
         )
 
+    reference_year = SimulationWindow.of_index(annual_temperature_c.index)
+
     annual_degree_minutes = calculate_heating_degree_minutes(annual_temperature_c).sum()
     if annual_degree_minutes == 0:
         electrical_load_kw = pd.Series(0.0, index=temperature_c.index)
     else:
-        heat_kw_per_degree_minute = config.annual_heat_demand_kwh / annual_degree_minutes / HOURS_PER_MINUTE
+        heat_kw_per_degree = config.annual_heat_demand_kwh / annual_degree_minutes / reference_year.step_hours
         thermal_demand_kw = (
-            calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree_minute
+            calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree
         ).clip(upper=config.thermal_capacity_kw)
 
         # Calculate COP for each timestep
