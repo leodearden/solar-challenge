@@ -9,7 +9,7 @@ import json
 import math
 import random
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
@@ -120,7 +120,9 @@ class ShuffledPoolDistribution:
 
     Attributes:
         values: List of values (can include None)
-        counts: Number of each value in the pool (must sum to n_homes)
+        counts: Number of each value in the pool.  In a fleet distribution they total
+            n_homes, one value per home, and FleetDistributionConfig refuses any other total;
+            a parameter only some homes draw leaves the other homes' values undrawn.
     """
 
     values: tuple[Optional[float], ...]
@@ -438,6 +440,32 @@ class FleetDistributionConfig:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', "
                 f"got '{self.random_order}'"
+            )
+        _refuse_pools_not_sized_to_the_fleet(self)
+
+
+def _shuffled_pools(
+    config: FleetDistributionConfig,
+) -> Iterator[tuple[str, ShuffledPoolDistribution]]:
+    """Each shuffled pool among *config*'s component parameters, with its path, e.g. ('pv.capacity_kw', pool)."""
+    for component_field in fields(config):
+        component = getattr(config, component_field.name)
+        if not is_dataclass(component):
+            continue
+        for parameter in fields(component):
+            spec = getattr(component, parameter.name)
+            if isinstance(spec, ShuffledPoolDistribution):
+                yield f"{component_field.name}.{parameter.name}", spec
+
+
+def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a shuffled pool's counts do not total its n_homes: a pool holds one value per home."""
+    for path, pool in _shuffled_pools(config):
+        total = sum(pool.counts)
+        if total != config.n_homes:
+            raise ConfigurationError(
+                f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
+                f"({config.n_homes}), got {total}"
             )
 
 
@@ -1632,9 +1660,13 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
+        ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
+            naming the pool; if a sampled PV capacity is not positive; or if a sampled
+            heat pump type is not 'ASHP' or 'GSHP'.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh; a null or 0 sample is no battery.
     """
+    _refuse_pools_not_sized_to_the_fleet(config)
     rng = random.Random(config.seed)
     sampler = _DistributionSampler(rng)
     homes: list[HomeConfig] = []
