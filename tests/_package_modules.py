@@ -9,7 +9,7 @@ Usage::
     from tests._package_modules import package_modules
 
     for module in package_modules():
-        found = doctest.DocTestFinder().find(module)
+        ...
 """
 
 import importlib
