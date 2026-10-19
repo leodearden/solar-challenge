@@ -11,7 +11,6 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Callable
-from typing import Optional
 
 import pandas as pd
 import pytest
@@ -35,14 +34,13 @@ from solar_challenge.optimize import (
     pareto_baseline,
     run_sweep,
 )
-from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._factories import make_config_result, make_cost_recovery_solution
 from tests._finance_builders import make_fleet_results, make_scenario
 
 
 # ---------------------------------------------------------------------------
 # Offline scaffolding: the finance builders, this module's pinned scenario and
-# fleet results over tests/_finance_builders.py, and the ConfigResult and
-# solution builders
+# fleet results over tests/_finance_builders.py
 # ---------------------------------------------------------------------------
 
 
@@ -94,79 +92,6 @@ def _interior_finance(n_homes: int = 5) -> FinanceConfig:
     )
 
 
-def _make_cost_recovery_solution(
-    own_use_rate: float = 15.0,
-    feasible: bool = True,
-    binding: str = "floor",
-    outlay_gbp: float = 400.0,
-    surplus: float = 100.0,
-) -> CostRecoverySolution:
-    rep = make_bill_breakdown(
-        total_outlay_gbp=outlay_gbp,
-        saving_vs_baseline_gbp=100.0,
-        saving_pct=20.0,
-    )
-    dist = make_bill_distribution(
-        representative=rep,
-        min_gbp=outlay_gbp,
-        mean_gbp=outlay_gbp,
-        median_gbp=outlay_gbp,
-        max_gbp=outlay_gbp,
-    )
-    return CostRecoverySolution(
-        own_use_rate_pence_per_kwh=own_use_rate,
-        outlay=dist,
-        representative_outlay_gbp=outlay_gbp,
-        net_surplus_per_home_per_year_gbp=surplus,
-        saving_vs_baseline_gbp=100.0,
-        saving_pct=20.0,
-        feasible=feasible,
-        binding=binding,
-    )
-
-
-def _make_config_result(
-    pv_kwp: float = 4.0,
-    battery_kwh: float = 6.0,
-    inverter_kw: float = 3.6,
-    feasible: bool = True,
-    binding: str = "floor",
-    representative_outlay_gbp: float = 400.0,
-    solved_own_use_rate_pence_per_kwh: float = 15.0,
-    surplus_at_solved_gbp: float = 100.0,
-    total_capex_gbp: float = 10000.0,
-    min_dscr: float = 1.5,
-    equity_irr: float = 0.08,
-    payback_years: Optional[float] = 12.0,
-    baseline_outlay_gbp: float = 450.0,
-    baseline_surplus_per_home_gbp: float = 80.0,
-) -> ConfigResult:
-    """Synthetic ConfigResult builder for pure helper tests (no simulation needed)."""
-    config = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
-    solution = _make_cost_recovery_solution(
-        own_use_rate=solved_own_use_rate_pence_per_kwh,
-        feasible=feasible,
-        binding=binding,
-        outlay_gbp=representative_outlay_gbp,
-        surplus=surplus_at_solved_gbp,
-    )
-    return ConfigResult(
-        config=config,
-        solution=solution,
-        representative_outlay_gbp=representative_outlay_gbp,
-        solved_own_use_rate_pence_per_kwh=solved_own_use_rate_pence_per_kwh,
-        surplus_at_solved_gbp=surplus_at_solved_gbp,
-        feasible=feasible,
-        binding=binding,
-        total_capex_gbp=total_capex_gbp,
-        min_dscr=min_dscr,
-        equity_irr=equity_irr,
-        payback_years=payback_years,
-        baseline_outlay_gbp=baseline_outlay_gbp,
-        baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
-    )
-
-
 # ---------------------------------------------------------------------------
 # step-01/02 — TestConfigResult: frozen dataclass construction
 # ---------------------------------------------------------------------------
@@ -178,12 +103,12 @@ class TestConfigResult:
     def test_all_fields_read_back(self) -> None:
         """All fields read back correctly after construction."""
         config = ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6)
-        solution = _make_cost_recovery_solution(
-            own_use_rate=15.0,
+        solution = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0,
             feasible=True,
             binding="floor",
-            outlay_gbp=400.0,
-            surplus=100.0,
+            representative_outlay_gbp=400.0,
+            net_surplus_per_home_per_year_gbp=100.0,
         )
         cr = ConfigResult(
             config=config,
@@ -217,35 +142,37 @@ class TestConfigResult:
 
     def test_payback_years_none_allowed(self) -> None:
         """payback_years=None is a valid sentinel (never pays back within asset life)."""
-        cr = _make_config_result(payback_years=None)
+        cr = make_config_result(payback_years=None)
         assert cr.payback_years is None
 
     def test_min_dscr_inf_allowed(self) -> None:
         """min_dscr=inf is allowed (debt-free project)."""
-        cr = _make_config_result(min_dscr=float("inf"))
+        cr = make_config_result(min_dscr=float("inf"))
         assert math.isinf(cr.min_dscr)
 
     def test_equity_irr_nan_allowed(self) -> None:
         """equity_irr=nan is allowed (undefined IRR for zero-equity project)."""
-        cr = _make_config_result(equity_irr=float("nan"))
+        cr = make_config_result(equity_irr=float("nan"))
         assert math.isnan(cr.equity_irr)
 
     def test_frozen_raises_on_assignment(self) -> None:
         """Assigning any field raises dataclasses.FrozenInstanceError."""
-        cr = _make_config_result()
+        cr = make_config_result()
         with pytest.raises(dataclasses.FrozenInstanceError):
             cr.representative_outlay_gbp = 999.0  # type: ignore[misc]
 
     def test_config_point_accessible(self) -> None:
         """config.pv_kwp / battery_kwh / inverter_kw match the constructed values."""
-        cr = _make_config_result(pv_kwp=5.0, battery_kwh=10.0, inverter_kw=4.6)
+        cr = make_config_result(pv_kwp=5.0, battery_kwh=10.0, inverter_kw=4.6)
         assert cr.config.pv_kwp == pytest.approx(5.0)
         assert cr.config.battery_kwh == pytest.approx(10.0)
         assert cr.config.inverter_kw == pytest.approx(4.6)
 
     def test_solution_field_accessible(self) -> None:
         """solution.own_use_rate_pence_per_kwh is readable through the ConfigResult."""
-        sol = _make_cost_recovery_solution(own_use_rate=18.5, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=18.5, feasible=True, binding="floor", representative_outlay_gbp=400.0
+        )
 
         cr = ConfigResult(
             config=ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6),
@@ -274,7 +201,7 @@ class TestRankedSweep:
     """RankedSweep frozen dataclass construction and validation."""
 
     def _make_one_feasible(self) -> ConfigResult:
-        return _make_config_result(
+        return make_config_result(
             pv_kwp=4.0,
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=100.0,
