@@ -8,6 +8,7 @@ scenario definitions, and parameter sweep functionality.
 import json
 import math
 import random
+import re
 import warnings
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
@@ -2124,8 +2125,6 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
         ),
     )
 
-
-import re
 
 # Pattern for variable substitution: ${VAR} or ${VAR:default}
 _VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
