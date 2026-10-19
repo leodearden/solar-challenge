@@ -29,7 +29,7 @@ from solar_challenge.web.charts import (
     comparison_radar,
     overlaid_power_flows,
 )
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import Database, get_db, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
@@ -57,10 +57,7 @@ def client(app: Flask) -> FlaskClient:
 @pytest.fixture
 def storage(app: Flask) -> RunStorage:
     """Create a RunStorage instance using the test app config."""
-    return RunStorage(
-        db_path=app.config["DATABASE"],
-        data_dir=app.config["DATA_DIR"],
-    )
+    return RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"])
 
 
 def _insert_test_run(

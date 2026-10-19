@@ -18,7 +18,7 @@ from flask import Flask
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.jobs import (
     HomeSimulator,
     JobEvent,
@@ -148,14 +148,14 @@ _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
 
 def _run_storage(tmp_path: Path) -> RunStorage:
-    storage = RunStorage(db_path=tmp_path / "jobs.db", data_dir=tmp_path / "data")
-    init_db(storage.db_path)
+    storage = RunStorage(Database(tmp_path / "jobs.db"), tmp_path / "data")
+    init_db(storage.database.path)
     return storage
 
 
 def _refuse_new_rows(storage: RunStorage, table: str) -> None:
     """Make storage's database refuse every row inserted into *table*."""
-    with get_db(storage.db_path) as conn:
+    with storage.database.transaction() as conn:
         conn.execute(
             f"CREATE TRIGGER refuse_new_{table} BEFORE INSERT ON {table} "
             f"BEGIN SELECT RAISE(ABORT, 'the database refuses new {table} rows'); END"
@@ -164,7 +164,7 @@ def _refuse_new_rows(storage: RunStorage, table: str) -> None:
 
 def _refuse_failed_rows(storage: RunStorage, table: str) -> None:
     """Make storage's database refuse every update that marks a row of *table* failed."""
-    with get_db(storage.db_path) as conn:
+    with storage.database.transaction() as conn:
         conn.execute(
             f"CREATE TRIGGER refuse_failed_{table} BEFORE UPDATE ON {table} WHEN NEW.status = 'failed' "
             f"BEGIN SELECT RAISE(ABORT, 'the database refuses failed {table} rows'); END"
@@ -229,7 +229,7 @@ def _submit_home_job(manager: JobManager, tmp_path: Path) -> str:
         config=_A_HOME,
         start_date=_JUNE_1,
         end_date=_JUNE_2,
-        db_path=str(storage.db_path),
+        db_path=str(storage.database.path),
         data_dir=str(storage.data_dir),
     )
     return job_id
@@ -241,7 +241,7 @@ def _submit_fleet_job(manager: JobManager, tmp_path: Path) -> str:
         configs=[_A_HOME],
         start_date=_JUNE_1,
         end_date=_JUNE_2,
-        db_path=str(storage.db_path),
+        db_path=str(storage.database.path),
         data_dir=str(storage.data_dir),
     )
     return job_id
@@ -259,7 +259,7 @@ class TestJobManagerSimulation:
             config=_A_HOME,
             start_date=_JUNE_1,
             end_date=_JUNE_2,
-            db_path=str(storage.db_path),
+            db_path=str(storage.database.path),
             data_dir=str(storage.data_dir),
         )
 
@@ -282,7 +282,7 @@ class TestJobManagerSimulation:
             configs=homes,
             start_date=_JUNE_1,
             end_date=_JUNE_2,
-            db_path=str(storage.db_path),
+            db_path=str(storage.database.path),
             data_dir=str(storage.data_dir),
         )
 
@@ -327,7 +327,7 @@ class TestJobManagerState:
             config=_A_HOME,
             start_date=_JUNE_1,
             end_date=_JUNE_2,
-            db_path=str(storage.db_path),
+            db_path=str(storage.database.path),
             data_dir=str(storage.data_dir),
         )
         assert manager.wait_until_idle(timeout=30)
@@ -864,11 +864,11 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_running_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that running jobs are marked as failed on recovery."""
-        db_path = str(tmp_path / "stale.db")
-        init_db(db_path)
+        database = Database(tmp_path / "stale.db")
+        init_db(database.path)
 
         # Insert a run and job in 'running' state
-        with get_db(db_path) as conn:
+        with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
@@ -879,11 +879,11 @@ class TestRecoverStaleJobs:
                 ("job-1", "run-1", "running"),
             )
 
-        recovered = recover_stale_jobs(db_path)
+        recovered = recover_stale_jobs(database)
         assert recovered == 1
 
         # Verify job status
-        with get_db(db_path) as conn:
+        with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT status, message FROM jobs WHERE id = ?", ("job-1",))
             row = cursor.fetchone()
@@ -892,10 +892,10 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_queued_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that queued jobs are also recovered."""
-        db_path = str(tmp_path / "stale2.db")
-        init_db(db_path)
+        database = Database(tmp_path / "stale2.db")
+        init_db(database.path)
 
-        with get_db(db_path) as conn:
+        with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
@@ -906,15 +906,15 @@ class TestRecoverStaleJobs:
                 ("job-1", "run-1", "queued"),
             )
 
-        recovered = recover_stale_jobs(db_path)
+        recovered = recover_stale_jobs(database)
         assert recovered == 1
 
     def test_recover_no_stale_jobs_returns_zero(self, tmp_path: Path) -> None:
         """Test that recovery returns 0 when no stale jobs exist."""
-        db_path = str(tmp_path / "clean.db")
-        init_db(db_path)
+        database = Database(tmp_path / "clean.db")
+        init_db(database.path)
 
-        recovered = recover_stale_jobs(db_path)
+        recovered = recover_stale_jobs(database)
         assert recovered == 0
 
     def test_recovery_fails_the_run_of_a_job_dropped_when_its_manager_shut_down(
@@ -930,7 +930,7 @@ class TestRecoverStaleJobs:
         assert manager.wait_until_idle(timeout=30)
         assert _run_of_job(manager, dropped_job_id, storage).status == "running"
 
-        recover_stale_jobs(storage.db_path)
+        recover_stale_jobs(storage.database)
 
         run = _run_of_job(manager, dropped_job_id, storage)
         assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
@@ -946,7 +946,7 @@ class TestRecoverStaleJobs:
         before = [_run_of_job(manager, job_id, storage) for manager, job_id in jobs]
         assert [run.status for run in before] == ["completed", "failed"]
 
-        recover_stale_jobs(storage.db_path)
+        recover_stale_jobs(storage.database)
 
         assert [_run_of_job(manager, job_id, storage) for manager, job_id in jobs] == before
 
@@ -960,6 +960,6 @@ class TestRecoverStaleJobs:
         before = [job_row(storage, job_id) for job_id in job_ids]
         assert [row["status"] for row in before] == ["completed", "failed"]
 
-        recover_stale_jobs(storage.db_path)
+        recover_stale_jobs(storage.database)
 
         assert [job_row(storage, job_id) for job_id in job_ids] == before

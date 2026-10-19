@@ -18,7 +18,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, get_db, init_db
+from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, get_db, init_db
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
@@ -43,7 +43,7 @@ def storage(db_path, temp_dir):
     init_db(db_path)
     data_dir = temp_dir / "data"
     data_dir.mkdir()
-    return RunStorage(db_path=db_path, data_dir=data_dir)
+    return RunStorage(Database(db_path), data_dir)
 
 
 @pytest.fixture
@@ -917,7 +917,7 @@ class TestRunRecord:
         No save writes notes, and a save stamps completed_at with the clock, so the test
         inserts the row to give every column a fixed, distinct value.
         """
-        with get_db(storage.db_path) as conn:
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status, error_message,"
                 " created_at, completed_at, duration_seconds, n_homes, notes)"
@@ -1078,7 +1078,7 @@ class TestRunName:
             summary=sample_summary,
             name="North Roof",
         )
-        with get_db(storage.db_path) as conn:
+        with storage.database.transaction() as conn:
             conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
 
         assert storage.run_name(run_id) is None

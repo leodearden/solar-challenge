@@ -29,6 +29,7 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
+from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
@@ -510,7 +511,7 @@ class TestRunLookupToolSurface:
             {"run_id_or_name": "disp-run-001"},
             **dispatch_dependencies(tmp_path, db_path=str(db_path)),
         )
-        expected = get_run_results("disp-run-001", RunStorage(db_path=db_path, data_dir=tmp_path))
+        expected = get_run_results("disp-run-001", RunStorage(Database(db_path), tmp_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 

@@ -21,7 +21,7 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import Database, get_db, init_db
 from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.storage import RunStorage
 
@@ -198,7 +198,7 @@ class TestSuggestConfig:
 
 def _storage(db_path: Path) -> RunStorage:
     """The RunStorage over the database at *db_path*, its run files beside it."""
-    return RunStorage(db_path=db_path, data_dir=db_path.parent)
+    return RunStorage(Database(db_path), db_path.parent)
 
 
 class TestGetRunResults:
@@ -342,7 +342,7 @@ class TestGetRunResults:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", RunStorage(db_path=bad_path, data_dir=tmp_path))
+            result = get_run_results("any-run-id", RunStorage(Database(bad_path), tmp_path))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -946,7 +946,7 @@ class TestRunHomeSimulationWithRealJobManager:
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
         job_manager = app.extensions["job_manager"]
-        storage = RunStorage(db_path=db_path, data_dir=data_dir)
+        storage = RunStorage(Database(Path(db_path)), data_dir)
 
         result = run_home_simulation(
             {
