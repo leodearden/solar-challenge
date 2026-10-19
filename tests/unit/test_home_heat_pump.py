@@ -11,6 +11,7 @@ from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
 
 
 class TestHeatPumpConfig:
@@ -193,41 +194,23 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
             simulate_home(home, day, day, weather_data=_dark_tmy_year(10.0).loc["1990-01-15"])
 
 
-@pytest.mark.slow
+@pytest.fixture
+def bristol_cold_january15_tmy(weather_cache: WeatherCache, cold_january15_tmy_weather: pd.DataFrame) -> None:
+    """Seed cold_january15_tmy_weather, with daylight on 15 January, as Bristol's TMY, which get_tmy_data then reads in place of PVGIS.
+
+    The daylight is an overcast day's, all of it diffuse, so the PV generates on the day the heat pump runs.
+    """
+    weather = cold_january15_tmy_weather.copy()
+    weather.loc["1990-01-15 09:00":"1990-01-15 15:00", ["ghi", "dhi"]] = 100.0
+    weather_cache.put(weather, "tmy", Location.bristol())
+
+
+@pytest.mark.usefixtures("bristol_cold_january15_tmy")
 class TestHeatPumpIntegration:
-    """Test heat pump integration in home simulation (calls simulate_home — network)."""
+    """Test heat pump integration in home simulation: simulate_home on Bristol homes, passed no weather_data.
 
-    def test_simulate_home_with_heat_pump_ashp(self):
-        """simulate_home generates heat pump load for ASHP."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
-            heat_pump_config=HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=8000.0,
-            ),
-            location=Location.bristol(),
-        )
-
-        # Simulate one day in winter (January)
-        results = simulate_home(
-            config,
-            start_date=pd.Timestamp("2024-01-15"),
-            end_date=pd.Timestamp("2024-01-15"),
-        )
-
-        # Verify heat pump load is present and tracked
-        assert results.heat_pump_load is not None
-        assert len(results.heat_pump_load) == 1440  # 24 hours * 60 minutes
-        assert results.heat_pump_load.min() >= 0.0  # Non-negative load
-
-        # Winter should have significant heating load
-        assert results.heat_pump_load.sum() > 0.0
-
-        # Demand should be higher than just household load
-        # (household load + heat pump load)
-        assert results.demand.sum() > 0.0
+    get_tmy_data then serves the synthetic TMY year that bristol_cold_january15_tmy seeds. Synthetic weather, no network.
+    """
 
     def test_simulate_home_with_heat_pump_gshp(self):
         """simulate_home generates heat pump load for GSHP."""
@@ -254,23 +237,6 @@ class TestHeatPumpIntegration:
         assert len(results.heat_pump_load) == 1440
         assert results.heat_pump_load.min() >= 0.0
         assert results.heat_pump_load.sum() > 0.0
-
-    def test_simulate_home_without_heat_pump(self):
-        """simulate_home works without heat pump (None in results)."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
-            location=Location.bristol(),
-        )
-
-        results = simulate_home(
-            config,
-            start_date=pd.Timestamp("2024-01-15"),
-            end_date=pd.Timestamp("2024-01-15"),
-        )
-
-        # Heat pump load should be None
-        assert results.heat_pump_load is None
 
     def test_results_to_dataframe_includes_heat_pump(self):
         """SimulationResults.to_dataframe includes heat pump load column."""
@@ -373,8 +339,8 @@ class TestHeatPumpIntegration:
         assert summary.peak_heat_pump_load_kw is None
         assert summary.heat_pump_load_ratio is None
 
-    def test_winter_has_higher_heat_pump_load_than_summer(self):
-        """Heat pump load is higher in winter than summer."""
+    def test_heat_pump_draws_power_on_a_winter_day_and_none_on_a_summer_day(self):
+        """The run's date picks the TMY day that drives the load: 15 January is below the heat pump's base temperature, 15 July above it."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0),
@@ -400,12 +366,8 @@ class TestHeatPumpIntegration:
             end_date=pd.Timestamp("2024-07-15"),
         )
 
-        winter_load = winter_results.heat_pump_load.sum()
-        summer_load = summer_results.heat_pump_load.sum()
-
-        # Winter heating load should be significantly higher than summer
-        # (summer may be near zero if temperatures are above base temperature)
-        assert winter_load > summer_load
+        assert winter_results.heat_pump_load.sum() > 0.0
+        assert summer_results.heat_pump_load.sum() == 0.0
 
     def test_heat_pump_with_battery(self):
         """Heat pump works correctly with battery storage."""
@@ -435,8 +397,8 @@ class TestHeatPumpIntegration:
         # Battery may charge or discharge depending on generation/demand
         assert results.battery_soc.max() >= 0.0
 
-    def test_heat_pump_load_reasonable_magnitude(self):
-        """Heat pump load has reasonable magnitude relative to capacity."""
+    def test_peak_heat_pump_load_is_capacity_over_the_cop_at_the_coldest_hour(self, cold_january15_tmy_weather):
+        """On 15 January the heat pump runs at its thermal capacity all day, so its peak electrical load is that capacity over the COP at the coldest hour."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0),
@@ -454,8 +416,7 @@ class TestHeatPumpIntegration:
             end_date=pd.Timestamp("2024-01-15"),
         )
 
-        # Peak heat pump load should not exceed capacity / min_COP
-        # ASHP min COP is 1.8, so max electrical load = 8.0 / 1.8 ≈ 4.44 kW
-        # Add some margin for numerical precision
-        max_expected_load = config.heat_pump_config.thermal_capacity_kw / 1.5
-        assert results.heat_pump_load.max() <= max_expected_load
+        coldest_hour_c = cold_january15_tmy_weather["temp_air"].min()
+        assert results.heat_pump_load.max() == pytest.approx(
+            config.heat_pump_config.thermal_capacity_kw / calculate_cop("ASHP", coldest_hour_c)
+        )
