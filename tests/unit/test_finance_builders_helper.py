@@ -17,6 +17,7 @@ from tests._finance_builders import (
     make_pv_config,
     make_scenario,
     make_scenario_and_finance,
+    make_scenario_of,
     make_sim_results,
     make_sized_home,
 )
@@ -200,6 +201,15 @@ def test_scenario_builders_give_every_home_the_given_battery() -> None:
 
     assert make_scenario(n_homes=2, battery_config=battery).homes == [battery_home] * 2
     assert scenario.homes == [battery_home] * 2
+
+
+def test_scenario_of_holds_exactly_the_given_homes() -> None:
+    homes = [make_sized_home(pv_kwp=4.0, battery_kwh=5.0), make_sized_home(pv_kwp=3.0)]
+
+    scenario = make_scenario_of(homes)
+
+    assert scenario.homes == homes
+    assert dataclasses.replace(scenario, homes=[make_home_config()]) == make_scenario()
 
 
 @pytest.mark.parametrize(
