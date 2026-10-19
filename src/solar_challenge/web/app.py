@@ -120,7 +120,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.extensions["database"] = database
 
     # Initialize RunStorage singleton
-    storage = RunStorage(db_path=database.path, data_dir=app.config["DATA_DIR"])
+    storage = RunStorage(database, app.config["DATA_DIR"])
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution
@@ -128,7 +128,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.extensions["job_manager"] = job_manager
 
     # Recover jobs stuck from previous server shutdown
-    recovered = recover_stale_jobs(database.path)
+    recovered = recover_stale_jobs(database)
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
 

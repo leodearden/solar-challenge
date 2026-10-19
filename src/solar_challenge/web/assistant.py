@@ -734,7 +734,7 @@ def dispatch_tool(
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, RunStorage(db_path=db_path, data_dir=data_dir))
+        return get_run_results(run_id_or_name, RunStorage(database.Database(Path(db_path)), data_dir))
     if name == "list_recent_runs":
         try:
             limit: int = int(tool_input.get("limit", 10))

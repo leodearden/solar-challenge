@@ -653,7 +653,7 @@ class JobManager:
             summary = calculate_summary(results)
 
             progress(90.0, "Saving", "Persisting results to storage...")
-            storage = RunStorage(db_path=db_path, data_dir=data_dir)
+            storage = RunStorage(Database(Path(db_path)), data_dir)
             duration = time.monotonic() - start_ref
             storage.save_home_run(
                 run_id=run_id,
@@ -720,7 +720,7 @@ class JobManager:
             fleet_summary = calculate_fleet_summary(fleet_results)
 
             progress(97.0, "Saving", "Persisting fleet results...")
-            storage = RunStorage(db_path=db_path, data_dir=data_dir)
+            storage = RunStorage(Database(Path(db_path)), data_dir)
             duration = time.monotonic() - start_ref
             storage.save_fleet_run(
                 run_id=run_id,
@@ -736,18 +736,18 @@ class JobManager:
         self._run_job(job_id, db_path, work, "Fleet simulation completed successfully")
 
 
-def recover_stale_jobs(db_path: str | Path) -> int:
+def recover_stale_jobs(database: Database) -> int:
     """Mark any jobs stuck in 'running' or 'queued' status as failed.
 
     Called on startup to clean up jobs interrupted by a server restart.
 
     Args:
-        db_path: Path to the SQLite database file.
+        database: The Database holding the jobs and runs tables.
 
     Returns:
         Number of jobs recovered.
     """
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
