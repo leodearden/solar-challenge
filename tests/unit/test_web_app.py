@@ -5,12 +5,15 @@ import importlib
 import re
 import shutil
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.web.database import Database
+from solar_challenge.web.shared import get_database
 from tests._web_app import build_test_app
 
 
@@ -135,3 +138,17 @@ def test_the_session_cookie_is_not_marked_secure(
     cookie = client.get_cookie(app.config["SESSION_COOKIE_NAME"])
     assert cookie is not None
     assert not cookie.secure
+
+
+def test_the_app_serves_the_database_its_config_names_and_its_connections_enforce_the_schema(
+    tmp_path: Path,
+) -> None:
+    app = build_test_app(tmp_path)
+
+    with app.app_context():
+        database = get_database()
+
+    assert database == Database(Path(app.config["DATABASE"]))
+    with closing(database.connect()) as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
