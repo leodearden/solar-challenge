@@ -29,7 +29,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from tests._cli_fleet_simulator import invoke_cli
-from tests._factories import make_bill_breakdown, make_bill_distribution, make_config_result
+from tests._factories import make_bill_distribution_from_statistics, make_config_result
 from tests._finance_builders import make_fleet_results
 
 
@@ -46,9 +46,8 @@ def _make_bill_distribution(
     max_gbp: float,
 ) -> "BillDistribution":  # type: ignore[name-defined]
     """Build a minimal BillDistribution whose representative sits at *median_gbp*."""
-    return make_bill_distribution(
-        representative=make_bill_breakdown(total_outlay_gbp=median_gbp),
-        per_home_net_bill_gbp=(min_gbp, mean_gbp, max_gbp),
+    return make_bill_distribution_from_statistics(
+        representative_outlay_gbp=median_gbp,
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,
