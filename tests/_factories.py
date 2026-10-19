@@ -106,10 +106,31 @@ def make_bill_distribution(
     )
 
 
+def make_bill_distribution_from_statistics(
+    *,
+    representative_outlay_gbp: float,
+    min_gbp: float,
+    mean_gbp: float,
+    median_gbp: float,
+    max_gbp: float,
+) -> BillDistribution:
+    """Build a synthetic BillDistribution of these statistics around a representative home.
+
+    The representative is make_bill_breakdown's, paying *representative_outlay_gbp*.
+    """
+    return make_bill_distribution(
+        representative=make_bill_breakdown(total_outlay_gbp=representative_outlay_gbp),
+        min_gbp=min_gbp,
+        mean_gbp=mean_gbp,
+        median_gbp=median_gbp,
+        max_gbp=max_gbp,
+    )
+
+
 def _one_home_paying(total_outlay_gbp: float) -> BillDistribution:
     """The distribution of a single home whose total outlay is *total_outlay_gbp*."""
-    return make_bill_distribution(
-        representative=make_bill_breakdown(total_outlay_gbp=total_outlay_gbp),
+    return make_bill_distribution_from_statistics(
+        representative_outlay_gbp=total_outlay_gbp,
         min_gbp=total_outlay_gbp,
         mean_gbp=total_outlay_gbp,
         median_gbp=total_outlay_gbp,
