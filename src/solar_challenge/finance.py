@@ -992,7 +992,7 @@ class YearPoint:
     still one season's sample, and its annual figures carry that season's bias.
 
     ``fleet_revenue_gbp`` is the CBS revenue:
-    own-use savings (own_use_rate × fleet_self_consumption_kwh / 100)
+    own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
     + SEG export income (Σ seg_export_income_gbp per home)
     + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw).
     """
@@ -1011,29 +1011,8 @@ class YearPoint:
     """Mean battery state-of-health across the fleet (fraction, 0–1;
     1.0 when the fleet has no batteries)."""
 
-    fleet_self_consumption_kwh: float
-    """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0).
-
-    .. note::
-        **Projection path** (:func:`project_multi_year` / ``_simulate_age``):
-        this field holds the fleet's **billed own-use**
-        (:func:`_billed_energy`), NOT the physics self-consumption
-        series: basis C (Σ demand − import per home) with no
-        ``self_consumption_override``, and Σ min(override × generation,
-        demand) with the override set.  ``fleet_export_kwh`` and
-        ``fleet_import_kwh`` stay the simulated grid flows on both paths.
-        The name is retained for back-compat; read it as "fleet billed
-        own-use kWh" on this path.
-
-        **Flat-assumption curve path** (:func:`spreadsheet_revenue_curve`):
-        this field holds a fraction-based figure
-        (``self_consumption_fraction × gen``), consistent with the
-        spreadsheet assumption model; may differ from basis-C on
-        grid-charging fleets.
-
-        Do not treat this field as a uniform physics self-consumption
-        series across both code paths.
-    """
+    fleet_billed_own_use_kwh: float
+    """Own-use the CBS bills the fleet at the own-use rate that year (kWh, ≥ 0)."""
 
     fleet_export_kwh: float
     """Total grid export from the fleet that year (kWh, ≥ 0)."""
@@ -1058,7 +1037,7 @@ class YearPoint:
                 f"battery_soh must be in [0, 1], got {self.battery_soh!r}"
             )
         fleet_energies_kwh = {
-            "fleet_self_consumption_kwh": self.fleet_self_consumption_kwh,
+            "fleet_billed_own_use_kwh": self.fleet_billed_own_use_kwh,
             "fleet_export_kwh": self.fleet_export_kwh,
             "fleet_import_kwh": self.fleet_import_kwh,
         }
@@ -1085,9 +1064,9 @@ class MultiYearCurve:
     ``points`` covers years 0 .. asset_life_years - 1 (one :class:`YearPoint`
     per year).  ``sampled_ages`` records the ages at which the driver actually
     ran simulations; the remaining years are filled by PCHIP interpolation.
-    ``interp_error_estimate`` is the maximum interpolation deviation as a
-    percentage of the annual-scale value at the time the adaptive loop
-    converged (or was capped at ``MAX_NODES``).
+    ``interp_error_estimate`` is the maximum interpolation deviation, as a
+    percentage of the magnitude of that metric's age-0 value, when the
+    adaptive loop converged (or was capped at ``MAX_NODES``).
     """
 
     points: tuple[YearPoint, ...]
@@ -1098,7 +1077,7 @@ class MultiYearCurve:
 
     interp_error_estimate: float
     """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
-    (fleet_self_consumption_kwh, fleet_export_kwh, fleet_import_kwh,
+    (fleet_billed_own_use_kwh, fleet_export_kwh, fleet_import_kwh,
     fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
     def __post_init__(self) -> None:
@@ -1345,7 +1324,7 @@ class _NodeData:
     age: int
     """System age in calendar years at which the fleet was simulated."""
 
-    fleet_sc: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_billed_own_use: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
 
     fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
@@ -1566,11 +1545,11 @@ def project_multi_year(
         ]
 
         # Each home is annualised once, by its own simulated days, and every figure
-        # below reads that annual record.  fleet_sc is the own-use the CBS bills
-        # (_billed_energy, the switch householder_bill reads); export, import and
-        # discharge stay the simulated flows (docs/cost-recovery-finance-model.md §4).
+        # below reads that annual record.  Own-use is billed through _billed_energy,
+        # the switch householder_bill reads; export, import and discharge stay the
+        # simulated flows (docs/cost-recovery-finance-model.md §4).
         annualised_homes = [(s, _annualise_physics(s, s.simulation_days)) for s in per_home_summaries]
-        fleet_sc = sum(
+        fleet_billed_own_use = sum(
             _billed_energy(
                 phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale
             ).own_use_kwh
@@ -1581,7 +1560,7 @@ def project_multi_year(
         per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
         #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
@@ -1590,7 +1569,7 @@ def project_multi_year(
         # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
         # self_consumption_override and seg scaling automatically); householder_bill
         # is no longer called here since seg_export_income_gbp was removed from it.
-        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
+        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
         if finance.grid_services_model == "capacity_at_events":
             # None is already excluded by the top-of-function guard; this assert
@@ -1623,7 +1602,7 @@ def project_multi_year(
 
         return _NodeData(
             age=age,
-            fleet_sc=fleet_sc,
+            fleet_billed_own_use=fleet_billed_own_use,
             fleet_exp=fleet_exp,
             fleet_imp=fleet_imp,
             per_home_discharge=per_home_discharge,
@@ -1655,13 +1634,13 @@ def project_multi_year(
 
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
-    # to percentages by each metric's age-0 value.  This ensures interp_error_estimate
-    # bounds ALL interpolated curves (self-consumption, export, import, revenue),
-    # not just self-consumption.
-    annual_scale_sc: float = max(sampled_data[0].fleet_sc, 1e-9)
-    annual_scale_exp: float = max(sampled_data[0].fleet_exp, 1e-9)
-    annual_scale_imp: float = max(sampled_data[0].fleet_imp, 1e-9)
-    annual_scale_rev: float = max(sampled_data[0].fleet_revenue, 1e-9)
+    # to percentages by the magnitude of each metric's age-0 value.  This ensures
+    # interp_error_estimate bounds ALL interpolated curves (own-use, export, import,
+    # revenue), not just own-use, whatever the revenue's sign.
+    annual_scale_own_use: float = max(abs(sampled_data[0].fleet_billed_own_use), 1e-9)
+    annual_scale_exp: float = max(abs(sampled_data[0].fleet_exp), 1e-9)
+    annual_scale_imp: float = max(abs(sampled_data[0].fleet_imp), 1e-9)
+    annual_scale_rev: float = max(abs(sampled_data[0].fleet_revenue), 1e-9)
     max_deviation: float = 0.0
     capped: bool = False
 
@@ -1673,12 +1652,12 @@ def project_multi_year(
         current_ages = sorted(sampled_data.keys())
 
         # Build PCHIP over the current node set for all driven metrics
-        sc_vals_now = [sampled_data[a].fleet_sc for a in current_ages]
+        own_use_vals_now = [sampled_data[a].fleet_billed_own_use for a in current_ages]
         exp_vals_now = [sampled_data[a].fleet_exp for a in current_ages]
         imp_vals_now = [sampled_data[a].fleet_imp for a in current_ages]
         rev_vals_now = [sampled_data[a].fleet_revenue for a in current_ages]
 
-        sc_interp_now = _interpolate_per_year(current_ages, sc_vals_now, asset_life)
+        own_use_interp_now = _interpolate_per_year(current_ages, own_use_vals_now, asset_life)
         exp_interp_now = _interpolate_per_year(current_ages, exp_vals_now, asset_life)
         imp_interp_now = _interpolate_per_year(current_ages, imp_vals_now, asset_life)
         rev_interp_now = _interpolate_per_year(current_ages, rev_vals_now, asset_life)
@@ -1704,7 +1683,7 @@ def project_multi_year(
 
             # Max PCHIP deviation across all driven metrics (percentage)
             dev = max(
-                abs(sc_interp_now[mid] - trial_node.fleet_sc) / annual_scale_sc * 100.0,
+                abs(own_use_interp_now[mid] - trial_node.fleet_billed_own_use) / annual_scale_own_use * 100.0,
                 abs(exp_interp_now[mid] - trial_node.fleet_exp) / annual_scale_exp * 100.0,
                 abs(imp_interp_now[mid] - trial_node.fleet_imp) / annual_scale_imp * 100.0,
                 abs(rev_interp_now[mid] - trial_node.fleet_revenue) / annual_scale_rev * 100.0,
@@ -1747,14 +1726,14 @@ def project_multi_year(
 
     # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())
-    sc_vals = [sampled_data[a].fleet_sc for a in ages_sorted]
+    own_use_vals = [sampled_data[a].fleet_billed_own_use for a in ages_sorted]
     exp_vals = [sampled_data[a].fleet_exp for a in ages_sorted]
     imp_vals = [sampled_data[a].fleet_imp for a in ages_sorted]
     pv_soh_vals = [sampled_data[a].mean_pv_soh for a in ages_sorted]
     batt_soh_vals = [sampled_data[a].mean_battery_soh for a in ages_sorted]
     rev_vals = [sampled_data[a].fleet_revenue for a in ages_sorted]
 
-    sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
+    own_use_per_year = _interpolate_per_year(ages_sorted, own_use_vals, asset_life)
     exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
     imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
     pv_soh_per_year = _interpolate_per_year(ages_sorted, pv_soh_vals, asset_life)
@@ -1767,10 +1746,10 @@ def project_multi_year(
             year=y,
             pv_soh=max(0.0, min(1.0, pv_soh_per_year[y])),
             battery_soh=max(0.0, min(1.0, batt_soh_per_year[y])),
-            fleet_self_consumption_kwh=max(0.0, sc_per_year[y]),
+            fleet_billed_own_use_kwh=max(0.0, own_use_per_year[y]),
             fleet_export_kwh=max(0.0, exp_per_year[y]),
             fleet_import_kwh=max(0.0, imp_per_year[y]),
-            fleet_revenue_gbp=max(0.0, rev_per_year[y]),
+            fleet_revenue_gbp=rev_per_year[y],
         )
         for y in range(asset_life)
     )
@@ -2163,7 +2142,7 @@ def spreadsheet_revenue_curve(
             year=y,
             pv_soh=1.0,
             battery_soh=1.0,
-            fleet_self_consumption_kwh=fleet_self_kwh,
+            fleet_billed_own_use_kwh=fleet_self_kwh,
             fleet_export_kwh=fleet_export_kwh,
             fleet_import_kwh=0.0,   # not modelled by the spreadsheet; set to 0
             fleet_revenue_gbp=fleet_revenue_gbp,
@@ -2183,7 +2162,7 @@ def spreadsheet_revenue_curve(
 # ---------------------------------------------------------------------------
 
 #: Minimum absolute slope (kWh-weighted / pence) below which we treat the
-#: project as having no self-consumption and fall through to the degenerate branch.
+#: project as having no billed own-use and fall through to the degenerate branch.
 _SLOPE_EPS: float = 1e-9
 
 
@@ -2203,37 +2182,24 @@ def solve_cost_recovery_rate(
     **Mechanism** (no re-sim per trial rate):
 
     ``net_surplus_per_home_per_year_gbp`` is *exactly affine* in *r*:
-    ``fleet_revenue_y = r × fleet_sc_y / 100 + C_y`` where *C_y* is
+    ``fleet_revenue_y = r × own_use_y / 100 + C_y`` where *C_y* is
     rate-independent.  PCHIP interpolation is a linear operator on node values;
     ``project_economics`` is affine in per-year revenue.  Hence two trial rates
     (r=0, r=retail) recover the exact affine line, and the solve is closed-form:
 
     1. Run ``project_multi_year`` **once** at the configured rate ``r0`` → base curve.
     2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via
-       ``dataclasses.replace``: ``rev_y' = rev_y + (r - r0)/100 × sc_y``.
+       ``dataclasses.replace``: ``rev_y' = rev_y + (r - r0)/100 × own_use_y``.
     3. Compute ``s0 = surplus_at(0)``, ``s_ret = surplus_at(retail)``,
        ``slope = (s_ret - s0) / retail``.
     4. Solve ``r* = (floor - s0) / slope``; clamp to [0, retail]; set *binding*.
     5. Compute outlay from a dedicated age-0 fleet sim (per-home granularity
        not available from the multi-year curve).
 
-    The rate base (``YearPoint.fleet_self_consumption_kwh``) and the revenue
+    The rate base (``YearPoint.fleet_billed_own_use_kwh``) and the revenue
     are the projection's annualised figures, so a short window is solved
     like-for-like against the annual opex, debt and floor, but carries that
     window's seasonal bias.
-
-    **Affine-line precondition** (Suggestion 3 / robustness note):
-
-    Step 2 is exact while the ``max(0.0, rev_per_year[y])`` clamp that
-    ``project_multi_year`` applies to ``fleet_revenue_gbp`` does not bind.  It
-    cannot bind today: every CBS revenue term is non-negative (own-use = rate
-    (≥ 0) × billed own-use kWh (≥ 0); SEG ≥ 0; grid-services ≥ 0 under both
-    models, the event model paying gross × (1 − aggregator_share)), and the
-    PCHIP interpolation is shape-preserving, so no
-    interpolated year falls below its non-negative nodes.  A future negative
-    revenue term would reintroduce a bounded error in the linear
-    reconstruction; callers needing exact results would then re-simulate at
-    the returned rate.
 
     **Cost note** (Suggestion 4 / performance):
 
@@ -2252,7 +2218,7 @@ def solve_cost_recovery_rate(
     * ``0 ≤ r* ≤ retail``: ``floor`` (feasible=True, surplus ≈ floor to float ε).
     * ``r* > retail``: ``infeasible_above_retail`` (feasible=False, rate=retail,
       surplus < floor).
-    * Degenerate (slope ≈ 0, no self-consumption): if ``s0 ≥ floor`` →
+    * Degenerate (slope ≈ 0, no billed own-use): if ``s0 ≥ floor`` →
       ``rate_clamped_zero``; else → ``infeasible_above_retail``.
 
     Args:
@@ -2294,7 +2260,7 @@ def solve_cost_recovery_rate(
             dataclasses.replace(
                 yp,
                 fleet_revenue_gbp=yp.fleet_revenue_gbp
-                + (r - r0) / 100.0 * yp.fleet_self_consumption_kwh,
+                + (r - r0) / 100.0 * yp.fleet_billed_own_use_kwh,
             )
             for yp in base_curve.points
         )
@@ -2327,7 +2293,7 @@ def solve_cost_recovery_rate(
             binding = "infeasible_above_retail"
             feasible = False
     else:
-        # Degenerate: near-zero self-consumption → surplus is constant
+        # Degenerate: near-zero billed own-use → surplus is constant
         if s0 >= floor:
             rate = 0.0
             binding = "rate_clamped_zero"
