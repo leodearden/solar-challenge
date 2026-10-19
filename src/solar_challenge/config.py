@@ -1667,10 +1667,12 @@ class _DistributionSampler:
         """Sample a count of *setting* from *spec*.
 
         A draw from a normal or uniform distribution is rounded to the nearest
-        whole number, a half rounding up: a draw clamped to a min of 2.5 gives 3.
-        The whole number can lie outside the spec's min and max, as 0 does for a
-        draw of 0.45 under a min of 0.4. A fixed value is returned as the spec
-        gives it, and any other value as drawn.
+        whole number, a half rounding up: a draw clamped to a min of 2.5 gives
+        3.0. The whole number is returned as a float, so a refusal of the count
+        names it as drawn, 1e+300 rather than the 301-digit int it equals. It
+        can lie outside the spec's min and max, as 0.0 does for a draw of 0.45
+        under a min of 0.4. A fixed value is returned as the spec gives it, and
+        any other value as drawn.
 
         Args:
             spec: The setting's distribution specification
@@ -1685,7 +1687,7 @@ class _DistributionSampler:
         value = self.sample(spec, setting)
         if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
             whole = math.floor(value)
-            return whole + 1 if value - whole >= 0.5 else whole
+            return float(whole + 1 if value - whole >= 0.5 else whole)
         return value
 
     def sample_with_context(
