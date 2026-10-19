@@ -89,7 +89,8 @@ def member_forms(cls: type) -> dict[str, str]:
     declares come first, in annotation order, then the other names it defines, in
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
-    module does not bind raises NameError.
+    module does not bind raises NameError, and a module another of the same name has
+    replaced in sys.modules raises LookupError.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -107,11 +108,12 @@ def named_classes(obj: object) -> set[type]:
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
     NameError. That module is the one sys.modules holds under the name the routine or
-    class spelling it records, and a routine whose own globals are another module's, as
+    class spelling it records; a routine whose own globals are another module's, or a
+    class outside any function that module does not bind under its qualified name, as
     once another module of the same name has replaced its own there, raises LookupError
-    naming both. Met again inside its own evaluation in the same module, as each "JSON" is
-    in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
-    there: that evaluation names them all.
+    naming it and that module. Met again inside its own evaluation in the same module, as
+    each "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string
+    names no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -521,10 +523,12 @@ def _defining_module(obj: object) -> types.ModuleType:
     """The module sys.modules holds under the name *obj*'s __module__ records: the one place this helper looks a module up by name, so the one place it checks the module is *obj*'s own.
 
     A routine, unwrapped as inspect.signature unwraps it, carries the globals of the
-    module that defined it, unless it is a builtin, which carries none. A routine whose
-    globals are another module's, as once another module of the same name has replaced
-    its own in sys.modules, raises LookupError naming both. Anything else records only
-    the name, so its module is looked up unchecked.
+    module that defined it, unless it is a builtin, which carries none. A class defined
+    outside any function is bound under its qualified name in the module that defined
+    it. A routine whose globals are another module's, or such a class the module found
+    does not bind there, as once another module of the same name has replaced its own in
+    sys.modules, raises LookupError naming it and the module found. Anything else records
+    only the name, so its module is looked up unchecked.
     """
     module = sys.modules[obj.__module__]
     if inspect.isroutine(obj):
@@ -536,7 +540,26 @@ def _defining_module(obj: object) -> types.ModuleType:
                 f"{getattr(module, '__file__', None)} under the name {obj.__module__!r}: "
                 "read each module's objects before importing another module of that name"
             )
+    elif inspect.isclass(obj) and "<locals>" not in obj.__qualname__:
+        bound = _bound_under(obj.__qualname__, module)
+        if bound is not obj:
+            raise LookupError(
+                f"{obj.__module__}.{obj.__qualname__} is not bound under "
+                f"{obj.__qualname__!r} in the module at {getattr(module, '__file__', None)}, "
+                f"which sys.modules holds under the name {obj.__module__!r}: that module "
+                f"binds {'nothing' if bound is None else 'another object'} there. Read each "
+                "module's objects before importing another module of that name, or bind the "
+                "class under its qualified name"
+            )
     return module
+
+
+def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
+    """What *module* binds under the dotted *qualified_name*, one attribute at a time; None if it binds nothing there."""
+    bound: object = module
+    for name in qualified_name.split("."):
+        bound = getattr(bound, name, None)
+    return bound
 
 
 def _evaluated(annotation: str, module: types.ModuleType) -> object:
