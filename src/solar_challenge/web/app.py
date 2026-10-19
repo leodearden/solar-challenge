@@ -11,7 +11,7 @@ from flask import Flask, render_template
 
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
-from solar_challenge.web.database import init_db
+from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager, recover_stale_jobs
 from solar_challenge.web.routes import bp as routes_bp
@@ -115,11 +115,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         app.secret_key = _get_secret_key(default_data_dir)
 
     # Initialize database with configured path
-    db_path = app.config["DATABASE"]
-    init_db(db_path)
+    database = Database(Path(app.config["DATABASE"]))
+    init_db(database.path)
+    app.extensions["database"] = database
 
     # Initialize RunStorage singleton
-    storage = RunStorage(db_path=db_path, data_dir=app.config["DATA_DIR"])
+    storage = RunStorage(db_path=database.path, data_dir=app.config["DATA_DIR"])
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution
@@ -127,7 +128,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.extensions["job_manager"] = job_manager
 
     # Recover jobs stuck from previous server shutdown
-    recovered = recover_stale_jobs(db_path)
+    recovered = recover_stale_jobs(database.path)
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
 

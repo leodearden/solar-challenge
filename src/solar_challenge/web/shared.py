@@ -8,8 +8,21 @@ from typing import Any
 from flask import current_app, request
 
 from solar_challenge.location import Location
+from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
+
+
+def get_database() -> Database:
+    """Return the app's Database, the one create_app registers in the current Flask app's extensions.
+
+    Raises:
+        TypeError: If the app's database extension is not a Database, naming the type it holds.
+    """
+    database = current_app.extensions["database"]
+    if not isinstance(database, Database):
+        raise TypeError(f"the app's database extension must be a Database, got {type(database).__name__}")
+    return database
 
 
 def get_storage() -> RunStorage:
