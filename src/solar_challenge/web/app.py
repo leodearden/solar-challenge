@@ -72,6 +72,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         queues) that is not shared across processes.  Multi-worker
         deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
         missing from workers that did not create them.
+        A host other than ``solar-challenge web start`` must call
+        ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
     Args:
         test_config: Optional configuration dict to override defaults.
@@ -153,8 +155,3 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(api_bp)
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
     app.register_blueprint(plotly_js_bp)
-
-
-if __name__ == "__main__":
-    application = create_app()
-    application.run(debug=True)
