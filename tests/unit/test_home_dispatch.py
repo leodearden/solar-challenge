@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name, and the cadence each dispatch path steps the engine at.
+"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name, and the demand each dispatch path's results carry.
 
 A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
 and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
@@ -106,8 +106,8 @@ def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_
         pytest.param(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"), "self_consumption", id="strategy-path"),
     ],
 )
-def test_each_dispatch_path_steps_the_engine_at_the_runs_cadence(home, strategy_name):
-    """Each row's demand comes back at the kW its load profile asked for only while the engine integrates each row over the step of the run's window and the results turn each row's kWh back into kW over the same step.
+def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_kw_in_hours(home, strategy_name):
+    """Each row's demand comes back at the kW its load profile asked for only while each engine call is handed the row's step in minutes and the results turn each row's kWh back into kW over the same step in hours.
 
     So it fails if either engine call is handed step_hours where step_minutes belongs, or if the
     conversion multiplies by step_hours.
