@@ -1328,14 +1328,8 @@ class TestWiredDcCapacity:
         [None, create_simple_inverter_params()],
         ids=["voltage-matched-inverter", "custom-sandia-inverter"],
     )
-    @pytest.mark.parametrize(
-        "build", [create_pv_system, wired_dc_capacity_kw], ids=lambda build: build.__name__
-    )
     def test_a_module_with_neither_pdc0_nor_stc_is_refused(
-        self,
-        build: Callable[[PVConfig], object],
-        custom_inverter_params: dict[str, float] | None,
-        sapm_module: dict[str, float],
+        self, custom_inverter_params: dict[str, float] | None, sapm_module: dict[str, float]
     ) -> None:
         config = PVConfig(
             capacity_kw=4.0,
@@ -1344,12 +1338,14 @@ class TestWiredDcCapacity:
         )
 
         with pytest.raises(ValueError) as refusal:
-            build(config)
+            create_pv_system(config)
 
         message = str(refusal.value)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
 
-    @pytest.mark.parametrize("module", ["rated_sapm_module", "module_beyond_every_mppt_window"])
+    @pytest.mark.parametrize(
+        "module", ["sapm_module", "rated_sapm_module", "module_beyond_every_mppt_window"]
+    )
     def test_refuses_a_config_create_pv_system_refuses(
         self, request: pytest.FixtureRequest, module: str
     ) -> None:
