@@ -16,16 +16,15 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
-from solar_challenge.finance import CostRecoverySolution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._factories import make_bill_breakdown, make_bill_distribution, make_cost_recovery_solution
 from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
-# §A — Helper factories (copied/adapted from test_cost_recovery_solve.py)
+# §A — Helper factories
 # ---------------------------------------------------------------------------
 
 
@@ -46,32 +45,6 @@ def _make_bill_distribution(
     )
 
 
-def _make_solution(
-    own_use_rate: float = 15.0,
-    net_surplus: float = 27.0,
-    feasible: bool = True,
-    binding: str = "floor",
-    outlay: "BillDistribution | None" = None,  # type: ignore[name-defined]
-) -> CostRecoverySolution:
-    """Build a minimal CostRecoverySolution.
-
-    When *outlay* is ``None`` (default) the distribution from
-    :func:`_make_bill_distribution` is used.  Pass a custom distribution to
-    test with values distinct from the main-bill fixture.
-    """
-    dist = outlay if outlay is not None else _make_bill_distribution()
-    return CostRecoverySolution(
-        own_use_rate_pence_per_kwh=own_use_rate,
-        outlay=dist,
-        representative_outlay_gbp=dist.representative.total_outlay_gbp,
-        net_surplus_per_home_per_year_gbp=net_surplus,
-        saving_vs_baseline_gbp=dist.representative.saving_vs_baseline_gbp,
-        saving_pct=dist.representative.saving_pct,
-        feasible=feasible,
-        binding=binding,
-    )
-
-
 # ---------------------------------------------------------------------------
 # §B — output.py cost-recovery block
 # ---------------------------------------------------------------------------
@@ -83,7 +56,10 @@ class TestGenerateFinanceReportCostRecoveryBasic:
     def test_cost_recovery_section_heading_present(self) -> None:
         """Report must contain a Cost-Recovery section heading when cost_recovery is provided."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -94,7 +70,10 @@ class TestGenerateFinanceReportCostRecoveryBasic:
     def test_cost_recovery_solved_rate_rendered(self) -> None:
         """Report must show the solved own-use rate."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=18.75, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=18.75, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -105,7 +84,10 @@ class TestGenerateFinanceReportCostRecoveryBasic:
     def test_cost_recovery_net_surplus_rendered(self) -> None:
         """Report must show the CBS net surplus per home per year."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
         cr_idx = report.find("## Cost-Recovery Analysis")
@@ -120,7 +102,10 @@ class TestGenerateFinanceReportCostRecoveryBasic:
     def test_cost_recovery_feasible_indicator_present(self) -> None:
         """Report must contain a feasibility indicator."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -168,8 +153,9 @@ class TestGenerateFinanceReportCostRecoveryFull:
             min_gbp=289.0, mean_gbp=341.0, median_gbp=335.0, max_gbp=393.0
         )
         bill = _make_bill_distribution()  # defaults
-        sol = _make_solution(
-            own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor",
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
             outlay=cr_outlay,
         )
 
@@ -190,8 +176,9 @@ class TestGenerateFinanceReportCostRecoveryFull:
         # confused with the main-bill section's £367.50 (default mean).
         cr_outlay = _make_bill_distribution(mean_gbp=342.0)
         bill = _make_bill_distribution()  # defaults; mean_gbp=367.5
-        sol = _make_solution(
-            own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor",
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
             outlay=cr_outlay,
         )
 
@@ -206,7 +193,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def test_saving_vs_baseline_renders(self) -> None:
         """Cost-recovery block must render saving_vs_baseline_gbp."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
         # make_bill_breakdown default: saving_vs_baseline_gbp=132.5 → renders as £132.50
 
         report = generate_finance_report(bill, cost_recovery=sol)
@@ -220,7 +210,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def test_saving_pct_renders(self) -> None:
         """Cost-recovery block must render saving_pct."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
         # make_bill_breakdown default: saving_pct=26.5 → renders as "26.5%" in CR section
 
         report = generate_finance_report(bill, cost_recovery=sol)
@@ -234,7 +227,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def test_binding_floor_label_distinct(self) -> None:
         """binding='floor' must render a 'surplus meets floor' label."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -246,7 +242,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def test_binding_rate_clamped_zero_label_distinct(self) -> None:
         """binding='rate_clamped_zero' must render an over-feasible label."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=0.0, net_surplus=500.0, feasible=True, binding="rate_clamped_zero")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=0.0, net_surplus_per_home_per_year_gbp=500.0,
+            feasible=True, binding="rate_clamped_zero",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -258,7 +257,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def test_binding_infeasible_above_retail_shows_warning(self) -> None:
         """binding='infeasible_above_retail' must render an explicit infeasible warning."""
         bill = _make_bill_distribution()
-        sol = _make_solution(own_use_rate=30.0, net_surplus=-50.0, feasible=False, binding="infeasible_above_retail")
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=30.0, net_surplus_per_home_per_year_gbp=-50.0,
+            feasible=False, binding="infeasible_above_retail",
+        )
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
@@ -272,9 +274,18 @@ class TestGenerateFinanceReportCostRecoveryFull:
         """The three binding states must each produce a distinct human-readable label."""
         bill = _make_bill_distribution()
 
-        sol_floor = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
-        sol_clamped = _make_solution(own_use_rate=0.0, net_surplus=500.0, feasible=True, binding="rate_clamped_zero")
-        sol_infeasible = _make_solution(own_use_rate=30.0, net_surplus=-50.0, feasible=False, binding="infeasible_above_retail")
+        sol_floor = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+        )
+        sol_clamped = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=0.0, net_surplus_per_home_per_year_gbp=500.0,
+            feasible=True, binding="rate_clamped_zero",
+        )
+        sol_infeasible = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=30.0, net_surplus_per_home_per_year_gbp=-50.0,
+            feasible=False, binding="infeasible_above_retail",
+        )
 
         r_floor = generate_finance_report(bill, cost_recovery=sol_floor)
         r_clamped = generate_finance_report(bill, cost_recovery=sol_clamped)
