@@ -1626,8 +1626,23 @@ class _DistributionSampler:
             ConfigurationError: If *setting* was drawn ahead and every value of it is
                 handed out, or if *spec* cannot be drawn afresh, as a proportional_to
                 without its source's value or a pool not drawn ahead for *setting*
-                cannot, naming *setting*.
+                cannot, naming *setting*; or if *spec* is a normal or uniform
+                distribution and the value it draws is not a finite number, naming
+                *setting* and the draw. A normal's draw is checked after its min and
+                max clamp it.
         """
+        value = self._next_value(spec, setting)
+        if (
+            isinstance(spec, (NormalDistribution, UniformDistribution))
+            and value is not None
+            and not math.isfinite(value)
+        ):
+            raise ConfigurationError(
+                f"{setting} must draw samples that are finite numbers, got a sample of {value!r}"
+            )
+        return value
+
+    def _next_value(self, spec: DistributionSpec, setting: str) -> Optional[float]:
         if setting in self._drawn_ahead:
             return self._next_value_drawn_ahead(setting)
         if spec is None:
@@ -1651,25 +1666,24 @@ class _DistributionSampler:
     def sample_count(self, spec: DistributionSpec, setting: str) -> Optional[float]:
         """Sample a count of *setting* from *spec*.
 
-        A finite draw from a normal or uniform distribution is rounded to the
-        nearest whole number, a half rounding up: a draw clamped to a min of 2.5
-        gives 3. The whole number can lie outside the spec's min and max, as 0
-        does for a draw of 0.45 under a min of 0.4. A fixed value is returned as
-        the spec gives it, and any other value as drawn, a draw that is not
-        finite included.
+        A draw from a normal or uniform distribution is rounded to the nearest
+        whole number, a half rounding up: a draw clamped to a min of 2.5 gives 3.
+        The whole number can lie outside the spec's min and max, as 0 does for a
+        draw of 0.45 under a min of 0.4. A fixed value is returned as the spec
+        gives it, and any other value as drawn.
 
         Args:
             spec: The setting's distribution specification
             setting: The setting's path in the fleet distribution, e.g. 'load.household_occupants'
+
+        Raises:
+            ConfigurationError: As sample does, for a normal or uniform draw that
+                is not a finite number.
         """
         if isinstance(spec, (int, float)):
             return spec
         value = self.sample(spec, setting)
-        if (
-            value is not None
-            and isinstance(spec, (NormalDistribution, UniformDistribution))
-            and math.isfinite(value)
-        ):
+        if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
             whole = math.floor(value)
             return whole + 1 if value - whole >= 0.5 else whole
         return value
@@ -1680,8 +1694,9 @@ class _DistributionSampler:
         """Sample with support for ProportionalDistribution.
 
         For ProportionalDistribution, looks up the source value from context
-        and applies multiplier and offset. For other distributions, delegates
-        to the regular sample method.
+        and applies multiplier and offset; the home's component type checks
+        that computed value. For other distributions, delegates to the regular
+        sample method, which checks the draw.
 
         Args:
             spec: Distribution specification
@@ -1690,6 +1705,11 @@ class _DistributionSampler:
 
         Returns:
             Sampled value (float or None)
+
+        Raises:
+            ConfigurationError: For a ProportionalDistribution whose multiplier is a
+                SweepSpec; or, as sample does, for a normal or uniform draw that is
+                not a finite number.
         """
         if isinstance(spec, ProportionalDistribution):
             source_val = context.get(spec.source)
@@ -1727,8 +1747,9 @@ def generate_homes_from_distribution(
         ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
             naming the pool; if a setting's spec cannot be drawn for it, e.g. a
             proportional_to outside the battery and heat pump settings, naming the
-            setting; if a sampled PV capacity is not positive; or if a sampled heat
-            pump type is not one of heat_pump.HEAT_PUMP_TYPES.
+            setting; if a normal or uniform draw is not a finite number, naming the
+            setting and the draw; if a sampled PV capacity is not positive; or if a
+            sampled heat pump type is not one of heat_pump.HEAT_PUMP_TYPES.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
