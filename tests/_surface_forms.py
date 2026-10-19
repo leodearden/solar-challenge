@@ -107,13 +107,13 @@ def named_classes(obj: object) -> set[type]:
     annotation or a forward reference names the class its name is bound to in the module
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
-    NameError. That module is the one sys.modules holds under the name the routine or
-    class spelling it records; a routine whose own globals are another module's, or a
-    class outside any function that module does not bind under its qualified name, as
-    once another module of the same name has replaced its own there, raises LookupError
-    naming it and that module. Met again inside its own evaluation in the same module, as
-    each "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string
-    names no class there: that evaluation names them all.
+    NameError. A routine is spelled in the module whose globals it carries, whatever
+    module its __module__ names, and a class in the one sys.modules holds under the name
+    its __module__ records; one whose module another of the same name has since replaced
+    in sys.modules raises LookupError naming it and the module found there. Met again
+    inside its own evaluation in the same module, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
+    there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -416,7 +416,7 @@ def _parsed_type_variable(variable: _TypeVariable, enclosing: _Enclosing) -> _De
 
 
 def _declaring_module(variable: _TypeVariable) -> types.ModuleType | None:
-    """The module *variable*'s __module__ names; None if that name is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
+    """The module *variable*'s __module__ names, looked up unchecked, as a type variable records nothing else to check it by; None if that name is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
     return None if variable.__module__ == "typing" else _defining_module(variable)
 
 
@@ -524,38 +524,95 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _defining_module(obj: object) -> types.ModuleType:
-    """The module sys.modules holds under the name *obj*'s __module__ records: the one place this helper looks a module up by name, so the one place it checks the module is *obj*'s own.
-
-    A routine, unwrapped as inspect.signature unwraps it, carries the globals of the
-    module that defined it, unless it is a builtin, which carries none. A class defined
-    outside any function is bound under its qualified name in the module that defined
-    it. A routine whose globals are another module's, or such a class the module found
-    does not bind there, as once another module of the same name has replaced its own in
-    sys.modules, raises LookupError naming it and the module found. Anything else records
-    only the name, so its module is looked up unchecked.
-    """
-    module = sys.modules[obj.__module__]
+    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; anything else records only its module's name, so that module is looked up unchecked."""
     if inspect.isroutine(obj):
-        namespace = getattr(inspect.unwrap(obj), "__globals__", None)
-        if namespace is not None and namespace is not vars(module):
-            raise LookupError(
-                f"{obj.__module__}.{obj.__qualname__} is defined in the module at "
-                f"{namespace.get('__file__')}, but sys.modules holds the module at "
-                f"{getattr(module, '__file__', None)} under the name {obj.__module__!r}: "
-                "read each module's objects before importing another module of that name"
-            )
-    elif inspect.isclass(obj) and "<locals>" not in obj.__qualname__:
-        bound = _bound_under(obj.__qualname__, module)
-        if bound is not obj:
-            raise LookupError(
-                f"{obj.__module__}.{obj.__qualname__} is not bound under "
-                f"{obj.__qualname__!r} in the module at {getattr(module, '__file__', None)}, "
-                f"which sys.modules holds under the name {obj.__module__!r}: that module "
-                f"binds {'nothing' if bound is None else 'another object'} there. Read each "
-                "module's objects before importing another module of that name, or bind the "
-                "class under its qualified name"
-            )
+        return _routine_module(obj)
+    if inspect.isclass(obj):
+        return _class_module(obj)
+    return sys.modules[obj.__module__]
+
+
+def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
+    """The module whose globals *routine*, unwrapped as inspect.signature unwraps it, carries, whatever module its __module__ names: the one sys.modules holds under the name that module was imported as, its spec's, or its __name__ if it has no spec.
+
+    A builtin carries no globals, so its module is the one its __module__ names. If
+    sys.modules holds another module under that name, as once another module of the same
+    name has replaced it there, LookupError names *routine* and both modules.
+    """
+    namespace = getattr(inspect.unwrap(routine), "__globals__", None)
+    if namespace is None:
+        return sys.modules[routine.__module__]
+    spec = namespace.get("__spec__")
+    name = namespace.get("__name__") if spec is None else spec.name
+    module = sys.modules[name]
+    if vars(module) is not namespace:
+        label = f"{routine.__module__}.{routine.__qualname__}"
+        raise _defined_elsewhere(label, namespace, module, name)
     return module
+
+
+_PY_TPFLAGS_HEAPTYPE = 1 << 9
+
+
+def _class_module(cls: type) -> types.ModuleType:
+    """The module sys.modules holds under the name *cls*'s __module__ records, where typing and inspect read a class's annotations and source, checked to be the module that defined *cls*.
+
+    A class defined outside any function must be bound there under its qualified name; for
+    one defined inside a function, the module's globals must be those the first function
+    its body compiled carries. Otherwise, as once another module of the same name has
+    replaced its own in sys.modules, LookupError names *cls* and the module found. A
+    static type, which CPython defines in C, carries no source or annotation to misread,
+    and a class inside a function whose body compiled no function carries nothing to check
+    it by, so their module is looked up unchecked.
+    """
+    module = sys.modules[cls.__module__]
+    if not cls.__flags__ & _PY_TPFLAGS_HEAPTYPE:
+        return module
+    if "<locals>" in cls.__qualname__:
+        function = _function_compiled_in_body(cls)
+        if function is not None and function.__globals__ is not vars(module):
+            label = f"{cls.__module__}.{cls.__qualname__}"
+            raise _defined_elsewhere(label, function.__globals__, module, cls.__module__)
+        return module
+    bound = _bound_under(cls.__qualname__, module)
+    if bound is not cls:
+        raise LookupError(
+            f"{cls.__module__}.{cls.__qualname__} is not bound under {cls.__qualname__!r} in "
+            f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+            f"the name {cls.__module__!r}: that module binds "
+            f"{'nothing' if bound is None else 'another object'} there. Read each module's "
+            "objects before importing another module of that name, or bind the class under "
+            "its qualified name"
+        )
+    return module
+
+
+def _defined_elsewhere(
+    label: str, namespace: dict[str, object], module: types.ModuleType, name: str
+) -> LookupError:
+    """The error for *label*, defined in the module whose globals are *namespace*, once sys.modules holds *module* in its place under *name*."""
+    return LookupError(
+        f"{label} is defined in the module at {namespace.get('__file__')}, but sys.modules "
+        f"holds the module at {getattr(module, '__file__', None)} under the name {name!r}: "
+        "read each module's objects before importing another module of that name"
+    )
+
+
+def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
+    """The first function *cls*'s own body compiled, read through _spelled_function and unwrapped from any decorator that records it as __wrapped__: one whose code's qualified name is *cls*'s dotted with the code's name; None if the body compiled none, as an annotation-only body compiles none, and as the dataclass decorator and EnumType compile the functions they add elsewhere."""
+    functions = (_spelled_function(member) or member for member in vars(cls).values())
+    unwrapped = (
+        inspect.unwrap(function) for function in functions if isinstance(function, types.FunctionType)
+    )
+    return next(
+        (
+            function
+            for function in unwrapped
+            if isinstance(function, types.FunctionType)
+            and function.__code__.co_qualname == f"{cls.__qualname__}.{function.__code__.co_name}"
+        ),
+        None,
+    )
 
 
 def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
@@ -833,7 +890,7 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
 
 
 def _class_source(cls: type) -> str:
-    """*cls*'s source, dedented; inspect.getsource finds a class's file through sys.modules by the name its __module__ records, so the source is read only once _defining_module has checked that module is *cls*'s own."""
+    """*cls*'s source, dedented, read only once _defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records."""
     _defining_module(cls)
     return textwrap.dedent(inspect.getsource(cls))
 
