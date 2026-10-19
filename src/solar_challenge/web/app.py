@@ -153,8 +153,3 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(api_bp)
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
     app.register_blueprint(plotly_js_bp)
-
-
-if __name__ == "__main__":
-    application = create_app()
-    application.run(debug=True)
