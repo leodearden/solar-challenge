@@ -13,10 +13,9 @@ import sqlite3
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
 
-from solar_challenge.web.database import PresetType, get_db
+from solar_challenge.web.database import Database, PresetType
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +39,9 @@ class PresetNameTaken(ValueError):
 
 
 def save_config_preset(
-    db_path: str | Path, name: str, preset_type: PresetType, config: Mapping[str, Any]
+    database: Database, name: str, preset_type: PresetType, config: Mapping[str, Any]
 ) -> str:
-    """Save *config* as the *preset_type* preset *name* and return the preset's id.
+    """Save *config* as the *preset_type* preset *name* in *database* and return the preset's id.
 
     A preset of that type already named *name* keeps its id and takes *config*. The lookup
     of *name* and the write share one write transaction, so saves of one name take effect
@@ -56,7 +55,7 @@ def save_config_preset(
         raise PresetNameTaken(name, "builtin", "home")
     config_json = json.dumps(config)
     saved_at = datetime.now(timezone.utc).isoformat()
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")
         holder = conn.execute("SELECT id, type FROM config_presets WHERE name = ?", (name,)).fetchone()
         if holder is None:
@@ -75,8 +74,8 @@ def save_config_preset(
         return str(holder["id"])
 
 
-def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
-    """The home presets, each name once: the built-in ones, then the saved ones by name.
+def home_presets(database: Database) -> list[dict[str, Any]]:
+    """The home presets, each name once: the built-in ones, then the ones saved in *database* by name.
 
     Each preset is its config with its name and its ``source``, a PresetSource; a saved one
     also has its ``created_at``. A saved home preset under a built-in preset's name is left
@@ -86,7 +85,7 @@ def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
     """
     builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
     try:
-        with get_db(db_path) as conn:
+        with database.transaction() as conn:
             rows = conn.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE type = 'home' ORDER BY name"
             ).fetchall()
@@ -109,6 +108,6 @@ def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
     return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
 
 
-def home_preset_named(db_path: str | Path, name: str) -> dict[str, Any] | None:
+def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
     """The preset home_presets lists under *name*, or None when it lists none."""
-    return next((preset for preset in home_presets(db_path) if preset["name"] == name), None)
+    return next((preset for preset in home_presets(database) if preset["name"] == name), None)

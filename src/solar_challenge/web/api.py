@@ -44,6 +44,7 @@ from solar_challenge.web.presets import (
 )
 from solar_challenge.web.shared import (
     NotAJsonObject,
+    get_database,
     get_job_manager,
     get_storage,
     request_json_object,
@@ -292,7 +293,7 @@ def list_presets() -> tuple[Response, int]:
     Returns:
         JSON array of preset objects, HTTP 200.
     """
-    return jsonify(home_presets(current_app.config["DATABASE"])), 200
+    return jsonify(home_presets(get_database())), 200
 
 def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
     """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
@@ -302,7 +303,7 @@ def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str,
         name another preset holds, HTTP 500 for a database fault.
     """
     try:
-        preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
+        preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
         return jsonify({"error": str(taken)}), 409
     except Exception as exc:  # noqa: BLE001
@@ -348,7 +349,7 @@ def get_preset(name: str) -> tuple[Response, int]:
     Returns:
         JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
     """
-    preset = home_preset_named(current_app.config["DATABASE"], name)
+    preset = home_preset_named(get_database(), name)
     if preset is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return jsonify(preset), 200
