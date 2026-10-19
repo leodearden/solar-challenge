@@ -642,7 +642,7 @@ def history_list_runs() -> Response:
 
     order_dir = "ASC" if order.lower() == "asc" else "DESC"
 
-    with get_database().transaction() as conn:
+    with get_storage().database.transaction() as conn:
         cursor = conn.cursor()
 
         # Build WHERE clause

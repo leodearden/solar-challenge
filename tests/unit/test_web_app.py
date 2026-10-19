@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.web.database import Database
-from solar_challenge.web.shared import get_database
+from solar_challenge.web.shared import get_database, get_storage
 from tests._web_app import build_test_app
 
 
@@ -152,3 +152,15 @@ def test_the_app_serves_the_database_its_config_names_and_its_connections_enforc
     with closing(database.connect()) as conn:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_the_apps_run_store_keeps_its_runs_in_the_apps_database(tmp_path: Path) -> None:
+    """The app's Database is the one owner of the store's file; its RunStorage borrows it for the runs.
+
+    So the chat rows and presets the app keeps in its Database, and the runs its
+    RunStorage keeps, are one file.
+    """
+    app = build_test_app(tmp_path)
+
+    with app.app_context():
+        assert get_storage().database == get_database()
