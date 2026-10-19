@@ -192,6 +192,12 @@ class TestExportFleetYAML:
                 "Unrecognised fleet form keys: 'heat_pump';",
                 id="unrecognised-key",
             ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "uniform"}}},
+                "uniform distribution for 'fleet_distribution.battery.capacity_kwh' requires "
+                "'min' and 'max'",
+                id="battery-uniform-without-its-range",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(

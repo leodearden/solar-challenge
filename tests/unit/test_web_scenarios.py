@@ -242,6 +242,12 @@ class TestScenarioAPI:
                 id="PV uniform min above max",
             ),
             pytest.param(
+                ("pv_capacity_kw",),
+                {"pv_distribution_type": "normal", "pv_mean": 4},
+                "requires 'mean' and 'std'",
+                id="PV normal without its std",
+            ),
+            pytest.param(
                 ("battery_capacity_kwh",),
                 {
                     "battery_distribution_type": "weighted_discrete",
