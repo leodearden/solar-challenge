@@ -14,7 +14,6 @@ an import error in this conftest would abort the run.
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import NonCallableMagicMock
 
@@ -22,17 +21,10 @@ import pytest
 
 from solar_challenge.web.jobs import JobEvent, JobState
 from tests._job_manager_double import autospecced_job_manager
-from tests._web_app import build_test_app
 
 if TYPE_CHECKING:
     from flask import Flask
     from flask.testing import FlaskClient
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
 
 
 @pytest.fixture

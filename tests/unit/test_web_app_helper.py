@@ -16,7 +16,7 @@ from tests._web_app import build_test_app
 
 
 def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
-    """The web_assistant conftest imports the helper when it loads, and a run without the web extra must skip those tests, not abort."""
+    """tests/unit/conftest.py imports the helper when it loads, and a run without the web extra must skip the tests that need it, not abort."""
     result = subprocess.run(
         [sys.executable, "-c", "import sys; sys.modules['flask'] = None; import tests._web_app"],
         cwd=project_root,

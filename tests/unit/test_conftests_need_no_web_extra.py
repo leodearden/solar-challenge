@@ -46,7 +46,6 @@ def _web_extra_modules(project_root: Path) -> list[str]:
         "tests.conftest",
         "tests.unit.conftest",
         "tests.unit.web_api.conftest",
-        "tests.unit.web_assistant.conftest",
         "tests.unit.web_jobs.conftest",
     ],
 )
