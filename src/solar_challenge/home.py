@@ -23,7 +23,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.weather import align_tmy_to_index, get_tmy_data
 
 
@@ -384,8 +384,8 @@ class _DispatchPath:
     timestep: _Timestep
 
 
-def _tariff_tou_timestep(tariff: TariffConfig) -> _Timestep:
-    """Each minute dispatched at the tariff's rates by simulate_timestep_tou."""
+def _tariff_tou_timestep(tariff: TariffConfig, step_minutes: float) -> _Timestep:
+    """Each row, step_minutes long, dispatched at the tariff's rates by simulate_timestep_tou."""
 
     def timestep(
         battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
@@ -396,14 +396,14 @@ def _tariff_tou_timestep(tariff: TariffConfig) -> _Timestep:
             battery=battery,
             timestamp=timestamp,
             tariff=tariff,
-            timestep_minutes=1.0,
+            timestep_minutes=step_minutes,
         )
 
     return timestep
 
 
-def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig]) -> _Timestep:
-    """Each minute dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig], step_minutes: float) -> _Timestep:
+    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
 
     def timestep(
         battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
@@ -412,7 +412,7 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
             generation_kw=generation_kw,
             demand_kw=demand_kw,
             battery=battery,
-            timestep_minutes=1.0,
+            timestep_minutes=step_minutes,
             timestamp=timestamp.to_pydatetime(),
             strategy=strategy,
             tariff=tariff,
@@ -421,8 +421,8 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
     return timestep
 
 
-def _dispatch_path(config: HomeConfig) -> _DispatchPath:
-    """How the home dispatches each minute.
+def _dispatch_path(config: HomeConfig, step_minutes: float) -> _DispatchPath:
+    """How the home dispatches each row, step_minutes long.
 
     It takes the tariff-rate TOU path when it asks for tou_optimized, has a tariff and its
     battery names no strategy of its own; otherwise its battery's strategy, self-consumption
@@ -431,9 +431,9 @@ def _dispatch_path(config: HomeConfig) -> _DispatchPath:
     tariff = config.tariff_config
     battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
     if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
-        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff))
+        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
     strategy = _create_dispatch_strategy(config)
-    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff))
+    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
 
 
 def _minute_flows(
@@ -506,25 +506,24 @@ def _export_revenue(
     return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=minutes)
 
 
-_MINUTE_KWH_TO_KW = 1 / HOURS_PER_MINUTE
-
-
 def _results(
     flows: Sequence[EnergyFlowResult],
     minutes: pd.DatetimeIndex,
     *,
+    step_hours: float,
     import_pricing: _ImportPricing,
     export_revenue: pd.Series,
     heat_pump_load: Optional[pd.Series],
     strategy_name: str,
 ) -> SimulationResults:
-    """The run's results on its minutes.
+    """The run's results on its minutes, each row lasting step_hours hours.
 
     Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
     """
+    kw_per_kwh = 1 / step_hours
 
     def power_kw(minute_kwh: Callable[[EnergyFlowResult], float]) -> pd.Series:
-        return pd.Series([minute_kwh(flow) * _MINUTE_KWH_TO_KW for flow in flows], index=minutes)
+        return pd.Series([minute_kwh(flow) * kw_per_kwh for flow in flows], index=minutes)
 
     return SimulationResults(
         strategy_name=strategy_name,
@@ -577,8 +576,9 @@ def simulate_home(
     minute_generation = interpolate_to_minute_resolution(simulate_pv_output(config.pv_config, config.location, weather))
     demand = _demand(config, weather, start_date, end_date)
     minutes = demand.total_kw.index
+    window = SimulationWindow.of_index(minutes)
     generation_kw = align_tmy_to_index(minute_generation, minutes)
-    dispatch = _dispatch_path(config)
+    dispatch = _dispatch_path(config, window.step_minutes)
     flows = _minute_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
     import_pricing = _price_imports(config.tariff_config, flows, minutes)
     export_revenue = _export_revenue(config.seg_tariff, flows, minutes)
@@ -592,6 +592,7 @@ def simulate_home(
     return _results(
         flows,
         minutes,
+        step_hours=window.step_hours,
         import_pricing=import_pricing,
         export_revenue=export_revenue,
         heat_pump_load=demand.heat_pump_kw,
