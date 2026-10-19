@@ -5,6 +5,7 @@ This module's client submits to a recording double that numbers job ids in submi
 order and takes the real submit_home_job's parameters.
 """
 
+import sys
 from collections.abc import Callable
 from inspect import signature
 from typing import Any
@@ -18,6 +19,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.simulation_params import parse_home_config
+from tests._html_page import element_attributes
 
 
 class _RecordingJobManager:
@@ -73,6 +75,15 @@ class TestRecordingJobManager:
         assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
+def _steps_the_sweep_page_offers(client: FlaskClient) -> tuple[int, int]:
+    """The fewest and the most steps the sweep page's Steps box offers: its min and its max."""
+    page = client.get("/scenarios/sweep").get_data(as_text=True)
+    [steps_box] = [box for box in element_attributes(page, "input") if box.get("x-model") == "steps"]
+    fewest, most = steps_box["min"], steps_box["max"]
+    assert fewest is not None and most is not None
+    return int(fewest), int(most)
+
+
 class TestSimulateSweep:
     """Tests for POST /api/simulate/sweep."""
 
@@ -122,14 +133,75 @@ class TestSimulateSweep:
         resp = client.post("/api/simulate/sweep", data=data, content_type=content_type)
         assert resp.status_code == 400
 
-    def test_steps_less_than_2_returns_400(self, client: FlaskClient) -> None:
-        """Steps < 2 returns 400."""
+    # One value for each field, refused by that field's number_fields reader; each reader's full matrix is tested there.
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            pytest.param(
+                {"min": 10**400, "max": 5, "steps": 2},
+                f"min must be a finite number, got {10**400!r}",
+                id="min-too-large-for-a-float",
+            ),
+            pytest.param(
+                {"min": 1, "max": float("inf"), "steps": 2},
+                "max must be a finite number, got inf",
+                id="max-infinity",
+            ),
+            pytest.param(
+                {"min": 1, "max": 5, "steps": 2.5},
+                "steps must be a whole number, got 2.5",
+                id="steps-fraction",
+            ),
+        ],
+    )
+    def test_a_number_it_cannot_use_is_refused_naming_the_field_and_the_value_sent_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        body: dict[str, object],
+        message: str,
+    ) -> None:
+        """A min, max or steps the sweep cannot use is a 400 naming the field and the value sent, never a 500, and no sweep point is submitted."""
+        resp = client.post("/api/simulate/sweep", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": message}
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_sweep_may_have_as_many_points_as_the_sweep_page_offers(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        """A sweep with as many points as the sweep page's Steps box offers submits one home per point."""
+        _, most = _steps_the_sweep_page_offers(client)
         resp = client.post(
             "/api/simulate/sweep",
-            json={"min": 1.0, "max": 10.0, "steps": 1},
+            json={"min": 1.0, "max": 10.0, "steps": most},
+        )
+        assert resp.status_code == 201
+        assert len(recording_job_manager.submitted_homes) == most
+
+    @pytest.mark.parametrize(
+        "steps_the_page_does_not_offer",
+        [
+            pytest.param(lambda fewest, most: fewest - 1, id="fewer-than-the-page-offers"),
+            pytest.param(lambda fewest, most: most + 1, id="more-than-the-page-offers"),
+        ],
+    )
+    def test_a_step_count_the_sweep_page_does_not_offer_is_refused_before_any_point_is_submitted(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        steps_the_page_does_not_offer: Callable[[int, int], int],
+    ) -> None:
+        """One step fewer, or one more, than the sweep page's Steps box offers is a 400 naming steps, the range the page offers and the value sent; no point is submitted."""
+        fewest, most = _steps_the_sweep_page_offers(client)
+        steps = steps_the_page_does_not_offer(fewest, most)
+        resp = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 10.0, "steps": steps},
         )
         assert resp.status_code == 400
-        assert "Steps" in resp.get_json()["error"]
+        assert resp.get_json() == {"error": f"steps must be between {fewest} and {most}, got {steps}"}
+        assert recording_job_manager.submitted_homes == []
 
     def test_min_gte_max_returns_400(self, client: FlaskClient) -> None:
         """min >= max returns 400."""
@@ -165,14 +237,35 @@ class TestSimulateSweep:
         )
         assert resp.status_code == 400
 
-    def test_invalid_numeric_param_returns_400(self, client: FlaskClient) -> None:
-        """Non-numeric min/max/steps returns 400."""
-        resp = client.post(
-            "/api/simulate/sweep",
-            json={"min": "abc", "max": 10.0, "steps": 3},
-        )
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(
+                {"min": 1e-10, "max": sys.float_info.max, "steps": 7, "mode": "geometric"},
+                id="geometric-from-a-tiny-min-to-the-largest-float",
+            ),
+            pytest.param(
+                {"min": -sys.float_info.max, "max": sys.float_info.max, "steps": 2, "mode": "linear"},
+                id="linear-from-the-most-negative-to-the-largest-float",
+            ),
+        ],
+    )
+    def test_a_min_and_max_too_far_apart_for_the_points_to_be_computed_are_refused_naming_both(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        body: dict[str, object],
+    ) -> None:
+        """A finite min and max so far apart that computing the points between them overflows a float is a 400 naming both, never a 500, and no point is submitted."""
+        resp = client.post("/api/simulate/sweep", json=body)
         assert resp.status_code == 400
-        assert "Invalid numeric" in resp.get_json()["error"]
+        assert resp.get_json() == {
+            "error": (
+                f"min {body['min']!r} and max {body['max']!r} are too far apart to sweep:"
+                " computing the points between them overflows a float"
+            )
+        }
+        assert recording_job_manager.submitted_homes == []
 
     @pytest.mark.parametrize(
         ("base_config", "type_name"),
