@@ -503,7 +503,7 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _evaluated(annotation: str, module: str) -> object:
-    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them."""
+    """*annotation* evaluated in a copy of the globals of the module sys.modules holds under the name *module*, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; a module another of the same name has since replaced there is not read."""
     spelling_module = sys.modules[module]
     namespace = dict(vars(spelling_module))
     exec(_type_checking_imports(spelling_module), namespace)

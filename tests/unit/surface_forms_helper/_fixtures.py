@@ -29,7 +29,7 @@ class Preset:
 def imported_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
 ) -> types.ModuleType:
-    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until the test ends."""
+    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until *monkeypatch* is undone or a later call imports another module of that name."""
     path = tmp_path / f"{name}.py"
     path.write_text(source)
     spec = importlib.util.spec_from_file_location(name, path)
