@@ -92,9 +92,11 @@ def test_a_negative_retry_is_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["", "fail\ned", "fail\red", "fail:ed"], ids=["empty", "lf", "cr", "colon"]
+    "name",
+    ["", "fail\ned", "fail\red", "fail:ed", "failed ", " failed", "fail ed"],
+    ids=["empty", "lf", "cr", "colon", "trailing-space", "leading-space", "inner-space"],
 )
-def test_an_event_name_that_is_empty_or_holds_a_cr_lf_or_colon_is_refused(name: str) -> None:
+def test_an_event_name_that_is_empty_or_holds_whitespace_or_a_colon_is_refused(name: str) -> None:
     with pytest.raises(ValueError, match=re.escape(repr(name))):
         SseEvent(name, ChatDone)
 

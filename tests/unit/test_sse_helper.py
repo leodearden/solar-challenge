@@ -97,6 +97,19 @@ def test_frame_with_more_than_one_data_line_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
+    "line",
+    ["event: delta ", "event:  delta"],
+    ids=["trailing", "leading"],
+)
+def test_event_name_with_surrounding_whitespace_is_rejected(line: str) -> None:
+    """EventSource dispatches the name verbatim; the chat client trims it."""
+    with pytest.raises(ValueError, match="no leading or trailing whitespace") as raised:
+        parse_sse_events(f"{line}\ndata: {{}}\n\n")
+
+    assert repr(line) in str(raised.value)
+
+
+@pytest.mark.parametrize(
     ("body", "field"),
     [
         ("event:delta\ndata: {}\n\n", "event"),
