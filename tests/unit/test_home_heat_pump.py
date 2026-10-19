@@ -339,8 +339,8 @@ class TestHeatPumpIntegration:
         assert summary.peak_heat_pump_load_kw is None
         assert summary.heat_pump_load_ratio is None
 
-    def test_winter_has_higher_heat_pump_load_than_summer(self):
-        """Heat pump load is higher in winter than summer."""
+    def test_heat_pump_draws_power_on_a_winter_day_and_none_on_a_summer_day(self):
+        """The run's date picks the TMY day that drives the load: 15 January is below the heat pump's base temperature, 15 July above it."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0),
@@ -366,12 +366,8 @@ class TestHeatPumpIntegration:
             end_date=pd.Timestamp("2024-07-15"),
         )
 
-        winter_load = winter_results.heat_pump_load.sum()
-        summer_load = summer_results.heat_pump_load.sum()
-
-        # Winter heating load should be significantly higher than summer
-        # (summer may be near zero if temperatures are above base temperature)
-        assert winter_load > summer_load
+        assert winter_results.heat_pump_load.sum() > 0.0
+        assert summer_results.heat_pump_load.sum() == 0.0
 
     def test_heat_pump_with_battery(self):
         """Heat pump works correctly with battery storage."""
@@ -401,8 +397,8 @@ class TestHeatPumpIntegration:
         # Battery may charge or discharge depending on generation/demand
         assert results.battery_soc.max() >= 0.0
 
-    def test_heat_pump_load_reasonable_magnitude(self):
-        """Heat pump load has reasonable magnitude relative to capacity."""
+    def test_peak_heat_pump_load_is_capacity_over_the_cop_at_the_coldest_hour(self, cold_january15_tmy_weather):
+        """On 15 January the heat pump runs at its thermal capacity all day, so its peak electrical load is that capacity over the COP at the coldest hour."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0),
@@ -420,8 +416,7 @@ class TestHeatPumpIntegration:
             end_date=pd.Timestamp("2024-01-15"),
         )
 
-        # Peak heat pump load should not exceed capacity / min_COP
-        # ASHP min COP is 1.8, so max electrical load = 8.0 / 1.8 ≈ 4.44 kW
-        # Add some margin for numerical precision
-        max_expected_load = config.heat_pump_config.thermal_capacity_kw / 1.5
-        assert results.heat_pump_load.max() <= max_expected_load
+        coldest_hour_c = cold_january15_tmy_weather["temp_air"].min()
+        assert results.heat_pump_load.max() == pytest.approx(
+            config.heat_pump_config.thermal_capacity_kw / calculate_cop("ASHP", coldest_hour_c)
+        )
