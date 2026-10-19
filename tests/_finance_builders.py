@@ -6,8 +6,8 @@ Tests of ``project_multi_year`` and ``solve_cost_recovery_rate`` inject their ow
 ``simulate``, so they need fleet results whose totals they choose rather than a
 PVGIS-driven simulation.  This module is the one place those fixtures are spelled:
 a default 4 kWp Bristol home, with or without a battery, or fitted with a given
-install, scenarios of n such homes, and ``SimulationResults`` whose
-``calculate_summary`` totals are exactly the kWh and £ the caller passes.
+install, scenarios of n such homes or of given homes, and ``SimulationResults``
+whose ``calculate_summary`` totals are exactly the kWh and £ the caller passes.
 
 Usage::
 
@@ -111,6 +111,11 @@ def make_scenario(
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
         finance=finance,
     )
+
+
+def make_scenario_of(homes: Sequence[HomeConfig]) -> ScenarioConfig:
+    """make_scenario's scenario, holding exactly *homes*."""
+    return dataclasses.replace(make_scenario(), homes=list(homes))
 
 
 def make_scenario_and_finance(
