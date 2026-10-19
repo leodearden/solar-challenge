@@ -64,8 +64,13 @@ def test_cost_recovery_solution_defaults_to_make_bill_distributions_outlay() -> 
     [pytest.param(make_cost_recovery_solution, id="solution"), pytest.param(make_config_result, id="config-result")],
 )
 def test_builders_refuse_both_an_outlay_and_a_representative_outlay(builder: Callable[..., object]) -> None:
-    with pytest.raises(TypeError, match="outlay or representative_outlay_gbp"):
-        builder(outlay=make_bill_distribution(), representative_outlay_gbp=400.0)
+    outlay = make_bill_distribution()
+
+    with pytest.raises(TypeError, match="^pass outlay or representative_outlay_gbp, not both") as refusal:
+        builder(outlay=outlay, representative_outlay_gbp=400.0)
+
+    assert f"outlay={outlay!r}" in str(refusal.value)
+    assert "representative_outlay_gbp=400.0" in str(refusal.value)
 
 
 def test_config_result_reads_its_solved_fields_from_its_solution() -> None:
