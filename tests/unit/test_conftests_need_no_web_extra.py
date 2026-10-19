@@ -41,7 +41,14 @@ def _web_extra_modules(project_root: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "conftest", ["tests.conftest", "tests.unit.web_api.conftest", "tests.unit.web_assistant.conftest"]
+    "conftest",
+    [
+        "tests.conftest",
+        "tests.unit.conftest",
+        "tests.unit.web_api.conftest",
+        "tests.unit.web_assistant.conftest",
+        "tests.unit.web_jobs.conftest",
+    ],
 )
 def test_importing_the_conftest_needs_no_web_extra(conftest: str, project_root: Path) -> None:
     result = subprocess.run(
