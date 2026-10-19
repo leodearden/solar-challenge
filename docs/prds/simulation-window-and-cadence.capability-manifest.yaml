@@ -91,11 +91,11 @@ tasks:
           paths: ["src/solar_challenge/home.py"]
           expect: absent
       - name: "no-fixed-minute-kw-conversion"
-        binding: "grep:home.py::simulate_home minute_kwh_to_kw = 1 / HOURS_PER_MINUTE today"
+        binding: "grep:home.py _MINUTE_KWH_TO_KW today (task 710 respelled minute_kwh_to_kw; re-pointed 2026-10-19, esc-779-3)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "minute_kwh_to_kw = 1 / HOURS_PER_MINUTE"
+          pattern: "_MINUTE_KWH_TO_KW"
           paths: ["src/solar_challenge/home.py"]
           expect: absent
       - name: "community-derives-window"
