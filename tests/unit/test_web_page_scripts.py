@@ -126,18 +126,16 @@ def _serving_problem(
 ) -> str | None:
     """Why a browser would not run the script the app serves at *src* under
     *integrity*, or None when it would."""
+    if integrity is None:
+        return "names no integrity attribute"
     with client.get(src) as response:
-        if response.status_code != 200:
-            return f"the app answers {response.status_code}"
-        if integrity is None:
-            return "names no integrity attribute"
         served = _sri_sha384(response.get_data())
-        if served != integrity:
-            return (
-                f"its integrity attribute names {integrity}, but the bytes the app"
-                f" serves hash to {served}, so a browser refuses to run the script"
-            )
-        return None
+    if served != integrity:
+        return (
+            f"its integrity attribute names {integrity}, but the bytes the app"
+            f" serves hash to {served}, so a browser refuses to run the script"
+        )
+    return None
 
 
 def _status_of(client: FlaskClient, src: str) -> int:
