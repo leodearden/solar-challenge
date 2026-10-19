@@ -72,11 +72,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         queues) that is not shared across processes.  Multi-worker
         deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
         missing from workers that did not create them.
-        A host other than ``solar-challenge web start``, such as
-        ``flask --app solar_challenge.web run`` or gunicorn with one worker,
-        must call ``solar_challenge.web.jobs.shutdown_all_managers()`` when
-        it stops, since nothing else drops the jobs still queued; otherwise
-        every queued simulation runs before the process exits.
+        A host other than ``solar-challenge web start`` must call
+        ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
     Args:
         test_config: Optional configuration dict to override defaults.
