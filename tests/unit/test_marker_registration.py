@@ -31,10 +31,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 INTEGRATION_FILES = [
     "tests/integration/test_pvgis.py",
-    "tests/integration/test_home_simulation.py",
-    "tests/integration/test_dispatch_strategies.py",
-    "tests/integration/test_tou_dispatch.py",
-    "tests/integration/test_tariff_integration.py",
     "tests/integration/test_pv_performance_ratio.py",
 ]
 
@@ -42,6 +38,10 @@ INTEGRATION_FILES = [
 OFFLINE_INTEGRATION_FILES = [
     "tests/integration/test_fleet_simulation.py",
     "tests/integration/test_ev_fleet.py",
+    "tests/integration/test_home_simulation.py",
+    "tests/integration/test_dispatch_strategies.py",
+    "tests/integration/test_tariff_integration.py",
+    "tests/integration/test_tou_dispatch.py",
 ]
 
 # The mark expression of the verify's test_command in dark-factory-orchestrator.yaml.
