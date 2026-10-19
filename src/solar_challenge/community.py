@@ -145,6 +145,7 @@ class CommunityResults:
 # ---------------------------------------------------------------------------
 
 def _price_grid_flows(
+    window: SimulationWindow,
     import_kw: pd.Series,
     export_kw: pd.Series,
     tariff: TariffConfig,
@@ -152,15 +153,17 @@ def _price_grid_flows(
 ) -> tuple[float, float]:
     """Price grid import and export flows using canonical billing primitives.
 
-    Each row's energy is its kW times the hours its row lasts on import_kw's
-    window, which export_kw shares, so it prices any cadence.
+    Each row's energy is its kW times the hours its row lasts on window, so it
+    prices any cadence.
 
     Parameters
     ----------
+    window:
+        The run's window, whose rows both flows are on.
     import_kw:
-        Community-level grid import series (kW) with a DatetimeIndex.
+        Community-level grid import series (kW) on window's rows.
     export_kw:
-        Community-level grid export series (kW) with the same DatetimeIndex.
+        Community-level grid export series (kW) on the same rows.
     tariff:
         Import tariff; the import leg is priced per-timestep via
         :func:`~solar_challenge.tariff.calculate_bill` (TOU-correct).
@@ -172,15 +175,7 @@ def _price_grid_flows(
     -------
     (import_cost_gbp, export_revenue_gbp)
         Both values in GBP.
-
-    Raises
-    ------
-    ValueError
-        As :meth:`~solar_challenge.timebase.SimulationWindow.of_index` does, for
-        an import_kw index no window describes.
     """
-    window = SimulationWindow.of_index(import_kw.index)
-
     # Import cost: per-timestep TOU-aware pricing via the canonical loop.
     import_cost_gbp: float = calculate_bill(window.row_energy_kwh(import_kw), tariff)
 
@@ -345,6 +340,7 @@ def simulate_community(
         )
         # Baseline: what the fleet would pay/earn WITHOUT community sharing
         base_imp, base_exp = _price_grid_flows(
+            window,
             fleet_results.total_grid_import,
             fleet_results.total_grid_export,
             billing.tariff,
@@ -352,6 +348,7 @@ def simulate_community(
         )
         # Community: what the fleet pays/earns AFTER sharing
         comm_imp, comm_exp = _price_grid_flows(
+            window,
             result.grid_import,
             result.grid_export,
             billing.tariff,
