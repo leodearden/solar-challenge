@@ -1,5 +1,7 @@
 """Pytest configuration and shared fixtures."""
 
+from __future__ import annotations
+
 import os
 import sys
 import tempfile
@@ -7,19 +9,27 @@ import weakref
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pathlib import Path
 
-from solar_challenge.weather import WeatherCache, set_weather_cache
+from tests._heap_freeze import freeze_the_heap_once
 from tests._network_guard import refusing_network
 from tests._uv_env import isolated_uv_env
+
+if TYPE_CHECKING:
+    from solar_challenge.weather import WeatherCache
 
 pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
 collect_ignore = ["interpreter_matrix", "css_build", "newest_releases"]
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Freeze the heap collection built, once per process, so the full collections during the run scan only what the tests create."""
+    freeze_the_heap_once()
 
 
 @pytest.fixture
@@ -90,7 +100,12 @@ _OFFLINE_WINDOW_KEY = pytest.StashKey[_OfflineWindow]()
 
 @contextmanager
 def _open_offline_window() -> Iterator[_OfflineWindow]:
-    """Open a test's window, which closes after the test is reported, where an error would abort the session."""
+    """Open a test's window, which closes after the test is reported, where an error would abort the session.
+
+    The first window imports solar_challenge.weather, before it refuses the network, so sessions that run no test never load it.
+    """
+    from solar_challenge.weather import WeatherCache, set_weather_cache
+
     with (
         tempfile.TemporaryDirectory(prefix="weather-cache-", ignore_cleanup_errors=True) as cache_dir,
         refusing_network() as refused,
@@ -152,6 +167,8 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
             "weather cache; weather_cache serves a test that runs offline",
             pytrace=False,
         )
+    from solar_challenge.weather import set_weather_cache
+
     set_weather_cache(window.weather_cache)
     return window.weather_cache
 
