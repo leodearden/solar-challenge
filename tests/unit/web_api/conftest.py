@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fixtures for the Flask test app the /api endpoint test modules drive, with its JobManager mocked.
+"""A mocked JobManager for the /api endpoint tests, installed on tests/unit/conftest.py's app, and a client that requests the mock.
 
 mock_job_manager installs a mock autospecced to JobManager, whose submit, state and event
 calls answer at once with canned values, so no test starts a real simulation. client
