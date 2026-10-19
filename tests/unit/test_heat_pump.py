@@ -21,6 +21,7 @@ from solar_challenge.heat_pump import (
     calculate_cop,
     generate_heat_pump_load,
 )
+from solar_challenge.timebase import SimulationWindow
 
 
 class TestHeatPumpConfigBasics:
@@ -552,6 +553,49 @@ class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
 
         heat_delivered_kwh = (load * calculate_cop("ASHP", 10.0)).sum() / 60
         assert heat_delivered_kwh == pytest.approx(8000.0 / days)
+
+
+class TestGenerateHeatPumpLoadIntegratesTheReferenceYearOverItsCadence:
+    """The reference year's heating degrees are integrated over the cadence its index's window reads, so a window at any cadence gets its share, and a reference whose index no window describes is refused."""
+
+    @pytest.mark.parametrize(
+        ("build_reference", "match"),
+        [
+            pytest.param(
+                lambda: pd.Series(10.0, index=pd.RangeIndex(525_600)),
+                "RangeIndex",
+                id="values-only-heating-year",
+            ),
+            pytest.param(
+                lambda: pd.Series(20.0, index=pd.RangeIndex(525_600)),
+                "RangeIndex",
+                id="values-only-year-without-heating",
+            ),
+            pytest.param(
+                lambda: pd.Series(
+                    10.0,
+                    index=pd.date_range("1992-01-01", periods=527_040, freq="1min", tz="UTC").delete(100_000),
+                ),
+                "position 100000",
+                id="leap-year-missing-a-minute",
+            ),
+        ],
+    )
+    def test_a_reference_no_window_describes_is_refused(self, build_reference, match):
+        reference = build_reference()
+
+        with pytest.raises(ValueError, match=match):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    def test_a_half_hourly_window_gets_its_days_share_of_a_minute_years_heat(self, year_at_10c):
+        window = pd.Series(10.0, index=pd.date_range("2025-01-15", periods=48, freq="30min", tz="Europe/London"))
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), window, annual_temperature_c=year_at_10c)
+
+        heat_delivered_kwh = SimulationWindow.of_index(load.index).energy_kwh(load) * calculate_cop("ASHP", 10.0)
+        assert heat_delivered_kwh == pytest.approx(8000.0 / 365)
 
 
 class TestGenerateHeatPumpLoadNamesItsLoad:
