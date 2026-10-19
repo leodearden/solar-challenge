@@ -3,6 +3,7 @@
 
 import gc
 import importlib
+import importlib.util
 import re
 import shutil
 import sys
@@ -79,6 +80,24 @@ def test_building_the_app_fails_naming_a_dashboard_folder_the_installed_package_
     with pytest.raises(FileNotFoundError, match=re.escape(str(web_dir / missing))):
         build_test_app(tmp_path / "data")
     assert not (web_dir / missing).exists()
+
+
+def test_building_the_app_fails_naming_the_plotly_js_the_installed_plotly_package_lacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installed plotly package that lacks the plotly.js it bundles fails the app build with a FileNotFoundError naming the file's path, instead of each chart page's request for the script."""
+    importlib.import_module("solar_challenge.web.app")
+    plotly_dir = tmp_path / "plotly"
+    plotly_dir.mkdir()
+    (plotly_dir / "__init__.py").touch()
+    plotly_spec = importlib.util.spec_from_file_location("plotly", plotly_dir / "__init__.py")
+    monkeypatch.setitem(sys.modules, "plotly", importlib.util.module_from_spec(plotly_spec))
+    _uncache_module(monkeypatch, "solar_challenge.web.plotly_js")
+    _uncache_module(monkeypatch, "solar_challenge.web.app")
+
+    bundled = plotly_dir / "package_data" / "plotly.min.js"
+    with pytest.raises(FileNotFoundError, match=re.escape(str(bundled))):
+        build_test_app(tmp_path / "data")
 
 
 def test_building_the_app_does_not_import_the_anthropic_sdk(

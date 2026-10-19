@@ -12,7 +12,21 @@ from pathlib import Path
 import plotly
 from flask import Blueprint, Response, send_file
 
-_BUNDLED_PLOTLY_JS = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
+
+def _bundled_plotly_js() -> Path:
+    """Return the plotly.js the installed plotly package bundles, the file plotly.offline.get_plotlyjs() reads; raise FileNotFoundError when the package has no file there."""
+    script = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
+    if not script.is_file():
+        raise FileNotFoundError(
+            "The web dashboard cannot start: the installed plotly package has no plotly.js"
+            f" at {script} for the chart pages to draw with. Reinstall plotly; if this"
+            " plotly release keeps its plotly.js elsewhere, serve the file"
+            " plotly.offline.get_plotlyjs() reads."
+        )
+    return script
+
+
+_BUNDLED_PLOTLY_JS = _bundled_plotly_js()
 
 bp = Blueprint("plotly_js", __name__)
 
