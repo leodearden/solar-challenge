@@ -372,7 +372,7 @@ class TestToolUseLoop:
         event_types = [e.event for e in events]
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
     def test_thinking_before_a_tool_call_is_replayed_unchanged(
         self,
@@ -399,7 +399,7 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         event_types = [e.event for e in parse_sse_events(resp.get_data(as_text=True))]
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
         calls = anthropic_api.calls
         assert len(calls) == 2, f"Expected stream() called exactly 2 times; got {len(calls)}"
@@ -452,7 +452,7 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         event_types = [e.event for e in parse_sse_events(resp.get_data(as_text=True))]
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
         calls = anthropic_api.calls
         assert len(calls) == 2, f"Expected stream() called exactly 2 times; got {len(calls)}"
@@ -873,8 +873,8 @@ class TestSimulationToolUseSignal:
         resp = client.post("/assistant/chat", json={"message": "run it with a heat pump"})
         events = parse_sse_events(resp.get_data(as_text=True))
 
-        error_events = [e for e in events if e.event == "error"]
-        assert not error_events, f"Expected no 'error' SSE frame; events: {events}"
+        failed_events = [e for e in events if e.event == "failed"]
+        assert not failed_events, f"Expected no 'failed' SSE frame; events: {events}"
         assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
         assert len(anthropic_api.calls) == 2, (
             f"Expected stream() called exactly 2 times; got {len(anthropic_api.calls)}"

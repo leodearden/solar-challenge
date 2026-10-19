@@ -10,6 +10,7 @@ Usage::
 """
 
 import json
+import re
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Any
@@ -17,10 +18,16 @@ from typing import Any
 
 @dataclass(frozen=True)
 class SseFrame:
-    """One Server-Sent Events frame: the event it names and its decoded data payload."""
+    """One Server-Sent Events frame: the event it names and its decoded data payload.
+
+    ``id`` and ``retry`` are the integers on the frame's own ``id`` and ``retry`` lines,
+    each None when the frame has no such line.
+    """
 
     event: str
     data: Any
+    id: int | None = None
+    retry: int | None = None
 
 
 def parse_sse_events(body: str) -> list[SseFrame]:
@@ -29,13 +36,17 @@ def parse_sse_events(body: str) -> list[SseFrame]:
     Blank lines separate frames. In each frame the last ``event: `` line names the
     event, and its ``data: `` line carries the payload: JSON-decoded when it
     parses, the raw string when it does not, and None when the line is absent or
-    empty. A frame with no ``event: `` line, such as a ``:heartbeat`` comment,
-    yields no SseFrame.
+    empty. The frame's own last ``id: `` and ``retry: `` lines give its id and retry
+    as integers, each None when the frame has none: unlike EventSource's
+    lastEventId, an id does not carry over to later frames. A frame with no
+    ``event: `` line, such as a ``:heartbeat`` comment, yields no SseFrame.
 
     Raises ValueError, rather than guess, on a frame that SSE readers decode
     differently: more than one ``data`` line (the spec joins them; the chat client
-    in web/static/js/assistant.js keeps the last), or an ``event`` or ``data`` line
-    with no space after its colon (the spec accepts it; the chat client ignores it).
+    in web/static/js/assistant.js keeps the last), a field line with no space
+    after its colon (the spec accepts it; the chat client ignores it), or an ``id``
+    or ``retry`` that is not all ASCII digits (int() reads ``+7`` and ``-1`` as
+    numbers; EventSource ignores such a retry and keeps an id as its raw text).
     """
     runs = groupby(body.splitlines(), key=_is_blank)
     frames = (_read_frame(list(lines)) for blank, lines in runs if not blank)
@@ -53,10 +64,26 @@ def _read_frame(lines: list[str]) -> SseFrame | None:
         raise ValueError(
             f"Expected at most one data line per SSE frame; got {len(payloads)}: {lines!r}"
         )
+    event_id = _integer_field(lines, "id")
+    retry = _integer_field(lines, "retry")
     if not events:
         return None
     payload = payloads[0] if payloads else None
-    return SseFrame(event=events[-1].strip(), data=_decode_payload(payload))
+    return SseFrame(
+        event=events[-1].strip(), data=_decode_payload(payload), id=event_id, retry=retry
+    )
+
+
+def _integer_field(lines: list[str], field: str) -> int | None:
+    values = _field_values(lines, field)
+    if not values:
+        return None
+    value = values[-1]
+    if not re.fullmatch(r"[0-9]+", value):
+        raise ValueError(
+            f"Expected the SSE {field} line to carry only ASCII digits; got: {lines!r}"
+        )
+    return int(value)
 
 
 def _field_values(lines: list[str], field: str) -> list[str]:
