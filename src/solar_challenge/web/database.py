@@ -187,7 +187,7 @@ def init_db(db_path: str | Path) -> None:
 
 
 def save_chat_message(
-    db_path: str | Path,
+    database: Database,
     session_id: str,
     role: ChatRole,
     content: str,
@@ -196,7 +196,7 @@ def save_chat_message(
     """Insert a chat message row and return the new row id.
 
     Args:
-        db_path: Path to the SQLite database file.
+        database: The Database holding the chat_messages table.
         session_id: Browser-session identifier scoping the conversation.
         role: Who wrote the message, one of CHAT_ROLES.
         content: Message text.
@@ -207,7 +207,7 @@ def save_chat_message(
     """
     created_at = datetime.now(timezone.utc).isoformat()
     metadata_json: str | None = json.dumps(metadata) if metadata is not None else None
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -220,20 +220,20 @@ def save_chat_message(
 
 
 def get_chat_history(
-    db_path: str | Path,
+    database: Database,
     session_id: str,
 ) -> list[dict[str, Any]]:
     """Return all chat messages for a session in insertion order.
 
     Args:
-        db_path: Path to the SQLite database file.
+        database: The Database holding the chat_messages table.
         session_id: Browser-session identifier to filter by.
 
     Returns:
         List of dicts with keys: ``role``, ``content``, ``created_at``,
         ``metadata`` (dict or ``None``).
     """
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """

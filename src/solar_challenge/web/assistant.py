@@ -25,13 +25,19 @@ from types import MappingProxyType
 from typing import Any, Generator, assert_never
 from uuid import uuid4
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, session
+from flask import Blueprint, Response, jsonify, render_template, session
 from flask.typing import ResponseReturnValue
 
-from solar_challenge.web import database
+from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
+from solar_challenge.web.shared import (
+    NotAJsonObject,
+    get_database,
+    get_job_manager,
+    get_storage,
+    request_json_object,
+)
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_DAYS_SENTINEL,
@@ -527,7 +533,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
 
 
-def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
+def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
     """Return a list of recent simulation runs, newest first.
 
     Read-only SELECT on the runs table; limit is clamped to [1, 50] so callers
@@ -535,9 +541,9 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
     summary metrics for each run.
 
     Args:
-        limit:   Maximum number of runs to return (clamped to 1–50; defaults to
-                 10 when <= 0).
-        db_path: Path to the SQLite database file.
+        limit:    Maximum number of runs to return (clamped to 1–50; defaults to
+                  10 when <= 0).
+        database: The Database whose runs table is read.
 
     Returns:
         ``{"runs": [...]}`` where each entry has ``run_id``, ``name``, ``type``,
@@ -552,7 +558,7 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
     effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
 
     try:
-        with database.get_db(db_path) as conn:
+        with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, type, status, created_at, n_homes, summary_json "
@@ -704,19 +710,18 @@ def dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     *,
-    db_path: "str | Path",
+    storage: RunStorage,
     job_manager: JobManager,
-    data_dir: "str | Path",
 ) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
         name:        The tool name as sent by the model.
         tool_input:  The validated input dict from the model's tool_use block.
-        db_path:     The SQLite database that the DB-backed tools read and that
-                     submitted jobs record their runs in.
+        storage:     The app's RunStorage: the run-lookup tools read its runs,
+                     and the jobs the trigger tools submit record their runs in
+                     its database and their artefacts under its data_dir.
         job_manager: The app's JobManager, which the trigger tools submit jobs to.
-        data_dir:    The root directory for submitted runs' artefacts.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -734,17 +739,17 @@ def dispatch_tool(
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, RunStorage(database.Database(Path(db_path)), data_dir))
+        return get_run_results(run_id_or_name, storage)
     if name == "list_recent_runs":
         try:
             limit: int = int(tool_input.get("limit", 10))
         except (ValueError, TypeError):
             limit = 10
-        return list_recent_runs(limit, db_path)
+        return list_recent_runs(limit, storage.database)
     if name == "run_home_simulation":
-        return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
+        return run_home_simulation(dict(tool_input), job_manager, storage.database.path, storage.data_dir)
     if name == "run_fleet_simulation":
-        return run_fleet_simulation(dict(tool_input), job_manager, db_path, data_dir)
+        return run_fleet_simulation(dict(tool_input), job_manager, storage.database.path, storage.data_dir)
     all_names = ", ".join(t["name"] for t in TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
@@ -776,8 +781,7 @@ def chat_history() -> ResponseReturnValue:
         ``role``, ``content``, ``created_at``, and ``metadata`` keys.
     """
     sid = _session_id()
-    db_path = current_app.config["DATABASE"]
-    messages = database.get_chat_history(db_path, sid)
+    messages = get_chat_history(get_database(), sid)
     return jsonify({"messages": messages})
 
 
@@ -1044,13 +1048,13 @@ def _failed(error: Exception) -> _TurnEnding:
 class _TurnRecorder:
     """Stores one chat turn in the session's chat_messages rows: the user's message, then the reply."""
 
-    db_path: "str | Path"
+    database: Database
     session_id: str
     model: str
 
     def store_user_message(self, text: str) -> None:
         """Store *text* as the turn's user row."""
-        database.save_chat_message(self.db_path, self.session_id, "user", text)
+        save_chat_message(self.database, self.session_id, "user", text)
 
     def store_reply(self, record: _ReplyRecord, ending: _TurnEnding) -> None:
         """Store the turn's one reply row: *record*'s text, or *ending*'s stand-in when it has none.
@@ -1061,8 +1065,8 @@ class _TurnRecorder:
         metadata: dict[str, Any] = {**record.cache_usage, "model": self.model} if record.cache_usage else {}
         if record.tools_run:
             metadata["invoked_tools"] = list(record.tools_run)
-        database.save_chat_message(
-            self.db_path,
+        save_chat_message(
+            self.database,
             self.session_id,
             "assistant",
             record.reply if _has_text(record.reply) else ending.stand_in,
@@ -1117,26 +1121,22 @@ def _refusal(user_message: str) -> str | None:
 def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
     """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
 
-    The run *run_id* names, if any, is the turn's context. This reads the app's
-    config, the session and the app's extensions, in the request; the frames it
-    returns read none of them, so the stream needs no request context.
+    The run *run_id* names, if any, is the turn's context. This reads the
+    session and the app's extensions, in the request; the frames it returns
+    read neither, so the stream needs no request context.
     """
-    db_path = current_app.config["DATABASE"]
+    database = get_database()
+    storage = get_storage()
     session_id = _session_id()
     model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
     messages = request_messages(
-        database.get_chat_history(db_path, session_id), user_message, _run_context(run_id, get_storage())
+        get_chat_history(database, session_id), user_message, _run_context(run_id, storage)
     )
-    run_tool = partial(
-        dispatch_tool,
-        db_path=db_path,
-        job_manager=get_job_manager(),
-        data_dir=current_app.config["DATA_DIR"],
-    )
+    run_tool = partial(dispatch_tool, storage=storage, job_manager=get_job_manager())
     return _turn_frames(
         user_message,
         _reply_events(client, _model_request(model, messages), run_tool),
-        _TurnRecorder(db_path, session_id, model),
+        _TurnRecorder(database, session_id, model),
     )
 
 
