@@ -291,6 +291,11 @@ def grid_dependency_ratio(*, grid_import_kwh: float, demand_kwh: float) -> float
     return _share(grid_import_kwh, demand_kwh)
 
 
+def heat_pump_load_ratio(*, heat_pump_load_kwh: float, demand_kwh: float) -> float:
+    """The share of the demand that was the heat pump's load, or 0.0 when the demand is not positive."""
+    return _share(heat_pump_load_kwh, demand_kwh)
+
+
 def _share(part: float, whole: float) -> float:
     """part / whole, or 0.0 when whole is not positive."""
     return float(part / whole) if whole > 0 else 0.0
@@ -703,7 +708,7 @@ def calculate_summary(
     if results.heat_pump_load is not None:
         total_heat_pump_kwh = totals["heat_pump_load_kwh"]
         peak_heat_pump_kw = float(results.heat_pump_load.max())
-        heat_pump_ratio = _share(total_heat_pump_kwh, total_demand)
+        heat_pump_ratio = heat_pump_load_ratio(heat_pump_load_kwh=total_heat_pump_kwh, demand_kwh=total_demand)
 
     return SummaryStatistics(
         total_generation_kwh=total_gen,

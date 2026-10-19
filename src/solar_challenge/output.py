@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, calculate_summary, grid_dependency_ratio, self_consumption_ratio
+from solar_challenge.home import (
+    SimulationResults,
+    calculate_summary,
+    grid_dependency_ratio,
+    heat_pump_load_ratio,
+    self_consumption_ratio,
+)
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
@@ -127,8 +133,8 @@ def generate_summary_report(
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
 
-            winter_hp_ratio = winter_hp_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
-            summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
+            winter_hp_ratio = heat_pump_load_ratio(heat_pump_load_kwh=winter_hp_kwh, demand_kwh=winter_demand_kwh)
+            summer_hp_ratio = heat_pump_load_ratio(heat_pump_load_kwh=summer_hp_kwh, demand_kwh=summer_demand_kwh)
 
             # Calculate average daily values
             cadence = results.window.cadence
