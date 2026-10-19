@@ -7,6 +7,7 @@ tool calls.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from solar_challenge.web.assistant import (
     METRIC_TABLE,
     TOOL_CALL_LIMIT_NOTICE,
     TOOLS,
+    ToolContext,
     dispatch_tool,
     explain_metric,
     get_run_results,
@@ -49,18 +51,18 @@ from tests.unit.web_assistant._fakes import (
 )
 
 
-def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
-    """The db_path, job_manager and data_dir ``dispatch_tool`` requires, rooted in *tmp_path*.
+def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
+    """The ToolContext ``dispatch_tool`` runs a tool in, rooted in *tmp_path*.
 
-    For tests that do not care which values they pass; keyword *overrides*
-    replace individual entries for those that do.
+    For tests that do not care which collaborators the tool gets; keyword
+    *overrides* replace individual fields for those that do.
     """
-    return {
-        "db_path": tmp_path / "assistant.db",
-        "job_manager": autospecced_job_manager(),
-        "data_dir": tmp_path,
-        **overrides,
-    }
+    defaults = ToolContext(
+        db_path=tmp_path / "assistant.db",
+        data_dir=tmp_path,
+        job_manager=autospecced_job_manager(),
+    )
+    return replace(defaults, **overrides)
 
 
 @pytest.fixture
@@ -111,7 +113,7 @@ class TestToolSurface:
         result = dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
-            **dispatch_dependencies(tmp_path),
+            tool_context(tmp_path),
         )
         expected = explain_metric("self_consumption_ratio")
         assert result == expected, (
@@ -123,7 +125,7 @@ class TestToolSurface:
         result = dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
-            **dispatch_dependencies(tmp_path),
+            tool_context(tmp_path),
         )
         expected = suggest_config(3100, "self_sufficiency")
         assert result == expected, (
@@ -136,7 +138,7 @@ class TestToolSurface:
             result = dispatch_tool(
                 "nonexistent_tool",
                 {},
-                **dispatch_dependencies(tmp_path),
+                tool_context(tmp_path),
             )
         except Exception as exc:
             raise AssertionError(
@@ -494,7 +496,7 @@ class TestRunLookupToolSurface:
         )
 
     def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
-        """dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
+        """dispatch_tool('get_run_results', {...}) with the seeded db_path in its context returns same dict as handler."""
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
             db_path,
@@ -508,14 +510,14 @@ class TestRunLookupToolSurface:
         result = dispatch_tool(
             "get_run_results",
             {"run_id_or_name": "disp-run-001"},
-            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
+            tool_context(tmp_path, db_path=str(db_path)),
         )
         expected = get_run_results("disp-run-001", RunStorage(db_path=db_path, data_dir=tmp_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
     def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
-        """dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
+        """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded db_path in its context returns same dict as handler."""
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
             db_path,
@@ -529,7 +531,7 @@ class TestRunLookupToolSurface:
         result = dispatch_tool(
             "list_recent_runs",
             {"limit": 5},
-            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
+            tool_context(tmp_path, db_path=str(db_path)),
         )
         expected = list_recent_runs(5, db_path)
 
@@ -649,7 +651,7 @@ class TestSimulationToolSurface:
         ]
 
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
-        """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
+        """dispatch_tool('run_home_simulation', {...}) with a mock job_manager in its context returns handler result."""
         jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
@@ -661,9 +663,7 @@ class TestSimulationToolSurface:
         via_dispatch = dispatch_tool(
             "run_home_simulation",
             params,
-            db_path=str(tmp_path / "t.db"),
-            job_manager=jm2,
-            data_dir=str(tmp_path),
+            tool_context(tmp_path, job_manager=jm2),
         )
 
         assert direct == via_dispatch, (
@@ -671,7 +671,7 @@ class TestSimulationToolSurface:
         )
 
     def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
-        """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
+        """dispatch_tool('run_fleet_simulation', {...}) with a mock job_manager in its context returns handler result."""
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
         jm = autospecced_job_manager()
@@ -683,9 +683,7 @@ class TestSimulationToolSurface:
         via_dispatch = dispatch_tool(
             "run_fleet_simulation",
             params,
-            db_path=str(tmp_path / "t.db"),
-            job_manager=jm2,
-            data_dir=str(tmp_path),
+            tool_context(tmp_path, job_manager=jm2),
         )
 
         assert direct == via_dispatch, (
