@@ -225,6 +225,39 @@ def test_a_name_its_module_imports_only_for_type_checking_names_the_class_its_ow
     assert named_classes(later.audit) == {decimal.Decimal}
 
 
+def test_a_routine_whose_module_another_module_of_the_same_name_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_both(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.audit)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
 def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_once_dropped(
     tmp_path: pathlib.Path,
 ) -> None:
