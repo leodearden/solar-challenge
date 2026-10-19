@@ -43,7 +43,13 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
-from tests._finance_builders import make_scenario_of, make_sized_home
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_of,
+    make_sim_results,
+    make_sized_home,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -70,51 +76,8 @@ _FIN_HOME = make_sized_home(pv_kwp=5.5, battery_kwh=5.0)
 
 
 # ---------------------------------------------------------------------------
-# Stub helpers — replace NotImplementedError bodies with real implementations
-# in step-2 (GREEN).
+# [FIN] fixture builders over tests/_finance_builders.py
 # ---------------------------------------------------------------------------
-
-
-def _make_sim_results_cr6(
-    self_kwh: float,
-    export_kwh: float,
-    import_kwh: float,
-    n_steps: int = 8760,  # hourly rows; each kW row counts for the hour it lasts
-) -> SimulationResults:
-    """Build a synthetic SimulationResults.
-
-    Hourly resolution (n_steps=8760 ≈ 1 yr) keeps memory ~60× lower than the
-    former 1-minute default while preserving energy totals exactly:
-      home.py totals each kW series as (series * window.step_hours).sum(),
-      and step_hours is 1 on this hourly index:
-      sc_kw = self_kwh / n_steps  →  sum = self_kwh  ✓
-
-    No battery grid-charging: grid_import is all load import.
-    Untariffed: import_cost is zero and grid_charge_cost is None.
-    export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
-    """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / n_steps   # kW s.t. its hourly rows total self_kwh
-    exp_kw = export_kwh / n_steps
-    imp_kw = import_kwh / n_steps
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),  # SEG=0 → no-flex CBS-revenue identity holds
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
 
 
 def _make_fleet_results_fin_cr6(
@@ -141,12 +104,9 @@ def _make_fleet_results_fin_cr6(
 
     No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
-    homes = [_FIN_HOME] * n_homes
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
 def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
@@ -328,7 +288,7 @@ class TestNoFlexAnchorReconciliation:
         year0 = curve.points[0]
 
         # No-flex CBS-revenue identity (by construction of the synthetic fleet)
-        # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0
+        # SEG=0 (export_revenue=0 in make_sim_results), grid_services=0
         expected_revenue = (
             finance.own_use_rate_pence_per_kwh
             * year0.fleet_billed_own_use_kwh
@@ -530,12 +490,9 @@ def _make_arbitrage_fleet_cr6(
     a lower r*.  Grid-charge energy is paid by the householder inside grid import
     (docs/cost-recovery-finance-model.md §4 and §8.2); it is not a CBS term.
     """
-    homes = [_FIN_HOME] * n_homes
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -568,12 +525,9 @@ def _make_interior_fleet_cr6(
 
     No-flex: no grid charging, export_revenue=0.
     """
-    homes = [_FIN_HOME] * n_homes
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
 def _make_finance_interior_cr6(
@@ -891,8 +845,8 @@ def _make_grid_charge_sim_results_cr6(
     This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
     is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
 
-    Untariffed, like _make_sim_results_cr6: import_cost is zero and grid_charge_cost
-    is None.
+    Untariffed, like make_sim_results' results: import_cost is zero and
+    grid_charge_cost is None.
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
     sc_kw = self_kwh / n_steps
@@ -936,17 +890,18 @@ def _make_grid_charge_fleet_cr6(
         _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
-    homes = [_FIN_HOME] * n_homes
-    per_home = [
-        _make_grid_charge_sim_results_cr6(
-            self_kwh=self_kwh,
-            export_kwh=export_kwh,
-            import_to_load_kwh=import_to_load_kwh,
-            grid_charge_kwh=grid_charge_kwh,
-        )
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results_of(
+        [
+            _make_grid_charge_sim_results_cr6(
+                self_kwh=self_kwh,
+                export_kwh=export_kwh,
+                import_to_load_kwh=import_to_load_kwh,
+                grid_charge_kwh=grid_charge_kwh,
+            )
+            for _ in range(n_homes)
+        ],
+        homes=[_FIN_HOME] * n_homes,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +983,7 @@ class TestArbitrageBasisCReconciliation:
     def test_flat_control_no_gap(self) -> None:
         """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
         # Use the existing flat-rate builder
-        flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+        flat_sr = make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
         assert _cbs_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
@@ -1183,7 +1138,7 @@ class TestCbsOwnUseKwhHelper:
 
     def test_normal_case(self) -> None:
         """demand=3400, import=1600 → basis C = 1800 kWh."""
-        s = _make_sim_results_cr6(
+        s = make_sim_results(
             self_kwh=1800.0,
             export_kwh=400.0,
             import_kwh=1600.0,
@@ -1198,7 +1153,7 @@ class TestCbsOwnUseKwhHelper:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
         # Build a summary with demand=500, import=900 by construction.
         # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
-        # Instead, build manually via _make_sim_results_cr6 with sc=0, import>demand:
+        # Instead, build manually via make_sim_results with sc=0, import>demand:
         # Use sc=500, import=900 → demand=1400 (still basis C > 0).
         # We need a summary where demand < import to test the clamp.
         # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
