@@ -355,7 +355,7 @@ class TestGetRunResults:
 
 
 class TestListRecentRuns:
-    """Tests for list_recent_runs(limit, db_path) -> dict."""
+    """Tests for list_recent_runs(limit, database) -> dict."""
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
@@ -371,7 +371,7 @@ class TestListRecentRuns:
                 summary={"total_generation_kwh": float(i * 100)},
             )
 
-        result = list_recent_runs(3, db_path)
+        result = list_recent_runs(3, Database(db_path))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -400,7 +400,7 @@ class TestListRecentRuns:
             summary={"self_consumption_ratio": 0.70},
         )
 
-        result = list_recent_runs(10, db_path)
+        result = list_recent_runs(10, Database(db_path))
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -419,7 +419,7 @@ class TestListRecentRuns:
         init_db(db_path)
 
         try:
-            result = list_recent_runs(10, db_path)
+            result = list_recent_runs(10, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -445,7 +445,7 @@ class TestListRecentRuns:
                 summary={},
             )
 
-        result = list_recent_runs(9999, db_path)
+        result = list_recent_runs(9999, Database(db_path))
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -465,7 +465,7 @@ class TestListRecentRuns:
         )
 
         try:
-            result = list_recent_runs(0, db_path)
+            result = list_recent_runs(0, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -491,7 +491,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, db_path)
+            result = list_recent_runs(5, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -510,7 +510,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, bad_path)
+            result = list_recent_runs(5, Database(bad_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
