@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("flask")
 
-from tests._web_app import build_test_app
+from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
 
 
 def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
@@ -63,3 +63,30 @@ def test_secret_key_none_leaves_the_apps_key_to_create_apps_own_lookup(
     exported_secret_key: str, tmp_path: Path
 ) -> None:
     assert build_test_app(tmp_path, secret_key=None).secret_key == exported_secret_key
+
+
+def test_the_store_config_is_pointed_into_the_missing_directory_which_stays_missing(
+    tmp_path: Path,
+) -> None:
+    app = build_test_app(tmp_path / "data")
+    directory = tmp_path / "missing"
+
+    point_store_config_at_a_missing_directory(app, directory)
+
+    assert Path(app.config["DATABASE"]).parent == directory
+    assert Path(app.config["DATA_DIR"]) == directory
+    assert not directory.exists()
+
+
+def test_an_existing_directory_is_refused_and_the_store_config_is_left_as_it_was(
+    tmp_path: Path,
+) -> None:
+    app = build_test_app(tmp_path / "data")
+    store_config = (app.config["DATABASE"], app.config["DATA_DIR"])
+    existing = tmp_path / "existing"
+    existing.mkdir()
+
+    with pytest.raises(AssertionError):
+        point_store_config_at_a_missing_directory(app, existing)
+
+    assert (app.config["DATABASE"], app.config["DATA_DIR"]) == store_config

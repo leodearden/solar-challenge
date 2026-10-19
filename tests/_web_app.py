@@ -7,9 +7,10 @@ test drops solar_challenge.web.app from sys.modules imports the factory anew.
 
 Usage::
 
-    from tests._web_app import build_test_app
+    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
 
     app = build_test_app(tmp_path)
+    point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 """
 
 from __future__ import annotations
@@ -40,3 +41,18 @@ def build_test_app(
             **secret_key_config,
         }
     )
+
+
+def point_store_config_at_a_missing_directory(app: Flask, directory: Path) -> None:
+    """Point *app*'s DATABASE and DATA_DIR config into *directory*, which must not exist.
+
+    A request that still read the store's location from the config would fail to open
+    its database, because sqlite3.connect does not create a missing directory. So a test
+    that sends a request after this call shows that the request used the store
+    create_app built.
+    """
+    assert not directory.exists(), (
+        f"{directory} exists, so a request that read the store config could still open a database in it"
+    )
+    app.config["DATABASE"] = str(directory / "test.db")
+    app.config["DATA_DIR"] = str(directory)
