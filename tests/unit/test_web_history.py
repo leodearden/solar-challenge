@@ -35,7 +35,7 @@ from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import build_test_app
+from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -256,6 +256,18 @@ class TestRunsAPI:
         run = data["runs"][0]
         assert run["total_generation_kwh"] == 100.0
         assert run["self_consumption_ratio"] == 0.60
+
+    def test_the_run_list_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """GET /api/history/runs reads the Database create_app built, whatever the app's store config names afterwards."""
+        _insert_test_run(app, run_id="listed-run")
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        response = client.get("/api/history/runs")
+
+        assert response.status_code == 200
+        assert [run["id"] for run in response.get_json()["runs"]] == ["listed-run"]
 
 
 class TestRunDetailAPI:
