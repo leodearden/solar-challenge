@@ -116,20 +116,17 @@ class TestGetJobStatus:
 class TestGetJobProgress:
     """Tests for GET /api/jobs/<id>/progress (SSE endpoint)."""
 
-    def test_returns_event_stream_content_type(
+    def test_is_served_with_the_event_stream_response_policy(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """SSE endpoint returns text/event-stream Content-Type."""
+        """The job's queued complete event ends the stream at once, so the body can be read whole."""
         resp = client.get("/api/jobs/job-home-001/progress")
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.content_type
+        resp.get_data()
 
-    def test_no_cache_header(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """SSE response includes Cache-Control: no-cache header."""
-        resp = client.get("/api/jobs/job-home-001/progress")
-        assert resp.headers.get("Cache-Control") == "no-cache"
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        assert resp.headers["Cache-Control"] == "no-cache"
+        assert resp.headers["X-Accel-Buffering"] == "no"
 
     def test_unknown_job_sends_error_event(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock

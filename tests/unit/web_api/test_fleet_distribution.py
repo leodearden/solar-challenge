@@ -425,6 +425,27 @@ class TestFleetFromDistribution:
             resolve_location(location)
         assert resp.get_json() == {"error": str(refusal.value)}
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("heat_pump", "ASHP", id="heat-pump-the-fleet-has-no-overlay-for"),
+            pytest.param(
+                "tarif", {"type": "flat_rate", "rate_per_kwh": 0.3}, id="misspelt-tariff"
+            ),
+        ],
+    )
+    def test_unrecognised_key_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, key: str, value: object
+    ) -> None:
+        """A top-level key the fleet form does not have is refused by name, not dropped from a fleet run without it; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: value},
+        )
+        assert resp.status_code == 400
+        assert f"Unrecognised fleet form keys: {key!r};" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
@@ -836,6 +857,26 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "count",
+        [pytest.param(1, id="short of n_homes"), pytest.param(3, id="beyond n_homes")],
+    )
+    def test_shuffled_pool_not_sized_to_n_homes_returns_400_carrying_the_grammars_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, count: int
+    ) -> None:
+        """A shuffled_pool whose count is not the body's 2 homes reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
+        body = {
+            **self._VALID_BODY,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [{"value": 4.0, "count": count}]}},
+        }
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "pv.capacity_kw" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

@@ -96,6 +96,21 @@ conventions:
       plotly/richardsonpy/scipy/anthropic). Eroding this leaks Any into a consumer's type checks.
 
   - rule: >
+      No solar_challenge module imports another solar_challenge module inside a function,
+      unless ALLOWED_FUNCTION_LOCAL_IMPORTS in tests/unit/test_import_structure.py lists the
+      (importing module, imported module) pair with its reason. The reason is Permanent, naming
+      the documented contract that requires the laziness (the cheap top-level import, or the
+      optional web extra), or Transitional, naming the task or program stream that removes the
+      import.
+    why: >
+      A function-local package import hides a dependency from the module's top, usually to dodge
+      an import cycle. Eleven did that until task 773 put ConfigurationError in the errors leaf
+      (INV-5; docs/prds/errors-leaf.md §7). The per-task verify runs the test, which checks both
+      ways: an import the list lacks fails it, naming its file:line and the imported module, and
+      so does an entry that no import matches any more. So the change that removes a deferred
+      import deletes its entry in the same commit.
+
+  - rule: >
       The project's own code is AGPL-3.0-or-later (pyproject is authoritative). pyproject's license
       expression also names MIT for the third-party code the wheel bundles: the scripts vendored
       under src/solar_challenge/web/static/vendor/ and the Tailwind CSS compiled into

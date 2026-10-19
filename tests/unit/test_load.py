@@ -16,6 +16,7 @@ from solar_challenge.load import (
     OFGEM_TDCV_BY_OCCUPANTS,
     energy_kwh,
     generate_load_profile,
+    household_occupant_count,
     scale_profile_to_energy,
 )
 
@@ -135,6 +136,36 @@ class TestLoadConfigValidation:
 
         assert type(config.household_occupants) is int
         assert config.household_occupants == 3
+
+
+class TestHouseholdOccupantCount:
+    """household_occupant_count is LoadConfig's occupant rule, for a caller holding a count that is not an int."""
+
+    @pytest.mark.parametrize(
+        "occupants",
+        [pytest.param(3.0, id="float"), pytest.param(np.int64(3), id="numpy-int64")],
+    )
+    def test_a_whole_number_count_is_given_as_the_int_it_equals(self, occupants: float) -> None:
+        count = household_occupant_count(occupants)
+
+        assert type(count) is int
+        assert count == 3
+
+    @pytest.mark.parametrize(
+        ("occupants", "refusal"),
+        [
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="below-one"),
+            pytest.param(11, "Household occupants seems unrealistic: 11", id="above-ten"),
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+        ],
+    )
+    def test_a_count_that_is_not_a_whole_number_from_1_to_10_is_refused_naming_it(
+        self, occupants: float, refusal: str
+    ) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            household_occupant_count(occupants)
+        assert str(exc_info.value) == refusal
 
 
 class TestGenerateLoadProfile:

@@ -4,9 +4,6 @@
 No PVGIS and not slow, so verify runs it. Total cost is deliberately not asserted: TOU
 guarantees only what it imports at the peak rate. The home has no seg_tariff, so
 simulate_home's warning that export revenue is 0.0 is ignored.
-
-Non-slow counterpart of
-tests/integration/test_tou_dispatch.py::TestTOUDispatchComparison::test_tou_dispatch_never_imports_more_at_peak_rate
 """
 
 from __future__ import annotations
@@ -41,7 +38,7 @@ def _sunny_then_sunless_weather() -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def greedy_and_tou() -> tuple[SimulationResults, SimulationResults]:
-    """The Economy 7 home of the slow file, simulated over both days with greedy, then TOU dispatch."""
+    """An Economy 7 home with a 5 kWh battery, simulated over both days with greedy, then TOU dispatch."""
     home = HomeConfig(
         pv_config=PVConfig.default_4kw(),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, seed=42),
@@ -76,7 +73,7 @@ def test_tou_imports_less_at_the_peak_rate_than_greedy(
 ) -> None:
     """TOU imports less than greedy at the peak rate.
 
-    The general guarantee is "never more" (see the slow counterpart). The sunless
+    The general guarantee is "never more". The sunless
     day makes it strict here: greedy spent the battery overnight, while TOU spends
     that charge at the peak rate.
     """

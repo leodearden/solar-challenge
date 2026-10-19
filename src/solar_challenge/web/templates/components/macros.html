@@ -91,6 +91,32 @@
 {% endmacro %}
 
 
+{# The chart tabs' colours: the selected tab's, and each other tab's #}
+{% set _selected_tab_classes = 'border-primary-500 text-primary-600 dark:text-primary-400' %}
+{% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300' %}
+
+
+{# A page's chart tabs: tabs lists the key and label of each tab, the first tab opens, and caller() renders the panels, each shown while activeTab is its tab's key. tests/e2e/test_chart_tab_colours.py says why the bar's :class is an object #}
+{% macro chart_tabs(tabs) %}
+<div x-data='{ activeTab: {{ tabs[0].key | tojson }} }' class="mb-8">
+    <div class="border-b border-slate-200 dark:border-slate-700 mb-6">
+        <nav class="-mb-px flex space-x-6" aria-label="Chart tabs" role="tablist">
+            {% for tab in tabs %}
+            <button
+                @click='activeTab = {{ tab.key | tojson }}'
+                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
+                :class='{ {{ _selected_tab_classes | tojson }}: activeTab === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: activeTab !== {{ tab.key | tojson }} }'
+                role="tab"
+                :aria-selected='activeTab === {{ tab.key | tojson }}'
+            >{{ tab.label }}</button>
+            {% endfor %}
+        </nav>
+    </div>
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+
 {# Range slider bound to the Alpine expression model; its thumb takes the theme's primary colour #}
 {% macro range_input(id, model, min, max, step, name='', width_class='w-full') %}
 <input

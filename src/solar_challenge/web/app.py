@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import atexit
 import logging
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ from solar_challenge.web.assistant import bp as assistant_bp
 from solar_challenge.web.database import init_db
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
 from solar_challenge.web.scenarios import bp as scenarios_bp
 from solar_challenge.web.storage import RunStorage
@@ -131,9 +131,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
 
-    # Register shutdown handler
-    atexit.register(job_manager.shutdown)
-
     _register_blueprints(app)
 
     # Register custom error handlers
@@ -149,12 +146,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
 
 def _register_blueprints(app: Flask) -> None:
-    """Register the blueprint of each feature area on *app*."""
+    """Register each of the dashboard's blueprints on *app*."""
     app.register_blueprint(routes_bp)
     app.register_blueprint(history_bp, url_prefix="/history")
     app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
     app.register_blueprint(api_bp)
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
+    app.register_blueprint(plotly_js_bp)
 
 
 if __name__ == "__main__":

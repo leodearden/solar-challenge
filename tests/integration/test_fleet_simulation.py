@@ -2,6 +2,7 @@
 
 The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
 Each fleet runs in this process (parallel=False); tests/unit/test_fleet.py covers the worker pool.
+Tests that ask june_fleet_run for equal fleets over as many days share one simulation, which they only read.
 VAL-006: Integration test for fleet simulation
 """
 
@@ -14,12 +15,13 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     calculate_fleet_summary,
-    simulate_fleet,
 )
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache
+from tests._computed_once import ComputedOnce
+from tests._june_fleet_runs import june_fleet_runs
 from tests._seeded_tmy import ClearJuneDays
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
@@ -31,10 +33,10 @@ def bristol_june_tmy(weather_cache: WeatherCache) -> None:
     _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
 
-def _simulate_june_days(config: FleetConfig, days: int) -> FleetResults:
-    """The fleet simulated in this process over the first *days* of _JUNE_DAYS, with every minute's energy balance validated."""
-    start, end = _JUNE_DAYS.window(days)
-    return simulate_fleet(config, start, end, validate_balance=True, parallel=False)
+@pytest.fixture(scope="module")
+def june_fleet_run() -> ComputedOnce[FleetResults]:
+    """The fleets this module's tests simulate over _JUNE_DAYS, each equal fleet and day count once."""
+    return june_fleet_runs(_JUNE_DAYS)
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
@@ -74,18 +76,18 @@ class TestFleetSimulation:
             name="Test fleet - 10 uniform homes",
         )
 
-    def test_simulates_10_homes_for_7_days(self, heterogeneous_fleet_config):
+    def test_simulates_10_homes_for_7_days(self, heterogeneous_fleet_config, june_fleet_run):
         """Simulates 10 homes for 7 days successfully."""
-        results = _simulate_june_days(heterogeneous_fleet_config, 7)
+        results = june_fleet_run(heterogeneous_fleet_config, 7)
 
         # Verify 10 homes simulated
         assert len(results) == 10
         assert isinstance(results, FleetResults)
 
-    def test_per_home_results_accessible(self, heterogeneous_fleet_config):
+    def test_per_home_results_accessible(self, heterogeneous_fleet_config, june_fleet_run):
         """Per-home results are accessible by index."""
         days = 3
-        results = _simulate_june_days(heterogeneous_fleet_config, days)
+        results = june_fleet_run(heterogeneous_fleet_config, days)
 
         # Access each home's results
         for i in range(10):
@@ -95,10 +97,10 @@ class TestFleetSimulation:
             assert (home_results.generation >= 0).all()
             assert (home_results.demand >= 0).all()
 
-    def test_fleet_aggregates_calculated(self, uniform_fleet_config):
+    def test_fleet_aggregates_calculated(self, uniform_fleet_config, june_fleet_run):
         """Fleet aggregates are calculated correctly."""
         days = 2
-        results = _simulate_june_days(uniform_fleet_config, days)
+        results = june_fleet_run(uniform_fleet_config, days)
 
         # Verify aggregate properties
         total_gen = results.total_generation
@@ -119,10 +121,10 @@ class TestFleetSimulation:
         manual_total_gen = sum(results[i].generation for i in range(10))
         assert (total_gen == manual_total_gen).all()
 
-    def test_fleet_summary_statistics(self, heterogeneous_fleet_config):
+    def test_fleet_summary_statistics(self, heterogeneous_fleet_config, june_fleet_run):
         """Fleet summary statistics are calculated correctly."""
         days = 7
-        results = _simulate_june_days(heterogeneous_fleet_config, days)
+        results = june_fleet_run(heterogeneous_fleet_config, days)
         summary = calculate_fleet_summary(results)
 
         assert isinstance(summary, FleetSummary)
@@ -142,10 +144,10 @@ class TestFleetSimulation:
         assert summary.per_home_generation_min_kwh <= summary.per_home_generation_mean_kwh
         assert summary.per_home_generation_mean_kwh <= summary.per_home_generation_max_kwh
 
-    def test_no_errors_or_warnings(self, heterogeneous_fleet_config):
+    def test_no_errors_or_warnings(self, heterogeneous_fleet_config, june_fleet_run):
         """Simulation completes without errors."""
         # This should complete without raising any exceptions
-        results = _simulate_june_days(heterogeneous_fleet_config, 3)
+        results = june_fleet_run(heterogeneous_fleet_config, 3)
 
         # All homes should have valid results
         for i in range(len(results)):
@@ -156,10 +158,10 @@ class TestFleetSimulation:
             assert not home_results.grid_import.isna().any()
             assert not home_results.grid_export.isna().any()
 
-    def test_aggregate_dataframe_output(self, uniform_fleet_config):
+    def test_aggregate_dataframe_output(self, uniform_fleet_config, june_fleet_run):
         """Fleet aggregate DataFrame is generated correctly."""
         days = 1
-        results = _simulate_june_days(uniform_fleet_config, days)
+        results = june_fleet_run(uniform_fleet_config, days)
         df = results.to_aggregate_dataframe()
 
         assert isinstance(df, pd.DataFrame)
@@ -170,9 +172,9 @@ class TestFleetSimulation:
         assert "grid_import_kw" in df.columns
         assert "grid_export_kw" in df.columns
 
-    def test_heterogeneous_configs_preserved(self, heterogeneous_fleet_config):
+    def test_heterogeneous_configs_preserved(self, heterogeneous_fleet_config, june_fleet_run):
         """Different home configurations produce different results."""
-        results = _simulate_june_days(heterogeneous_fleet_config, 3)
+        results = june_fleet_run(heterogeneous_fleet_config, 3)
         summary = calculate_fleet_summary(results)
 
         # Heterogeneous fleet should have variation in per-home generation

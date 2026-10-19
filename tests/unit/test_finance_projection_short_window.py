@@ -139,7 +139,7 @@ class TestProjectMultiYearAnnualisesShortWindow:
             sum(b.own_use_payment_gbp for b in bills) * 100.0 / finance.own_use_rate_pence_per_kwh
         )
         assert billed_own_use_kwh == pytest.approx(len(summaries) * annual_own_use_kwh)
-        assert year_0.fleet_self_consumption_kwh == pytest.approx(billed_own_use_kwh)
+        assert year_0.fleet_billed_own_use_kwh == pytest.approx(billed_own_use_kwh)
 
     def test_short_window_warns_once_naming_the_window(self) -> None:
         """Annualising a short window raises one UserWarning per projection, naming its days."""

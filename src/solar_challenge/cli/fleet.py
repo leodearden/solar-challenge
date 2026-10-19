@@ -2,11 +2,14 @@
 """Fleet simulation commands."""
 
 import dataclasses
+import functools
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar
 
 import pandas as pd
 import typer
+from rich.progress import Progress, TaskID
 from rich.table import Table
 
 if TYPE_CHECKING:
@@ -375,45 +378,12 @@ def sweep(
     if "fleet_distribution" not in raw_config:
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
-    # Build sweep configs upfront
-    sweep_configs: list[tuple[float, FleetConfig]] = []
-    param_name: str = "multiplier"  # Default for YAML sweep
-
-    if param is not None:
-        # CLI-driven sweep
-        if min_val is None or max_val is None:
-            raise ConfigurationError(
-                "CLI sweep requires --min and --max values"
-            )
-        sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
-        sweep_values = sweep_spec.get_values()
-        param_name = param
-        print_info(
-            f"CLI sweep: {param} from {min_val} to {max_val} "
-            f"({steps} steps, {mode})"
-        )
-
-        for val in sweep_values:
-            substituted = substitute_config_variables(raw_config, {param: val})
-            fleet_config = dataclasses.replace(
-                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
-            )
-            sweep_configs.append((val, fleet_config))
-
+    if param is None:
+        param_name, sweep_configs = _yaml_sweep(raw_config)
     else:
-        # YAML-defined sweep
-        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
-        if sweep_spec is None:
-            raise ConfigurationError(
-                "No sweep spec found in config. "
-                "Use --param for CLI sweep or add type: sweep to multiplier."
-            )
-
-        print_info(
-            f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
-            f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+        param_name, sweep_configs = _param_sweep(
+            raw_config, param, min_val, max_val, steps, mode
         )
-        sweep_configs = parse_sweep_fleet_configs(raw_config)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)
@@ -421,30 +391,13 @@ def sweep(
 
     print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
+    export_point = (
+        None
+        if output_dir is None
+        else functools.partial(_export_sweep_point, output_dir, param_name)
+    )
+
     # Run multi-sweep simulation with cross-sweep parallelism
-    results_summary: list[dict[str, Any]] = []
-
-    def on_sweep_complete(sweep_idx: int, sweep_val: float, fleet_results: FleetResults) -> None:
-        """Handle completed sweep: save results and update summary."""
-        summary = calculate_fleet_summary(fleet_results)
-        results_summary.append({
-            "sweep_value": sweep_val,
-            "param": param_name,
-            "self_consumption_ratio": summary.fleet_self_consumption_ratio,
-            "total_generation_kwh": summary.total_generation_kwh,
-            "total_consumption_kwh": summary.total_demand_kwh,
-            "grid_import_kwh": summary.total_grid_import_kwh,
-            "grid_export_kwh": summary.total_grid_export_kwh,
-        })
-
-        # Save individual result if output_dir specified
-        if output_dir is not None:
-            if param is not None:
-                output_file = output_dir / f"{param}_{sweep_val:.4f}.csv"
-            else:
-                output_file = output_dir / f"multiplier_{sweep_val:.4f}.csv"
-            _export_fleet_results(fleet_results, output_file)
-
     with create_fleet_progress() as progress:
         task = progress.add_task(
             f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
@@ -456,20 +409,16 @@ def sweep(
             parallel=not sequential, max_workers=workers
         )
 
-        # Wrap iterator to update progress
-        def progress_iter() -> Any:
-            for item in result_iter:
-                progress.update(task, advance=1)
-                yield item
-
-        collect_multi_sweep_results(
+        sweep_results = collect_multi_sweep_results(
             sweep_configs,
-            progress_iter(),
-            on_sweep_complete=on_sweep_complete,
+            _advance_per_item(progress, task, result_iter),
+            on_sweep_complete=export_point,
         )
 
-    # Sort results by sweep value for consistent output
-    results_summary.sort(key=lambda x: x["sweep_value"])
+    results_summary = [
+        _sweep_summary_row(param_name, sweep_value, fleet_results)
+        for sweep_value, fleet_results in sweep_results.iter_results()
+    ]
 
     # Print summary table
     _print_sweep_summary(results_summary)
@@ -480,6 +429,89 @@ def sweep(
         summary_file = output_dir / "sweep_summary.csv"
         summary_df.to_csv(summary_file, index=False)
         print_success(f"Sweep summary saved to {summary_file}")
+
+
+def _param_sweep(
+    raw_config: dict[str, Any],
+    param: str,
+    min_val: Optional[float],
+    max_val: Optional[float],
+    steps: int,
+    mode: str,
+) -> tuple[str, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, param, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
+    if min_val is None or max_val is None:
+        raise ConfigurationError("CLI sweep requires --min and --max values")
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
+    print_info(
+        f"CLI sweep: {param} from {min_val} to {max_val} "
+        f"({steps} steps, {mode})"
+    )
+    return param, [
+        (
+            value,
+            dataclasses.replace(
+                parse_fleet_config(substitute_config_variables(raw_config, {param: value})),
+                name=f"{param}={value:.4f}",
+            ),
+        )
+        for value in sweep_spec.get_values()
+    ]
+
+
+def _yaml_sweep(
+    raw_config: Mapping[str, Any],
+) -> tuple[str, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, multiplier, and each sweep value with the fleet raw_config's YAML-defined sweep builds for it."""
+    param_name = "multiplier"
+    sweep_spec = detect_fleet_sweep_spec(raw_config)
+    if sweep_spec is None:
+        raise ConfigurationError(
+            "No sweep spec found in config. "
+            "Use --param for CLI sweep or add type: sweep to multiplier."
+        )
+    print_info(
+        f"YAML sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
+        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+    )
+    return param_name, parse_sweep_fleet_configs(raw_config)
+
+
+_T = TypeVar("_T")
+
+
+def _advance_per_item(progress: Progress, task: TaskID, items: Iterable[_T]) -> Iterator[_T]:
+    """Yield each of items after advancing progress's task by one."""
+    for item in items:
+        progress.update(task, advance=1)
+        yield item
+
+
+def _export_sweep_point(
+    output_dir: Path,
+    param_name: str,
+    _sweep_index: int,
+    sweep_value: float,
+    fleet_results: FleetResults,
+) -> None:
+    """Export a completed sweep point to its CSV under output_dir; the arguments after param_name are those collect_multi_sweep_results passes to on_sweep_complete."""
+    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{sweep_value:.4f}.csv")
+
+
+def _sweep_summary_row(
+    param_name: str, sweep_value: float, fleet_results: FleetResults
+) -> dict[str, Any]:
+    """The summary row of the sweep point at sweep_value: its fleet's self-consumption ratio and energy totals."""
+    summary = calculate_fleet_summary(fleet_results)
+    return {
+        "sweep_value": sweep_value,
+        "param": param_name,
+        "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+        "total_generation_kwh": summary.total_generation_kwh,
+        "total_consumption_kwh": summary.total_demand_kwh,
+        "grid_import_kwh": summary.total_grid_import_kwh,
+        "grid_export_kwh": summary.total_grid_export_kwh,
+    }
 
 
 def _print_sweep_summary(results: list[dict[str, Any]]) -> None:

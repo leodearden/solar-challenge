@@ -53,7 +53,7 @@ What a user observes:
 - **Two tests pin the memo.** `test_compute_once_event_figure_reused_across_ages` and `test_compute_once_memo_reused_on_bisection_path` monkeypatch `gridservices.compute_grid_services_at_events` and assert `call_count == 1`. They pass only while the import stays function-local, so a layering fix that hoists it fails them.
 - **Silent no-ops in optimize.**
   - `cli/optimize.configs --grid-services-kw` writes the flat field. Under capacity_at_events nothing reads it.
-  - The `grid_services` sensitivity alias sweeps the same field through `optimize._build_axis_configs`. Under capacity_at_events every swept value prices identically, so the panel reports the axis as rank-stable.
+  - The `grid_services` sensitivity alias sweeps the same field through `optimize.apply_knob`. Under capacity_at_events every swept value prices identically, so the panel reports the axis as rank-stable.
 - **The band vocabulary is written four times:**
   - `flex.FLEX_VALUE_BANDS` keys, with `resolve_flex_band`;
   - `GridServicesRateBands`' fields and `resolve`'s if-chain;
@@ -257,7 +257,7 @@ class GridServicesRateBand:                # frozen; gains a last field (additiv
   - Omitted, the default is retained_floor plus grid_services when the pricing is none or flat.
   - Under the events model the default is retained_floor only, with a printed line naming the omitted grid_services axis and why.
   - An explicit `--sensitivity` naming grid_services under the events model is refused before any simulation.
-- **`optimize._build_axis_configs`.** Rebuilding a `FinanceConfig` with a flat rate under the events model raises β's refusal, so library callers of `sensitivity_panel` get it too.
+- **`optimize.apply_knob`.** Rebuilding a `FinanceConfig` with a flat rate under the events model raises β's refusal, so library callers of `sensitivity_panel` get it too.
 
 ### 5.7 Scenario grammar (ε)
 

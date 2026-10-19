@@ -236,7 +236,7 @@ class TestSpreadsheetRevenueCurve:
         assert len(curve1.points) == len(curve2.points)
         for pt1, pt2 in zip(curve1.points, curve2.points):
             assert pt1.fleet_revenue_gbp == pt2.fleet_revenue_gbp
-            assert pt1.fleet_self_consumption_kwh == pt2.fleet_self_consumption_kwh
+            assert pt1.fleet_billed_own_use_kwh == pt2.fleet_billed_own_use_kwh
             assert pt1.fleet_export_kwh == pt2.fleet_export_kwh
         assert curve1.interp_error_estimate == curve2.interp_error_estimate
         assert curve1.sampled_ages == curve2.sampled_ages
@@ -256,7 +256,7 @@ class TestSpreadsheetRevenueCurve:
             assert pt2.fleet_revenue_gbp == pytest.approx(2.0 * pt1.fleet_revenue_gbp, rel=1e-10)
 
     def test_energy_fields_consistent_with_scf(self) -> None:
-        """fleet_self_consumption_kwh and fleet_export_kwh must reflect scf."""
+        """fleet_billed_own_use_kwh and fleet_export_kwh must reflect scf."""
         n_homes = 100
         pv_kwp = 5.5
         kwh_per_kwp = 1050.0
@@ -267,7 +267,7 @@ class TestSpreadsheetRevenueCurve:
         )
         fleet_gen = float(n_homes) * pv_kwp * kwh_per_kwp
         for pt in curve.points:
-            assert pt.fleet_self_consumption_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
+            assert pt.fleet_billed_own_use_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
             assert pt.fleet_export_kwh == pytest.approx((1.0 - scf) * fleet_gen, rel=1e-10)
 
 
@@ -736,7 +736,7 @@ class TestCalibrationPhysicsColumn:
             f"  Physics DSCR:            {physics_econ.min_dscr:.4f}\n"
             f"  Spreadsheet IRR:         {ss_econ.equity_irr*100:.2f}%\n"
             f"  Physics IRR:             {physics_econ.equity_irr*100:.2f}%\n"
-            f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}"
+            f"  Physics billed own-use:  {physics_curve.points[0].fleet_billed_own_use_kwh:.1f}"
             " kWh/yr (window annualised)\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}"
             " kWh/yr (window annualised)\n"

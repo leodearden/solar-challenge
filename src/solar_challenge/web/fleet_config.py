@@ -238,6 +238,10 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
     )
 
 
+#: The top-level keys of a fleet form that form_to_fleet_distribution_config reads.
+FLEET_DISTRIBUTION_FORM_KEYS: frozenset[str] = frozenset({"n_homes", "seed", "pv", "battery", "load"})
+
+
 def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
     """Convert web form data to a fleet distribution config dict.
 
@@ -250,7 +254,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     no dispatch strategy: every battery takes the form's dispatch_strategy.
 
     Args:
-        form_data: Form data dict from the web UI.
+        form_data: A fleet form, of which only the FLEET_DISTRIBUTION_FORM_KEYS are read.
 
     Returns:
         Fleet distribution config dict.

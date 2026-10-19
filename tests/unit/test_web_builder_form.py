@@ -354,8 +354,8 @@ class TestBuilderFormErrors:
         rather than exhausting the host's memory.
         """
         at_limit = [{"value": 4, "count": MAX_FLEET_HOMES}]
-        assert builder_form_errors(_form_with_pv_pool(at_limit)) == [], (
-            "premise: a pool of the fleet limit's values is accepted"
+        assert builder_form_errors({**_form_with_pv_pool(at_limit), "n_homes": MAX_FLEET_HOMES}) == [], (
+            "premise: a pool of the fleet limit's values is accepted for a fleet of that many homes"
         )
         assert builder_form_errors(_form_with_pv_pool(rows)) == [reason]
 

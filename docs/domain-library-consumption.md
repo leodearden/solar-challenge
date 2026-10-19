@@ -431,6 +431,24 @@ web app stores, is spaced one minute apart, so its amounts are unchanged;
 consumers that build results at another spacing re-check their totals when they
 re-pin.
 
+**Unreleased on main** (task 708): an EV whose `EVConfig.smart_charging_mode`
+is `"solar"` or `"off_peak"` now charges only while it is home. Each day's
+session is one unbroken run inside the stay from `arrival_hour` to
+`departure_hour`, covering as much of the mode's window (10:00–16:00, or
+Economy 7's 00:30–07:30) as it can, on either day of an overnight stay, and
+starting as early as it can. A window too short for the charge is used whole,
+with the rest charged just before it opens, or from arrival when that is later.
+On the 0.5.0 tag such a session started when the window opened and could run
+past departure: a 3.6 kW, 35 kWh off-peak EV home from 18:00 to 07:00 charged
+from 00:30 until 10:14, and now charges from 21:16 until 07:00. The tag also
+looked only at the arrival day's solar window, and only at the next night's
+off-peak window for an overnight stay: a 7 kW, 35 kWh solar EV home from 18:00
+to 12:00 charged from 18:00 until 23:00, and now charges from 07:00 until 12:00
+the next morning. `"none"` is unchanged. The demand that `simulate_home` and
+`simulate_fleet` return changes for homes with such EVs, and so do the figures
+built on it, `solve_cost_recovery_rate`'s included; consumers re-baseline them
+when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

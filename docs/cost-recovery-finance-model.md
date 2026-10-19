@@ -12,6 +12,7 @@
 **Unreleased on main** (task 307): on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
 **Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
 **Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
+**Unreleased on main** (task 702): `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name. `project_multi_year` also no longer floors a year's `fleet_revenue_gbp` at £0, so a `simulate` whose fleet earns a negative revenue projects, and the solve prices, that loss; the 0.5.0 tag projects it as £0. Its adaptive refinement measures each metric's interpolation error against the magnitude of that metric's age-0 value, so a fleet whose revenue is negative at age 0 and varies with age converges as the fleet earning the mirror revenue does; the 0.5.0 tag divides that fleet's revenue error by 1e-9, so its bisection typically runs to `MAX_NODES` and reports a meaningless `interp_error_estimate`. Fleets `simulate_fleet` builds are unaffected: their own-use, SEG and grid-services income is never negative.
 
 ---
 
@@ -99,7 +100,7 @@ the floor-binding rate is correspondingly higher).
 **Implementation**: `finance._cbs_own_use_kwh(summary)` returns
 `max(summary.total_demand_kwh − summary.total_grid_import_kwh, 0.0)`.
 `bill_distribution` passes it to `householder_bill` as
-annual_self_consumption_kwh, and `_simulate_age` passes it for fleet_sc.  Both
+annual_self_consumption_kwh, and `_simulate_age` passes it for `fleet_billed_own_use`.  Both
 annualise it and pass it to `_billed_energy(annual, finance, physics_own_use_kwh=…)`,
 the one physics/override switch, which replaces it with the override's own-use when
 one is set.  The physics `self_consumption` series and
@@ -274,13 +275,13 @@ fleet_revenue_gbp = own_use_revenue
 Where each term is:
 
 ```
-own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
-                    (fleet_sc_kwh = Σ_homes _billed_energy(a_h, finance,
-                                      physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)).own_use_kwh
-                                  = Σ_homes k_h × (demand − import)
-                                    with no override (basis C)
-                                  = Σ_homes min(override × k_h × generation, k_h × demand)
-                                    with self_consumption_override set)
+own_use_revenue   = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh / 100
+                    (fleet_billed_own_use_kwh = Σ_homes _billed_energy(a_h, finance,
+                                                  physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)).own_use_kwh
+                                              = Σ_homes k_h × (demand − import)
+                                                with no override (basis C)
+                                              = Σ_homes min(override × k_h × generation, k_h × demand)
+                                                with self_consumption_override set)
                     (a_h = _annualise_physics(s_h, sim_days_h), home h's window totals × k_h;
                      k_h = _annualisation_scale(sim_days_h)
                          = 365 / sim_days_h if sim_days_h < 360, else 1)
@@ -357,7 +358,7 @@ When `grid_services_income_per_kw_per_year_gbp=0.0` and `export_revenue=0`
 (synthetic SEG-free fleet):
 
 ```
-fleet_revenue_gbp = own_use_rate × fleet_sc / 100
+fleet_revenue_gbp = own_use_rate × fleet_billed_own_use / 100
 ```
 
 This identity is hard-asserted in `TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
@@ -392,14 +393,14 @@ each grid-charged kWh twice.
 
 Source: `finance.py:solve_cost_recovery_rate()`.
 
-The CBS net surplus per home is **exactly affine** in the own-use rate `r`:
+The solve reconstructs the CBS net surplus per home as an **affine** function of the own-use rate `r`:
 
 ```
-net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
+net_surplus(r) = [Σ_years (r × own_use_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
 ```
 
-where `sc_y` is the fleet own-use the bills charge at year `y`
-(`YearPoint.fleet_self_consumption_kwh`, §4's `fleet_sc_kwh` = Σ_homes `_billed_energy`
+where `own_use_y` is the fleet own-use the bills charge at year `y`
+(`YearPoint.fleet_billed_own_use_kwh`, §4's `fleet_billed_own_use_kwh` = Σ_homes `_billed_energy`
 own-use: basis C, or the capped override own-use; annualised as in §4, after degradation
 interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
 `opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
@@ -408,8 +409,21 @@ while the sum runs over all `N_years = asset_life_years`.  With the defaults
 (`loan_term_years` = 15, `asset_life_years` = 25) debt service is therefore paid in
 15 of the 25 years and enters the mean at 15/25 of its annual value (worked in §7.4).
 Source: `project_economics` (algorithm steps 5, 6 and 10 in its docstring).
-PCHIP interpolation and `project_economics` are both linear in per-year revenue,
-so the affine form is preserved end-to-end.
+`project_economics` is affine in per-year revenue, so shifting each year's revenue
+by `(r − r0)/100 × own_use_y` gives a surplus that is affine in `r` by construction.
+
+**Exactness.**  PCHIP interpolation is positively homogeneous but **not linear** in
+its node values.  The reconstruction (`rev_y + (r − r0)/100 × own_use_y`, applied to
+the interpolated per-year curve) therefore equals a full re-projection at rate `r`:
+
+- exactly at the simulated nodes, and
+- between them whenever the rate-independent income nodes (SEG + grid services)
+  are proportional to the own-use nodes, for example zero.
+
+Otherwise the two can differ between the nodes.  A synthetic case (own-use
+10,000 / 9,000 / 6,000 kWh and `C` of 500 / 800 / 820 at ages 0 / 12 / 24, `r0` = 15 p,
+solved to `r` = 0) differs by £38.74 in one year.  The solve's closed form is
+exact for the reconstructed line, which is what `solve_cost_recovery_rate` solves.
 
 The solver uses this affine structure to avoid re-simulating for each trial rate:
 
@@ -424,7 +438,7 @@ The solver uses this affine structure to avoid re-simulating for each trial rate
 | `r* < 0` — project over-delivers at r = 0 | 0 | `rate_clamped_zero` | True |
 | `0 ≤ r* ≤ retail` — interior solve | `r*` | `floor` | True |
 | `r* > retail` — impossible to meet floor | `retail` | `infeasible_above_retail` | False |
-| Degenerate (no self-consumption) | 0 or retail | one of the above | as above |
+| Degenerate (no billed own-use) | 0 or retail | one of the above | as above |
 
 After the solve, a separate age-0 fleet simulation provides per-home granularity
 for the `BillDistribution` (representative median-outlay home, min/mean/median/max).
@@ -437,11 +451,11 @@ to 6 dp and the own-use payment to 4 dp: the 4-dp rate 7.1901 gives bills of
 £24,446.34, and £244.46 gives an outlay of £486.63.
 
 ```
-own_use_kwh/home = min(0.70 × 5,775, 3,400)             = 3,400 kWh/yr    (capped at demand)
-fleet_sc         = 100 × 3,400                          = 340,000 kWh/yr
-required revenue = 13,100 + 14,410.5445 × 15/25 + 2,700 = 24,446.3267     = £24,446.33/yr (§7.4)
-r*               = 24,446.3267 / (340,000 / 100)        = 7.190096 p/kWh  (live solve: 7.190096)
-bills collect    = 100 × 3,400 × 7.190096 / 100         = £24,446.33/yr   (the required revenue)
+own_use_kwh/home     = min(0.70 × 5,775, 3,400)             = 3,400 kWh/yr    (capped at demand)
+fleet_billed_own_use = 100 × 3,400                          = 340,000 kWh/yr
+required revenue     = 13,100 + 14,410.5445 × 15/25 + 2,700 = 24,446.3267     = £24,446.33/yr (§7.4)
+r*                   = 24,446.3267 / (340,000 / 100)        = 7.190096 p/kWh  (live solve: 7.190096)
+bills collect        = 100 × 3,400 × 7.190096 / 100         = £24,446.33/yr   (the required revenue)
 ```
 
 On basis C the same anchor solves at 12.2232 p (§7.4).  The bills collect exactly the
@@ -539,18 +553,18 @@ period 2024-01-01 to 2024-12-31) with injected energy aggregates and no PVGIS
 
 ```
 Synthetic energy inputs (per home, annual):
-  self_kwh           = 2,000 kWh   (constant power series; B-style sc)
-  export_kwh         = 3,775 kWh   (constant power series)
-  import_kwh         = 1,400 kWh
-  grid_charge_cost   = None         (flat-rate; no battery grid-charging)
-  export_revenue     = £0           (SEG = 0, CBS retains all export)
-  grid_services      = £0/kW/yr     (no-flex)
+  self_kwh                       = 2,000 kWh   (constant power series; B-style sc)
+  export_kwh                     = 3,775 kWh   (constant power series)
+  import_kwh                     = 1,400 kWh
+  grid_charge_cost               = None         (flat-rate; no battery grid-charging)
+  export_revenue                 = £0           (SEG = 0, CBS retains all export)
+  grid_services                  = £0/kW/yr     (no-flex)
 
   Basis C (no grid-charging):
-    own_use_kwh/home = demand − import = (2000 + 1400) − 1400 = 2,000 kWh/home
+    own_use_kwh/home             = demand − import = (2000 + 1400) − 1400 = 2,000 kWh/home
     (basis C == B-style sc when grid_charge == 0; see §2)
-  fleet_sc (basis C) = 100 × 2,000 = 200,000 kWh/yr
-  synthetic scf      ≈ 0.346        (2,000 / (2,000 + 3,775))
+  fleet_billed_own_use (basis C) = 100 × 2,000 = 200,000 kWh/yr
+  synthetic scf                  ≈ 0.346        (2,000 / (2,000 + 3,775))
 ```
 
 **[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN` / the [FIN] fixture builders):
@@ -622,7 +636,7 @@ For this fixture (flat curve, SEG = 0, grid services = 0), setting §5's
 `net_surplus(r*) = floor` gives:
 
 ```
-r* = (opex + debt_svc × loan_term/asset_life + floor × n_homes) / (fleet_sc / 100)
+r* = (opex + debt_svc × loan_term/asset_life + floor × n_homes) / (fleet_billed_own_use / 100)
 ```
 
 **Reproduction.**  Carry `debt_svc` to 4 dp: the 2-dp value 14,410.54 × 15/25 gives
@@ -728,7 +742,7 @@ A positive value increases `fleet_revenue_gbp` without changing householder
 sc_kwh, so it directly reduces the required rate:
 
 ```
-r*(flex) = r*(no-flex) − grid_services_income / (fleet_sc / 100)   [approx, single-year]
+r*(flex) = r*(no-flex) − grid_services_income / (fleet_billed_own_use / 100)   [approx, single-year]
 ```
 
 This directional property is hard-asserted in
@@ -751,9 +765,9 @@ own_use_kwh (basis C) = sc_kwh (B-style) − grid_charge_kwh
 
 So the CBS neither bills nor pays for grid-charged energy (§4) and bears only the
 battery round-trip loss, absorbed into the solved rate.  The solved rate therefore
-moves with arbitrage only through basis-C own-use (`fleet_sc` in `project_multi_year`).
+moves with arbitrage only through basis-C own-use (`fleet_billed_own_use` in `project_multi_year`).
 
-Gates: `TestArbitrageBasisCReconciliation` pins the basis (fleet_sc is basis C on a
+Gates: `TestArbitrageBasisCReconciliation` pins the basis (`fleet_billed_own_use` is basis C on a
 grid-charging fleet, task-84 §6), and `TestGridChargeEnergyPaidOnce` pins that each
 grid-charged kWh is paid once, on householder import.
 `TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
@@ -808,10 +822,10 @@ fleet median — the board's single-home summary figure.
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `bill()` |
 | Saving | `baseline_bill − total_outlay` | `bill()` |
-| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ_homes `_billed_energy` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_billed_own_use / 100` (`fleet_billed_own_use` = Σ_homes `_billed_energy` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
-| Solve rate-base | `fleet_sc` = Σ_homes `_billed_energy` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
+| Solve rate-base | `fleet_billed_own_use` = Σ_homes `_billed_energy` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
 | Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |

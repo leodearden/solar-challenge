@@ -28,7 +28,12 @@ from solar_challenge.web.fleet_config import (
     distribution_grammar_spec,
 )
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
-from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
+from solar_challenge.web.shared import (
+    LOCATION_PRESETS,
+    NotAJsonObject,
+    refuse_unrecognised_keys,
+    require_json_object,
+)
 
 _BUILDER_FORM = "Builder form"
 
@@ -86,7 +91,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             MAX_FLEET_HOMES, or counts totalling more.
     """
     form = require_json_object(form, _BUILDER_FORM)
-    _refuse_unrecognised_keys(form)
+    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
     fields = _present_fields(form)
 
     document: dict[str, Any] = {
@@ -176,8 +181,8 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
 
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and a shuffled pool smaller than the fleet with IndexError.
-    Anything else it raises is a defect in the loader, not a refusal, so it propagates.
+    a config it builds.  Anything else it raises is a defect in the loader, not a refusal,
+    so it propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
@@ -185,7 +190,7 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
         path.write_text(scenario_yaml(document), encoding="utf-8")
         try:
             load_fleet_config(path)
-        except (ConfigurationError, ValueError, IndexError) as exc:
+        except (ConfigurationError, ValueError) as exc:
             errors.append(str(exc))
     try:
         parse_seg_rate(document["seg"])
@@ -213,15 +218,6 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
         except ValueError as exc:
             errors.append(f"period.{key} is not a date: {exc}")
     return errors
-
-
-def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:
-    unrecognised = sorted(form.keys() - _RECOGNISED_KEYS)
-    if unrecognised:
-        raise ValueError(
-            f"Unrecognised builder form keys: {', '.join(map(repr, unrecognised))}; "
-            f"recognised keys: {', '.join(sorted(_RECOGNISED_KEYS))}"
-        )
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:

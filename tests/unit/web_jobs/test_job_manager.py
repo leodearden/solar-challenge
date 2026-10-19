@@ -5,7 +5,8 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -176,6 +177,35 @@ _JOBS_LOGGER = "solar_challenge.web.jobs"
 
 def _records_logged_by_jobs_py(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.name == _JOBS_LOGGER]
+
+
+class _RecordKeeper(logging.Handler):
+    """Keeps every record it handles, in order."""
+
+    def __init__(self, level: int) -> None:
+        super().__init__(level)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _errors_logged_by_jobs_py_kept_out_of_the_report() -> Iterator[list[logging.LogRecord]]:
+    """Collect the ERROR records jobs.py logs in the block, and pass none on to pytest, which would write them into the test's report.
+
+    tests/unit/test_xdist_sendable_reports.py says why a report must not hold them.
+    """
+    jobs_logger = logging.getLogger(_JOBS_LOGGER)
+    keeper = _RecordKeeper(logging.ERROR)
+    propagated_before = jobs_logger.propagate
+    jobs_logger.addHandler(keeper)
+    jobs_logger.propagate = False
+    try:
+        yield keeper.records
+    finally:
+        jobs_logger.propagate = propagated_before
+        jobs_logger.removeHandler(keeper)
 
 
 def _ids_tracked_by(manager: JobManager, ids: list[str]) -> list[str]:
@@ -705,17 +735,16 @@ class TestJobManagerUnrecordedFailures:
         assert list(manager.get_events(job_id))[-1] == JobEvent("error", state)
 
     def test_a_failure_whose_message_sqlite_cannot_store_is_logged_for_each_table_and_still_reported(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path
     ) -> None:
         manager = JobManager(
             max_workers=1, simulate_home=_a_simulation_failing_with_a_message_sqlite_cannot_store, new_id=CountingIds()
         )
 
-        with caplog.at_level(logging.ERROR, logger=_JOBS_LOGGER):
+        with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
             job_id = _submit_home_job(manager, tmp_path)
             assert manager.wait_until_idle(timeout=30)
 
-        records = _records_logged_by_jobs_py(caplog)
         assert [(record.levelno, record.getMessage()) for record in records] == [
             (
                 logging.ERROR,

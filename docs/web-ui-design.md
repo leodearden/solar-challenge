@@ -29,7 +29,7 @@ Built on the existing Flask + Alpine.js stack, enhanced with compiled Tailwind C
 | Templating | Jinja2 | Server-rendered pages |
 | Client interactivity | Alpine.js 3.x | Lightweight reactivity for forms, toggles, tabs (as-built; HTMX was not adopted) |
 | Styling | Tailwind CSS 3.x | Compiled build (`static/dist/style.css`; CDN play mode was not adopted) |
-| Charts | Plotly.js 2.x | Already present |
+| Charts | Plotly.js | As-built: the release the `plotly` Python package bundles, served by `web/plotly_js.py` |
 | Persistence | SQLite via `sqlite3` | stdlib, no ORM |
 | Background jobs | `concurrent.futures.ThreadPoolExecutor` + SSE | No external broker |
 | AI | Anthropic Python SDK | `claude-sonnet-4-5-20250514` |
