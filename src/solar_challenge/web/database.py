@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SQLite database module for Solar Challenge web dashboard persistence.
 
-Provides schema initialization and connection management for storing
-simulation runs, background jobs, chat messages, and configuration presets.
+Provides schema initialization for storing simulation runs, background jobs,
+chat messages, and configuration presets, and Database, through which every
+connection to the dashboard's database is opened.
 
 Schema migration strategy:
     There is currently no automated migration framework.  When the schema
@@ -14,10 +15,12 @@ Schema migration strategy:
 
 import json
 import sqlite3
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Generator, Literal, get_args
+from typing import Any, Literal, get_args
 
 RunType = Literal["home", "fleet", "sweep"]  # the type of a run, held by the runs table's type column
 RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
@@ -47,17 +50,43 @@ def _check_one_of(column: str, values: tuple[str, ...]) -> str:
     return f"CHECK({column} IN ({', '.join(_sql_string_literal(value) for value in values)}))"
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open the dashboard database at *db_path* under the policy every dashboard connection applies.
+@dataclass(frozen=True)
+class Database:
+    """The dashboard's SQLite database file at *path*, through which every connection to it is opened."""
 
-    Rows are read by column name and the schema's foreign keys are enforced. Opening reads
-    nothing from the file, so an unreadable database raises at the first statement. The
-    caller closes the connection.
-    """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    path: Path
+
+    def connect(self) -> sqlite3.Connection:
+        """Open a connection to this database under the policy every dashboard connection applies; the caller closes it.
+
+        Rows are read by column name and the schema's foreign keys are enforced. Opening reads
+        nothing from the file, so an unreadable database raises at the first statement, inside
+        the caller's error handling. journal_mode=WAL is a property of the file, which init_db
+        sets when it creates the schema, so a connection to an initialised database reports
+        wal. tests/unit/test_web_database_connections.py pins this policy.
+        """
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection through connect() for one block of work.
+
+        Commits when the block succeeds, rolls back and re-raises when the block raises, and
+        closes the connection either way.
+        """
+        conn = self.connect()
+
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def init_db(db_path: str | Path) -> None:
@@ -73,7 +102,7 @@ def init_db(db_path: str | Path) -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = connect(db_path)
+    conn = Database(db_path).connect()
     conn.execute("PRAGMA journal_mode=WAL")
 
     cursor = conn.cursor()
@@ -231,32 +260,6 @@ def get_chat_history(
     return result
 
 
-@contextmanager
-def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
-    """Open a connection through connect() for one block of work.
-
-    Commits when the block succeeds, rolls back when the block raises, and
-    closes the connection either way.
-
-    Args:
-        db_path: Path to the SQLite database file.
-
-    Yields:
-        sqlite3.Connection: A connection from connect().
-
-    Example:
-        with get_db("/path/to/db.sqlite") as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs")
-            rows = cursor.fetchall()
-    """
-    conn = connect(db_path)
-
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def get_db(db_path: str | Path) -> AbstractContextManager[sqlite3.Connection]:
+    """A transaction on the dashboard database at *db_path*, from Database.transaction()."""
+    return Database(Path(db_path)).transaction()
