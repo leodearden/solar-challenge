@@ -765,13 +765,14 @@ class TestGenerateHomesHouseholdOccupants:
     def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
         self, household_occupants: DistributionSpec
     ) -> None:
-        """Every draw from 2.6 to 3.4 gives its home 3 occupants, the nearest whole number, where truncation gives 2 to every draw below 3.
+        """Every draw from 2.6 to 3.4 gives its home the int 3, the nearest whole number, where truncation gives 2 to every draw below 3.
 
         The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
         """
         homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
 
-        assert [home.load_config.household_occupants for home in homes] == [3] * 20
+        occupants = [home.load_config.household_occupants for home in homes]
+        assert [(type(count), count) for count in occupants] == [(int, 3)] * 20
 
     @pytest.mark.parametrize(
         "household_occupants",
@@ -807,12 +808,25 @@ class TestGenerateHomesHouseholdOccupants:
                 "Household occupants must be at least 1, got 0",
                 id="shuffled-pool-zero",
             ),
+            pytest.param(
+                UniformDistribution(min=1e300, max=1e300),
+                "Household occupants seems unrealistic: 1e+300",
+                id="uniform-draw-too-large-for-a-count",
+            ),
+            pytest.param(
+                UniformDistribution(min=-1e300, max=-1e300),
+                "Household occupants must be at least 1, got -1e+300",
+                id="uniform-draw-far-below-one",
+            ),
         ],
     )
     def test_a_count_load_config_refuses_is_refused_as_it_refuses_it(
         self, household_occupants: DistributionSpec, refusal: str
     ) -> None:
-        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, or replaced by the default 3."""
+        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, or replaced by the default 3, and a drawn count is named as drawn, 1e+300 rather than the 301-digit int it equals.
+
+        A uniform between equal bounds draws its bound whatever the seed.
+        """
         with pytest.raises(ValueError) as exc_info:
             generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
         assert str(exc_info.value) == refusal
