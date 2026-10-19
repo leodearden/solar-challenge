@@ -169,7 +169,9 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     one string given in its place raises TypeError.
 
     A string annotation in any of those class bodies is read as named_classes reads one,
-    so a name its module does not bind raises NameError.
+    so a name its module does not bind raises NameError. Like those annotations, *cls*'s
+    source is read from its own module only, so a module another of the same name has
+    replaced in sys.modules raises LookupError.
     """
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
     return _attributes_set_on_self(cls, reviewed) - declared
@@ -185,7 +187,9 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
-    its module does not bind raises NameError.
+    its module does not bind raises NameError. Like such an annotation, *cls*'s source is
+    read from its own module only, so a module another of the same name has replaced in
+    sys.modules raises LookupError.
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
@@ -818,7 +822,7 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
     """The __init__ and __post_init__ statements of *cls*'s own body, never another method nor anything a class nested in it defines."""
-    match ast.parse(textwrap.dedent(inspect.getsource(cls))).body:
+    match ast.parse(_class_source(cls)).body:
         case [ast.ClassDef(body=body)]:
             return [
                 statement
@@ -826,6 +830,12 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
                 if isinstance(statement, ast.FunctionDef) and statement.name in _INITIALISERS
             ]
     raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
+
+
+def _class_source(cls: type) -> str:
+    """*cls*'s source, dedented; inspect.getsource finds a class's file through sys.modules by the name its __module__ records, so the source is read only once _defining_module has checked that module is *cls*'s own."""
+    _defining_module(cls)
+    return textwrap.dedent(inspect.getsource(cls))
 
 
 @dataclasses.dataclass(frozen=True)
