@@ -23,10 +23,9 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.seg import SEGTariff
-from tests._finance_builders import make_home_config
+from tests._finance_builders import make_home_config, make_sim_results
 
 
 class TestReconcileSegHomes:
@@ -93,52 +92,35 @@ def _seg_aware_fleet_results_factory(
     self_kwh: float = 5.0,
     export_kwh: float = 5.0,
     import_kwh: float = 3.0,
-    n_minutes: int = 1440,
-) -> Callable:
-    """Return a simulate closure that prices export_revenue from each home's seg_tariff.
+    days: int = 1,
+) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
+    """Return a simulate that prices each home's export at that home's own seg_tariff.
 
-    Mirrors home.py:336-349 (Task-85 zeroing): export_revenue is non-zero only
-    when home.seg_tariff is set, summing to export_kwh × rate/100 per home.
-    The kWh arguments are for the simulated period; _annualise_physics handles
-    scaling to 365 days.  Use as ``simulate=lambda fc, s, e: factory(fc)``.
+    Every home self-consumes *self_kwh*, exports *export_kwh* and imports
+    *import_kwh* over *days* days.  A home with a tariff earns export_kwh × rate/100,
+    and a home without one earns nothing, as in simulate_home.  _annualise_physics
+    scales the totals to 365 days.  Callers write
+    ``simulate=_seg_aware_fleet_results_factory()``.
     """
-    def _simulate(
-        fleet_config: "FleetConfig",  # type: ignore[name-defined]
-        start: pd.Timestamp,
-        end: pd.Timestamp,
-    ) -> FleetResults:
-        idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-        sc_kw = self_kwh / (n_minutes / 60.0)
-        exp_kw = export_kwh / (n_minutes / 60.0)
-        imp_kw = import_kwh / (n_minutes / 60.0)
-        gen_kw = sc_kw + exp_kw
-        demand_kw = sc_kw + imp_kw
-        zeros = pd.Series(0.0, index=idx)
 
-        per_home = []
-        for home in fleet_config.homes:
-            # Price export_revenue from seg_tariff if set (mirrors Task-85 zeroing in home.py)
-            if home.seg_tariff is not None:
-                rev_per_min = exp_kw / 60.0 * home.seg_tariff.rate_pence_per_kwh / 100.0
-                export_rev: pd.Series = pd.Series(rev_per_min, index=idx)
-            else:
-                export_rev = zeros.copy()
-
-            per_home.append(SimulationResults(
-                generation=pd.Series(gen_kw, index=idx),
-                demand=pd.Series(demand_kw, index=idx),
-                self_consumption=pd.Series(sc_kw, index=idx),
-                battery_charge=zeros.copy(),
-                battery_discharge=zeros.copy(),
-                battery_soc=zeros.copy(),
-                grid_import=pd.Series(imp_kw, index=idx),
-                grid_export=pd.Series(exp_kw, index=idx),
-                import_cost=zeros.copy(),
-                export_revenue=export_rev,
-                tariff_rate=zeros.copy(),
-            ))
-
-        return FleetResults(per_home_results=per_home, home_configs=list(fleet_config.homes))
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        return FleetResults(
+            per_home_results=[
+                make_sim_results(
+                    self_kwh=self_kwh,
+                    export_kwh=export_kwh,
+                    import_kwh=import_kwh,
+                    export_revenue_gbp=(
+                        0.0
+                        if home.seg_tariff is None
+                        else export_kwh * home.seg_tariff.rate_pence_per_kwh / 100.0
+                    ),
+                    days=days,
+                )
+                for home in fleet_config.homes
+            ],
+            home_configs=list(fleet_config.homes),
+        )
 
     return _simulate
 

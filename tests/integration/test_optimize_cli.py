@@ -20,9 +20,6 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.finance import CostRecoverySolution
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
     ConfigPoint,
@@ -32,7 +29,6 @@ from solar_challenge.optimize import (
     SensitivityPanel,
 )
 from solar_challenge.output import generate_config_ranking_report
-from solar_challenge.pv import PVConfig
 from tests._cli_fleet_simulator import invoke_cli
 from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_fleet_results
@@ -183,46 +179,8 @@ def _make_sensitivity_axis(
 
 
 # ---------------------------------------------------------------------------
-# §B — Fast-simulate FleetResults factory (mirrors test_cost_recovery_cli.py §E)
+# §B — The patched `optimize configs` tests' scenario writer
 # ---------------------------------------------------------------------------
-
-
-def _make_pv_config(system_age_years: float = 0.0) -> PVConfig:
-    return PVConfig(
-        capacity_kw=4.0,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
-def _make_load_config() -> LoadConfig:
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config() -> HomeConfig:
-    return HomeConfig(
-        pv_config=_make_pv_config(),
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-    )
-
-
-def _make_fleet_results(n_homes: int = 5) -> FleetResults:
-    """Build a FleetResults yielding binding='floor', feasible=True when solved.
-
-    Each of the *n_homes* homes has a year of constant power: 2,000 kWh
-    self-consumed, 800 kWh exported and 1,200 kWh imported.  The results are
-    tests/_finance_builders.make_sim_results', whose docstring says why hourly
-    steps give exact totals.
-    """
-    return make_fleet_results(
-        homes=[_make_home_config() for _ in range(n_homes)],
-        self_kwh=2000.0,
-        export_kwh=800.0,
-        import_kwh=1200.0,
-    )
 
 
 def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
@@ -825,16 +783,25 @@ class TestOptimizeCLIHelp:
 # ---------------------------------------------------------------------------
 
 
+def _feasible_fleet_results(n_homes: int) -> FleetResults:
+    """*n_homes* default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year.
+
+    Under _write_optimize_scenario's finance the cost-recovery solve binds at
+    the floor and is feasible.
+    """
+    return make_fleet_results(n_homes=n_homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+
 @pytest.fixture(scope="module")
 def optimize_fleet_results() -> FleetResults:
     """Module-scoped fixture: constant feasible FleetResults for a five-home scenario, built once per module."""
-    return _make_fleet_results(n_homes=5)
+    return _feasible_fleet_results(n_homes=5)
 
 
 @pytest.fixture(scope="module")
 def one_home_fleet_results() -> FleetResults:
     """Module-scoped fixture: constant feasible FleetResults for a one-home scenario, built once per module."""
-    return _make_fleet_results(n_homes=1)
+    return _feasible_fleet_results(n_homes=1)
 
 
 # Each --sensitivity alias the CLI documents → the knob whose axis section it adds to the report.
