@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Unit tests for tests/_factories.py's cost-recovery solution and config-result builders."""
+"""Unit tests for tests/_factories.py's from-statistics bill distribution, cost-recovery solution and config-result builders."""
 
 from collections.abc import Callable
 
@@ -10,9 +10,23 @@ from solar_challenge.optimize import ConfigPoint
 from tests._factories import (
     make_bill_breakdown,
     make_bill_distribution,
+    make_bill_distribution_from_statistics,
     make_config_result,
     make_cost_recovery_solution,
 )
+
+
+def test_bill_distribution_from_statistics_holds_them_and_a_representative_paying_the_given_outlay() -> None:
+    outlay = make_bill_distribution_from_statistics(
+        representative_outlay_gbp=355.0,
+        min_gbp=300.0,
+        mean_gbp=345.0,
+        median_gbp=350.0,
+        max_gbp=400.0,
+    )
+
+    assert outlay.representative == make_bill_breakdown(total_outlay_gbp=355.0)
+    assert (outlay.min_gbp, outlay.mean_gbp, outlay.median_gbp, outlay.max_gbp) == (300.0, 345.0, 350.0, 400.0)
 
 
 def test_cost_recovery_solution_reads_its_representative_outlay_and_saving_from_its_outlay() -> None:
