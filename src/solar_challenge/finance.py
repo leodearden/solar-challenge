@@ -6,6 +6,8 @@ project, from simulation results and a :class:`FinanceConfig`.
 
 Provides:
   - ``FinanceConfig`` — frozen dataclass of the financial parameters.
+  - ``DEFAULT_SPREADSHEET_SELF_CONSUMPTION`` — self-consumption fraction the
+    spreadsheet assumption uses when no override is set.
   - ``BillBreakdown`` — frozen dataclass of per-householder financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level outlay statistics.
   - ``CostRecoverySolution`` — frozen dataclass result of the cost-recovery solve.
@@ -15,6 +17,7 @@ Provides:
   - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
   - ``MultiYearCurve`` — frozen dataclass for a full multi-year projection curve.
   - ``ProjectEconomics`` — frozen dataclass of project-level economics.
+  - ``MAX_NODES`` — cap on the number of ages ``project_multi_year`` simulates.
   - ``project_multi_year`` — forward-march driver for adaptive PCHIP projection.
   - ``project_economics`` — project-level financial appraisal of a curve.
   - ``spreadsheet_revenue_curve`` — analytic revenue curve from spreadsheet inputs.
@@ -56,8 +59,8 @@ if TYPE_CHECKING:
 class FinanceConfig:
     """Financial parameters for community PV/battery project appraisal.
 
-    Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
-    used to compute project NPV, payback period, and per-home savings.
+    Holds investor-spreadsheet defaults used to compute project NPV, payback
+    period, and per-home savings.
     All monetary values are in nominal GBP or pence; rates are fractional.
     Every number must be finite.
 
@@ -191,7 +194,7 @@ class FinanceConfig:
 
 
 # ---------------------------------------------------------------------------
-# BillBreakdown — per-householder line items (§3.1)
+# BillBreakdown — per-householder line items
 # ---------------------------------------------------------------------------
 
 
@@ -619,7 +622,7 @@ def _billed_energy(
 def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float) -> float:
     """A home's annualised import cost, priced at retail when no tariff priced it.
 
-    Missing-tariff fallback (§3.2 robustness).  Homes generated from a
+    Missing-tariff fallback.  Homes generated from a
     fleet_distribution carry ``tariff_config=None`` (config.py), and
     ``simulate_home`` then reports ``total_import_cost_gbp == 0`` even though
     energy was genuinely imported (home.py: import costs are all-zero when
@@ -696,7 +699,7 @@ def _seg_export_income_gbp(
 
 
 # ---------------------------------------------------------------------------
-# _cbs_own_use_kwh — basis-C own-use energy helper (task-84 §6)
+# _cbs_own_use_kwh — basis-C own-use energy helper (docs/cost-recovery-finance-model.md §2)
 # ---------------------------------------------------------------------------
 
 
@@ -761,7 +764,8 @@ def bill(
 ) -> BillBreakdown:
     """Period-native billing core: pure arithmetic over caller-resolved inputs.
 
-    This is the single source of truth for the BillBreakdown identities (§3.1).
+    This is the single source of truth for the BillBreakdown identities
+    (docs/cost-recovery-finance-model.md §3).
     It performs **no** annualisation, no re-pricing of import energy, and emits
     no warnings — all of that belongs in the caller (e.g. :func:`householder_bill`
     for the simulator's annual wrapper).
@@ -917,7 +921,7 @@ def householder_bill(
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
     override = finance.self_consumption_override
 
-    # ---- Annualisation (§3.2 / §12) ----------------------------------------
+    # ---- Annualisation (docs/cost-recovery-finance-model.md §4, Annual basis) ----
     phys = _annualise_physics(summary, simulation_days)
     if simulation_days < _SHORT_PERIOD_THRESHOLD:
         warnings.warn(
@@ -938,7 +942,7 @@ def householder_bill(
     # export_kwh / export_rev_physics not needed here: export income is the CBS's
     # and is computed by _seg_export_income_gbp, not by the householder bill.
 
-    # ---- Self-consumption switch (§2.3 / §3.2) ------------------------------
+    # ---- Self-consumption switch (docs/cost-recovery-finance-model.md §3, Override path) ----
     energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
     if override is None:
         # Physics path: the simulated import, at its simulated cost
@@ -979,7 +983,7 @@ def householder_bill(
 
 
 # ---------------------------------------------------------------------------
-# YearPoint — one year in a multi-year projection (§3.1)
+# YearPoint — one year in a multi-year projection
 # ---------------------------------------------------------------------------
 
 
@@ -1061,7 +1065,7 @@ class YearPoint:
 
 
 # ---------------------------------------------------------------------------
-# MultiYearCurve — full projection curve (§3.1)
+# MultiYearCurve — full projection curve
 # ---------------------------------------------------------------------------
 
 
@@ -1272,8 +1276,9 @@ def bill_distribution(
     bills = [
         householder_bill(
             summary=s,
-            # Basis C (task-84 §6), the physics own-use project_multi_year bills too;
-            # _billed_energy replaces it with the override's own-use when one is set.
+            # Basis C (docs/cost-recovery-finance-model.md §2), the physics own-use
+            # project_multi_year bills too; _billed_energy replaces it with the
+            # override's own-use when one is set.
             annual_self_consumption_kwh=_cbs_own_use_kwh(s),
             finance=finance,
             simulation_days=simulation_days,
@@ -1529,7 +1534,7 @@ def project_multi_year(
     # ---- Seed nodes ---------------------------------------------------------
     seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
 
-    # Memo dict for the capacity_at_events grid-services figure (PRD decision 7 / Open Q1).
+    # Memo dict for the capacity_at_events grid-services figure.
     # Computed once from the representative (age-0) simulation, reused for all ages
     # and all bisection trial nodes.  Captured by the _simulate_age closure.
     _event_gs_memo: dict[str, float] = {}
@@ -2078,7 +2083,7 @@ def spreadsheet_revenue_curve(
     spreadsheet's named input assumptions:
 
     * ``inp_kWhPerkWp`` (Sensitivity!B8) → ``kwh_per_kwp``
-    * Own-use rate 15 p/kWh (§3 [FIN] assumptions)
+    * Own-use rate 15 p/kWh (docs/finance-spreadsheet-reconciliation.md §3.1)
     * Export rate 6 p/kWh (Smart Export Guarantee [FIN] basis)
     * Self-consumption fraction: typically 0.45 (PV-only) or 0.70 (with battery,
       [FIN]); caller-supplied, not enforced by this function
