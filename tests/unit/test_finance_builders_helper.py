@@ -14,9 +14,11 @@ from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
+    make_pv_config,
     make_scenario,
     make_scenario_and_finance,
     make_sim_results,
+    make_sized_home,
 )
 
 
@@ -150,6 +152,22 @@ def test_home_config_is_the_default_home_with_the_given_battery() -> None:
     assert make_home_config().battery_config is None
     assert home.battery_config == battery
     assert dataclasses.replace(home, battery_config=None) == make_home_config()
+
+
+def test_sized_home_is_the_default_home_fitted_with_the_given_install() -> None:
+    home = make_sized_home(pv_kwp=5.5, battery_kwh=5.0, inverter_kw=3.6)
+
+    assert home.pv_config == dataclasses.replace(make_pv_config(), capacity_kw=5.5, inverter_capacity_kw=3.6)
+    assert home.battery_config == BatteryConfig(capacity_kwh=5.0)
+    assert dataclasses.replace(home, pv_config=make_pv_config(), battery_config=None) == make_home_config()
+
+
+def test_sized_home_has_no_battery_and_an_inverter_sized_to_the_array_by_default() -> None:
+    home = make_sized_home(pv_kwp=3.0)
+
+    assert home.battery_config is None
+    assert home.pv_config.inverter_capacity_kw is None
+    assert home.pv_config.effective_inverter_capacity_kw == 3.0
 
 
 def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
