@@ -424,13 +424,20 @@ class TestGenerateConfigRankingReportTable2:
         assert "450" in report, f"baseline outlay 450 not found:\n{report}"
 
     def test_baseline_surplus_values_present(self) -> None:
-        """Report must show baseline_surplus_per_home_gbp for each feasible config."""
+        """Report must show each feasible config's baseline_surplus_per_home_gbp in its Fixed-15p Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        assert "30" in report, f"baseline surplus 30 not found:\n{report}"
-        assert "80" in report, f"baseline surplus 80 not found:\n{report}"
-        assert "60" in report, f"baseline surplus 60 not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£30.00",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£80.00",
+            "6.0 kWp / 5.0 kWh / 5.0 kW": "£60.00",
+        }
+        shown = {
+            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline CBS Surplus (£/home/yr)"]
+            for label in expected
+        }
+        assert shown == expected, f"baseline surpluses not shown in their configs' rows:\n{report}"
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
         """Table 2 must have exactly 2 '✔ Pareto' tokens (A+B) and exactly 1 '—' marker (C)."""
