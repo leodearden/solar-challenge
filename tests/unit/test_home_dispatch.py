@@ -3,7 +3,7 @@
 
 A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
 and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
-self-consumption by default.
+self-consumption by default. A strategy given to simulate_home runs in place of either.
 """
 
 import dataclasses
@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
@@ -82,6 +83,25 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
 def test_results_name_the_dispatch_selected_for_the_home(home, strategy_name):
     """Each home's results name the dispatch selected for it: the tariff-rate TOU path, or its battery's strategy."""
     assert _simulate_june_21(home).strategy_name == strategy_name
+
+
+def test_a_strategy_given_to_simulate_home_dispatches_the_run_in_place_of_the_configured_one():
+    """_TOU_HOME alone runs the tariff-rate TOU path; given SelfConsumptionStrategy, its run is the greedy home's, row for row."""
+    day = pd.Timestamp("2024-06-21")
+
+    given = simulate_home(
+        _TOU_HOME,
+        day,
+        day,
+        weather=weather_for(_TOU_HOME, synthetic_june_weather(day)),
+        strategy=SelfConsumptionStrategy(),
+    )
+
+    assert given.strategy_name == "self_consumption"
+    pd.testing.assert_frame_equal(
+        given.to_dataframe(),
+        _simulate_june_21(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy")).to_dataframe(),
+    )
 
 
 def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_does_not():
