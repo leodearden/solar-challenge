@@ -60,7 +60,7 @@ class OrchestratorCommand:
 def verify_command(project_root: Path, slot: VerifySlot) -> OrchestratorCommand:
     """Return the verify slot *slot* of *project_root*'s yaml, run in *project_root* as a task verify runs it."""
     assert slot in VERIFY_SLOTS, f"{slot!r} is not a dark-factory verify slot; those are {VERIFY_SLOTS}"
-    command = load_orchestrator_config(project_root).get(slot)
+    command = _load_orchestrator_config(project_root).get(slot)
     assert isinstance(command, str), (
         f"dark-factory-orchestrator.yaml's verify slot {slot!r} is {command!r} (None if the yaml lacks it), "
         "not a command string"
@@ -96,7 +96,7 @@ def lane_commands(project_root: Path) -> tuple[OrchestratorCommand, ...]:
     return tuple(lane_command(project_root, job["name"]) for job in offline_lane_jobs(project_root))
 
 
-def load_orchestrator_config(project_root: Path) -> dict[str, Any]:
+def _load_orchestrator_config(project_root: Path) -> dict[str, Any]:
     """Return *project_root*'s dark-factory-orchestrator.yaml, parsed as YAML."""
     config_path = project_root / "dark-factory-orchestrator.yaml"
     config: dict[str, Any] = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -105,7 +105,7 @@ def load_orchestrator_config(project_root: Path) -> dict[str, Any]:
 
 def git_config(project_root: Path) -> dict[str, Any]:
     """Return the `git` mapping (dark-factory's GitConfig) of *project_root*'s dark-factory-orchestrator.yaml, where the offline-lane settings live."""
-    git: dict[str, Any] = load_orchestrator_config(project_root)["git"]
+    git: dict[str, Any] = _load_orchestrator_config(project_root)["git"]
     return git
 
 
