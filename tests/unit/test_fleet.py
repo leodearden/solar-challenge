@@ -2,6 +2,7 @@
 
 import multiprocessing
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -14,13 +15,15 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     MultiSweepResults,
+    aggregate_home_summaries,
     calculate_fleet_summary,
+    calculate_home_summaries,
     collect_multi_sweep_results,
     simulate_fleet,
     simulate_fleet_iter,
     simulate_multi_sweep_iter,
 )
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -256,6 +259,7 @@ class TestFleetResults:
             pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
             pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
             pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
+            pytest.param(calculate_home_summaries, id="calculate_home_summaries"),
         ],
     )
     def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
@@ -436,6 +440,117 @@ class TestFleetSummary:
         assert summary.total_net_cost_gbp is None
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
+
+    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
+    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(
+        self, sample_results, seg_tariff_pence_per_kwh
+    ):
+        """Each home's summary is the one calculate_summary derives from that home's results at the same SEG tariff, listed in per_home_results' order."""
+        assert calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh) == [
+            calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+            for results in sample_results.per_home_results
+        ]
+
+    def test_home_summaries_aggregate_into_the_fleets_totals_ratios_and_per_home_statistics(self):
+        """The fleet's totals sum its homes', its ratios divide those totals, and its per-home statistics range over its homes' generation and self-consumption ratios."""
+        small_array = SummaryStatistics(
+            total_generation_kwh=4.0,
+            total_demand_kwh=6.0,
+            total_self_consumption_kwh=3.0,
+            total_grid_import_kwh=3.0,
+            total_grid_export_kwh=1.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=1.0,
+            peak_demand_kw=1.5,
+            self_consumption_ratio=0.75,
+            grid_dependency_ratio=0.5,
+            export_ratio=0.25,
+            simulation_days=1,
+            total_import_cost_gbp=0.75,
+            total_export_revenue_gbp=0.125,
+            net_cost_gbp=0.625,
+            seg_revenue_gbp=0.125,
+        )
+        medium_array = SummaryStatistics(
+            total_generation_kwh=16.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=2.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=14.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=3.0,
+            peak_demand_kw=2.0,
+            self_consumption_ratio=0.125,
+            grid_dependency_ratio=0.75,
+            export_ratio=0.875,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=1.75,
+            net_cost_gbp=-0.25,
+            seg_revenue_gbp=1.75,
+        )
+        large_array = SummaryStatistics(
+            total_generation_kwh=40.0,
+            total_demand_kwh=16.0,
+            total_self_consumption_kwh=10.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=30.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=6.0,
+            peak_demand_kw=3.0,
+            self_consumption_ratio=0.25,
+            grid_dependency_ratio=0.375,
+            export_ratio=0.75,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=3.75,
+            net_cost_gbp=-2.25,
+            seg_revenue_gbp=3.75,
+        )
+
+        assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(
+            n_homes=3,
+            total_generation_kwh=60.0,
+            total_demand_kwh=30.0,
+            total_self_consumption_kwh=15.0,
+            total_grid_import_kwh=15.0,
+            total_grid_export_kwh=45.0,
+            fleet_self_consumption_ratio=0.25,
+            fleet_grid_dependency_ratio=0.5,
+            per_home_generation_min_kwh=4.0,
+            per_home_generation_max_kwh=40.0,
+            per_home_generation_mean_kwh=20.0,
+            per_home_generation_median_kwh=16.0,
+            per_home_self_consumption_ratio_min=0.125,
+            per_home_self_consumption_ratio_max=0.75,
+            per_home_self_consumption_ratio_mean=0.375,
+            simulation_days=1,
+            total_seg_revenue_gbp=5.625,
+            per_home_seg_revenue_mean_gbp=1.875,
+            total_net_cost_gbp=-1.875,
+            total_import_cost_gbp=3.75,
+            total_export_revenue_gbp=5.625,
+        )
+
+    def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
+        """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
+        first, second, third = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
+        assert [first.seg_revenue_gbp, second.seg_revenue_gbp, third.seg_revenue_gbp] == pytest.approx(
+            [3.60, 7.20, 10.80]
+        ), "premise: the homes export 24, 48 and 72 kWh, which earn 3.60, 7.20 and 10.80 GBP at 15p/kWh"
+
+        summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
+
+        assert summary.total_seg_revenue_gbp == pytest.approx(14.40)
+        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20)
+
+    def test_aggregating_no_home_summaries_is_refused(self):
+        """A fleet summary aggregates at least one home's summary."""
+        with pytest.raises(ValueError, match="at least one home"):
+            aggregate_home_summaries([])
 
 
 _JUNE_DAY = pd.Timestamp("2024-06-21", tz="Europe/London")

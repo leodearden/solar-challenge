@@ -95,6 +95,18 @@ def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskCli
     return client
 
 
+def _client_of_a_finished_fleet_job(app: Flask) -> FlaskClient:
+    """Return a client of *app* whose JobManager has run a fleet job of one home to its end.
+
+    The job's id is "id-1" and its run's id is "id-2".
+    """
+    manager = JobManager(simulate_home=RecordingSimulation(), new_id=CountingIds())
+    client = client_using(app, manager)
+    assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
+    assert manager.wait_until_idle(timeout=30)
+    return client
+
+
 def _sse(event: str, data: str) -> str:
     """Return the SSE message a progress stream sends for *event* with the JSON text *data*."""
     return f"event: {event}\ndata: {data}\n\n"
@@ -112,6 +124,11 @@ _COMPLETED = _sse(
     "complete",
     '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
     ' "message": "Simulation completed successfully", "run_id": "id-2"}',
+)
+_FLEET_COMPLETED = _sse(
+    "complete",
+    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+    ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
 )
 _FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
 
@@ -232,11 +249,6 @@ class TestJobProgressEndpoint:
                 _SIMULATING,
                 _sse(
                     "progress",
-                    '{"progress_pct": 80.0, "current_step": "Summarizing",'
-                    ' "message": "Calculating summary statistics...", "status": "running"}',
-                ),
-                _sse(
-                    "progress",
                     '{"progress_pct": 90.0, "current_step": "Saving",'
                     ' "message": "Persisting results to storage...", "status": "running"}',
                 ),
@@ -269,22 +281,39 @@ class TestJobProgressEndpoint:
 
         assert stream == final_event
 
+    def test_the_stream_of_a_completed_fleet_job_sends_each_progress_event_then_its_completion(
+        self, app: Flask
+    ) -> None:
+        client = _client_of_a_finished_fleet_job(app)
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == "".join(
+            [
+                _STARTING,
+                _sse(
+                    "progress",
+                    '{"progress_pct": 5.0, "current_step": "Home 1/1",'
+                    ' "message": "Simulating home 1 of 1...", "status": "running"}',
+                ),
+                _sse(
+                    "progress",
+                    '{"progress_pct": 97.0, "current_step": "Saving",'
+                    ' "message": "Persisting fleet results...", "status": "running"}',
+                ),
+                _FLEET_COMPLETED,
+            ]
+        )
+
     def test_a_stream_opened_after_another_drained_a_fleet_jobs_events_sends_the_fleet_jobs_own_completion(
         self, app: Flask
     ) -> None:
-        manager = JobManager(simulate_home=RecordingSimulation(), new_id=CountingIds())
-        client = client_using(app, manager)
-        assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
-        assert manager.wait_until_idle(timeout=30)
+        client = _client_of_a_finished_fleet_job(app)
         live_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
         late_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
-        assert late_stream == _sse(
-            "complete",
-            '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
-            ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
-        )
+        assert late_stream == _FLEET_COMPLETED
         assert live_stream.endswith(late_stream)
 
 
