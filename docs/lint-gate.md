@@ -1,6 +1,6 @@
 # Lint: The Gate Is a Test, Not `lint_command`
 
-**Task:** #246; #994 (§4)
+**Task:** #246; #994 (§4); #1003 (§5)
 **Rules:** [`pyproject.toml`](../pyproject.toml), table `[tool.ruff.lint]`
 **Test:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py)
 
@@ -44,3 +44,22 @@ saying why it comes there.
 
 pycodestyle as a whole (`E`) cannot join: its line-length rule, E501, flags over a thousand
 lines of the package.
+
+## 5. Decision (task 1003, 2026-10-20): E7 and E9 Join the Selection
+
+The selection includes pycodestyle's E7, its statement rules; ruff's
+[rule list](https://docs.astral.sh/ruff/rules/) says what each one flags. Most flag a
+statement that does something other than it seems to, such as a bare `except`, which also
+catches `KeyboardInterrupt` and `SystemExit`. While nothing checked for them, such
+statements could build up unseen, as E402's findings did. Where `==` compares element by
+element, as on a NumPy array or a pandas Series, the unsafe fixes for E711 and E712 change
+what the code does: they rewrite `series == None` to `series is None` and `mask == False`
+to `not mask`, neither of which compares element by element. Write such a comparison with
+the library's own operations instead, such as `series.isna()` or `~mask`. A line that has
+to break one of these rules carries `# noqa:` with the rule's code.
+
+It includes E9 too. E9 makes the lint report a path it cannot read, such as a missing
+path, a broken symlink or a module ruff may not open, as an E902 finding. Without it, ruff
+only warns on stderr and reports no finding, so the lint would pass a module it never
+read. Ruff reports a syntax error whatever the selection. E999, the old syntax-error
+rule, was removed in ruff 0.8.0 and can no longer be selected, so E9 is E902 alone.

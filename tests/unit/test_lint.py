@@ -66,6 +66,11 @@ def _lint_probe(project_root: Path, source: str, *ruff_args: str) -> list[_Findi
     return _lint(project_root, *ruff_args, "--stdin-filename", _PROBE, "-", stdin=source)
 
 
+def _located_codes(findings: list[_Finding]) -> list[tuple[str, str, int]]:
+    """Each finding's rule code, path and row: the verdict a probe pins, without ruff's wording."""
+    return [(finding.code, finding.path, finding.row) for finding in findings]
+
+
 def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> None:
     """The lint reports an unused import in a module of the package.
 
@@ -74,7 +79,7 @@ def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> 
     """
     findings = _lint_probe(project_root, "import json\n")
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("F401", _PROBE, 1)], (
+    assert _located_codes(findings) == [("F401", _PROBE, 1)], (
         "the lint must report the unused import in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
@@ -86,8 +91,40 @@ def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) ->
 
     findings = _lint_probe(project_root, source)
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E402", _PROBE, 2)], (
+    assert _located_codes(findings) == [("E402", _PROBE, 2)], (
         "the lint must report the mid-file import in a package module, and nothing else; it reported:\n"
+        + "\n".join(map(str, findings))
+    )
+
+
+def test_lint_flags_a_bare_except_in_a_package_module(project_root: Path) -> None:
+    """The lint reports a bare except in a module of the package."""
+    source = "try:\n    pass\nexcept:\n    pass\n"
+
+    findings = _lint_probe(project_root, source)
+
+    assert _located_codes(findings) == [("E722", _PROBE, 3)], (
+        "the lint must report the bare except in a package module, and nothing else; it reported:\n"
+        + "\n".join(map(str, findings))
+    )
+
+
+def test_lint_flags_a_package_path_it_cannot_read(project_root: Path) -> None:
+    """The lint reports a path in the package that it cannot read as a finding, not only as a warning on stderr.
+
+    No file exists at _PROBE, the path the other probes lint stdin as, so ruff
+    cannot read it. A broken symlink, or a module ruff may not open, gets the
+    same finding.
+    """
+    assert not (project_root / _PROBE).exists(), (
+        f"the probe needs no file at {_PROBE}, the path it lints, so that ruff cannot read it; "
+        "remove the file there"
+    )
+
+    findings = _lint(project_root, _PROBE)
+
+    assert _located_codes(findings) == [("E902", _PROBE, 1)], (
+        "the lint must report the package path it cannot read, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
 
@@ -95,12 +132,12 @@ def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) ->
 def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
     """The lint applies pyproject.toml's rule selection, not ruff's default rules.
 
-    The probe's bare except breaks E722, a default rule pyproject.toml does not
-    select. A control run with --isolated, which makes ruff ignore pyproject.toml,
-    shows that ruff's defaults still flag the probe, so the probe tells the
-    selection from the defaults.
+    The probe's `except Exception: pass` breaks S110 and BLE001, default rules
+    pyproject.toml does not select. A control run with --isolated, which makes
+    ruff ignore pyproject.toml, shows that ruff's defaults still flag the probe,
+    so the probe tells the selection from the defaults.
     """
-    source = "try:\n    pass\nexcept:\n    pass\n"
+    source = "try:\n    pass\nexcept Exception:\n    pass\n"
 
     assert _lint_probe(project_root, source, "--isolated"), (
         "ruff's default rules no longer flag the probe, so it cannot tell them from pyproject.toml's "
@@ -118,11 +155,6 @@ def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Pat
 
 def test_the_package_passes_the_lint(project_root: Path) -> None:
     """The package has no finding under the project's lint, so the verify fails a commit that adds one."""
-    assert (project_root / _PACKAGE).is_dir(), (
-        f"the lint checks {_PACKAGE}, which is not a directory, and ruff passes a missing path; "
-        "point _PACKAGE at the package"
-    )
-
     findings = _lint(project_root, _PACKAGE)
 
     assert not findings, (
