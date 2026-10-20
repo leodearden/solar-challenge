@@ -30,6 +30,7 @@ from solar_challenge.flex import resolve_grid_services_band
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from tests._finance_builders import make_fleet_results_of
 
 pytestmark = pytest.mark.integration
 
@@ -107,7 +108,7 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> SimulationResults:
 def _synthetic_fleet_results(homes: list) -> FleetResults:
     """Build a deterministic FleetResults with one SimulationResults per home."""
     per_home = [_make_synthetic_sim_results() for _ in homes]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results_of(per_home, homes=homes)
 
 
 def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-defined]
