@@ -158,7 +158,8 @@ def _kill_session(shell: subprocess.Popen[str]) -> None:
     *shell*'s process group, because a command can move processes into a group of
     their own inside it: GNU timeout, which several lane commands start with, calls
     setpgid, so killing only the shell's group would leave timeout, uv and pytest
-    running.
+    running. Where /proc cannot be listed, as on macOS, the session's other groups
+    cannot be found, so only *shell*'s own group is killed.
     """
     if shell.returncode is not None:
         return
@@ -168,10 +169,19 @@ def _kill_session(shell: subprocess.Popen[str]) -> None:
 
 
 def _process_groups_in_session(session: int) -> set[int]:
-    """Return the process group of each process in the session *session*, found by listing /proc."""
-    groups: set[int] = set()
-    for pid in (int(entry) for entry in os.listdir("/proc") if entry.isdigit()):
+    """Return the process groups in the session *session*: its leader's, whose id is the session's, and each group /proc lists in it."""
+    groups = {session}
+    for pid in _pids_in_proc():
         with contextlib.suppress(ProcessLookupError, PermissionError):
             if os.getsid(pid) == session:
                 groups.add(os.getpgid(pid))
     return groups
+
+
+def _pids_in_proc() -> list[int]:
+    """Return the pid of each process /proc lists; none where /proc cannot be listed, as on macOS."""
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    return [int(entry) for entry in entries if entry.isdigit()]
