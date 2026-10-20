@@ -95,12 +95,12 @@ def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) ->
 def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
     """The lint applies pyproject.toml's rule selection, not ruff's default rules.
 
-    The probe's bare except breaks E722, a default rule pyproject.toml does not
-    select. A control run with --isolated, which makes ruff ignore pyproject.toml,
-    shows that ruff's defaults still flag the probe, so the probe tells the
-    selection from the defaults.
+    The probe's `except Exception: pass` breaks S110 and BLE001, default rules
+    pyproject.toml does not select. A control run with --isolated, which makes
+    ruff ignore pyproject.toml, shows that ruff's defaults still flag the probe,
+    so the probe tells the selection from the defaults.
     """
-    source = "try:\n    pass\nexcept:\n    pass\n"
+    source = "try:\n    pass\nexcept Exception:\n    pass\n"
 
     assert _lint_probe(project_root, source, "--isolated"), (
         "ruff's default rules no longer flag the probe, so it cannot tell them from pyproject.toml's "
