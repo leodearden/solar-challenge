@@ -2,10 +2,10 @@
 """Which submodules the package's lazy loader maps public names to import pvlib.
 
 The first access of a public name imports the submodule the lazy loader maps it to, so a
-name costs the consumer pvlib exactly when that submodule imports it. docs/domain-library-
-consumption.md (Lazy pvlib dependency) tells consumers which submodules those are. Each
-case runs in a fresh ``python -I`` interpreter that imported only solar_challenge, so the
-modules that earlier tests imported cannot hide what a name loads.
+name costs the consumer pvlib exactly when that submodule imports it. The 'Lazy pvlib
+dependency' caveat in docs/domain-library-consumption.md tells consumers which submodules
+those are. Each case runs in a fresh ``python -I`` interpreter that imported only
+solar_challenge, so the modules that earlier tests imported cannot hide what a name loads.
 """
 
 import json
