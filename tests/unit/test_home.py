@@ -829,7 +829,7 @@ class TestCalculateSummary:
     def test_heat_pump_load_ratio_is_the_heat_pumps_load_over_the_runs_demand(self):
         """8 kWh of heat-pump load in a 40 kWh demand is 0.2, though the run generated 60 kWh and imported 10."""
         run = make_sim_results(self_kwh=30.0, export_kwh=30.0, import_kwh=10.0, days=1)
-        heat_pump_kw = 8.0 / (len(run.demand) * HOURS_PER_MINUTE)
+        heat_pump_kw = 8.0 / (len(run.demand) * run.window.step_hours)
         summary = calculate_summary(
             dataclasses.replace(run, heat_pump_load=pd.Series(heat_pump_kw, index=run.demand.index))
         )
