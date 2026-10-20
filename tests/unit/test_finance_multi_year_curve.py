@@ -271,7 +271,9 @@ def _project_without_refinement(asset_life_years: int) -> MultiYearCurve:
 
 
 class TestPerYearInterpolation:
-    """project_multi_year fills the years between its sampled ages by PCHIP through their values."""
+    """project_multi_year fills the years between its sampled ages by PCHIP through their values
+    (docs/prds/financial-layer-battery-fidelity.md §3.3 step 4, H4).
+    """
 
     def test_years_between_sampled_ages_follow_pchip_through_their_values(self) -> None:
         """Every year, the sampled ages included, equals scipy's PchipInterpolator through the sampled values."""
