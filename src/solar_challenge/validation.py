@@ -169,6 +169,7 @@ def validate_pv_generation(
             generation's index.
     """
     results: list[ValidationResult] = []
+    wired_kw = wired_dc_capacity_kw(pv_config)
 
     # Check 1: No negative values
     min_value = float(generation.min())
@@ -188,7 +189,6 @@ def validate_pv_generation(
         ))
 
     # Check 2: Peak within 10% over the wired DC
-    wired_kw = wired_dc_capacity_kw(pv_config)
     results.append(_check_peak_within_capacity(generation, pv_config, wired_kw))
 
     # Check 3: Night-time generation is approximately zero

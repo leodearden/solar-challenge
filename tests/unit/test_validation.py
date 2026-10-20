@@ -299,6 +299,20 @@ class TestValidatePVGeneration:
         with pytest.raises(ValueError, match="SimulationWindow.of_index reads a DatetimeIndex"):
             validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=True)
 
+    def test_a_config_create_pv_system_refuses_is_refused_with_its_error(self) -> None:
+        """No CEC inverter's MPPT window admits that module's string voltage."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6},
+        )
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as validating:
+            validate_pv_generation(_year_of_generation(4000.0), config, check_annual=True)
+
+        assert str(validating.value) == str(building.value)
+
 
 class TestAnnualYieldPerWiredKwp:
     """A year's yield is per kWp of the modules the PV model wires, not per configured kW."""
@@ -526,21 +540,11 @@ class TestOneWiredDcPerValidation:
         results = validate_pv_generation(generation, pv_config, check_annual=True)
 
         assert {"peak_within_capacity", "annual_yield_range"} <= {r.check_name for r in results}
-        assert built == [pv_config], f"one validation built the PV system {len(built)} times"
-
-    def test_a_config_create_pv_system_refuses_is_refused_with_its_error(self) -> None:
-        """No CEC inverter's MPPT window admits that module's string voltage."""
-        config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params={**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6},
+        assert built, (
+            "the spy saw no build: it counts the create_pv_system that "
+            "pv.wired_dc_capacity_kw looks up in pv's module globals"
         )
-
-        with pytest.raises(ValueError) as building:
-            create_pv_system(config)
-        with pytest.raises(ValueError) as validating:
-            validate_pv_generation(_year_of_generation(4000.0), config, check_annual=True)
-
-        assert str(validating.value) == str(building.value)
+        assert built == [pv_config], f"one validation built the PV system {len(built)} times"
 
 
 class TestValidateConsumption:
