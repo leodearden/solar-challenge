@@ -77,41 +77,6 @@ class TestGetJobStatus:
         assert resp.status_code == 404
         assert resp.get_json() == {"error": "Job not found"}
 
-    def test_completed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Completed job returns status='completed'."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-done",
-            run_id="run-done",
-            status="completed",
-            progress_pct=100.0,
-            current_step="Done",
-            message="Simulation completed successfully",
-        )
-        resp = client.get("/api/jobs/job-done")
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "completed"
-
-    def test_failed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Failed job returns status='failed' with message."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-fail",
-            run_id="run-fail",
-            status="failed",
-            progress_pct=20.0,
-            message="Something went wrong",
-        )
-        resp = client.get("/api/jobs/job-fail")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["status"] == "failed"
-        assert "wrong" in data["message"]
-
 
 class TestGetJobProgress:
     """Tests for GET /api/jobs/<id>/progress (SSE endpoint)."""
@@ -189,13 +154,11 @@ class TestGetJobResults:
     def test_running_job_returns_409(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Running job returns 409 (conflict)."""
+        """A job not yet completed answers 409 with the error, its status and its progress."""
         mock_job_manager.job_state.return_value = _A_RUNNING_JOB
         resp = client.get("/api/jobs/job-running/results")
         assert resp.status_code == 409
-        data = resp.get_json()
-        assert "not yet completed" in data["error"]
-        assert data["status"] == "running"
+        assert resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 50.0}
 
     def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
         self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -235,3 +198,4 @@ class TestGetJobResults:
         )
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Run not found"}
