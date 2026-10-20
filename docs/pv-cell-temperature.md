@@ -83,8 +83,9 @@
 
 This is a dated record. Re-measure before relying on it.
 
-- **Provenance.** 2026-10-20, on task 823's branch at commit 6b58a83 (from main 8b65e02):
-  CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6.
+- **Provenance.** 2026-10-20, on task 823's branch from main 8b65e02, and again from main
+  85b1896 (at 2be9d1b) with identical figures: CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3,
+  numpy 2.4.6.
   - Bristol's TMY comes through `get_tmy_data` from the weather cache: key
     `tmy_f8a4df0259c4` (key version 2), GHI 1069.46 kWh/m², scaled to PVGIS v5_3's
     2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).

@@ -60,6 +60,13 @@ model's annual performance ratio lands on the two UK references (§5):
   inverter peaks at 3.000 kW with or without the losses and keeps 0.9546 of its energy;
   8 kW of CEC modules on 3.68 kW peaks at 3.680 kW and keeps 0.9636. A derate of the AC
   would cap both peaks at 0.859 of the rating and keep 0.859 of the energy.
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by
+  `simulate_pv_output`'s sum and maximum over a copy of `clear_june_daytime`, on task
+  823's commit 2be9d1b: the 6 kW of `create_simple_module_params()` modules on 3 kW still
+  peaks at 3.000 kW with or without the losses, and keeps 0.9563; the 8 kW of the default
+  CEC module on 3.68 kW still peaks at 3.680 kW, and keeps 0.9634.]**
 - At unchanged voltage. The Sandia and ADR inverters read `v_mp`, and `create_pv_system`
   matches the strings' voltage to the inverter's MPPT window
   ([pv-inverter-string-matching.md](pv-inverter-string-matching.md)). pvlib's built-in
@@ -89,6 +96,15 @@ This is a dated record. Re-measure with the script before relying on it.
   kWh/kWp, ratio 0.9359; with them 3976.80 kWh, 993.14 kWh/kWp, ratio 0.8034, which the
   slow guard reads too. The site table below and §6's Bristol figures predate the
   change.]**
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by the script's
+  `measure` on task 823's commit 2be9d1b (same interpreter and libraries, the same TMY;
+  in-plane 1236.12 kWh/m²): without the losses 4716.89 kWh, 1177.96 kWh/kWp, ratio
+  0.9529; with them 4052.83 kWh, 1012.12 kWh/kWp, ratio 0.8188, which the slow guard
+  reads too, inside its 0.76–0.84. The site table below and §6's Bristol figures predate
+  NOCT-SAM as well: the table needs each site's TMY and PVGIS's estimate, which the
+  weather cache does not hold offline.]**
 - **Earlier reading** (2026-10-03, main f3e05fb, by task 252's first plan): PVGIS v5_3's
   PVcalc at 14% over SARAH3 2005–2023 gave Bristol 1022.83 kWh/kWp, ratio 0.8124, and
   0.808–0.825 across the fourteen sites.

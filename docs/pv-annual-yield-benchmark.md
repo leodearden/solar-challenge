@@ -22,6 +22,13 @@ DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configur
 The yields are §3's Bristol measurements. Divided by the nameplate, these correct
 simulations failed the band as it then was, 700–1100; divided by the wired DC, they
 were inside it.
+**[Amended 2026-10-20, task 823: those yields are §3's 2026-09-30 record: the unscaled
+TMY, no system losses, and SAPM's generic cell temperature. Re-measured by §3's method on
+the scaled TMY, with the system losses and NOCT-SAM's cell temperature
+([pv-cell-temperature.md](pv-cell-temperature.md)), on task 823's commit 2be9d1b, per
+nameplate and per wired kWp: 0.3 kW 1333.8 and 999.3; 0.7 kW 1133.1 and 990.4; 1.5 kW
+1085.0 and 1016.1; 5.9 kW 1029.1 and 1010.8. Per wired kWp all four are inside today's
+300–1200 (§2); per nameplate, 0.3 kW is above it.]**
 `validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
 generation, so the wired DC is that of the config's own module, `custom_module_params`
 included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
@@ -134,6 +141,16 @@ This is a dated record. Re-measure with the method below before relying on it.
   on the scaled TMY by §3's and §4's methods, on task 236's commit be3e1de: the 248
   capacities read 925.9–1007.7 kWh/kWp (median 989.1), all inside the band, old or new,
   and 4 kW reads 993.1. The AC peak reaches at most 0.948 × the wired DC (at 0.4 kW).]**
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured with the losses on the
+  scaled TMY by §3's and §4's methods, on task 823's commit 2be9d1b (same interpreter and
+  libraries): the 248 capacities read 943.8 (10.2 kW) to 1026.4 (10.1 kW) kWh/kWp
+  (median 1008.2), all inside the band, and 4 kW reads 1012.1. The AC peak reaches at
+  most 0.994 × the wired DC, at 0.4 kW (0.398 kW on 0.40 kWp). That is a bright, windy
+  April hour, 1194 W/m² in plane, 8.4 °C air and 6.8 m/s wind, where NOCT-SAM puts the
+  cell at 23.0 °C and SAPM put it at 36.8 °C. The UK-site table below predates
+  NOCT-SAM.]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses. From task 252 every model chain deducts PVWatts v5's default
   system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).
