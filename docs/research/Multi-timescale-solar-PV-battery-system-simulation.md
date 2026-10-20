@@ -49,6 +49,8 @@ Alternative generators include **LoadProfileGenerator** (agent-based behavior si
 
 For UK-specific validation, Elexon's **Profile Classes 1 and 2** (domestic unrestricted and Economy 7) provide half-hourly settlement coefficients. The UK Power Networks open data portal offers aggregated smart meter data at LV feeder level, while SSEN has published 1.8 million smart meter readings aggregated to feeder and substation levels. Average UK household consumption is **3,400 kWh/year** (Ofgem TDCV), varying regionally from 2,906 kWh in the North East to 3,720 kWh in East England.
 
+> **Editor's note (2026-10-20):** The 3,400 kWh figure and its regional range (2,906 to 3,720 kWh) are not Ofgem TDCVs, and the text above cites no document for them. No Ofgem electricity TDCV band was 3,400 kWh in any value set published before this document was written, and DESNZ's mean domestic consumption per meter does not match either figure. Task 1005's commit records the check. The paragraph is otherwise left as originally written.
+
 For emerging loads, **hplib** provides heat pump efficiency modeling with COP calculations from Heatpump Keymark data, while **SpiceEV** simulates individual EV charging events with multiple charging strategies.
 
 ## Monte Carlo frameworks enable robust uncertainty quantification
