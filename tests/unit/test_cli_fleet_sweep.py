@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet sweep`, on either sweep path, exports one CSV per point named after the swept parameter, and a summary of every point."""
+"""`fleet sweep`, on either sweep path, exports one CSV per point named after the swept parameter, and a summary of every point; on the --param path, each point simulates where its substituted location: block puts it."""
 
 from pathlib import Path
 
@@ -9,8 +9,10 @@ import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
+from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
+from tests._synthetic_weather import sunless_weather
 
 runner = CliRunner()
 
@@ -59,21 +61,20 @@ def _clear_june_in_tmp_path(
     monkeypatch.chdir(tmp_path)
 
 
-def _sweep(capacity_kwh: object, *options: str) -> Result:
-    """Write fleet.yaml in the working directory: two homes with 4 kW of PV, a deterministic 3400 kWh a year of load and a battery of capacity_kwh. Run `fleet sweep` on it for _DAY into out, with options, simulating one home after another."""
-    Path("fleet.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "fleet_distribution": {
-                    "n_homes": 2,
-                    "seed": 42,
-                    "pv": {"capacity_kw": 4.0},
-                    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    "battery": {"capacity_kwh": capacity_kwh},
-                }
-            }
-        )
-    )
+def _fleet_distribution(**blocks: object) -> dict[str, object]:
+    """A fleet_distribution of two homes with 4 kW of PV and a deterministic 3400 kWh a year of load, and blocks besides."""
+    return {
+        "n_homes": 2,
+        "seed": 42,
+        "pv": {"capacity_kw": 4.0},
+        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+        **blocks,
+    }
+
+
+def _sweep_document(document: dict[str, object], *options: str) -> Result:
+    """Write document as fleet.yaml in the working directory. Run `fleet sweep` on it for _DAY into out, with options, simulating one home after another."""
+    Path("fleet.yaml").write_text(yaml.safe_dump(document))
 
     return runner.invoke(
         app,
@@ -82,6 +83,13 @@ def _sweep(capacity_kwh: object, *options: str) -> Result:
             "--start", _DAY, "--end", _DAY, "--sequential", *options,
         ],
         catch_exceptions=False,
+    )
+
+
+def _sweep(capacity_kwh: object, *options: str) -> Result:
+    """Run `fleet sweep`, with options, on two homes with 4 kW of PV, a deterministic 3400 kWh a year of load and a battery of capacity_kwh."""
+    return _sweep_document(
+        {"fleet_distribution": _fleet_distribution(battery={"capacity_kwh": capacity_kwh})}, *options
     )
 
 
@@ -180,3 +188,29 @@ def test_the_progress_bar_counts_every_home_of_every_point(
     status = " ".join(result.stderr.split())
     assert "Simulating 2 sweeps (4 total homes)..." in status
     assert "4/4" in status
+
+
+def test_a_param_sweep_of_a_placeholder_in_the_location_block_simulates_each_point_at_its_latitude(
+    weather_cache: WeatherCache,
+) -> None:
+    """Latitude 50 is served the clear _DAY and latitude 52 a sunless one, so a point generates only if its homes simulate at the latitude its sweep value gives."""
+    weather_cache.put(
+        ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).hourly_weather(),
+        "tmy",
+        Location(latitude=50.0, longitude=Location.BRISTOL_LON),
+    )
+    weather_cache.put(
+        sunless_weather(_DAY, temp_air=15.0),
+        "tmy",
+        Location(latitude=52.0, longitude=Location.BRISTOL_LON),
+    )
+
+    result = _sweep_document(
+        {"location": {"latitude": "${LAT:51.45}"}, "fleet_distribution": _fleet_distribution()},
+        "--param", "LAT", "--min", "50", "--max", "52", "--steps", "2", "--mode", "linear",
+    )
+
+    assert result.exit_code == 0, result.output
+    generation_kwh = pd.read_csv(Path("out", "sweep_summary.csv")).set_index("sweep_value")["total_generation_kwh"]
+    assert generation_kwh.loc[50.0] > 0
+    assert generation_kwh.loc[52.0] == 0
