@@ -114,8 +114,11 @@ def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: Path) -> None:
-    """The offline lane runs exactly one job of the row's name, and it is enabled: lane_command's asserts are the check."""
-    lane_command(project_root, job.name)
+    """The offline lane runs exactly one job of the row's name, and it is enabled, as lane_command asserts."""
+    try:
+        lane_command(project_root, job.name)
+    except AssertionError as failure:
+        pytest.fail(f"{failure}; while the lane does not run the {job.name!r} job, {job.if_unrun}")
 
 
 def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> None:
