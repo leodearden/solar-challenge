@@ -25,7 +25,7 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.charts import sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.shared import LOCATION_PRESETS
+from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import traces

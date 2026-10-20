@@ -28,7 +28,7 @@ from solar_challenge.web.fleet_config import (
     distribution_grammar_spec,
 )
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
-from solar_challenge.web.shared import (
+from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
     refuse_unrecognised_keys,

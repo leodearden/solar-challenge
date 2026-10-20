@@ -21,7 +21,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
