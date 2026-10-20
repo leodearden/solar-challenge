@@ -97,6 +97,30 @@ def test_frame_with_more_than_one_data_line_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
+    "line",
+    ["event: delta ", "event:  delta"],
+    ids=["trailing", "leading"],
+)
+def test_event_name_with_surrounding_whitespace_is_rejected(line: str) -> None:
+    """EventSource dispatches the name verbatim; the chat client trims it."""
+    with pytest.raises(ValueError, match="no leading or trailing whitespace") as raised:
+        parse_sse_events(f"{line}\ndata: {{}}\n\n")
+
+    assert repr(line) in str(raised.value)
+
+
+def test_event_name_with_an_inner_space_is_kept_as_written() -> None:
+    """EventSource and the chat client both keep an inner space, so the reader does not refuse it.
+
+    web/sse.py's SseEvent refuses any whitespace in a name it writes. The reader refuses
+    only what clients decode differently, not everything the encoder would not write.
+    """
+    body = "event: fail ed\ndata: {}\n\n"
+
+    assert parse_sse_events(body) == [SseFrame(event="fail ed", data={})]
+
+
+@pytest.mark.parametrize(
     ("body", "field"),
     [
         ("event:delta\ndata: {}\n\n", "event"),
