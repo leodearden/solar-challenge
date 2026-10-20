@@ -72,32 +72,32 @@ GSHP_COP_MIN: float = 3.2  # Minimum COP
 GSHP_COP_MAX: float = 4.8  # Maximum COP
 
 
-def calculate_heating_degree_minutes(
+def heating_degree_deficit_c(
     temperature_c: pd.Series,
     base_temp_c: float = BASE_TEMPERATURE_C
 ) -> pd.Series:
-    """Calculate heating degree minutes from temperature data.
+    """Each row's temperature deficit below the heating base temperature, in °C.
 
-    Heating degree minutes quantify heating demand at each timestep.
-    When outdoor temperature falls below the base temperature, heating is required.
-    The degree minutes value represents the temperature deficit that must be made up.
+    When outdoor temperature falls below the base temperature, heating is required,
+    and the deficit is the temperature gap that must be made up.
 
-    This is the minute-resolution equivalent of heating degree days (HDD),
-    commonly used for UK heating demand calculations.
+    The deficit is per row, whatever the row's length: a caller multiplies it by
+    the window's step_hours to get heating degree-hours, which divided by 24 are
+    heating degree days (HDD), commonly used for UK heating demand calculations.
 
     Args:
         temperature_c: Time series of outdoor temperature in degrees Celsius
         base_temp_c: Base temperature threshold for heating (default 15.5°C for UK)
 
     Returns:
-        Series of heating degree minutes (°C-minutes), same length as input.
+        Series of deficits in °C, same length as input.
         Zero when temperature is at or above base, positive when heating needed.
     """
     # Calculate temperature deficit below base temperature
     # Negative values (temp above base) become zero (no heating needed)
-    degree_minutes = base_temp_c - temperature_c
-    degree_minutes = degree_minutes.clip(lower=0.0)
-    return degree_minutes
+    deficit_c = base_temp_c - temperature_c
+    deficit_c = deficit_c.clip(lower=0.0)
+    return deficit_c
 
 
 def calculate_cop(heat_pump_type: HeatPumpType, outdoor_temp_c: float) -> float:
@@ -273,13 +273,13 @@ def generate_heat_pump_load(
 
     reference_year = _reference_year_window(annual_temperature_c)
 
-    annual_degree_rows = calculate_heating_degree_minutes(annual_temperature_c).sum()
+    annual_degree_rows = heating_degree_deficit_c(annual_temperature_c).sum()
     if annual_degree_rows == 0:
         electrical_load_kw = pd.Series(0.0, index=temperature_c.index)
     else:
         heat_kw_per_degree = config.annual_heat_demand_kwh / annual_degree_rows / reference_year.step_hours
         thermal_demand_kw = (
-            calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree
+            heating_degree_deficit_c(temperature_c) * heat_kw_per_degree
         ).clip(upper=config.thermal_capacity_kw)
 
         # Calculate COP for each timestep

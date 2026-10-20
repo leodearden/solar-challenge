@@ -17,9 +17,9 @@ from solar_challenge.heat_pump import (
     GSHP_COP_BASE,
     GSHP_COP_MIN,
     GSHP_COP_MAX,
-    calculate_heating_degree_minutes,
     calculate_cop,
     generate_heat_pump_load,
+    heating_degree_deficit_c,
 )
 from solar_challenge.timebase import SimulationWindow
 
@@ -216,66 +216,66 @@ class TestCalculateCOP:
         assert gshp_cop > ashp_cop
 
 
-class TestCalculateHeatingDegreeMinutes:
-    """Test heating degree minutes calculation."""
+class TestHeatingDegreeDeficit:
+    """Test the per-row temperature deficit below the heating base temperature."""
 
     def test_temperature_below_base(self):
-        """Temperature below base produces positive degree minutes."""
+        """Temperature below base produces a positive deficit."""
         temps = pd.Series([10.0, 12.0, 5.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Base is 15.5°C by default
         # Deficits: 5.5, 3.5, 10.5
-        assert degree_mins.iloc[0] == pytest.approx(5.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(3.5, rel=0.001)
-        assert degree_mins.iloc[2] == pytest.approx(10.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(5.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(3.5, rel=0.001)
+        assert deficit_c.iloc[2] == pytest.approx(10.5, rel=0.001)
 
     def test_temperature_above_base_gives_zero(self):
-        """Temperature above base gives zero degree minutes."""
+        """Temperature above base gives a zero deficit."""
         temps = pd.Series([20.0, 18.0, 16.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # All temperatures above base (15.5°C)
-        assert (degree_mins >= 0).all()
-        assert degree_mins.iloc[0] == 0.0
-        assert degree_mins.iloc[1] == 0.0
-        assert degree_mins.iloc[2] == 0.0
+        assert (deficit_c >= 0).all()
+        assert deficit_c.iloc[0] == 0.0
+        assert deficit_c.iloc[1] == 0.0
+        assert deficit_c.iloc[2] == 0.0
 
     def test_temperature_at_base_gives_zero(self):
-        """Temperature exactly at base gives zero degree minutes."""
+        """Temperature exactly at base gives a zero deficit."""
         temps = pd.Series([BASE_TEMPERATURE_C])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert degree_mins.iloc[0] == 0.0
+        deficit_c = heating_degree_deficit_c(temps)
+        assert deficit_c.iloc[0] == 0.0
 
     def test_custom_base_temperature(self):
         """Can use custom base temperature."""
         temps = pd.Series([18.0, 15.0])
-        degree_mins = calculate_heating_degree_minutes(temps, base_temp_c=20.0)
+        deficit_c = heating_degree_deficit_c(temps, base_temp_c=20.0)
 
         # Deficits from 20°C: 2.0, 5.0
-        assert degree_mins.iloc[0] == pytest.approx(2.0, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(5.0, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(2.0, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(5.0, rel=0.001)
 
     def test_negative_temperatures(self):
         """Handles negative temperatures correctly."""
         temps = pd.Series([-5.0, -10.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Deficits from 15.5°C: 20.5, 25.5
-        assert degree_mins.iloc[0] == pytest.approx(20.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(25.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(20.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(25.5, rel=0.001)
 
     def test_returns_series_same_length(self):
         """Output series has same length as input."""
         temps = pd.Series([10.0, 12.0, 14.0, 16.0, 18.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert len(degree_mins) == len(temps)
+        deficit_c = heating_degree_deficit_c(temps)
+        assert len(deficit_c) == len(temps)
 
     def test_no_negative_values(self):
         """Output never contains negative values."""
         temps = pd.Series([5.0, 10.0, 15.0, 20.0, 25.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert (degree_mins >= 0).all()
+        deficit_c = heating_degree_deficit_c(temps)
+        assert (deficit_c >= 0).all()
 
 
 def _utc_1990_minute_index() -> pd.DatetimeIndex:
