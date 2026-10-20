@@ -80,6 +80,18 @@ def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> 
     )
 
 
+def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) -> None:
+    """The lint reports a module-level import below other code in a module of the package."""
+    source = "PATTERN = 'x'\nimport re\n\nCOMPILED = re.compile(PATTERN)\n"
+
+    findings = _lint_probe(project_root, source)
+
+    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E402", _PROBE, 2)], (
+        "the lint must report the mid-file import in a package module, and nothing else; it reported:\n"
+        + "\n".join(map(str, findings))
+    )
+
+
 def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
     """The lint applies pyproject.toml's rule selection, not ruff's default rules.
 
