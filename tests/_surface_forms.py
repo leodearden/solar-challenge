@@ -53,8 +53,10 @@ def surface_form(obj: object) -> str:
     """The surface form of *obj*.
 
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
-    anything neither a class nor a routine, is its type's qualified name. Any other
-    class's or routine's is its signature, a class's being its constructor's without self.
+    anything neither a class nor a routine, is its type's qualified name; a
+    functools.partial is a routine on every admitted minor, as inspect counts one from
+    3.14. Any other class's or routine's is its signature, a class's being its
+    constructor's without self and a partial's the one it leaves of the callable it wraps.
     A dataclass's signature follows its kind: dataclass, then in brackets those of eq,
     order, unsafe_hash and frozen that are on, whether set on the class or on the base it
     inherits them from. An annotation in that signature which it has no rule for, such as
@@ -62,7 +64,7 @@ def surface_form(obj: object) -> str:
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
-    if not (inspect.isclass(obj) or inspect.isroutine(obj)):
+    if not (inspect.isclass(obj) or _is_routine(obj)):
         return type(obj).__qualname__
     signature = inspect.signature(obj)
     text = str(
@@ -462,7 +464,7 @@ def _form_classes(obj: object) -> set[type]:
     """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
-    if not (inspect.isclass(obj) or inspect.isroutine(obj)):
+    if not (inspect.isclass(obj) or _is_routine(obj)):
         return {type(obj)}
     annotations = _signature_annotations(inspect.signature(obj))
     if not annotations:
@@ -474,6 +476,11 @@ def _form_classes(obj: object) -> set[type]:
             for name, annotation in annotations.items()
         )
     )
+
+
+def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
+    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
+    return inspect.isroutine(obj) or isinstance(obj, functools.partial)
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
