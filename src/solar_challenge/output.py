@@ -3,13 +3,14 @@
 
 import math
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, calculate_summary
-from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
+from solar_challenge.timebase import SimulationWindow, step_hours
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -28,6 +29,11 @@ _TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
 def _in_months(rows: _TimeIndexed, months: tuple[int, ...]) -> _TimeIndexed:
     """The rows of *rows* whose timestamps fall in *months*."""
     return rows[rows.index.month.isin(months)]
+
+
+def _days_lasted(rows: pd.Series, window: SimulationWindow) -> float:
+    """The days *rows* last in all, each of its rows lasting *window*'s cadence."""
+    return len(rows) * window.cadence / timedelta(days=1)
 
 
 def export_to_csv(
@@ -125,8 +131,9 @@ def generate_summary_report(
             summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
 
             # Calculate average daily values
-            winter_days = len(winter_hp_load) * HOURS_PER_MINUTE / 24 if len(winter_hp_load) > 0 else 1
-            summer_days = len(summer_hp_load) * HOURS_PER_MINUTE / 24 if len(summer_hp_load) > 0 else 1
+            window = results.window
+            winter_days = _days_lasted(winter_hp_load, window)
+            summer_days = _days_lasted(summer_hp_load, window)
             winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
             summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
 
