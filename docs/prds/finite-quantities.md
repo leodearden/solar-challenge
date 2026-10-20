@@ -221,7 +221,7 @@ Not input types, classified in ι's table with the reason:
   - `RankedSweep`, `SensitivityAxis`, `SensitivityPanel` and `ConfigResult`;
   - `CommunityResults` and `CommunityMetrics`;
   - `ValidationResult`.
-- **Library or private values:** `pv.CecInverter`, `pv._StringGroup`, `pv._Inverter`, `battery._SocLimitsAndEfficiencies` and `home._PerMinuteAmount`.
+- **Library or private values:** `pv.CecInverter`, `pv._StringGroup`, `pv._Inverter`, `battery._SocLimitsAndEfficiencies` and `home._StepAmount`.
 - **Spec containers:** `PVDistributionConfig`, `BatteryDistributionConfig`, `LoadDistributionConfig`, `HeatPumpDistributionConfig` and `EVDistributionConfig`. Each scalar arm is read at parse (§5.3), and each sampled value is read by the generated home's type.
 - **Retired by S5:** `ParameterSweepConfig` and `SweepResult`.
 
