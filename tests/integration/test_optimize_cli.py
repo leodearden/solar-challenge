@@ -225,14 +225,19 @@ class TestGenerateConfigRankingReportTable1:
         )
 
     def test_solved_own_use_rate_formatted(self) -> None:
-        """Each config's solved own-use rate must appear as 'XX.XX p/kWh'."""
+        """Each config's solved own-use rate must appear as 'XX.XX p/kWh' in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Config 1: 12.50 p/kWh  Config 2: 18.75 p/kWh
-        assert "12.50" in report, f"12.50 p/kWh not found:\n{report}"
-        assert "18.75" in report, f"18.75 p/kWh not found:\n{report}"
-        assert "p/kWh" in report, f"'p/kWh' token not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "12.50 p/kWh",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "18.75 p/kWh",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Solved Rate (p/kWh)"]
+            for label in expected
+        }
+        assert shown == expected, f"solved own-use rates not shown in their configs' rows:\n{report}"
 
     def test_outlay_distribution_values(self) -> None:
         """Report must show min/mean/median/max outlay for each config."""
@@ -293,16 +298,19 @@ class TestGenerateConfigRankingReportTable1:
         assert "∞" in report, f"'∞' symbol for inf DSCR not found:\n{report}"
 
     def test_equity_irr_formatted_as_percent(self) -> None:
-        """equity_irr must be rendered as a percentage (e.g. '9.0%' or '7.0%')."""
+        """Each config's equity_irr must be rendered as a one-decimal percentage in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        assert "9.0%" in report or "9%" in report, (
-            f"equity IRR 9% not found:\n{report}"
-        )
-        assert "7.0%" in report or "7%" in report, (
-            f"equity IRR 7% not found:\n{report}"
-        )
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "9.0%",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "7.0%",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Equity IRR"]
+            for label in expected
+        }
+        assert shown == expected, f"equity IRRs not shown in their configs' rows:\n{report}"
 
     def test_payback_none_shown_as_dash(self) -> None:
         """payback_years=None must render as '—' in the config's Cost-Recovery Rank Payback cell."""
