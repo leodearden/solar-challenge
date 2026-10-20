@@ -279,7 +279,7 @@ class TestSimulationResults:
         assert "grid_charge_cost_gbp" not in message
 
 
-class TestPerStepAmounts:
+class TestPerMinuteAmounts:
     """Test SimulationResults.per_minute_amounts, each row's energy and money, and total_amounts, their run totals."""
 
     def test_power_becomes_each_rows_kwh_and_money_stays_its_pounds(self):
