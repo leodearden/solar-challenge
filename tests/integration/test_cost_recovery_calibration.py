@@ -41,7 +41,7 @@ from solar_challenge.finance import (
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
-from tests._fin_calibration import make_physics_column_scenario
+from tests._fin_calibration import FIN_GOLDEN, FIN_SCF, make_fin_finance, make_physics_column_scenario
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -52,31 +52,10 @@ from tests._finance_builders import (
 
 
 # ---------------------------------------------------------------------------
-# [FIN] Golden constants (reused from θ / test_finance_calibration.py)
+# [FIN] fixture builders over tests/_finance_builders.py and tests/_fin_calibration.py
 # ---------------------------------------------------------------------------
-
-_FIN_GOLDEN = {
-    "inp_kWp": 5.5,
-    "inp_Batt_kWh": 5.0,
-    "inp_kWhPerkWp": 1050.0,
-    "capital_stack_b6": 775000.0,   # 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
-    "min_dscr": 2.10378435678433,   # Debt_Analytics!B16
-    "own_use_rate_pence_per_kwh": 15.0,
-    "export_rate_pence_per_kwh": 6.0,
-    "grant_gbp": 250000.0,
-    "equity_fraction": 0.75,
-    "loan_term_years": 15,
-    "loan_rate": 0.07,
-}
-
-_FIN_SCF = 0.70  # spreadsheet with-battery self-consumption fraction assumption
 
 _FIN_HOME = make_sized_home(pv_kwp=5.5, battery_kwh=5.0)
-
-
-# ---------------------------------------------------------------------------
-# [FIN] fixture builders over tests/_finance_builders.py
-# ---------------------------------------------------------------------------
 
 
 def _make_fleet_results_fin_cr6(
@@ -87,7 +66,7 @@ def _make_fleet_results_fin_cr6(
 ) -> FleetResults:
     """Build a [FIN]-aligned synthetic FleetResults.
 
-    With _make_finance_fin_cr6 defaults the solve lands in the interior 'floor'
+    With _make_finance_fin_cr6's finance the solve lands in the interior 'floor'
     regime (feasible=True):
       - 100 homes × 5.5 kWp + 5 kWh (HomeConfig)
       - fleet_sc = n_homes × self_kwh = 200,000 kWh
@@ -113,72 +92,34 @@ def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
     return make_scenario_of([_FIN_HOME] * n_homes)
 
 
-def _make_finance_cr6(
-    *,
-    grid_services: float = 0.0,
-    retained_cash_floor: float = 27.0,
-    own_use_rate: float = 15.0,
-    retail_rate: float = 23.0,
-    pv_cost_per_kwp: float = 1000.0,
-    grant_gbp: float = 250000.0,
-    equity_fraction: float = 0.75,
-    loan_term_years: int = 15,
-    loan_rate: float = 0.07,
-) -> FinanceConfig:
-    """Unified FinanceConfig factory for CR6 tests.
+def _make_finance_fin_cr6() -> FinanceConfig:
+    """The [FIN] finance with no self-consumption override, so it prices the simulated own-use.
 
-    All three former builders (_make_finance_fin_cr6 / _make_finance_interior_cr6 /
-    _make_finance_flex_cr6) were ~95% identical; they now call this factory with
-    their distinct defaults, preventing silent drift on shared fields.
-
-    Default values match [FIN] (capex=£775k, grant=£250k, retail=23p, floor=£27).
-    Interior/flex tests pass explicit overrides (pv_cost=2000, grant=0, retail=30, floor=50).
-    """
-    return FinanceConfig(
-        standing_charge_pence_per_day=60.0,
-        pv_cost_per_kwp_gbp=pv_cost_per_kwp,
-        roof_fit_cost_gbp=1000.0,
-        battery_cost_per_kwh_gbp=250.0,
-        inverter_cost_per_kw_gbp=0.0,
-        grant_gbp=grant_gbp,
-        equity_fraction=equity_fraction,
-        loan_term_years=loan_term_years,
-        loan_rate=loan_rate,
-        opex_per_home_per_year_gbp=131.0,
-        asset_life_years=25,
-        own_use_rate_pence_per_kwh=own_use_rate,
-        retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
-        retail_baseline_rate_pence_per_kwh=retail_rate,
-        vat_rate=0.05,
-        grid_services_income_per_kw_per_year_gbp=grid_services,
-        # self_consumption_override=None (default) → physics path for SEG
-    )
-
-
-def _make_finance_fin_cr6(
-    *,
-    grid_services: float = 0.0,
-    retained_cash_floor: float = 27.0,
-    own_use_rate: float = 15.0,
-    retail_rate: float = 23.0,
-) -> FinanceConfig:
-    """[FIN]-aligned FinanceConfig (capex=£775k, grant=£250k, retail=23p, floor=£27).
-
+    On the 100-home [FIN] fleet (grant=£250k, retail=23p, floor=£27):
     Capex = 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
     Grant = £250,000 → financed = £525,000
     Equity (0.75) = £393,750; Debt (0.25) = £131,250
     Debt service (7%, 15yr) ≈ £14,410/yr
     """
-    return _make_finance_cr6(
-        grid_services=grid_services,
-        retained_cash_floor=retained_cash_floor,
-        own_use_rate=own_use_rate,
-        retail_rate=retail_rate,
-        pv_cost_per_kwp=1000.0,
-        grant_gbp=_FIN_GOLDEN["grant_gbp"],
-        equity_fraction=_FIN_GOLDEN["equity_fraction"],
-        loan_term_years=int(_FIN_GOLDEN["loan_term_years"]),
-        loan_rate=_FIN_GOLDEN["loan_rate"],
+    return make_fin_finance(self_consumption_override=None)
+
+
+def _make_finance_cr6(
+    *,
+    grid_services: float,
+    retained_cash_floor: float,
+    retail_rate: float,
+    pv_cost_per_kwp: float,
+    grant_gbp: float,
+) -> FinanceConfig:
+    """_make_finance_fin_cr6's [FIN] finance, with the five fields CR6's interior and flex regimes vary replaced."""
+    return dataclasses.replace(
+        _make_finance_fin_cr6(),
+        grid_services_income_per_kw_per_year_gbp=grid_services,
+        retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
+        retail_baseline_rate_pence_per_kwh=retail_rate,
+        pv_cost_per_kwp_gbp=pv_cost_per_kwp,
+        grant_gbp=grant_gbp,
     )
 
 
@@ -259,12 +200,7 @@ class TestNoFlexAnchorReconciliation:
     def _build_fin_anchor(self) -> tuple:  # type: ignore[type-arg]
         """Build (scenario, finance, fr, simulate) for the [FIN] no-flex anchor."""
         scenario = _make_scenario_fin_cr6(n_homes=100)
-        finance = _make_finance_fin_cr6(
-            grid_services=0.0,
-            retained_cash_floor=27.0,
-            own_use_rate=15.0,
-            retail_rate=23.0,
-        )
+        finance = _make_finance_fin_cr6()
         fr = _make_fleet_results_fin_cr6(
             n_homes=100,
             self_kwh=2000.0,
@@ -376,7 +312,7 @@ class TestOverrideOwnUseCappedAtDemand:
     @staticmethod
     def _scenario_and_finance() -> tuple[ScenarioConfig, FinanceConfig]:
         """The 100-home [FIN] anchor and its finance under the spreadsheet's 0.70 override."""
-        finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
+        finance = make_fin_finance(self_consumption_override=FIN_SCF)
         return _make_scenario_fin_cr6(), finance
 
     @pytest.fixture(scope="class")
@@ -549,6 +485,7 @@ def _make_finance_interior_cr6(
     ∴ interior ✓ (r* derived in _make_interior_fleet_cr6)
     """
     return _make_finance_cr6(
+        grid_services=0.0,
         retained_cash_floor=retained_cash_floor,
         retail_rate=retail_rate,
         pv_cost_per_kwp=pv_cost_per_kwp,
@@ -776,11 +713,11 @@ def _spreadsheet_economics_cr6(
     """
     curve = spreadsheet_revenue_curve(
         n_homes=len(scenario.homes),
-        pv_kwp=_FIN_GOLDEN["inp_kWp"],
-        kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-        self_consumption_fraction=_FIN_SCF,
-        own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-        export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+        pv_kwp=FIN_GOLDEN["inp_kWp"],
+        kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
+        self_consumption_fraction=FIN_SCF,
+        own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+        export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
         asset_life_years=finance.asset_life_years,
     )
     return project_economics(curve, scenario, finance)
@@ -812,9 +749,9 @@ class TestThetaStaysGreen:
         econ = self._build_theta_econ()
 
         assert econ.total_capex_gbp == pytest.approx(
-            _FIN_GOLDEN["capital_stack_b6"], abs=1.0
+            FIN_GOLDEN["capital_stack_b6"], abs=1.0
         ), (
-            f"θ-isolation: capex expected £{_FIN_GOLDEN['capital_stack_b6']:,.0f}, "
+            f"θ-isolation: capex expected £{FIN_GOLDEN['capital_stack_b6']:,.0f}, "
             f"got £{econ.total_capex_gbp:,.2f}"
         )
         assert econ.min_dscr >= 1.20, (
