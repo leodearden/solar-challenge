@@ -183,13 +183,12 @@ class TestPureUnitClassesSelectedByTheVerify:
     PURE_UNIT_CLASSES = [
         "TestCalculateSummary",  # test_home.py
         "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
-        # test_home_heat_pump.py — this simulates from a synthetic Bristol TMY year it seeds, no network
+        # test_home_heat_pump.py — this simulates from a synthetic Bristol TMY year given as its weather, no network
         "TestHeatPumpIntegration",
         "TestFleetSummary",      # test_fleet.py
         # test_fleet.py — these simulate from the Bristol TMY that bristol_june_tmy seeds, no network
         "TestSimulateFleetIter",
         "TestParallelMatchesSequential",
-        "TestSimulateHomeWeatherData",
         "TestMultiSweepIter",
         "TestCollectMultiSweepResults",
     ]

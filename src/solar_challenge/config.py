@@ -32,6 +32,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.weather import default_weather
 
 
 #: Dispatch strategy names recognised by the simulation engine.
@@ -2548,7 +2549,7 @@ def run_parameter_sweep(
             home = _apply_parameter_to_home(base_scenario.home, param_name, value, location)
             start = base_scenario.period.get_start_timestamp(location.timezone)
             end = base_scenario.period.get_end_timestamp(location.timezone)
-            home_results = simulate_home(home, start, end)
+            home_results = simulate_home(home, start, end, weather=default_weather())
             yield SweepResult(parameter_value=value, results=home_results)
         else:
             # Fleet simulation

@@ -28,7 +28,6 @@ import pandas as pd
 
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, connect, get_db
 from solar_challenge.web.storage import RunStorage
 
@@ -188,7 +187,7 @@ class JobManager:
         self,
         max_workers: int = 2,
         *,
-        simulate_home: HomeSimulator = _default_simulate_home,
+        simulate_home: HomeSimulator,
         new_id: Callable[[], str] = _random_id,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -196,8 +195,9 @@ class JobManager:
 
         Args:
             max_workers: Maximum number of concurrent simulation threads.
-            simulate_home: Simulates one home over a date range; defaults to
-                solar_challenge.home.simulate_home.
+            simulate_home: Simulates one home over a date range, on the weather
+                it is bound to; create_app binds solar_challenge.home.simulate_home
+                to default_weather().
             new_id: Returns a new, unique id on each call; each job and each run
                 takes one. Defaults to a random UUID.
             clock: Returns the time in seconds on a clock that never goes

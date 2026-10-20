@@ -1212,9 +1212,9 @@ home:
         captured: dict[str, HomeConfig] = {}
         real_simulate_home = _home_module.simulate_home
 
-        def spy_simulate_home(home_config, start_date, end_date, progress_callback=None):  # type: ignore[no-untyped-def]
+        def spy_simulate_home(home_config, *args, **kwargs):  # type: ignore[no-untyped-def]
             captured["home_config"] = home_config
-            return real_simulate_home(home_config, start_date, end_date, progress_callback)
+            return real_simulate_home(home_config, *args, **kwargs)
 
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)

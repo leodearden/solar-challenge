@@ -26,6 +26,7 @@ from solar_challenge.location import Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
+from solar_challenge.weather import default_weather
 
 app = typer.Typer(help="Single home simulation commands")
 
@@ -154,7 +155,7 @@ def run(
     # Run simulation with progress
     with create_progress() as progress:
         task = progress.add_task("Running simulation...", total=None)
-        results = simulate_home(home_config, start_date, end_date)
+        results = simulate_home(home_config, start_date, end_date, weather=default_weather())
         progress.update(task, completed=True)
 
     if report:
@@ -250,7 +251,7 @@ def quick(
 
     with create_progress() as progress:
         task = progress.add_task("Running simulation...", total=None)
-        results = simulate_home(home_config, start_date, end_date)
+        results = simulate_home(home_config, start_date, end_date, weather=default_weather())
         progress.update(task, completed=True)
 
     summary = calculate_summary(results)
