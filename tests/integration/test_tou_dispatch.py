@@ -1,6 +1,6 @@
 """TOU-optimized battery dispatch of an Economy 7 home, simulated over clear June days.
 
-The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
+Every simulation is given clear June days as Bristol's weather, so these tests run offline.
 The home has no seg_tariff, so simulate_home's warning that export revenue is 0.0 is ignored.
 tests/integration/test_tou_dispatch_synthetic_weather.py compares TOU-optimized with greedy dispatch.
 """
@@ -19,19 +19,12 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
+from tests._synthetic_weather import weather_for
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.fixture
-def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
-
-
-@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning")
 @pytest.mark.integration
 class TestTOUOptimizedDispatch:
@@ -54,7 +47,7 @@ class TestTOUOptimizedDispatch:
         """TOU-optimized dispatch strategy completes successfully."""
         start, end = _JUNE_DAYS.window(3)
 
-        results = simulate_home(tou_home, start, end)
+        results = simulate_home(tou_home, start, end, weather=weather_for(tou_home, _JUNE_DAYS.hourly_weather()))
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -73,7 +66,9 @@ class TestTOUOptimizedDispatch:
         """Energy balances every minute, and no output is negative, with TOU dispatch."""
         start, end = _JUNE_DAYS.window(2)
 
-        results = simulate_home(tou_home, start, end, validate_balance=True)
+        results = simulate_home(
+            tou_home, start, end, validate_balance=True, weather=weather_for(tou_home, _JUNE_DAYS.hourly_weather())
+        )
 
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
@@ -90,7 +85,7 @@ class TestTOUOptimizedDispatch:
         """Summary statistics should be reasonable with TOU dispatch."""
         start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(tou_home, start, end)
+        results = simulate_home(tou_home, start, end, weather=weather_for(tou_home, _JUNE_DAYS.hourly_weather()))
         summary = calculate_summary(results)
 
         # 7 days of simulation

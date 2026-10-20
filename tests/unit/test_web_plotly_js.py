@@ -3,20 +3,12 @@
 plotly.js release the same plotly package bundles, so the dashboard serves that release."""
 
 import hashlib
-from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 from flask import Flask, url_for
 from plotly.offline import get_plotlyjs
-
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    return build_test_app(tmp_path)
 
 
 def _plotly_js_url(app: Flask) -> str:

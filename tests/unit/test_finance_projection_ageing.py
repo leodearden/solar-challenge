@@ -19,7 +19,12 @@ from solar_challenge.battery import BatteryConfig, compute_soh
 from solar_challenge.finance import project_multi_year
 from solar_challenge.fleet import FleetResults
 from solar_challenge.pv import calculate_degradation_factor
-from tests._finance_builders import make_fleet_results, make_scenario_and_finance, make_sim_results
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_and_finance,
+    make_sim_results,
+)
 
 
 def _make_degrading_simulate(
@@ -234,7 +239,7 @@ def _make_battery_ageing_simulate(
                     discharge_kwh=discharge,
                 )
             )
-        return FleetResults(per_home_results=per_home, home_configs=list(fc.homes))
+        return make_fleet_results_of(per_home, homes=fc.homes)
 
     return _simulate
 

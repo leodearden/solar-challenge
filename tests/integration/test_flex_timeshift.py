@@ -26,7 +26,7 @@ from solar_challenge.finance import FinanceConfig, bill_distribution, householde
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
-from tests._synthetic_weather import sunless_weather
+from tests._synthetic_weather import sunless_weather, weather_for
 
 pytestmark = pytest.mark.integration
 
@@ -124,8 +124,8 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     start = end = pd.Timestamp("2024-01-15")
     weather = sunless_weather("2024-01-15", temp_air=8.0)
 
-    res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)
-    res_off = simulate_home(home_off, start, end, weather_data=weather, validate_balance=True)
+    res_on = simulate_home(home_on, start, end, weather=weather_for(home_on, weather), validate_balance=True)
+    res_off = simulate_home(home_off, start, end, weather=weather_for(home_off, weather), validate_balance=True)
 
     # ---- Corroborating assertions (mechanism must fire) -----------------------
     assert res_on.battery_charge.sum() > 0, (

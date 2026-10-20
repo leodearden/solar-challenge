@@ -36,7 +36,8 @@ def client(app: Flask) -> FlaskClient:
 def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClient:
     """A client of the JobManager create_app built, whose jobs run the real simulate_home.
 
-    Bristol's TMY is a clear day on 1 June 2024, the first day of every days window the API simulates.
+    Its jobs run on the weather create_app bound, the test's own weather cache. There Bristol's TMY is a
+    clear day on 1 June 2024, the first day of every days window the API simulates.
     """
     weather_cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
     return app.test_client()
@@ -95,6 +96,18 @@ def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskCli
     return client
 
 
+def _client_of_a_finished_fleet_job(app: Flask) -> FlaskClient:
+    """Return a client of *app* whose JobManager has run a fleet job of one home to its end.
+
+    The job's id is "id-1" and its run's id is "id-2".
+    """
+    manager = JobManager(simulate_home=RecordingSimulation(), new_id=CountingIds())
+    client = client_using(app, manager)
+    assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
+    assert manager.wait_until_idle(timeout=30)
+    return client
+
+
 def _sse(event: str, data: str) -> str:
     """Return the SSE message a progress stream sends for *event* with the JSON text *data*."""
     return f"event: {event}\ndata: {data}\n\n"
@@ -113,34 +126,16 @@ _COMPLETED = _sse(
     '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
     ' "message": "Simulation completed successfully", "run_id": "id-2"}',
 )
+_FLEET_COMPLETED = _sse(
+    "complete",
+    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+    ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
+)
 _FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
 
 
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
-
-    def test_get_job_status_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<id> returns job status after submission."""
-        # Submit a job first
-        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
-        assert submit_resp.status_code == 201
-        job_id = submit_resp.get_json()["job_id"]
-
-        # Check status
-        status_resp = client.get(f"/api/jobs/{job_id}")
-        assert status_resp.status_code == 200
-        data = status_resp.get_json()
-        assert data["job_id"] == job_id
-        assert "status" in data
-        assert "progress_pct" in data
-        assert "current_step" in data
-
-    def test_get_unknown_job_returns_404(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown_id> returns 404."""
-        response = client.get("/api/jobs/nonexistent-job-id-12345")
-        assert response.status_code == 404
-        data = response.get_json()
-        assert "error" in data
 
     def test_after_a_restart_an_earlier_job_is_not_found_although_its_rows_remain(self, tmp_path: Path) -> None:
         before_restart = build_test_app(tmp_path)
@@ -200,27 +195,6 @@ class TestGetJobStatusEndpoint:
 class TestJobProgressEndpoint:
     """Tests for GET /api/jobs/<id>/progress (SSE)."""
 
-    def test_progress_returns_event_stream(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<id>/progress returns text/event-stream content type."""
-        # Submit a job first
-        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
-        assert submit_resp.status_code == 201
-        job_id = submit_resp.get_json()["job_id"]
-
-        # Request progress stream
-        response = client.get(f"/api/jobs/{job_id}/progress")
-        assert response.status_code == 200
-        assert "text/event-stream" in response.content_type
-
-    def test_progress_unknown_job_sends_error(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown>/progress sends error event."""
-        response = client.get("/api/jobs/nonexistent-id/progress")
-        assert response.status_code == 200
-        assert "text/event-stream" in response.content_type
-        # The stream should contain an error event
-        data = response.get_data(as_text=True)
-        assert "error" in data
-
     def test_the_stream_of_a_completed_job_sends_each_progress_event_then_its_completion(self, app: Flask) -> None:
         client = _client_of_a_finished_job(app, RecordingSimulation())
 
@@ -230,11 +204,6 @@ class TestJobProgressEndpoint:
             [
                 _STARTING,
                 _SIMULATING,
-                _sse(
-                    "progress",
-                    '{"progress_pct": 80.0, "current_step": "Summarizing",'
-                    ' "message": "Calculating summary statistics...", "status": "running"}',
-                ),
                 _sse(
                     "progress",
                     '{"progress_pct": 90.0, "current_step": "Saving",'
@@ -269,22 +238,39 @@ class TestJobProgressEndpoint:
 
         assert stream == final_event
 
+    def test_the_stream_of_a_completed_fleet_job_sends_each_progress_event_then_its_completion(
+        self, app: Flask
+    ) -> None:
+        client = _client_of_a_finished_fleet_job(app)
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == "".join(
+            [
+                _STARTING,
+                _sse(
+                    "progress",
+                    '{"progress_pct": 5.0, "current_step": "Home 1/1",'
+                    ' "message": "Simulating home 1 of 1...", "status": "running"}',
+                ),
+                _sse(
+                    "progress",
+                    '{"progress_pct": 97.0, "current_step": "Saving",'
+                    ' "message": "Persisting fleet results...", "status": "running"}',
+                ),
+                _FLEET_COMPLETED,
+            ]
+        )
+
     def test_a_stream_opened_after_another_drained_a_fleet_jobs_events_sends_the_fleet_jobs_own_completion(
         self, app: Flask
     ) -> None:
-        manager = JobManager(simulate_home=RecordingSimulation(), new_id=CountingIds())
-        client = client_using(app, manager)
-        assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
-        assert manager.wait_until_idle(timeout=30)
+        client = _client_of_a_finished_fleet_job(app)
         live_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
         late_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
-        assert late_stream == _sse(
-            "complete",
-            '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
-            ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
-        )
+        assert late_stream == _FLEET_COMPLETED
         assert live_stream.endswith(late_stream)
 
 
@@ -312,11 +298,6 @@ class TestJobResultsEndpoint:
 
         assert response.status_code == 409
         assert response.get_json() == {"error": "Job not yet completed", "status": "failed", "progress_pct": 20.0}
-
-    def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
-        """Test GET /api/jobs/<unknown_id>/results returns 404."""
-        response = client.get("/api/jobs/nonexistent-id/results")
-        assert response.status_code == 404
 
 
 class TestJobCompletion:
@@ -373,6 +354,26 @@ class TestJobCompletion:
             time.sleep(1)
 
         assert status == "completed", f"Job did not complete, last status: {status}"
+
+    def test_a_two_home_fleet_job_completes_with_its_results_stored(
+        self, app: Flask, real_simulation_client: FlaskClient
+    ) -> None:
+        """Each home of the fleet runs on the weather create_app bound, and the fleet's summary is stored for its run."""
+        submit_resp = real_simulation_client.post(
+            "/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST, {**A_HOME_JOB_REQUEST, "pv_kw": 3.0}]}
+        )
+        assert submit_resp.status_code == 201
+        job_id = submit_resp.get_json()["job_id"]
+        run_id = submit_resp.get_json()["run_id"]
+
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
+
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
+        assert results_resp.status_code == 200
+        results_data = results_resp.get_json()
+        assert (results_data["run_id"], results_data["type"]) == (run_id, "fleet")
+        assert results_data["summary"]["n_homes"] == 2
+        assert results_data["summary"]["per_home_generation_min_kwh"] > 0
 
 
 class TestSimulateFleetEndpoint:

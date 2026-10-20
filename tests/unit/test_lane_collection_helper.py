@@ -10,12 +10,18 @@ import os
 import shlex
 import sys
 import textwrap
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
 
-from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
+from tests._collect_only import CollectedTest
+from tests._lane_collection import (
+    collect_lane_job,
+    default_collection_node_ids_under,
+    suite_node_ids_matching,
+    suite_tests_matching,
+)
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -64,7 +70,7 @@ def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path
     collection = collect_lane_job(project_root, "probe", env=os.environ)
 
     assert collection.command == command
-    assert collection.node_ids == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.outcome
+    assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
 
 
 def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
@@ -75,7 +81,7 @@ def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
 
     collection = collect_lane_job(project_root, "probe", env=os.environ)
 
-    assert collection.node_ids == ("suite/test_in_suite.py::test_case",), collection.outcome
+    assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
 
 def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
@@ -103,7 +109,7 @@ def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
 
     collection = collect_lane_job(project_root, "probe", env=environment)
 
-    assert collection.node_ids == ("test_environment.py::test_environment[unset]",), collection.outcome
+    assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
 
 
 def test_a_job_whose_command_fails_to_collect_fails_naming_the_job_its_command_and_the_error(
@@ -134,18 +140,20 @@ def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_comma
     assert repr(command) in str(failure.value)
 
 
-def test_a_job_whose_command_exits_cleanly_without_collecting_returns_no_node_ids_and_its_output(
-    tmp_path: Path,
-) -> None:
-    """Whether a job that collected nothing broke the lane is each lane test's job-specific assertion."""
-    project_root = _project_with_lane_job(
-        tmp_path, shlex.join([sys.executable, "-c", "print('this command never ran pytest')"])
-    )
+def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path: Path) -> None:
+    """The command exits 0, yet reading its node ids fails, naming it and showing its output; it never reads as an empty suite.
+
+    It prints its phrase in two parts, so only its output, not its text, holds the phrase whole.
+    """
+    command = shlex.join([sys.executable, "-c", "print('this command never ran', 'pytest')"])
+    project_root = _project_with_lane_job(tmp_path, command)
 
     collection = collect_lane_job(project_root, "probe", env=os.environ)
 
-    assert collection.node_ids == (), collection.outcome
-    assert "this command never ran pytest" in collection.outcome
+    with pytest.raises(AssertionError) as failure:
+        collection.node_ids()
+    assert repr(command) in str(failure.value)
+    assert "this command never ran pytest" in str(failure.value)
 
 
 def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_it(tmp_path: Path) -> None:
@@ -158,7 +166,7 @@ def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_i
     collection = collect_lane_job(project_root, "probe", env=os.environ)
 
     assert collection.node_ids_outside("suite") == ("suite_extra/test_beside_suite.py::test_case",), (
-        collection.outcome
+        collection.describe()
     )
 
 
@@ -188,7 +196,7 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
     collection = collect_lane_job(project_root, "probe", env=os.environ)
 
     assert collection.node_ids_outside("test_contract.py") == ("test_contract_extra.py::test_case",), (
-        collection.outcome
+        collection.describe()
     )
 
 
@@ -255,6 +263,30 @@ def test_a_mark_selection_returns_only_the_suites_node_ids_its_expression_matche
 
     assert suite_node_ids_matching(project_root, _SUITE, "slow") == (f"{_SUITE}/test_slow.py::test_case",)
     assert suite_node_ids_matching(project_root, _SUITE, "not slow") == (_SUITE_NODE_ID,)
+
+
+def test_a_mark_selections_tests_carry_their_files_and_parametrize_ids(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path, ini="[pytest]\nmarkers =\n    slow: selected by its mark\n")
+    (project_root / _SUITE / "test_matrix.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+
+            @pytest.mark.slow
+            @pytest.mark.parametrize("minor", ["3.12", "3.13"])
+            def test_matrix(minor):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    module = PurePosixPath(f"{_SUITE}/test_matrix.py")
+    assert suite_tests_matching(project_root, _SUITE, "slow") == (
+        CollectedTest(f"{module}::test_matrix[3.12]", module, "3.12"),
+        CollectedTest(f"{module}::test_matrix[3.13]", module, "3.13"),
+    )
 
 
 def test_a_mark_selection_matching_none_of_the_suites_tests_returns_no_node_ids(tmp_path: Path) -> None:

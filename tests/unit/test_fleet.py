@@ -2,6 +2,7 @@
 
 import multiprocessing
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -14,17 +15,19 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     MultiSweepResults,
+    aggregate_home_summaries,
     calculate_fleet_summary,
+    calculate_home_summaries,
     collect_multi_sweep_results,
     simulate_fleet,
     simulate_fleet_iter,
     simulate_multi_sweep_iter,
 )
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache, get_tmy_data
+from solar_challenge.weather import WeatherCache, default_weather
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -256,6 +259,7 @@ class TestFleetResults:
             pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
             pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
             pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
+            pytest.param(calculate_home_summaries, id="calculate_home_summaries"),
         ],
     )
     def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
@@ -437,6 +441,117 @@ class TestFleetSummary:
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
 
+    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
+    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(
+        self, sample_results, seg_tariff_pence_per_kwh
+    ):
+        """Each home's summary is the one calculate_summary derives from that home's results at the same SEG tariff, listed in per_home_results' order."""
+        assert calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh) == [
+            calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+            for results in sample_results.per_home_results
+        ]
+
+    def test_home_summaries_aggregate_into_the_fleets_totals_ratios_and_per_home_statistics(self):
+        """The fleet's totals sum its homes', its ratios divide those totals, and its per-home statistics range over its homes' generation and self-consumption ratios."""
+        small_array = SummaryStatistics(
+            total_generation_kwh=4.0,
+            total_demand_kwh=6.0,
+            total_self_consumption_kwh=3.0,
+            total_grid_import_kwh=3.0,
+            total_grid_export_kwh=1.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=1.0,
+            peak_demand_kw=1.5,
+            self_consumption_ratio=0.75,
+            grid_dependency_ratio=0.5,
+            export_ratio=0.25,
+            simulation_days=1,
+            total_import_cost_gbp=0.75,
+            total_export_revenue_gbp=0.125,
+            net_cost_gbp=0.625,
+            seg_revenue_gbp=0.125,
+        )
+        medium_array = SummaryStatistics(
+            total_generation_kwh=16.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=2.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=14.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=3.0,
+            peak_demand_kw=2.0,
+            self_consumption_ratio=0.125,
+            grid_dependency_ratio=0.75,
+            export_ratio=0.875,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=1.75,
+            net_cost_gbp=-0.25,
+            seg_revenue_gbp=1.75,
+        )
+        large_array = SummaryStatistics(
+            total_generation_kwh=40.0,
+            total_demand_kwh=16.0,
+            total_self_consumption_kwh=10.0,
+            total_grid_import_kwh=6.0,
+            total_grid_export_kwh=30.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=6.0,
+            peak_demand_kw=3.0,
+            self_consumption_ratio=0.25,
+            grid_dependency_ratio=0.375,
+            export_ratio=0.75,
+            simulation_days=1,
+            total_import_cost_gbp=1.5,
+            total_export_revenue_gbp=3.75,
+            net_cost_gbp=-2.25,
+            seg_revenue_gbp=3.75,
+        )
+
+        assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(
+            n_homes=3,
+            total_generation_kwh=60.0,
+            total_demand_kwh=30.0,
+            total_self_consumption_kwh=15.0,
+            total_grid_import_kwh=15.0,
+            total_grid_export_kwh=45.0,
+            fleet_self_consumption_ratio=0.25,
+            fleet_grid_dependency_ratio=0.5,
+            per_home_generation_min_kwh=4.0,
+            per_home_generation_max_kwh=40.0,
+            per_home_generation_mean_kwh=20.0,
+            per_home_generation_median_kwh=16.0,
+            per_home_self_consumption_ratio_min=0.125,
+            per_home_self_consumption_ratio_max=0.75,
+            per_home_self_consumption_ratio_mean=0.375,
+            simulation_days=1,
+            total_seg_revenue_gbp=5.625,
+            per_home_seg_revenue_mean_gbp=1.875,
+            total_net_cost_gbp=-1.875,
+            total_import_cost_gbp=3.75,
+            total_export_revenue_gbp=5.625,
+        )
+
+    def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
+        """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
+        first, second, third = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
+        assert [first.seg_revenue_gbp, second.seg_revenue_gbp, third.seg_revenue_gbp] == pytest.approx(
+            [3.60, 7.20, 10.80]
+        ), "premise: the homes export 24, 48 and 72 kWh, which earn 3.60, 7.20 and 10.80 GBP at 15p/kWh"
+
+        summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
+
+        assert summary.total_seg_revenue_gbp == pytest.approx(14.40)
+        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20)
+
+    def test_aggregating_no_home_summaries_is_refused(self):
+        """A fleet summary aggregates at least one home's summary."""
+        with pytest.raises(ValueError, match="at least one home"):
+            aggregate_home_summaries([])
+
 
 _JUNE_DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
 
@@ -563,44 +678,6 @@ class TestParallelMatchesSequential:
                 check_exact=True,
                 obj=f"{home.name}'s results from {worker_start_method} workers",
             )
-
-
-@pytest.mark.usefixtures("bristol_june_tmy")
-class TestSimulateHomeWeatherData:
-    """Test optional weather_data parameter in simulate_home."""
-
-    def test_accepts_weather_data_parameter(self):
-        """simulate_home accepts pre-fetched weather data."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        )
-        start = _JUNE_DAY
-        end = _JUNE_DAY
-
-        # Pre-fetch weather data
-        weather = get_tmy_data(config.location)
-
-        # Should work with provided weather data
-        result = simulate_home(config, start, end, weather_data=weather)
-
-        assert isinstance(result, SimulationResults)
-        assert len(result.generation) == 1440  # 1 day at minute resolution
-
-    def test_fetches_weather_when_none(self):
-        """simulate_home fetches weather data when not provided."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        )
-        start = _JUNE_DAY
-        end = _JUNE_DAY
-
-        # Should work without weather data
-        result = simulate_home(config, start, end, weather_data=None)
-
-        assert isinstance(result, SimulationResults)
-        assert len(result.generation) == 1440
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
@@ -833,7 +910,7 @@ class TestMultiSweepResults:
 
 
 class TestParallelFleetWeather:
-    """Parallel workers simulate each home from its location's TMY in the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals."""
+    """Parallel workers simulate each home on its location's TMY from the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals: each worker receives its home's weather in its job."""
 
     _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
     _LOAD =LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
@@ -844,8 +921,9 @@ class TestParallelFleetWeather:
     ) -> None:
         """Serve a clear 21 June as Bristol's TMY and the same day at half its irradiance as Bath's.
 
-        The test runs in an empty working directory, so a worker that falls back to
-        the default weather cache finds nothing there and writes nothing to the repository.
+        Workers receive their weather in the job. The test runs in an empty working directory,
+        so a worker that read the default weather itself would find nothing there and write
+        nothing to the repository.
         """
         monkeypatch.chdir(tmp_path)
         weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
@@ -867,7 +945,7 @@ class TestParallelFleetWeather:
                 for location in (Location.bristol(), self._BATH)
             ]
         )
-        alone = [simulate_home(home, _JUNE_DAY, _JUNE_DAY) for home in fleet.homes]
+        alone = [simulate_home(home, _JUNE_DAY, _JUNE_DAY, weather=default_weather()) for home in fleet.homes]
         assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
             "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
         )
@@ -882,7 +960,7 @@ class TestParallelFleetWeather:
                     obj=f"{home.name}'s results with parallel={parallel}",
                 )
 
-    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
     def test_multi_sweep_gives_each_home_the_results_simulate_home_gives_it_here(
         self, worker_start_method: str
     ) -> None:
@@ -917,7 +995,7 @@ class TestParallelFleetWeather:
                 for home, in_sweep in zip(fleet.homes, fleet_results.per_home_results, strict=True):
                     pd.testing.assert_frame_equal(
                         in_sweep.to_dataframe(),
-                        simulate_home(home, _JUNE_DAY, _JUNE_DAY).to_dataframe(),
+                        simulate_home(home, _JUNE_DAY, _JUNE_DAY, weather=default_weather()).to_dataframe(),
                         check_exact=True,
                         obj=f"{home.name} of the {pv_kw} kW sweep with parallel={parallel}",
                     )

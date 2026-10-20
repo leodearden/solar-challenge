@@ -129,7 +129,8 @@ conventions:
       points at pyproject's license expression for the bundled third-party code.)
 
   - rule: >
-      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names),
+      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (the names
+      FROZEN_SURFACE in tests/unit/test_public_api_surface.py pins),
       the signatures of the exported callables, and the public members of the exported classes
       (the methods, classmethods, properties, class constants and instance attributes each class
       body defines or declares) are consumed by a separate, pinned repo. The contract also covers
@@ -282,7 +283,7 @@ subprojects:
 
     key_decisions:
       - decision: "Fleet runs use ProcessPoolExecutor (subprocesses), not threads."
-        why: "Work is CPU-bound numpy/pvlib; the GIL would serialise threads. Frozen dataclass configs pickle cleanly to workers; the weather cache is pre-warmed before the pool starts so workers don't race to write it."
+        why: "Work is CPU-bound numpy/pvlib; the GIL would serialise threads. Frozen dataclass configs pickle cleanly to workers; workers receive their weather in the job, a PrefetchedWeather of their home's location fetched once in the calling process, so no worker reads the cache or the network under any start method."
       - decision: "Weather is TMY-based and aligned to the simulation period by UTC month-day-time, discarding the TMY's own year; a UTC 29 February the TMY lacks repeats the TMY's 28 February, for PV and air temperature alike; hourly PV/temperature is expanded to 1-minute by forward-fill (repeat each hour's value)."
         why: "The TMY is a synthetic 'typical year', so aligning by time of year lets a sim over real dates use typical conditions; that is intentional, not a date bug. The match uses the UTC clock because the PVGIS TMY is UTC-indexed and pvlib places the sun at those UTC instants. Matching the demand's local wall clock ran BST PV output and heat-pump temperature an hour early (fixed by task 166). Forward-fill preserves hourly energy totals exactly and deliberately does NOT synthesise sub-hourly variability. Repeating 28 February is the usual TMY practice for a leap year; the former 0.0 fill gave every default (leap-year 2024) run a 29 February with no PV and 0 °C air for the heat pump (task 190)."
       - decision: "get_tmy_data scales the PVGIS TMY's ghi, dni and dhi by one factor, so its annual GHI equals PVGIS's 2005-2020 mean at the point."

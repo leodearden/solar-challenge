@@ -29,6 +29,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (
     ValidationReport,
@@ -75,6 +76,26 @@ def _display_validation_report(report: ValidationReport) -> None:
         print_error(f"{passed}/{total} checks passed")
 
 
+def _read_results_csv(csv_file: Path) -> pd.DataFrame:
+    """The results csv_file holds, indexed by its first column as _on_the_default_clock reads it."""
+    frame = pd.read_csv(csv_file, index_col=0, parse_dates=True)
+    return frame.set_axis(_on_the_default_clock(frame.index))
+
+
+def _on_the_default_clock(index: pd.Index) -> pd.Index:
+    """index with its timestamps that carry UTC offsets read as the instants they name, on the default location's clock.
+
+    A zoned index (one offset) and text (differing offsets, which read_csv leaves unparsed)
+    become those instants; text that is not timestamps raises pandas' ValueError. A naive
+    DatetimeIndex names no instant and is returned as written, and any other index, such as
+    integers, as read, for SimulationWindow.of_index to refuse.
+    """
+    zoned = isinstance(index, pd.DatetimeIndex) and index.tz is not None
+    if not (zoned or pd.api.types.is_string_dtype(index.dtype)):
+        return index
+    return pd.to_datetime(index, utc=True).tz_convert(Location.bristol().timezone)
+
+
 @app.command()
 @handle_errors
 def results(
@@ -103,6 +124,10 @@ def results(
 ) -> None:
     """Validate simulation results CSV against benchmarks.
 
+    The CSV's first column holds the timestamps an export writes. Timestamps with UTC
+    offsets are read on the default location's (UK) clock, naive ones as written. Rows may
+    be at any even cadence, each row's kW counting for the time the row lasts.
+
     Checks PV generation and consumption values for sanity:
     - Generation never negative
     - Generation zero at night
@@ -111,8 +136,7 @@ def results(
     - Consumption never negative or unrealistically high
     - Baseload present
     """
-    # Load CSV
-    df = pd.read_csv(csv_file, index_col=0, parse_dates=True)
+    df = _read_results_csv(csv_file)
 
     # Check for required columns
     gen_col = None

@@ -25,8 +25,6 @@ class _DataclassInstance(Protocol):
 
 P = TypeVar("P", bound=_DataclassInstance)
 
-_CHARACTERS_NO_EVENT_NAME_HOLDS = frozenset("\r\n:")
-
 
 @dataclass(frozen=True)
 class SseEvent(Generic[P]):
@@ -36,9 +34,9 @@ class SseEvent(Generic[P]):
     payload_type: type[P]
 
     def __post_init__(self) -> None:
-        if not self.name or _CHARACTERS_NO_EVENT_NAME_HOLDS.intersection(self.name):
+        if not self.name or ":" in self.name or any(c.isspace() for c in self.name):
             raise ValueError(
-                f"An SSE event name must be non-empty and hold no CR, LF or ':'; got {self.name!r}"
+                f"An SSE event name must be non-empty and hold no whitespace or ':'; got {self.name!r}"
             )
 
 

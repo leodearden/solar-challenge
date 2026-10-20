@@ -26,9 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.home import simulate_home as _default_simulate_home
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, connect, get_db
 from solar_challenge.web.storage import RunStorage
 
@@ -188,7 +187,7 @@ class JobManager:
         self,
         max_workers: int = 2,
         *,
-        simulate_home: HomeSimulator = _default_simulate_home,
+        simulate_home: HomeSimulator,
         new_id: Callable[[], str] = _random_id,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -196,8 +195,9 @@ class JobManager:
 
         Args:
             max_workers: Maximum number of concurrent simulation threads.
-            simulate_home: Simulates one home over a date range; defaults to
-                solar_challenge.home.simulate_home.
+            simulate_home: Simulates one home over a date range, on the weather
+                it is bound to; create_app binds solar_challenge.home.simulate_home
+                to default_weather().
             new_id: Returns a new, unique id on each call; each job and each run
                 takes one. Defaults to a random UUID.
             clock: Returns the time in seconds on a clock that never goes
@@ -629,8 +629,8 @@ class JobManager:
         """Worker function that runs a home simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
-        simulation-specific logic: running the simulation, calculating
-        summary statistics, and persisting results via RunStorage.
+        simulation-specific logic: running the simulation, then saving the
+        run from its results through RunStorage.save_home_run_from_results.
 
         Args:
             job_id: Unique job identifier.
@@ -649,17 +649,13 @@ class JobManager:
             progress(20.0, "Simulating", "Running home simulation...")
             results = self._simulate_home(config, start_date, end_date)
 
-            progress(80.0, "Summarizing", "Calculating summary statistics...")
-            summary = calculate_summary(results)
-
             progress(90.0, "Saving", "Persisting results to storage...")
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
             duration = time.monotonic() - start_ref
-            storage.save_home_run(
+            storage.save_home_run_from_results(
                 run_id=run_id,
                 config=config,
                 results=results,
-                summary=summary,
                 name=name or config.name or "Web Simulation",
                 status="completed",
                 duration_seconds=duration,
@@ -683,8 +679,8 @@ class JobManager:
         """Worker function that runs a fleet simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
-        fleet-specific logic: iterating homes, aggregating results, and
-        persisting via RunStorage.
+        fleet-specific logic: simulating each home, then saving the run from
+        the fleet's results through RunStorage.save_fleet_run_from_results.
 
         Args:
             job_id: Unique job identifier.
@@ -702,31 +698,18 @@ class JobManager:
         def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
             total = len(configs)
             per_home_results: list[SimulationResults] = []
-            per_home_summaries: list[SummaryStatistics] = []
 
             for i, home_config in enumerate(configs):
                 pct = (i / total) * 90.0 + 5.0  # 5% to 95%
                 progress(pct, f"Home {i + 1}/{total}", f"Simulating home {i + 1} of {total}...")
-                results = self._simulate_home(home_config, start_date, end_date)
-                summary = calculate_summary(results)
-                per_home_results.append(results)
-                per_home_summaries.append(summary)
-
-            progress(95.0, "Aggregating", "Aggregating fleet results...")
-            fleet_results = FleetResults(
-                per_home_results=per_home_results,
-                home_configs=configs,
-            )
-            fleet_summary = calculate_fleet_summary(fleet_results)
+                per_home_results.append(self._simulate_home(home_config, start_date, end_date))
 
             progress(97.0, "Saving", "Persisting fleet results...")
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
             duration = time.monotonic() - start_ref
-            storage.save_fleet_run(
+            storage.save_fleet_run_from_results(
                 run_id=run_id,
-                fleet_results=fleet_results,
-                fleet_summary=fleet_summary,
-                per_home_summaries=per_home_summaries,
+                fleet_results=FleetResults(per_home_results=per_home_results, home_configs=configs),
                 name=name or "Fleet Simulation",
                 status="completed",
                 duration_seconds=duration,

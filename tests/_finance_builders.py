@@ -5,9 +5,9 @@
 Tests of ``project_multi_year`` and ``solve_cost_recovery_rate`` inject their own
 ``simulate``, so they need fleet results whose totals they choose rather than a
 PVGIS-driven simulation.  This module is the one place those fixtures are spelled:
-a default 4 kWp Bristol home, with or without a battery, scenarios of n such homes,
-and ``SimulationResults`` whose ``calculate_summary`` totals are exactly the kWh and
-£ the caller passes.
+a default 4 kWp Bristol home, with or without a battery, or fitted with a given
+install, scenarios of n such homes or of given homes, and ``SimulationResults``
+whose ``calculate_summary`` totals are exactly the kWh and £ the caller passes.
 
 Usage::
 
@@ -27,6 +27,7 @@ result on a default home unless ``homes=`` is given.
 """
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
 
 import pandas as pd
@@ -69,6 +70,25 @@ def make_home_config(*, battery_config: BatteryConfig | None = None) -> HomeConf
     )
 
 
+def make_sized_home(
+    *,
+    pv_kwp: float,
+    battery_kwh: float | None = None,
+    inverter_kw: float | None = None,
+) -> HomeConfig:
+    """make_home_config's home fitted with the install project_economics prices.
+
+    make_pv_config's array is resized to *pv_kwp* kWp on an *inverter_kw* kW
+    inverter, sized to the array by default, and the home has a *battery_kwh* kWh
+    battery, none by default.
+    """
+    battery = None if battery_kwh is None else BatteryConfig(capacity_kwh=battery_kwh)
+    return dataclasses.replace(
+        make_home_config(battery_config=battery),
+        pv_config=dataclasses.replace(make_pv_config(), capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw),
+    )
+
+
 def make_scenario(
     *,
     n_homes: int = 1,
@@ -91,6 +111,11 @@ def make_scenario(
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
         finance=finance,
     )
+
+
+def make_scenario_of(homes: Sequence[HomeConfig]) -> ScenarioConfig:
+    """make_scenario's scenario, holding exactly *homes*."""
+    return dataclasses.replace(make_scenario(), homes=list(homes))
 
 
 def make_scenario_and_finance(

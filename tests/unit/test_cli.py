@@ -168,11 +168,18 @@ class TestValidateCLI:
         assert result.exit_code == 0
 
 
-def _valid_results_frame() -> pd.DataFrame:
-    """A valid 7-day, 1-minute results frame: a 3.5 kW daytime sinusoid and flat demand."""
-    index = pd.date_range(
-        "2024-06-01", periods=7 * 24 * 60, freq="1min", tz="Europe/London"
-    )
+def _valid_results_frame(
+    first_day: str = "2024-06-01",
+    last_day: str = "2024-06-07",
+    *,
+    freq: str = "1min",
+    tz: str | None = "Europe/London",
+) -> pd.DataFrame:
+    """A valid results frame from first_day's midnight through last_day, a row every freq on tz's clock: a 3.5 kW daytime sinusoid and a flat 0.4 kW demand.
+
+    tz None writes naive timestamps.
+    """
+    index = pd.date_range(first_day, f"{last_day} 23:59", freq=freq, tz=tz)
     hours = index.hour + index.minute / 60.0
     daylight = (hours >= 6) & (hours < 21)
     sine = np.sin(np.pi * (hours - 6) / 15)
@@ -237,6 +244,58 @@ class TestValidateResultsCommand:
 
         assert result.exit_code == 1
         assert f"CSV must contain a '{required}' column" in " ".join(
+            result.output.split()
+        )
+
+    @pytest.mark.parametrize(
+        "tz", [pytest.param("Europe/London", id="zoned"), pytest.param(None, id="naive")]
+    )
+    def test_a_half_hourly_export_is_judged_at_its_own_cadence(
+        self, tmp_path: Path, tz: str | None
+    ) -> None:
+        """0.4 kW over 336 half-hours of 2023 is 67.2 kWh in 7 days, which x 365/7 is 3,504 kWh.
+
+        A naive export is read as written.
+        """
+        frame = _valid_results_frame("2023-06-01", "2023-06-07", freq="30min", tz=tz)
+
+        result = self._validate_results(tmp_path, frame, "--consumption-kwh", "3504")
+
+        assert result.exit_code == 0, result.output
+        assert "3504.0000" in result.output
+        assert "All 7 checks passed" in " ".join(result.output.split())
+
+    @pytest.mark.parametrize(
+        ("first_day", "last_day", "annual_kwh"),
+        [
+            pytest.param("2024-03-30", "2024-04-01", "3464.8", id="spring-forward"),
+            pytest.param("2024-10-26", "2024-10-28", "3562.4", id="fall-back"),
+        ],
+    )
+    def test_an_export_across_a_clock_change_is_validated_on_the_uk_clock(
+        self, tmp_path: Path, first_day: str, last_day: str, annual_kwh: str
+    ) -> None:
+        """read_csv leaves these rows' two UTC offsets as text.
+
+        On the UK clock each window is 3 calendar days of 2024: 0.4 kW for 71 or 73 hours,
+        x 366/3. Read in UTC, the fall-back window would start a day earlier and cover 4 days.
+        """
+        frame = _valid_results_frame(first_day, last_day)
+
+        result = self._validate_results(tmp_path, frame, "--consumption-kwh", annual_kwh)
+
+        assert result.exit_code == 0, result.output
+        assert f"{float(annual_kwh):.4f}" in result.output
+        assert "All 7 checks passed" in " ".join(result.output.split())
+
+    def test_a_csv_whose_first_column_is_not_timestamps_is_refused(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "results.csv"
+        csv_file.write_text("t,generation_kw,demand_kw\n0,0.0,0.4\n1,0.0,0.4\n2,0.0,0.4\n")
+
+        result = runner.invoke(app, ["validate", "results", str(csv_file)])
+
+        assert result.exit_code == 1
+        assert "SimulationWindow.of_index reads a DatetimeIndex" in " ".join(
             result.output.split()
         )
 
@@ -1153,9 +1212,9 @@ home:
         captured: dict[str, HomeConfig] = {}
         real_simulate_home = _home_module.simulate_home
 
-        def spy_simulate_home(home_config, start_date, end_date, progress_callback=None):  # type: ignore[no-untyped-def]
+        def spy_simulate_home(home_config, *args, **kwargs):  # type: ignore[no-untyped-def]
             captured["home_config"] = home_config
-            return real_simulate_home(home_config, start_date, end_date, progress_callback)
+            return real_simulate_home(home_config, *args, **kwargs)
 
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)

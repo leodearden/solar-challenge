@@ -40,9 +40,17 @@ def _web_extra_modules(project_root: Path) -> list[str]:
     )
 
 
-@pytest.mark.parametrize(
-    "conftest", ["tests.conftest", "tests.unit.web_api.conftest", "tests.unit.web_assistant.conftest"]
-)
+def _conftests_outside_the_e2e_suite() -> list[str]:
+    """Return the module name of every conftest.py under tests/ but tests/e2e's, which a default run never loads: pyproject.toml's addopts --ignore tests/e2e."""
+    tests = Path(__file__).resolve().parents[1]
+    return sorted(
+        ".".join(conftest.relative_to(tests.parent).with_suffix("").parts)
+        for conftest in tests.rglob("conftest.py")
+        if not conftest.is_relative_to(tests / "e2e")
+    )
+
+
+@pytest.mark.parametrize("conftest", _conftests_outside_the_e2e_suite())
 def test_importing_the_conftest_needs_no_web_extra(conftest: str, project_root: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-c", _IMPORT_WITH_MODULES_BLOCKED, conftest, *_web_extra_modules(project_root)],

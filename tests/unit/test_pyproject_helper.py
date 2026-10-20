@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_pyproject.py, the packaging-metadata contract tests' structured reader of pyproject.toml."""
+"""Unit tests for tests/_pyproject.py, the packaging-metadata contract tests' structured reader of pyproject.toml and uv.lock."""
+
+from typing import Any
 
 import pytest
 from packaging.version import Version
 
-from tests._pyproject import declared_floor
+from tests._pyproject import declared_floor, locked_versions
+
+
+def _lock(*entries: dict[str, Any]) -> dict[str, Any]:
+    """Return a parsed uv.lock holding *entries* as its [[package]] tables."""
+    return {"version": 1, "package": list(entries)}
 
 
 @pytest.mark.parametrize(
@@ -95,3 +102,45 @@ def test_declared_floor_is_the_bound_guaranteed_whichever_markers_apply(
     requirements: list[str], floor: Version | None
 ) -> None:
     assert declared_floor(requirements, "setuptools") == floor
+
+
+@pytest.mark.parametrize(
+    ("lock", "distribution", "versions"),
+    [
+        pytest.param(
+            _lock({"name": "pandas", "version": "3.0.3"}, {"name": "numpy", "version": "2.4.6"}),
+            "pandas",
+            (Version("3.0.3"),),
+            id="one-pin",
+        ),
+        pytest.param(
+            _lock({"name": "pandas", "version": "3.0.3"}, {"name": "pandas", "version": "2.3.3"}),
+            "pandas",
+            (Version("2.3.3"), Version("3.0.3")),
+            id="forked-pins-lowest-first",
+        ),
+        pytest.param(
+            _lock({"name": "pyyaml", "version": "6.0.3"}),
+            "PyYAML",
+            (Version("6.0.3"),),
+            id="names-compare-canonically",
+        ),
+    ],
+)
+def test_locked_versions_are_every_release_the_lock_pins_for_the_named_distribution_lowest_first(
+    lock: dict[str, Any], distribution: str, versions: tuple[Version, ...]
+) -> None:
+    assert locked_versions(lock, distribution) == versions
+
+
+@pytest.mark.parametrize(
+    "lock",
+    [
+        pytest.param(_lock({"name": "numpy", "version": "2.4.6"}), id="distribution-not-locked"),
+        pytest.param(_lock({"name": "pandas", "source": {"editable": "."}}), id="versionless-entry-is-no-pin"),
+    ],
+)
+def test_locked_versions_are_empty_when_the_lock_pins_no_release_of_the_named_distribution(
+    lock: dict[str, Any],
+) -> None:
+    assert locked_versions(lock, "pandas") == ()

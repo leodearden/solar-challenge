@@ -46,7 +46,9 @@ def parse_sse_events(body: str) -> list[SseFrame]:
     in web/static/js/assistant.js keeps the last), a field line with no space
     after its colon (the spec accepts it; the chat client ignores it), or an ``id``
     or ``retry`` that is not all ASCII digits (int() reads ``+7`` and ``-1`` as
-    numbers; EventSource ignores such a retry and keeps an id as its raw text).
+    numbers; EventSource ignores such a retry and keeps an id as its raw text), or an
+    ``event`` name with leading or trailing whitespace (EventSource dispatches it
+    verbatim, so a listener for the bare name never fires; the chat client trims it).
     """
     runs = groupby(body.splitlines(), key=_is_blank)
     frames = (_read_frame(list(lines)) for blank, lines in runs if not blank)
@@ -68,10 +70,14 @@ def _read_frame(lines: list[str]) -> SseFrame | None:
     retry = _integer_field(lines, "retry")
     if not events:
         return None
+    event = events[-1]
+    if event != event.strip():
+        raise ValueError(
+            f"Expected the SSE event name to carry no leading or trailing whitespace; "
+            f"got line: {f'event: {event}'!r}"
+        )
     payload = payloads[0] if payloads else None
-    return SseFrame(
-        event=events[-1].strip(), data=_decode_payload(payload), id=event_id, retry=retry
-    )
+    return SseFrame(event=event, data=_decode_payload(payload), id=event_id, retry=retry)
 
 
 def _integer_field(lines: list[str], field: str) -> int | None:

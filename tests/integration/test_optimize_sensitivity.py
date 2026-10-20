@@ -27,7 +27,12 @@ from solar_challenge.optimize import (
     sensitivity_panel,
 )
 from solar_challenge.seg import SEGTariff
-from tests._finance_builders import make_fleet_results, make_scenario, make_sim_results
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario,
+    make_sim_results,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +138,8 @@ class _SegPricingSimulate:
     def __call__(self, fleet_config, start, end):  # type: ignore[no-untyped-def]
         rates = _home_seg_rates(fleet_config.homes)
         self.rates_per_call.append(frozenset(rates))
-        return FleetResults(
-            per_home_results=[self._results_at(rate) for rate in rates],
-            home_configs=list(fleet_config.homes),
+        return make_fleet_results_of(
+            [self._results_at(rate) for rate in rates], homes=fleet_config.homes
         )
 
     def _results_at(self, rate: Optional[float]) -> SimulationResults:

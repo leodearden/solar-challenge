@@ -3,10 +3,12 @@
 These tests exercise the interactive UI chrome that wraps every page:
 sidebar navigation, theme toggle, and sidebar collapse/expand.  They run
 against the live Flask server provided by the ``live_server`` fixture.
+A page load lays the sidebar and the main column out in the sidebar state
+localStorage stores, before Alpine starts, so only the sidebar toggle slides them.
 """
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -230,3 +232,130 @@ def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
     assert expanded_width > 200, (
         f"Sidebar should be expanded again (width={expanded_width})"
     )
+
+
+# ── Sidebar state on load ──────────────────────────────────────────────
+
+# The desktop sidebar's width and #main-content's left edge, in px, at pytest-playwright's default 1280x720 viewport (Tailwind lg).
+_SIDEBAR_OPEN = {"sidebar_width": 256, "content_left": 256}
+_SIDEBAR_COLLAPSED = {"sidebar_width": 64, "content_left": 64}
+
+# Records in window.sidebarProbe.load how the sidebar and the main column load, at two moments:
+# - before_alpine: their layout at readystatechange 'interactive'. That fires once the page is parsed,
+#   before any deferred script runs, Alpine included. Reading the layout there makes the browser
+#   compute the page's style, so a later change Alpine makes to a transitioned property must start
+#   a transition.
+# - slides_as_alpine_starts: the CSS transitions running at Alpine's alpine:initialized event, which
+#   fires once Alpine has applied its bindings. Only transitions on the desktop sidebar (the first
+#   <aside>, the element _desktop_sidebar locates) or anything in it, or on #main-content or anything
+#   holding it, count.
+_RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
+    const sidebar = () => document.querySelector('aside');
+    const content = () => document.getElementById('main-content');
+    const layout = () => ({
+        sidebar_width: sidebar().getBoundingClientRect().width,
+        content_left: content().getBoundingClientRect().left,
+    });
+    const describe = target => target === sidebar() ? 'sidebar'
+        : target.contains(content()) ? 'main column'
+        : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
+    const slides = () => document.getAnimations()
+        .filter(animation => animation instanceof CSSTransition)
+        .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
+        .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
+    window.sidebarProbe = {layout, slides, load: {}};
+    document.addEventListener('readystatechange', () => {
+        if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = layout();
+    });
+    document.addEventListener('alpine:initialized', () => {
+        window.sidebarProbe.load.slides_as_alpine_starts = slides();
+    });
+})()"""
+
+# Clicks the toggle in the page and returns the slides one task later: the click's class changes
+# have taken effect by then, and no 300 ms transition can have ended.
+_CLICK_AND_READ_THE_SLIDES = """async toggle => {
+    toggle.click();
+    await new Promise(resolve => setTimeout(resolve));
+    return window.sidebarProbe.slides();
+}"""
+
+
+def _sidebar_toggle(page: Page) -> Locator:
+    """The desktop sidebar's collapse/expand button; the mobile sidebar has none."""
+    return page.get_by_role("button", name="Toggle sidebar")
+
+
+def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None) -> None:
+    """Open url with localStorage's sidebarOpen set to stored_state (left unset if None), recording how the sidebar loads."""
+    if stored_state is not None:
+        page.add_init_script(f"localStorage.setItem('sidebarOpen', '{stored_state}')")
+    page.add_init_script(_RECORD_HOW_THE_SIDEBAR_LOADS)
+    page.goto(url)
+
+
+def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, float]]:
+    """What the recorder saw as the page loaded, and the layout now; it reads load on its own because the probe holds functions."""
+    return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.layout()")
+
+
+@pytest.mark.parametrize(
+    ("stored_state", "layout", "toggle_title"),
+    [
+        pytest.param(None, _SIDEBAR_OPEN, "Collapse sidebar", id="open-by-default"),
+        pytest.param("true", _SIDEBAR_OPEN, "Collapse sidebar", id="open"),
+        pytest.param("false", _SIDEBAR_COLLAPSED, "Expand sidebar", id="collapsed"),
+    ],
+)
+def test_a_page_load_lays_out_the_sidebar_in_its_stored_state_before_alpine_starts_and_slides_nothing(
+    page: Page, live_server: str, stored_state: str | None, layout: dict[str, int], toggle_title: str
+) -> None:
+    """The dashboard's sidebar and main column are laid out in the stored state before Alpine starts, and neither slides as it starts.
+
+    The toggle's title shows that Alpine has started and agrees with the stored state. The page is
+    the dashboard because its sidebar holds no current-page group, whose highlight Alpine fades in
+    on load on a grouped page.
+    """
+    _open_with_the_sidebar_stored(page, live_server + "/", stored_state)
+
+    expect(_sidebar_toggle(page)).to_have_attribute("title", toggle_title)
+    assert _how_the_sidebar_loaded(page) == ({"before_alpine": layout, "slides_as_alpine_starts": []}, layout)
+
+
+@pytest.mark.parametrize(
+    ("stored_state", "title_before", "title_after"),
+    [
+        pytest.param(None, "Collapse sidebar", "Expand sidebar", id="collapse"),
+        pytest.param("false", "Expand sidebar", "Collapse sidebar", id="expand"),
+    ],
+)
+def test_the_sidebar_toggle_slides_the_sidebar_and_the_main_column(
+    page: Page, live_server: str, stored_state: str | None, title_before: str, title_after: str
+) -> None:
+    """The sidebar toggle slides the sidebar's width and the main column's margin.
+
+    It clicks once per page load, in the page. A second click a few ms after the first reverses
+    transitions that have not advanced a frame, which starts no new width transition. A Playwright
+    click followed by a separate evaluate leaves two round trips in which a loaded host can let
+    300 ms pass.
+    """
+    _open_with_the_sidebar_stored(page, live_server + "/", stored_state)
+    expect(_sidebar_toggle(page)).to_have_attribute("title", title_before)
+
+    slides = _sidebar_toggle(page).evaluate(_CLICK_AND_READ_THE_SLIDES)
+
+    assert {"sidebar width", "main column margin-left"} <= set(slides), f"The toggle started only these slides: {slides}"
+    expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
+
+
+def test_the_next_page_load_starts_in_the_state_the_sidebar_toggle_left(page: Page, live_server: str) -> None:
+    """Once the toggle has collapsed the sidebar, and again once it has expanded it, a reload lays it out in that state before Alpine starts and slides nothing."""
+    _open_with_the_sidebar_stored(page, live_server + "/", None)
+    expect(_sidebar_toggle(page)).to_have_attribute("title", "Collapse sidebar")
+
+    for title_after, layout in (("Expand sidebar", _SIDEBAR_COLLAPSED), ("Collapse sidebar", _SIDEBAR_OPEN)):
+        _sidebar_toggle(page).click()
+        expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
+        page.reload()
+        expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
+        assert _how_the_sidebar_loaded(page) == ({"before_alpine": layout, "slides_as_alpine_starts": []}, layout)

@@ -2,19 +2,24 @@
  * Draws each Plotly chart of a page from the figure its container carries
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
+ * Each drawn chart is fitted to its container whenever the container's size
+ * changes while it is shown, as when base.html's main column slides in on
+ * load, the sidebar is toggled, the window is resized or the chart's tab is
+ * shown again, so the chart ends as wide as its container.
  *
  * Charts are drawn in the theme's colours (AC9), and each drawn chart is
  * recoloured on theme-changed once it is shown (AC10): at once if it is, else
- * when its tab is next shown. A chart that cannot be drawn or recoloured,
- * whether Plotly fails at once or after it returns, logs a console error
- * naming its container's id, and the page's other charts still draw.
+ * when its tab is next shown. A chart that cannot be drawn, fitted or
+ * recoloured, whether Plotly fails at once or after it returns, logs a
+ * console error naming its container's id, and the page's other charts still
+ * draw.
  *
  * Plotly must load first.
  */
 (function () {
     "use strict";
 
-    var SOLAR_CHART_CONFIG = { responsive: true, displayModeBar: true, scrollZoom: false };
+    var SOLAR_CHART_CONFIG = { displayModeBar: true, scrollZoom: false };
 
     /** The containers whose charts are drawn. */
     var _drawn = [];
@@ -117,6 +122,7 @@
             return Plotly.newPlot(container, fig.data, layout, SOLAR_CHART_CONFIG);
         }, function () {
             _drawn.push(container);
+            _fitWhileShown.observe(container);
             if (_isDark() !== drawnDark) {
                 _recolourOnceShown.observe(container);
             }
@@ -127,6 +133,13 @@
     function _recolour(container) {
         _attempt(container, 'recolour the chart of', function () {
             return Plotly.relayout(container, _attributePaths(_themeOverrides(_isDark())));
+        });
+    }
+
+    /** Fits the chart of container, which is drawn, to the container's size. */
+    function _fit(container) {
+        _attempt(container, 'fit the chart of', function () {
+            return Plotly.Plots.resize(container);
         });
     }
 
@@ -151,6 +164,15 @@
 
     /** Recolours each observed container's chart the first time it is shown (AC10). */
     var _recolourOnceShown = _onceShown(_recolour);
+
+    /** Fits each observed container's chart, which is drawn, whenever the container's size changes while it has a width. */
+    var _fitWhileShown = new ResizeObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.contentRect.width > 0) {
+                _fit(entry.target);
+            }
+        });
+    });
 
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('[data-chart-figure]').forEach(function (container) {

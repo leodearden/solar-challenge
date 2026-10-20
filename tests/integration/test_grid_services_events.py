@@ -43,6 +43,7 @@ from solar_challenge.gridservices import (
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
+from tests._finance_builders import make_fleet_results_of
 from tests.integration._helpers import board_econ_scenario
 
 pytestmark = pytest.mark.integration
@@ -96,7 +97,7 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> SimulationResults:
 def _synthetic_fleet_results_in_window(homes: list) -> FleetResults:
     """Build FleetResults with in-window battery_soc/discharge per home."""
     per_home = [_make_in_window_sim_results() for _ in homes]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results_of(per_home, homes=homes)
 
 
 def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-defined]
@@ -329,9 +330,8 @@ def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-def
             tariff_rate=zeros.copy(),
             grid_charge_cost=None,
         )
-        fc_homes = list(getattr(fc, "homes", []))
-        per_home = [sim_r for _ in fc_homes]
-        return FleetResults(per_home_results=per_home, home_configs=fc_homes)
+        fc_homes = getattr(fc, "homes", [])
+        return make_fleet_results_of([sim_r for _ in fc_homes], homes=fc_homes)
 
     return _sim
 

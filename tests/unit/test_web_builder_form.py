@@ -11,7 +11,7 @@ pytest.importorskip("flask")
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, form_to_fleet_distribution_config
-from solar_challenge.web.shared import NotAJsonObject
+from solar_challenge.web.request_boundary import NotAJsonObject
 from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms

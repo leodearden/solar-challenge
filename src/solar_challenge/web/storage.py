@@ -29,8 +29,8 @@ from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get
 import pandas as pd
 
 import solar_challenge.config
-from solar_challenge.fleet import FleetResults, FleetSummary
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
+from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType, get_db
 
 T = TypeVar("T")
@@ -439,6 +439,32 @@ class RunStorage:
 
         self._upsert_run_row(row)
 
+    def save_home_run_from_results(
+        self,
+        run_id: str,
+        config: HomeConfig,
+        results: SimulationResults,
+        *,
+        name: str | None = None,
+        status: RunStatus = "completed",
+        duration_seconds: float | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        """Save a home run as save_home_run does, with the summary calculate_summary derives from *results*.
+
+        This is the save a finished home job makes. It raises as save_home_run raises.
+        """
+        self.save_home_run(
+            run_id,
+            config,
+            results,
+            calculate_summary(results),
+            name=name,
+            status=status,
+            duration_seconds=duration_seconds,
+            created_at=created_at,
+        )
+
     def load_home_run(
         self,
         run_id: str,
@@ -570,6 +596,38 @@ class RunStorage:
                 json.dump(home_summary_dict, f, indent=2)
 
         self._upsert_run_row(row)
+
+    def save_fleet_run_from_results(
+        self,
+        run_id: str,
+        fleet_results: FleetResults,
+        *,
+        name: str | None = None,
+        status: RunStatus = "completed",
+        duration_seconds: float | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        """Save a fleet run as save_fleet_run does, with each home's summary and the fleet summary aggregated from them.
+
+        Each summary is derived once from *fleet_results*. This is the save a finished
+        fleet job makes.
+
+        Raises:
+            ValueError: If fleet_results has no homes, or its home_configs does not hold one
+                HomeConfig per home's results; the save has written nothing then. Otherwise
+                as save_fleet_run raises.
+        """
+        home_summaries = calculate_home_summaries(fleet_results)
+        self.save_fleet_run(
+            run_id,
+            fleet_results,
+            aggregate_home_summaries(home_summaries),
+            home_summaries,
+            name=name,
+            status=status,
+            duration_seconds=duration_seconds,
+            created_at=created_at,
+        )
 
     def load_fleet_run(
         self,

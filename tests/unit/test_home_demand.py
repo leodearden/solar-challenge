@@ -10,7 +10,7 @@ from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
 def test_demand_is_the_homes_load_profile_on_its_locations_clock_ev_charging_included():
@@ -23,7 +23,7 @@ def test_demand_is_the_homes_load_profile_on_its_locations_clock_ev_charging_inc
     )
     day = pd.Timestamp("2024-06-21")
 
-    results = simulate_home(home, day, day, weather_data=synthetic_june_weather(day))
+    results = simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather(day)))
 
     load_profile = generate_load_profile(home.load_config, day, day, timezone="Europe/Paris", ev_config=home.ev_config)
     household_load = generate_load_profile(home.load_config, day, day, timezone="Europe/Paris")

@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD

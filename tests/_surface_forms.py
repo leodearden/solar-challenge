@@ -7,7 +7,7 @@ the forms of the public members a class's own body defines or declares. named_cl
 gives the classes those forms name, and signature_closure the classes of a package that
 some names' forms name, directly or through another such class. member_forms reads class
 bodies, so undeclared_attributes and unset_attributes check the attributes a class
-declares against those its own source sets on self.
+declares against those its own __init__ and __post_init__ set on self.
 
 tests/unit/surface_forms_helper/test_<function>.py pins each function's rules, one rule
 per test.
@@ -46,7 +46,7 @@ import textwrap
 import types
 import typing
 import weakref
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable, Iterator
 
 
 def surface_form(obj: object) -> str:
@@ -89,7 +89,8 @@ def member_forms(cls: type) -> dict[str, str]:
     declares come first, in annotation order, then the other names it defines, in
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
-    module does not bind raises NameError.
+    module does not bind raises NameError, and a module another of the same name has
+    replaced in sys.modules raises LookupError.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -106,8 +107,14 @@ def named_classes(obj: object) -> set[type]:
     annotation or a forward reference names the class its name is bound to in the module
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
-    NameError. Met again inside its own evaluation in the same module, as each "JSON" is
-    in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
+    NameError. A routine is spelled in the module whose globals it carries, whatever
+    module its __module__ names, and a class in the one sys.modules holds under the name
+    its __module__ records; one whose module another of the same name has since replaced
+    in sys.modules raises LookupError naming it and the module found there. A signature
+    that annotates nothing, as that of each routine CPython defines in C such as
+    str.join, names no class, and no module is looked up for it. Met again inside its
+    own evaluation in the same module, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
     there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
@@ -154,27 +161,43 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
     return found
 
 
-def undeclared_attributes(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares.
+def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
+    """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
+
+    A write to self whose attribute name the scan cannot read, such as
+    setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
+    *cls* and the write's text, unless *reviewed* holds that text; a text in *reviewed*
+    that is no such write's raises ValueError. *reviewed* is a collection of such texts:
+    one string given in its place raises TypeError.
 
     A string annotation in any of those class bodies is read as named_classes reads one,
-    so a name its module does not bind raises NameError.
+    so a name its module does not bind raises NameError. Like those annotations, *cls*'s
+    source is read from its own module only, so a module another of the same name has
+    replaced in sys.modules raises LookupError.
     """
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
-    return _attributes_set_on_self(cls) - declared
+    return _attributes_set_on_self(cls, reviewed) - declared
 
 
-def unset_attributes(cls: type) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+
+    As in undeclared_attributes, a write to self whose attribute name the scan cannot
+    read raises TypeError unless *reviewed* holds its text, a text in *reviewed* that is
+    no such write's raises ValueError, and one string given as *reviewed* raises
+    TypeError. A reviewed write sets none of the declared attributes, since its names
+    are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
-    its module does not bind raises NameError.
+    its module does not bind raises NameError. Like such an annotation, *cls*'s source is
+    read from its own module only, so a module another of the same name has replaced in
+    sys.modules raises LookupError.
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
     """
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
-    return declared - _attributes_set_on_self(cls) - _defaulted_fields(cls)
+    return declared - _attributes_set_on_self(cls, reviewed) - _defaulted_fields(cls)
 
 
 class _Spelling(str):
@@ -198,7 +221,7 @@ class _Evaluation:
     """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
 
     source: str
-    module: str
+    module: types.ModuleType
 
 
 _Enclosing: typing.TypeAlias = frozenset[_TypeVariable | typing.NewType | _Evaluation]
@@ -212,7 +235,7 @@ class _Construct(abc.ABC):
         """The spelling, alike on every admitted minor."""
 
     @abc.abstractmethod
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         """The classes it names, a name in it resolved in *module*."""
 
 
@@ -226,7 +249,7 @@ class _Unevaluated(_Construct):
     def text(self) -> str:
         return self.source
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         evaluation = _Evaluation(self.source, module)
         if evaluation in self.enclosing:
             return set()
@@ -244,7 +267,7 @@ class _Leaf(_Construct):
     def text(self) -> str:
         return self.spelling
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return set(self.named)
 
 
@@ -257,7 +280,7 @@ class _Union(_Construct):
     def text(self) -> str:
         return " | ".join(member.text() for member in self.members)
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return _classes_of(self.members, module)
 
 
@@ -272,7 +295,7 @@ class _Subscripted(_Construct):
         inside = _texts_of(self.arguments) if self.arguments else "()"
         return f"{self.origin.text()}[{inside}]"
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return self.origin.classes(module) | _classes_of(self.arguments, module)
 
 
@@ -285,7 +308,7 @@ class _ParameterTypes(_Construct):
     def text(self) -> str:
         return f"[{_texts_of(self.members)}]"
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return _classes_of(self.members, module)
 
 
@@ -294,7 +317,7 @@ class _Declared(_Construct):
     """A type variable or a NewType: spelled by its name, then in parentheses the annotations its declaration passes, if any; naming their classes alone, a name in them resolved in the module that declares it, or, where none is known, in the module that spells the signature holding it."""
 
     name: str
-    module: str | None
+    module: types.ModuleType | None
     arguments: tuple[_Construct, ...]
 
     def text(self) -> str:
@@ -302,7 +325,7 @@ class _Declared(_Construct):
             return self.name
         return f"{self.name}({_texts_of(self.arguments)})"
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return _classes_of(self.arguments, module if self.module is None else self.module)
 
 
@@ -316,7 +339,7 @@ class _Keyword(_Construct):
     def text(self) -> str:
         return f"{self.keyword}={self.annotation.text()}"
 
-    def classes(self, module: str) -> set[type]:
+    def classes(self, module: types.ModuleType) -> set[type]:
         return self.annotation.classes(module)
 
 
@@ -324,7 +347,7 @@ def _texts_of(constructs: Iterable[_Construct]) -> str:
     return ", ".join(construct.text() for construct in constructs)
 
 
-def _classes_of(constructs: Iterable[_Construct], module: str) -> set[type]:
+def _classes_of(constructs: Iterable[_Construct], module: types.ModuleType) -> set[type]:
     return set().union(*(construct.classes(module) for construct in constructs))
 
 
@@ -394,18 +417,19 @@ def _parsed_type_variable(variable: _TypeVariable, enclosing: _Enclosing) -> _De
     return _Declared(repr(variable), module, tuple(arguments))
 
 
-def _declaring_module(variable: _TypeVariable) -> str | None:
-    """The module *variable*'s __module__ names; None if that is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
-    return None if variable.__module__ == "typing" else variable.__module__
+def _declaring_module(variable: _TypeVariable) -> types.ModuleType | None:
+    """The module *variable*'s __module__ names, looked up unchecked, as a type variable records nothing else to check it by; None if that name is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
+    return None if variable.__module__ == "typing" else _defining_module(variable)
 
 
 def _parsed_new_type(new_type: typing.NewType, enclosing: _Enclosing) -> _Declared:
     """*new_type* by its qualified name, as a class is spelled, then its supertype, read inside its declaration; its name alone if that declaration encloses it."""
     qualified_name = new_type.__qualname__  # type: ignore[attr-defined]  # typeshed's NewType omits the __qualname__ its __init__ sets
+    module = _defining_module(new_type)
     if new_type in enclosing:
-        return _Declared(qualified_name, new_type.__module__, ())
+        return _Declared(qualified_name, module, ())
     supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
-    return _Declared(qualified_name, new_type.__module__, (supertype,))
+    return _Declared(qualified_name, module, (supertype,))
 
 
 def _parsed_subscription(annotation: object, enclosing: _Enclosing) -> _Construct:
@@ -435,38 +459,46 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
 
 
 def _form_classes(obj: object) -> set[type]:
-    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it."""
+    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
     if not (inspect.isclass(obj) or inspect.isroutine(obj)):
         return {type(obj)}
-    signature = inspect.signature(obj)
-    annotations = {
-        name: parameter.annotation for name, parameter in signature.parameters.items()
-    }
-    annotations["return"] = signature.return_annotation
+    annotations = _signature_annotations(inspect.signature(obj))
+    if not annotations:
+        return set()
     modules = _spelling_modules(obj, annotations)
     return set().union(
         *(
             _parsed(annotation, frozenset()).classes(modules[name])
             for name, annotation in annotations.items()
-            if annotation is not inspect.Parameter.empty
         )
     )
 
 
-def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, str]:
+def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
+    """The annotations *signature* gives, by parameter name or "return"; a parameter or return without one has no entry."""
+    annotations = {
+        name: parameter.annotation
+        for name, parameter in signature.parameters.items()
+        if parameter.annotation is not inspect.Parameter.empty
+    }
+    if signature.return_annotation is not inspect.Signature.empty:
+        annotations["return"] = signature.return_annotation
+    return annotations
+
+
+def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": a routine's own. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
     if not inspect.isclass(obj):
-        return dict.fromkeys(names, obj.__module__)
+        return dict.fromkeys(names, _defining_module(obj))
     holder = _constructor_holder(obj)
     if not _holds_generated_init(holder):
-        return dict.fromkeys(names, holder.__module__)
+        return dict.fromkeys(names, _defining_module(holder))
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
     return {
-        name: next(
-            (base.__module__ for base in decorated if name in inspect.get_annotations(base)),
-            holder.__module__,
+        name: _defining_module(
+            next((base for base in decorated if name in inspect.get_annotations(base)), holder)
         )
         for name in names
     }
@@ -497,16 +529,116 @@ def _holds_generated_init(cls: type) -> bool:
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        return _parsed(member.annotation, frozenset()).classes(cls.__module__)
+        return _parsed(member.annotation, frozenset()).classes(_defining_module(cls))
     function = _spelled_function(member)
     return _form_classes(member if function is None else function)
 
 
-def _evaluated(annotation: str, module: str) -> object:
-    """*annotation* evaluated in a copy of the globals of the module sys.modules holds under the name *module*, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; a module another of the same name has since replaced there is not read."""
-    spelling_module = sys.modules[module]
-    namespace = dict(vars(spelling_module))
-    exec(_type_checking_imports(spelling_module), namespace)
+def _defining_module(obj: object) -> types.ModuleType:
+    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; anything else records only its module's name, so that module is looked up unchecked."""
+    if inspect.isroutine(obj):
+        return _routine_module(obj)
+    if inspect.isclass(obj):
+        return _class_module(obj)
+    return sys.modules[obj.__module__]
+
+
+def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
+    """The module whose globals *routine*, unwrapped as inspect.signature unwraps it, carries, whatever module its __module__ names: the one sys.modules holds under the name that module was imported as, its spec's, or its __name__ if it has no spec.
+
+    If sys.modules holds another module under that name, as once another module of the
+    same name has replaced it there, LookupError names *routine* and both modules. A
+    routine that carries no globals records nothing to check its module by, so the one
+    its __module__ names is looked up unchecked.
+    """
+    namespace = getattr(inspect.unwrap(routine), "__globals__", None)
+    if namespace is None:
+        return sys.modules[routine.__module__]
+    spec = namespace.get("__spec__")
+    name = namespace.get("__name__") if spec is None else spec.name
+    module = sys.modules[name]
+    if vars(module) is not namespace:
+        label = f"{routine.__module__}.{routine.__qualname__}"
+        raise _defined_elsewhere(label, namespace, module, name)
+    return module
+
+
+_PY_TPFLAGS_HEAPTYPE = 1 << 9
+
+
+def _class_module(cls: type) -> types.ModuleType:
+    """The module sys.modules holds under the name *cls*'s __module__ records, where typing and inspect read a class's annotations and source, checked to be the module that defined *cls*.
+
+    A class defined outside any function must be bound there under its qualified name; for
+    one defined inside a function, the module's globals must be those the first function
+    its body compiled carries. Otherwise, as once another module of the same name has
+    replaced its own in sys.modules, LookupError names *cls* and the module found. A
+    static type, which CPython defines in C, carries no source or annotation to misread,
+    and a class inside a function whose body compiled no function carries nothing to check
+    it by, so their module is looked up unchecked.
+    """
+    module = sys.modules[cls.__module__]
+    if not cls.__flags__ & _PY_TPFLAGS_HEAPTYPE:
+        return module
+    if "<locals>" in cls.__qualname__:
+        function = _function_compiled_in_body(cls)
+        if function is not None and function.__globals__ is not vars(module):
+            label = f"{cls.__module__}.{cls.__qualname__}"
+            raise _defined_elsewhere(label, function.__globals__, module, cls.__module__)
+        return module
+    bound = _bound_under(cls.__qualname__, module)
+    if bound is not cls:
+        raise LookupError(
+            f"{cls.__module__}.{cls.__qualname__} is not bound under {cls.__qualname__!r} in "
+            f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+            f"the name {cls.__module__!r}: that module binds "
+            f"{'nothing' if bound is None else 'another object'} there. Read each module's "
+            "objects before importing another module of that name, or bind the class under "
+            "its qualified name"
+        )
+    return module
+
+
+def _defined_elsewhere(
+    label: str, namespace: dict[str, object], module: types.ModuleType, name: str
+) -> LookupError:
+    """The error for *label*, defined in the module whose globals are *namespace*, once sys.modules holds *module* in its place under *name*."""
+    return LookupError(
+        f"{label} is defined in the module at {namespace.get('__file__')}, but sys.modules "
+        f"holds the module at {getattr(module, '__file__', None)} under the name {name!r}: "
+        "read each module's objects before importing another module of that name"
+    )
+
+
+def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
+    """The first function *cls*'s own body compiled, read through _spelled_function and unwrapped from any decorator that records it as __wrapped__: one whose code's qualified name is *cls*'s dotted with the code's name; None if the body compiled none, as an annotation-only body compiles none, and as the dataclass decorator and EnumType compile the functions they add elsewhere."""
+    functions = (_spelled_function(member) or member for member in vars(cls).values())
+    unwrapped = (
+        inspect.unwrap(function) for function in functions if isinstance(function, types.FunctionType)
+    )
+    return next(
+        (
+            function
+            for function in unwrapped
+            if isinstance(function, types.FunctionType)
+            and function.__code__.co_qualname == f"{cls.__qualname__}.{function.__code__.co_name}"
+        ),
+        None,
+    )
+
+
+def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
+    """What *module* binds under the dotted *qualified_name*, one attribute at a time; None if it binds nothing there."""
+    bound: object = module
+    for name in qualified_name.split("."):
+        bound = getattr(bound, name, None)
+    return bound
+
+
+def _evaluated(annotation: str, module: types.ModuleType) -> object:
+    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them."""
+    namespace = dict(vars(module))
+    exec(_type_checking_imports(module), namespace)
     return eval(annotation, namespace)
 
 
@@ -588,7 +720,7 @@ def _init_only_variables(cls: type) -> set[str]:
     annotated = {
         name
         for name, annotation in inspect.get_annotations(cls).items()
-        if not _is_class_var(annotation, cls.__module__)
+        if not _is_class_var(annotation, cls)
     }
     return (annotated & _constructor_parameters(cls)) - _fields(cls).keys()
 
@@ -635,14 +767,14 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
-        if name not in class_values and not _is_class_var(annotation, cls.__module__)
+        if name not in class_values and not _is_class_var(annotation, cls)
     }
 
 
-def _is_class_var(annotation: object, module: str) -> bool:
-    """Whether *annotation* is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute; a string annotation is evaluated as named_classes evaluates one, in *module*."""
+def _is_class_var(annotation: object, cls: type) -> bool:
+    """Whether *annotation*, which *cls*'s own body declares, is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute; a string annotation is evaluated as named_classes evaluates one, in *cls*'s module."""
     if isinstance(annotation, str):
-        return _is_class_var(_evaluated(annotation, module), module)
+        return _is_class_var(_evaluated(annotation, _defining_module(cls)), cls)
     return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
@@ -702,20 +834,129 @@ def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
     return f"{kind}[{', '.join(qualifiers)}]" if qualifiers else kind
 
 
-def _attributes_set_on_self(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self.
+def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
+    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines set on their receiver, each one's first parameter.
 
-    A frozen dataclass can set one only by object.__setattr__(self, "name", value), so
-    that call counts as setting it too.
+    Each is read whole, a closure in it included. An attribute is set by any assignment
+    to it on the receiver, or by setattr(receiver, "name", value),
+    <expr>.__setattr__(receiver, "name", value), receiver.__setattr__("name", value) or
+    super().__setattr__("name", value), whose name is a string constant.
+
+    A write names no attribute the scan can read if it is one of those calls with any
+    other name, such as a variable, an f-string or a starred argument, or a reach into
+    the receiver's __dict__, as receiver.__dict__ in any context or as vars(receiver).
+    Such a write raises TypeError naming *cls* and the write's source, as ast.unparse
+    spells it, unless *reviewed* holds that source. Then a text in *reviewed* that is no
+    such write's source raises ValueError.
     """
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(cls)))):
-        match node:
-            case ast.Attribute(value=ast.Name(id="self"), attr=name, ctx=ast.Store()):
-                names.add(name)
-            case ast.Call(
-                func=ast.Attribute(value=ast.Name(id="object"), attr="__setattr__"),
-                args=[ast.Name(id="self"), ast.Constant(value=str() as name), *_],
-            ):
-                names.add(name)
+    writes = [
+        write
+        for initialiser in _initialisers(cls)
+        for write in _writes_to_receiver(initialiser)
+    ]
+    _refuse_unreviewed(cls, {write.source for write in writes if write.name is None}, reviewed)
+    names = {write.name for write in writes if write.name is not None}
     return {name for name in names if not name.startswith("_")}
+
+
+def _refuse_unreviewed(cls: type, unnamed: set[str], reviewed: Collection[str]) -> None:
+    """Raise TypeError if *reviewed* is one string, not a collection of write texts; then TypeError naming each source in *unnamed*, *cls*'s writes to self that name no attribute, that *reviewed* lacks; then ValueError naming each text in *reviewed* that *unnamed* lacks."""
+    if isinstance(reviewed, str):
+        raise TypeError(
+            f"reviewed must be a collection of write texts, not one string: {reviewed!r}"
+        )
+    unreviewed = unnamed - set(reviewed)
+    if unreviewed:
+        raise TypeError(
+            f"{cls.__qualname__} sets attributes on self under names the scan cannot "
+            f"read:{_listed(unreviewed)}\nGive each name as a string constant, as in "
+            'object.__setattr__(self, "name", value); or, once a reviewer has checked that '
+            "every name such a write sets is declared, pass the write's text in reviewed."
+        )
+    stale = set(reviewed) - unnamed
+    if stale:
+        raise ValueError(
+            f"{cls.__qualname__} makes none of these reviewed writes to self:"
+            f"{_listed(stale)}\nDrop each from reviewed."
+        )
+
+
+def _listed(texts: set[str]) -> str:
+    """*texts* in sorted order, each on a line of its own, indented."""
+    return "".join(f"\n  {text}" for text in sorted(texts))
+
+
+_INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
+
+
+def _initialisers(cls: type) -> list[ast.FunctionDef]:
+    """The __init__ and __post_init__ statements of *cls*'s own body, never another method nor anything a class nested in it defines."""
+    match ast.parse(_class_source(cls)).body:
+        case [ast.ClassDef(body=body)]:
+            return [
+                statement
+                for statement in body
+                if isinstance(statement, ast.FunctionDef) and statement.name in _INITIALISERS
+            ]
+    raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
+
+
+def _class_source(cls: type) -> str:
+    """*cls*'s source, dedented, read only once _defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records."""
+    _defining_module(cls)
+    return textwrap.dedent(inspect.getsource(cls))
+
+
+@dataclasses.dataclass(frozen=True)
+class _SelfWrite:
+    """A write an initialiser makes to its receiver: the attribute it sets, None if its source names none the scan can read, and its source as ast.unparse spells it."""
+
+    name: str | None
+    source: str
+
+
+def _writes_to_receiver(function: ast.FunctionDef) -> Iterator[_SelfWrite]:
+    """Each write *function* makes to its receiver, its first positional parameter, anywhere in it; none if it takes no positional parameter."""
+    positional = [*function.args.posonlyargs, *function.args.args]
+    if not positional:
+        return
+    receiver = positional[0].arg
+    for node in ast.walk(function):
+        write = _write_to(receiver, node)
+        if write is not None:
+            yield write
+
+
+def _write_to(receiver: str, node: ast.AST) -> _SelfWrite | None:
+    """The write *node* makes to *receiver*, if it is one in a spelling _attributes_set_on_self reads."""
+    match node:
+        case ast.Attribute(value=ast.Name(id=owner), attr="__dict__") if owner == receiver:
+            return _SelfWrite(None, ast.unparse(node))
+        case ast.Call(func=ast.Name(id="vars"), args=[ast.Name(id=owner)]) if owner == receiver:
+            return _SelfWrite(None, ast.unparse(node))
+        case ast.Attribute(value=ast.Name(id=owner), attr=name, ctx=ast.Store()) if owner == receiver:
+            return _SelfWrite(name, ast.unparse(node))
+        case ast.Call(
+            func=ast.Name(id="setattr") | ast.Attribute(attr="__setattr__"),
+            args=[ast.Name(id=owner), named, *_],
+        ) if owner == receiver:
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
+        case ast.Call(
+            func=ast.Attribute(value=ast.Name(id=owner), attr="__setattr__"),
+            args=[named, *_],
+        ) if owner == receiver:
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
+        case ast.Call(
+            func=ast.Attribute(value=ast.Call(func=ast.Name(id="super")), attr="__setattr__"),
+            args=[named, *_],
+        ):
+            return _SelfWrite(_constant_name(named), ast.unparse(node))
+    return None
+
+
+def _constant_name(named: ast.expr) -> str | None:
+    """The name *named* gives, if it is a string constant; None for any other expression, whose value the source does not show."""
+    match named:
+        case ast.Constant(value=str() as name):
+            return name
+    return None

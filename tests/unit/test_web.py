@@ -1,7 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
 import uuid
-from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
@@ -29,20 +28,7 @@ from tests._html_page import (
 )
 from tests._plotly_figure import annotations_by_text
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 def _run_storage(app: Flask) -> RunStorage:

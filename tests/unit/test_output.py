@@ -22,7 +22,7 @@ from solar_challenge.output import (
     generate_summary_report,
 )
 from tests._finance_builders import make_home_config
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
 @pytest.fixture
@@ -220,12 +220,8 @@ class TestSeasonalBreakdowns:
 
     def test_a_battery_homes_summer_day_has_its_summarys_figures(self):
         day = pd.Timestamp("2024-06-21")
-        run = simulate_home(
-            make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)),
-            day,
-            day,
-            weather_data=synthetic_june_weather(day),
-        )
+        home = make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))
+        run = simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather(day)))
         summary = calculate_summary(run)
         # The battery discharges, so min(generation, demand) would differ from the summary.
         assert summary.total_battery_discharge_kwh > 0

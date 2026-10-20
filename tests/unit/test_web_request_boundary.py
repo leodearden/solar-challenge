@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.shared, called directly: its request-body rules, a JSON object and only recognised keys, and its location resolver."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object and only recognised keys, and its location resolver."""
 
 import pytest
 
 pytest.importorskip("flask")
 
 from solar_challenge.location import Location
-from solar_challenge.web.shared import (
+from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
     refuse_unrecognised_keys,

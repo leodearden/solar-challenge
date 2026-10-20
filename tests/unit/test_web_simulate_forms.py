@@ -6,12 +6,9 @@ request from: heat pump, tariff, dispatch, PV age and SEG on /simulate/home, and
 SEG on /simulate/fleet.
 """
 
-from pathlib import Path
-
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.seg import SEG_PRESETS
@@ -25,19 +22,6 @@ from tests._html_page import (
     headings,
     texts,
 )
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 def _options_per_seg_preset_key(page: str) -> dict[str, int]:

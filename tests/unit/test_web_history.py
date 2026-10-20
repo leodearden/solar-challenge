@@ -27,28 +27,15 @@ from solar_challenge.web.charts import (
     comparison_radar,
 )
 from solar_challenge.web.database import get_db
-from solar_challenge.web.shared import LOCATION_PRESETS
+from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 @pytest.fixture

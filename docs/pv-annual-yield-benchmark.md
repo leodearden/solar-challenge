@@ -1,7 +1,7 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203), #324, #282, #749
-**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
+**Task:** #239 (follow-up from #203), #324, #282, #749, #781, #812
+**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`, `_module_rating_w`); [`src/solar_challenge/timebase.py`](../src/solar_challenge/timebase.py) (`SimulationWindow.annualisation_scale`)
 
 ---
 
@@ -27,9 +27,25 @@ generation, so the wired DC is that of the config's own module, `custom_module_p
 included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
 against a `PVConfig` of the default module at that capacity.
 
-A run of 365 days or more is judged on its AC energy scaled to a 365-day year by
-`validation._annual_equivalent_kwh`, as `validate_consumption` scales its annual total:
-a two-year run at 1000 kWh/kWp a year reads 1000, not 2000. A shorter run is not judged.
+The wired DC is the sum, over the arrays of the `PVSystem` that `create_pv_system`
+builds, of modules per string × strings × the module's rating, `pv._module_rating_w`.
+A module with PVWatts parameters (`pdc0` and `gamma_pdc`) is rated at its `pdc0`, the
+power pvlib's PVWatts DC model multiplies by the module count; any other module is
+rated at its `STC`. `create_pv_system` counts the modules by the same rating and
+refuses a module that has neither, so the module count, the DC the model gives at STC
+and the wired DC agree. Until task 812, a module without an `STC` was counted as 400 W
+whatever its `pdc0`: 4 kW of `{"pdc0": 300.0, "gamma_pdc": -0.004}` wired 10 modules,
+3.0 kWp modelled, and was judged on 4.0 kWp; it now wires 13, 3.9 kWp.
+
+A run of 365 calendar days or more is judged on its AC energy scaled to a year by its
+window's `annualisation_scale` (`timebase.SimulationWindow`). The scale is the covered
+year's days over the window's calendar days. The year's days are 365 or 366, or 365.25
+for a window across a year end
+([simulation-window-and-cadence.md](prds/simulation-window-and-cadence.md), §Resolved
+design decisions 5). `validate_consumption` scales its annual total by the same rule. So
+a 2023–2024 run at 1000 kWh/kWp a year reads 1000, not 2000, and a whole calendar year is
+judged on its own energy. A shorter run is not judged: a yield benchmark needs a year of
+seasons.
 
 ## 2. The Band Is Sourced from PVGIS and MCS
 

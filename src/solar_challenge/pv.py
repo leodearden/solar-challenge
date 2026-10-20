@@ -4,7 +4,7 @@
 import functools
 import math
 import warnings
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -453,6 +453,11 @@ def _cec_library_inverter(name: str, efficiency: float) -> _Inverter:
 _PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
 
 
+def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
+    """Whether the module has the parameters pvlib infers its PVWatts DC model from."""
+    return _PVWATTS_MODULE_KEYS <= module_params.keys()
+
+
 def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
     """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency."""
     return create_pvwatts_inverter_params(
@@ -490,7 +495,7 @@ def _inverter_and_wiring(
     one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
         return _Inverter(name=None, parameters=config.custom_inverter_params), one_string
-    if _PVWATTS_MODULE_KEYS <= module_params.keys():
+    if _is_pvwatts_module(module_params):
         return _Inverter(name=None, parameters=_pvwatts_inverter(config)), one_string
     if "V_mp_ref" not in module_params:
         raise ValueError(
@@ -524,9 +529,17 @@ def _arrays(
     ]
 
 
-def _module_rating_w(module_params: dict[str, float]) -> float:
-    """Each module's rated DC power at STC in watts, 400 W when the parameters give none."""
-    return module_params.get("STC", 400.0)
+def _module_rating_w(module_params: Mapping[str, float]) -> float:
+    """Each module's rated DC power in watts: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC."""
+    if _is_pvwatts_module(module_params):
+        return module_params["pdc0"]
+    if "STC" in module_params:
+        return module_params["STC"]
+    raise ValueError(
+        "Module parameters have neither pdc0 and gamma_pdc, whose pdc0 rates a PVWatts "
+        "module, nor an STC rating, so the modules cannot be counted; add STC, the "
+        "module's DC power in W at standard test conditions"
+    )
 
 
 def _module_count(config: PVConfig, module_params: dict[str, float]) -> int:
@@ -557,7 +570,9 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     _wiring_within_window for how it is chosen from candidate_cec_inverters and
     how the modules are wired to it. A module with PVWatts parameters (pdc0 and
     gamma_pdc, e.g. one from create_simple_module_params) gets pvlib's PVWatts
-    inverter at the configured AC capacity and efficiency instead.
+    inverter at the configured AC capacity and efficiency instead. It wires the
+    whole number of modules nearest capacity_kw, each rated at its pdc0 if it
+    has PVWatts parameters and at its STC otherwise (_module_rating_w).
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -569,10 +584,11 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         inverter parameters
 
     Raises:
-        ValueError: If the module parameters have neither PVWatts parameters
-            nor a V_mp_ref and no custom inverter parameters are given, or if
-            no CEC inverter's MPPT window admits a string of the module's
-            voltage.
+        ValueError: If the module parameters rate the module by neither a
+            PVWatts module's pdc0 nor an STC, if they have neither PVWatts
+            parameters nor a V_mp_ref and no custom inverter parameters are
+            given, or if no CEC inverter's MPPT window admits a string of the
+            module's voltage.
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0)
@@ -586,16 +602,24 @@ def create_pv_system(config: PVConfig) -> PVSystem:
 def wired_dc_capacity_kw(config: PVConfig) -> float:
     """The DC capacity, in kW, of the modules create_pv_system wires for config.
 
-    The system holds a whole number of modules, so this differs from
-    config.capacity_kw unless the module's rating divides it: 0.3 kW of
-    DEFAULT_CEC_MODULE, 400.428 W at STC, wires one module.
+    It sums each array's modules per string × strings × module rating
+    (_module_rating_w) over the arrays of the PVSystem that create_pv_system
+    builds for config. The system holds a whole number of modules, so this
+    differs from config.capacity_kw unless the module's rating divides it:
+    0.3 kW of DEFAULT_CEC_MODULE, 400.428 W at STC, wires one module.
+
+    Raises:
+        ValueError: Whatever create_pv_system raises for config.
 
     Example:
         >>> round(wired_dc_capacity_kw(PVConfig(capacity_kw=0.3)), 3)
         0.4
     """
-    module_params = _module_parameters(config)
-    return _module_count(config, module_params) * _module_rating_w(module_params) / 1000
+    wired_w = sum(
+        array.modules_per_string * array.strings * _module_rating_w(array.module_parameters)
+        for array in create_pv_system(config).arrays
+    )
+    return float(wired_w) / 1000
 
 
 def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
@@ -671,11 +695,13 @@ def create_model_chain_picking_from(
         ModelChain ready to run simulations with weather data
 
     Raises:
-        ValueError: If the module parameters have neither PVWatts parameters
-            nor a V_mp_ref and no custom inverter parameters are given, if no
-            candidate's MPPT window admits the strings, or if pvlib infers an
-            inverter model that can not read its DC model's output, e.g.
-            custom Sandia inverter parameters with PVWatts module parameters.
+        ValueError: If the module parameters rate the module by neither a
+            PVWatts module's pdc0 nor an STC, if they have neither PVWatts
+            parameters nor a V_mp_ref and no custom inverter parameters are
+            given, if no candidate's MPPT window admits the strings, or if
+            pvlib infers an inverter model that can not read its DC model's
+            output, e.g. custom Sandia inverter parameters with PVWatts module
+            parameters.
     """
     pv_system = _pv_system(config, candidates)
 

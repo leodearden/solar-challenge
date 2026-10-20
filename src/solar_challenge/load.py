@@ -10,7 +10,7 @@ from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
@@ -521,25 +521,30 @@ def _generate_elexon_profile(
 
 
 def energy_kwh(profile: pd.Series) -> float:
-    """Integrate a 1-minute power Series to total energy in kWh.
+    """The energy in kWh a kW profile delivers: each row's kW times the hours its row lasts, the cadence SimulationWindow.of_index reads from its index.
 
     Args:
-        profile: Power series in kW with 1-minute resolution
+        profile: Power series in kW
 
     Returns:
         Total energy in kWh
+
+    Raises:
+        ValueError: As SimulationWindow.of_index does, if the profile's index is not
+            a DatetimeIndex, is empty, has one row and no fixed-duration freq, or is
+            not evenly spaced.
     """
-    return float(profile.sum() * HOURS_PER_MINUTE)
+    return SimulationWindow.of_index(profile.index).energy_kwh(profile)
 
 
 def scale_profile_to_energy(
     profile: pd.Series,
     target_kwh: float,
 ) -> pd.Series:
-    """Scale a 1-minute power profile so that its total energy is target_kwh.
+    """Scale a power profile so that its energy_kwh is target_kwh.
 
     Args:
-        profile: Power series in kW with 1-minute resolution
+        profile: Power series in kW
         target_kwh: Target total energy in kWh
 
     Returns:
@@ -547,7 +552,8 @@ def scale_profile_to_energy(
 
     Raises:
         ValueError: If the profile's energy is zero, since no factor scales it
-            to target_kwh.
+            to target_kwh; or as energy_kwh does, if no window describes the
+            profile's index.
     """
     current_kwh = energy_kwh(profile)
     if current_kwh == 0:

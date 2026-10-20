@@ -2,22 +2,23 @@
 """The rules of tests/_surface_forms.py's undeclared_attributes, one per test."""
 
 import pathlib
+import re
 from dataclasses import InitVar, dataclass
 
 import pytest
 
 from tests._surface_forms import undeclared_attributes, unset_attributes
+from tests.unit.surface_forms_helper._fixtures import imported_module
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
     class Meter:
-        def __init__(self, site: pathlib.Path) -> None:
+        def __init__(self, site: pathlib.Path, readings: list[float]) -> None:
             self.site = site
             self.reading: float = 0.0
             self.low, self.high = 0.0, 1.0
-
-        def add(self, kwh: float) -> None:
-            self.total += kwh
+            for kwh in readings:
+                self.total += kwh
 
     assert undeclared_attributes(Meter) == {"site", "reading", "low", "high", "total"}
 
@@ -32,6 +33,58 @@ def test_object_setattr_on_self_sets_the_attribute_it_names() -> None:
             object.__setattr__(self, "label", f"{self.kwh} kWh")
 
     assert undeclared_attributes(Reading) == {"label"}
+
+
+def test_setattr_or___setattr___on_the_receiver_with_a_string_constant_sets_the_attribute_it_names() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            setattr(self, "site", "roof")
+            object.__setattr__(self, "reading", 0.0)
+            self.__setattr__("low", 0.0)
+            super().__setattr__("high", 1.0)
+
+    assert vars(Meter()).keys() == {"site", "reading", "low", "high"}
+    assert undeclared_attributes(Meter) == {"site", "reading", "low", "high"}
+
+
+def test_only_the_init_and_post_init_the_class_body_itself_defines_are_read() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self.ok = 1
+
+        def reset(self) -> None:
+            self.reading = 0.0
+
+        @staticmethod
+        def build(self: object) -> None:
+            self.fromstatic = 1
+
+        class _Helper:
+            def __init__(self) -> None:
+                self.leaked = 1
+
+    assert undeclared_attributes(Meter) == {"ok"}
+
+
+def test_an_assignment_to_the_receiver_in_a_closure_inside_an_initialiser_sets_it() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            def fill() -> None:
+                self.site = "roof"
+
+            fill()
+
+    assert vars(Meter()).keys() == {"site"}
+    assert undeclared_attributes(Meter) == {"site"}
+
+
+def test_the_receiver_is_the_first_parameter_whatever_its_name() -> None:
+    class Meter:
+        def __init__(this, self: object) -> None:
+            this.renamed = 1
+            self.elsewhere = 2
+
+    assert undeclared_attributes(Meter) == {"renamed"}
 
 
 def test_an_attribute_a_class_body_in_the_mro_declares_or_defines_is_not_undeclared() -> None:
@@ -56,7 +109,8 @@ def test_an_attribute_only_a_base_sets_on_self_is_undeclared_in_the_base_not_its
             self.site = site
 
     class Meter(Base):
-        def reset(self) -> None:
+        def __init__(self, site: pathlib.Path) -> None:
+            super().__init__(site)
             self.reading = 0.0
 
     assert undeclared_attributes(Base) == {"site"}
@@ -108,3 +162,96 @@ def test_a_class_body_string_annotation_naming_a_name_its_module_does_not_bind_r
         undeclared_attributes(Meter)
     with pytest.raises(NameError, match="Nowhere"):
         unset_attributes(Base)
+
+
+def test_a_write_under_a_computed_name_raises_a_type_error_naming_the_class_and_each_such_write_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Meter:
+        def __init__(self, name: str) -> None:
+            setattr(self, name, 0.0)
+            object.__setattr__(self, f"{name}_low", 0.0)
+            super().__setattr__(name.upper(), 1.0)
+
+    writes = [
+        "setattr(self, name, 0.0)",
+        "object.__setattr__(self, f'{name}_low', 0.0)",
+        "super().__setattr__(name.upper(), 1.0)",
+    ]
+    for scan in (undeclared_attributes, unset_attributes):
+        with pytest.raises(TypeError) as refusal:
+            scan(Meter)
+        for text in ["Meter", *writes]:
+            assert text in str(refusal.value)
+
+
+def test_a_reach_into_the_receivers___dict___raises_a_type_error_naming_the_class_and_each_reach_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self.__dict__["site"] = "roof"
+            vars(self).update(low=0.0)
+
+    for scan in (undeclared_attributes, unset_attributes):
+        with pytest.raises(TypeError) as refusal:
+            scan(Meter)
+        for text in ["Meter", "self.__dict__", "vars(self)"]:
+            assert text in str(refusal.value)
+
+
+def test_a_reviewed_write_under_a_computed_name_is_not_refused_and_the_other_writes_are_still_read() -> None:
+    class Meter:
+        def __init__(self, name: str) -> None:
+            setattr(self, name, 0.0)
+            self.site = "roof"
+
+    assert undeclared_attributes(Meter, reviewed={"setattr(self, name, 0.0)"}) == {"site"}
+
+
+def test_a_reviewed_write_the_initialisers_do_not_make_raises_a_value_error_naming_it_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self.site = "roof"
+
+    stale = "setattr(self, name, 0.0)"
+    with pytest.raises(ValueError, match=re.escape(stale)):
+        undeclared_attributes(Meter, reviewed={stale})
+    with pytest.raises(ValueError, match=re.escape(stale)):
+        unset_attributes(Meter, reviewed={stale})
+
+
+def test_reviewed_given_as_one_string_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self.site = "roof"
+
+    text = "setattr(self, name, 0.0)"
+    for scan in (undeclared_attributes, unset_attributes):
+        with pytest.raises(TypeError, match=re.escape(text)):
+            scan(Meter, reviewed=text)
+
+
+def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sys_modules_raises_a_lookup_error_from_undeclared_attributes_and_unset_attributes(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "metering",
+        "class Meter:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.early = 1\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "metering",
+        "class Meter:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.late = 1\n",
+    )
+
+    with pytest.raises(LookupError) as undeclared:
+        undeclared_attributes(earlier.Meter)
+    with pytest.raises(LookupError) as unset:
+        unset_attributes(earlier.Meter)
+
+    assert later.__file__ in str(undeclared.value)
+    assert later.__file__ in str(unset.value)

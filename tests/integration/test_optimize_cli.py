@@ -18,7 +18,6 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
-from solar_challenge.finance import CostRecoverySolution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -30,101 +29,29 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from tests._cli_fleet_simulator import invoke_cli
-from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._factories import make_bill_distribution_from_statistics, make_config_result
 from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
-# §A — Helper factories (adapted from test_cost_recovery_cli.py)
+# §A — Helper factories
 # ---------------------------------------------------------------------------
 
 
 def _make_bill_distribution(
-    min_gbp: float = 310.0,
-    mean_gbp: float = 355.0,
-    median_gbp: float = 360.0,
-    max_gbp: float = 410.0,
+    *,
+    min_gbp: float,
+    mean_gbp: float,
+    median_gbp: float,
+    max_gbp: float,
 ) -> "BillDistribution":  # type: ignore[name-defined]
     """Build a minimal BillDistribution whose representative sits at *median_gbp*."""
-    return make_bill_distribution(
-        representative=make_bill_breakdown(total_outlay_gbp=median_gbp),
-        per_home_net_bill_gbp=(min_gbp, mean_gbp, max_gbp),
+    return make_bill_distribution_from_statistics(
+        representative_outlay_gbp=median_gbp,
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,
         max_gbp=max_gbp,
-    )
-
-
-def _make_solution(
-    own_use_rate: float = 15.0,
-    net_surplus: float = 27.0,
-    feasible: bool = True,
-    binding: str = "floor",
-    outlay: "Optional[BillDistribution]" = None,  # type: ignore[name-defined]
-) -> CostRecoverySolution:
-    """Build a minimal CostRecoverySolution for fixture use."""
-    dist = outlay if outlay is not None else _make_bill_distribution()
-    return CostRecoverySolution(
-        own_use_rate_pence_per_kwh=own_use_rate,
-        outlay=dist,
-        representative_outlay_gbp=dist.median_gbp,
-        net_surplus_per_home_per_year_gbp=net_surplus,
-        saving_vs_baseline_gbp=dist.representative.saving_vs_baseline_gbp,
-        saving_pct=dist.representative.saving_pct,
-        feasible=feasible,
-        binding=binding,
-    )
-
-
-def _make_config_result(
-    pv_kwp: float = 4.0,
-    battery_kwh: float = 0.0,
-    inverter_kw: float = 5.0,
-    own_use_rate: float = 15.0,
-    net_surplus: float = 27.0,
-    feasible: bool = True,
-    binding: str = "floor",
-    total_capex: float = 50_000.0,
-    min_dscr: float = float("inf"),
-    equity_irr: float = 0.08,
-    payback_years: Optional[float] = 12.5,
-    baseline_outlay: float = 380.0,
-    baseline_surplus: float = 45.0,
-    outlay_min: float = 310.0,
-    outlay_mean: float = 355.0,
-    outlay_median: float = 360.0,
-    outlay_max: float = 410.0,
-) -> ConfigResult:
-    """Build a ConfigResult with distinct numeric values for each field."""
-    point = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
-    dist = _make_bill_distribution(
-        min_gbp=outlay_min,
-        mean_gbp=outlay_mean,
-        median_gbp=outlay_median,
-        max_gbp=outlay_max,
-    )
-    solution = _make_solution(
-        own_use_rate=own_use_rate,
-        net_surplus=net_surplus,
-        feasible=feasible,
-        binding=binding,
-        outlay=dist,
-    )
-    return ConfigResult(
-        config=point,
-        solution=solution,
-        representative_outlay_gbp=outlay_median,
-        solved_own_use_rate_pence_per_kwh=own_use_rate,
-        surplus_at_solved_gbp=net_surplus,
-        feasible=feasible,
-        binding=binding,
-        total_capex_gbp=total_capex,
-        min_dscr=min_dscr,
-        equity_irr=equity_irr,
-        payback_years=payback_years,
-        baseline_outlay_gbp=baseline_outlay,
-        baseline_surplus_per_home_gbp=baseline_surplus,
     )
 
 
@@ -229,44 +156,38 @@ class TestGenerateConfigRankingReportTable1:
     def _make_sweep_two_feasible(self) -> RankedSweep:
         """Build a RankedSweep with two feasible configs and one infeasible."""
         # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
-        r1 = _make_config_result(
+        r1 = make_config_result(
             pv_kwp=4.0,
             battery_kwh=0.0,
             inverter_kw=5.0,
-            own_use_rate=12.5,
-            net_surplus=35.0,
+            solved_own_use_rate_pence_per_kwh=12.5,
+            surplus_at_solved_gbp=35.0,
             feasible=True,
             binding="floor",
-            total_capex=48_000.0,
+            total_capex_gbp=48_000.0,
             min_dscr=float("inf"),
             equity_irr=0.09,
             payback_years=11.0,
-            baseline_outlay=375.0,
-            baseline_surplus=40.0,
-            outlay_min=300.0,
-            outlay_mean=345.0,
-            outlay_median=350.0,
-            outlay_max=400.0,
+            baseline_outlay_gbp=375.0,
+            baseline_surplus_per_home_gbp=40.0,
+            outlay=_make_bill_distribution(min_gbp=300.0, mean_gbp=345.0, median_gbp=350.0, max_gbp=400.0),
         )
         # Config 2 (second cheapest): 5 kWp, 5 kWh battery
-        r2 = _make_config_result(
+        r2 = make_config_result(
             pv_kwp=5.0,
             battery_kwh=5.0,
             inverter_kw=5.0,
-            own_use_rate=18.75,
-            net_surplus=27.0,
+            solved_own_use_rate_pence_per_kwh=18.75,
+            surplus_at_solved_gbp=27.0,
             feasible=True,
             binding="floor",
-            total_capex=72_000.0,
+            total_capex_gbp=72_000.0,
             min_dscr=1.45,
             equity_irr=0.07,
             payback_years=14.5,
-            baseline_outlay=410.0,
-            baseline_surplus=55.0,
-            outlay_min=325.0,
-            outlay_mean=368.0,
-            outlay_median=370.0,
-            outlay_max=420.0,
+            baseline_outlay_gbp=410.0,
+            baseline_surplus_per_home_gbp=55.0,
+            outlay=_make_bill_distribution(min_gbp=325.0, mean_gbp=368.0, median_gbp=370.0, max_gbp=420.0),
         )
         # Infeasible: 6 kWp, 10 kWh — ConfigPoint only in RankedSweep
         infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
@@ -361,10 +282,10 @@ class TestGenerateConfigRankingReportTable1:
     def test_payback_none_shown_as_dash(self) -> None:
         """payback_years=None must render as '—'."""
         # Build a config with payback=None
-        r_no_payback = _make_config_result(
+        r_no_payback = make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
             payback_years=None,
-            own_use_rate=10.0,
+            solved_own_use_rate_pence_per_kwh=10.0,
         )
         sweep = _make_ranked_sweep(results=(r_no_payback,))
         report = generate_config_ranking_report(sweep)
@@ -373,10 +294,10 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_nan_irr_shown_as_na(self) -> None:
         """equity_irr=NaN must render as 'n/a'."""
-        r_nan_irr = _make_config_result(
+        r_nan_irr = make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
             equity_irr=float("nan"),
-            own_use_rate=10.0,
+            solved_own_use_rate_pence_per_kwh=10.0,
         )
         sweep = _make_ranked_sweep(results=(r_nan_irr,))
         report = generate_config_ranking_report(sweep)
@@ -407,7 +328,7 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_empty_infeasible_no_infeasible_section(self) -> None:
         """When there are no infeasible configs, the infeasible section is omitted."""
-        r = _make_config_result()
+        r = make_config_result()
         sweep = _make_ranked_sweep(results=(r,), infeasible=())
         report = generate_config_ranking_report(sweep)
 
@@ -426,40 +347,40 @@ class TestGenerateConfigRankingReportTable2:
     def _make_sweep_with_pareto(self) -> RankedSweep:
         """Build a RankedSweep where some (not all) feasible configs are on the Pareto front."""
         # Config A (cheapest, on Pareto): 4 kWp / 0 kWh — low outlay, low surplus
-        r_a = _make_config_result(
+        r_a = make_config_result(
             pv_kwp=4.0,
             battery_kwh=0.0,
             inverter_kw=5.0,
-            own_use_rate=12.5,
-            net_surplus=27.0,
+            solved_own_use_rate_pence_per_kwh=12.5,
+            surplus_at_solved_gbp=27.0,
             feasible=True,
             binding="floor",
-            baseline_outlay=360.0,
-            baseline_surplus=30.0,
+            baseline_outlay_gbp=360.0,
+            baseline_surplus_per_home_gbp=30.0,
         )
         # Config B (more expensive, on Pareto): 5 kWp / 5 kWh — higher surplus
-        r_b = _make_config_result(
+        r_b = make_config_result(
             pv_kwp=5.0,
             battery_kwh=5.0,
             inverter_kw=5.0,
-            own_use_rate=18.75,
-            net_surplus=27.0,
+            solved_own_use_rate_pence_per_kwh=18.75,
+            surplus_at_solved_gbp=27.0,
             feasible=True,
             binding="floor",
-            baseline_outlay=420.0,
-            baseline_surplus=80.0,
+            baseline_outlay_gbp=420.0,
+            baseline_surplus_per_home_gbp=80.0,
         )
         # Config C (dominated, NOT on Pareto): higher outlay, lower surplus than B
-        r_c = _make_config_result(
+        r_c = make_config_result(
             pv_kwp=6.0,
             battery_kwh=5.0,
             inverter_kw=5.0,
-            own_use_rate=20.0,
-            net_surplus=27.0,
+            solved_own_use_rate_pence_per_kwh=20.0,
+            surplus_at_solved_gbp=27.0,
             feasible=True,
             binding="floor",
-            baseline_outlay=450.0,
-            baseline_surplus=60.0,
+            baseline_outlay_gbp=450.0,
+            baseline_surplus_per_home_gbp=60.0,
         )
         # Pareto front: A and B (C is dominated by B)
         pareto = (r_a.config, r_b.config)
@@ -560,7 +481,7 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_infeasible_absent_from_table2(self) -> None:
         """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
-        r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
+        r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
         sweep = _make_ranked_sweep(
             results=(r,),
@@ -592,7 +513,7 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def _make_sweep_one(self) -> RankedSweep:
         """A minimal single-config RankedSweep."""
-        r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
+        r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         return _make_ranked_sweep(results=(r,), pareto=(r.config,))
 
     def _make_panel(self, sweep: RankedSweep) -> SensitivityPanel:
@@ -838,7 +759,7 @@ def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
 class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
-    Each test that runs a sweep passes a constant fleet simulator as the Click
+    Each test that runs a sweep passes its own fleet simulator as the Click
     context object (``obj=CliFleetSimulator(...)``), so the whole sweep,
     sensitivity panel included, runs offline without PVGIS.
     """
@@ -1006,6 +927,73 @@ class TestOptimizeCLIE2EFast:
             or "known" in result.output.lower()
         ), (
             f"Expected clear error message about unknown alias in output:\n{result.output}"
+        )
+
+    def test_a_plain_value_error_while_the_sensitivity_panel_runs_exits_one_as_an_invalid_value(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A plain ValueError raised while the sensitivity panel runs ends the command with exit 1 and its invalid-value line on stderr; the panel is not skipped.
+
+        A run without the panel counts the simulations the sweep asks for; the
+        simulator answers that many and raises on the next, which the panel asks for.
+        """
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        sweep_only, sweep_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--sensitivity", ""],
+            n_homes=1,
+        )
+        assert sweep_only.exit_code == 0, sweep_only.output
+        asked: list[object] = []
+
+        def simulate(fleet_config, start, end):
+            asked.append(fleet_config)
+            if len(asked) > len(sweep_fleets):
+                raise ValueError("a defect raised while the sensitivity panel runs")
+            return one_home_fleet_results
+
+        result = invoke_cli(
+            [
+                "optimize", "configs", str(_write_optimize_scenario(tmp_path, n_homes=1)),
+                *options,
+                "--sensitivity", "grid_services",
+            ],
+            simulate,
+        )
+
+        assert len(asked) > len(sweep_fleets), "the panel asked for no simulation"
+        assert result.exit_code == 1, result.output
+        assert result.stdout == ""
+        stderr = " ".join(result.stderr.split())
+        assert "Computing sensitivity panel for axes" in stderr
+        assert stderr.endswith("Invalid value: a defect raised while the sensitivity panel runs")
+        assert "Sensitivity panel skipped" not in result.output
+
+    def test_the_sensitivity_panel_is_skipped_with_a_note_when_the_sweep_has_no_feasible_config(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """With every config infeasible, the command prints the report without the panel, notes the skip on stderr and exits 0."""
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--retained-floor", "9999999", "--sensitivity", "grid_services"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "## Cost-Recovery Rank" in result.stdout
+        assert "## Sensitivity Analysis" not in result.stdout
+        stderr = " ".join(result.stderr.split())
+        assert "Computing sensitivity panel" not in stderr
+        assert stderr.endswith(
+            "Sensitivity panel skipped: no feasible baseline config found "
+            "(sensitivity requires at least one feasible config)."
         )
 
 

@@ -5,7 +5,7 @@ This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
 specification that future maintainers must update when the public surface changes.
 
 Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 69 public
+  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 72 public
                      names (test_all_equals_frozen_set)
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, a dataclass's following its kind, e.g.
@@ -19,7 +19,8 @@ Concerns:
                      and declared attributes
                      (test_every_pinned_class_member_matches_frozen_members,
                       test_pinned_classes_inherit_only_from_pinned_classes,
-                      test_pinned_classes_declare_the_public_attributes_they_set_on_self)
+                      test_pinned_classes_declare_the_public_attributes_they_set_on_self,
+                      test_reviewed_computed_name_writes_name_only_pinned_classes)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -41,6 +42,7 @@ import inspect
 import subprocess
 import sys
 import types
+import typing
 from collections.abc import Mapping
 
 import solar_challenge
@@ -56,7 +58,7 @@ from tests._surface_forms import (
 
 
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the exact 69 public names, each with its frozen surface form
+# H2 surface-lock: the exact 72 public names, each with its frozen surface form
 #
 # The keys mirror PRD §3.1, grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
@@ -142,6 +144,9 @@ FROZEN_SURFACE: dict[str, str] = {
     "WeatherCache": "(cache_dir: Path | None = None) -> None",
     "get_weather_cache": "() -> WeatherCache",
     "set_weather_cache": "(cache: WeatherCache | None) -> None",
+    "WeatherProvider": "(*args, **kwargs)",
+    "PvgisTmy": "dataclass[eq, frozen] (cache: WeatherCache | None) -> None",
+    "PrefetchedWeather": "dataclass[frozen] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
     "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
     "OFGEM_TDCV_BY_OCCUPANTS": "dict",
@@ -160,7 +165,7 @@ def test_all_equals_frozen_set() -> None:
     Fails on any add/remove to __all__ without updating FROZEN_SET.
     The symmetric-difference message names the exact drifted symbol(s).
 
-    Also asserts len==69 explicitly — a bare set-compare would silently pass
+    Also asserts len==72 explicitly — a bare set-compare would silently pass
     if __all__ contained a duplicate entry (set collapses duplicates).
     """
     actual = set(solar_challenge.__all__)
@@ -169,9 +174,9 @@ def test_all_equals_frozen_set() -> None:
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
     )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 69, (
+    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 72, (
         f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 69 each)"
+        f"FROZEN_SET has {len(FROZEN_SET)} (expected 72 each)"
     )
     # Document the CLI-excluded invariant explicitly
     assert "get_cli_app" not in solar_challenge.__all__, (
@@ -404,6 +409,16 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "clear": "(self) -> int",
         "invalidate": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> bool",
     },
+    "WeatherProvider": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PvgisTmy": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PrefetchedWeather": {
+        "get": "(self, location: Location) -> DataFrame",
+        "fetch": "classmethod (cls, weather: WeatherProvider, locations: Iterable[Location]) -> PrefetchedWeather",
+    },
     # --- load (load.py) ---
     "LoadConfig": {
         "get_annual_consumption": "(self) -> float",
@@ -487,7 +502,7 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
-_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum)
+_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic)
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
@@ -512,32 +527,76 @@ def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# H2 members: the writes to self under a computed name that a reviewer has
+# checked
+#
+# undeclared_attributes and unset_attributes cannot tell which names a write to
+# self under a computed name sets, so they refuse one unless it is reviewed
+# here.  Keys are pinned-class paths, then each write's text exactly as their
+# TypeError prints it, ready to paste; each value is the reviewed reason that
+# every name the write sets is declared.  A new such write, in a new pinned
+# class or an old one, trips the lock until someone reviews it.  An entry its
+# class no longer makes raises ValueError, so drop the entry then.
+# ---------------------------------------------------------------------------
+REVIEWED_COMPUTED_NAME_WRITES: dict[str, dict[str, str]] = {
+    "FinanceConfig": {
+        "object.__setattr__(self, field_name, whole_years)": "__post_init__ draws field_name from the literal tuple ('loan_term_years', 'asset_life_years'), two of its declared fields",
+    },
+    "home.SimulationResults": {
+        "object.__setattr__(self, name, series.rename(column))": "__post_init__ draws name from _series_columns(), which reads dataclasses.fields, so each name is a declared field by construction",
+    },
+}
+
+
 def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None:
-    """H2 member-lock guard: a pinned class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
+    """H2 member-lock guard: a pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
 
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
-    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
-    nothing sets would pin a name that instances lack.
+    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that no
+    __init__ or __post_init__ sets would pin a name that instances lack.
+
+    A known gap: undeclared_attributes reads only __init__ and __post_init__, so an
+    undeclared public attribute that only another method sets on self, such as a cache
+    filled on first use, passes this guard though FROZEN_MEMBERS cannot pin it.
     """
     classes = _pinned_classes()
     undeclared = [
         f"{path}.{attribute}"
         for path, cls in classes.items()
-        for attribute in sorted(undeclared_attributes(cls))
+        for attribute in sorted(
+            undeclared_attributes(cls, reviewed=REVIEWED_COMPUTED_NAME_WRITES.get(path, {}))
+        )
     ]
     unset = [
         f"{path}.{attribute}"
         for path, cls in classes.items()
-        for attribute in sorted(unset_attributes(cls))
+        for attribute in sorted(
+            unset_attributes(cls, reviewed=REVIEWED_COMPUTED_NAME_WRITES.get(path, {}))
+        )
     ]
     assert not undeclared and not unset, (
         f"Public attributes set on self that no class body declares: {undeclared}. "
-        f"Attributes a class body declares that nothing sets on self: {unset}. "
+        "Attributes a class body declares that no __init__ or __post_init__ sets on "
+        f"self: {unset}. "
         "member_forms reads class bodies, so FROZEN_MEMBERS cannot pin an attribute "
         "that is only set on self. Declare each such attribute in its class body, e.g. "
         "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its 'Unreleased on "
-        "main' line in docs/domain-library-consumption.md, or make it private; and drop "
-        "each declaration that nothing sets."
+        "main' line in docs/domain-library-consumption.md, or make it private; and set "
+        "each declared attribute in __init__ or __post_init__, or drop its declaration."
+    )
+
+
+def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
+    """Sync guard: every key of REVIEWED_COMPUTED_NAME_WRITES is a pinned class's path.
+
+    The lock test passes each pinned class only its own entry, so an entry under any
+    other path, stale or misspelled, would be read by nothing.
+    """
+    stale = REVIEWED_COMPUTED_NAME_WRITES.keys() - _pinned_classes().keys()
+    assert not stale, (
+        "REVIEWED_COMPUTED_NAME_WRITES names paths that are no pinned class's "
+        f"(stale/misspelled?): {sorted(stale)}"
     )
 
 

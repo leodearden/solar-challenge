@@ -43,13 +43,8 @@ from solar_challenge.web.presets import (
     home_presets,
     save_config_preset,
 )
-from solar_challenge.web.shared import (
-    NotAJsonObject,
-    get_job_manager,
-    get_storage,
-    request_json_object,
-    require_json_object,
-)
+from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
+from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config

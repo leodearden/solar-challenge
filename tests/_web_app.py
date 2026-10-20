@@ -28,6 +28,8 @@ def build_test_app(
 
     The test_config supplies *secret_key* as the app's SECRET_KEY. With
     secret_key=None it holds no SECRET_KEY, and create_app looks a key up itself.
+    The app's jobs simulate on default_weather() as it is when the app is built,
+    so a test's weather must be in place before it builds the app.
     """
     from solar_challenge.web.app import create_app
 

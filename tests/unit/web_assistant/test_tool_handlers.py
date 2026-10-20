@@ -22,7 +22,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import get_db, init_db
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager

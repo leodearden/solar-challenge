@@ -34,7 +34,7 @@ from solar_challenge.web.fleet_config import (
     read_fleet_seed,
     read_fleet_size,
 )
-from solar_challenge.web.shared import refuse_unrecognised_keys, resolve_location
+from solar_challenge.web.request_boundary import refuse_unrecognised_keys, resolve_location
 from solar_challenge.web.simulation_params import (
     DATE_RANGE_KEYS,
     parse_date_range,

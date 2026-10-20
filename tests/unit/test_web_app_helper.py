@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, the shared builder of the web tests' Flask app."""
+"""Unit tests for tests/_web_app.py, the shared builder of the web tests' Flask app, and for the app and client fixtures tests/unit/conftest.py builds with it."""
 
 import subprocess
 import sys
@@ -9,11 +9,14 @@ import pytest
 
 pytest.importorskip("flask")
 
+from flask import Flask
+from flask.testing import FlaskClient
+
 from tests._web_app import build_test_app
 
 
 def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
-    """The web_assistant conftest imports the helper when it loads, and a run without the web extra must skip those tests, not abort."""
+    """tests/unit/conftest.py imports the helper when it loads, and a run without the web extra must skip the tests that need it, not abort."""
     result = subprocess.run(
         [sys.executable, "-c", "import sys; sys.modules['flask'] = None; import tests._web_app"],
         cwd=project_root,
@@ -33,6 +36,14 @@ def test_the_app_runs_in_testing_mode_with_its_data_under_the_given_directory(
     assert app.testing
     assert Path(app.config["DATABASE"]).is_relative_to(tmp_path)
     assert Path(app.config["DATA_DIR"]) == tmp_path
+
+
+def test_the_app_fixture_keeps_its_data_under_the_tests_own_tmp_path(app: Flask, tmp_path: Path) -> None:
+    assert Path(app.config["DATA_DIR"]) == tmp_path
+
+
+def test_the_client_fixture_is_a_client_of_the_app_fixture(app: Flask, client: FlaskClient) -> None:
+    assert client.application is app
 
 
 @pytest.fixture
