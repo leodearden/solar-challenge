@@ -284,7 +284,7 @@ class TestElexonProfileShape:
 
 
 class TestEnergyKwh:
-    """energy_kwh integrates a 1-minute kW profile to its energy in kWh."""
+    """energy_kwh integrates a kW profile, each row over the hours its row lasts, to its energy in kWh."""
 
     def test_calculates_from_minute_profile(self):
         """A day at a constant 1 kW is 24 kWh: the window's own energy."""
@@ -296,10 +296,29 @@ class TestEnergyKwh:
         total = energy_kwh(profile)
         assert total == pytest.approx(24.0, rel=0.001)
 
-    def test_empty_profile_returns_zero(self):
-        """An empty profile has zero energy."""
-        profile = pd.Series([], dtype=float)
-        assert energy_kwh(profile) == 0.0
+    def test_a_half_hourly_profile_counts_each_row_as_half_an_hour(self):
+        """A week at a constant 0.4 kW is 67.2 kWh, whatever the cadence of its rows."""
+        week_of_half_hours = pd.date_range(
+            "2023-06-01", "2023-06-07 23:30", freq="30min", tz="Europe/London"
+        )
+        profile = pd.Series(0.4, index=week_of_half_hours)
+
+        assert energy_kwh(profile) == pytest.approx(67.2, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("profile", "match"),
+        [
+            pytest.param(
+                pd.Series([], index=pd.DatetimeIndex([], tz="Europe/London"), dtype=float),
+                "empty",
+                id="empty",
+            ),
+            pytest.param(pd.Series([1.0, 2.0, 3.0]), "RangeIndex", id="range-index"),
+        ],
+    )
+    def test_a_profile_no_window_describes_is_refused(self, profile: pd.Series, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            energy_kwh(profile)
 
 
 class TestScaleProfileToEnergy:
@@ -329,7 +348,7 @@ class TestScaleProfileToEnergy:
 
     def test_raises_on_zero_consumption(self):
         """Raises error when profile has zero consumption."""
-        profile = pd.Series([0.0] * 100)
+        profile = pd.Series(0.0, index=pd.date_range("2024-01-01", periods=100, freq="1min"))
         with pytest.raises(ValueError, match="zero"):
             scale_profile_to_energy(profile, target_kwh=100.0)
 

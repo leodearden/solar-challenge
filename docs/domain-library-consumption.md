@@ -449,6 +449,22 @@ the next morning. `"none"` is unchanged. The demand that `simulate_home` and
 built on it, `solve_cost_recovery_rate`'s included; consumers re-baseline them
 when they re-pin.
 
+**Unreleased on main** (task 779): `simulate_community` reads each row's length
+from the window of the fleet's index, `SimulationWindow.of_index` of
+`FleetResults.total_grid_export`'s index. It does so in both sharing modes,
+whether or not it bills. The community battery steps at the window's cadence,
+and billing prices each row's kWh over it. It now raises `ValueError` for a
+fleet index no window describes: an empty index; one row without a
+fixed-duration `freq`; unevenly spaced rows, naming the first position whose
+gap differs and both gaps; or an index that is not a `DatetimeIndex`, naming
+its type and dtype. The 0.5.0 tag reads the length from the index's first two
+rows, and takes one minute for a single row or an empty index. The only
+refusal it states is of a billed index whose last gap differs from its first,
+so it prices a fleet whose index lacks one middle row with no error. The fleets
+`simulate_fleet` returns are spaced one minute apart, so their community
+results are unchanged. Consumers that build a `FleetResults` on another index
+re-check it when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
