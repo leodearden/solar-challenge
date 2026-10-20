@@ -682,3 +682,33 @@ class TestFleetFormFromScenario:
             ),
         ):
             fleet_form_from_scenario(document)
+
+    @pytest.mark.parametrize(
+        "counts",
+        [
+            pytest.param([MAX_FLEET_HOMES + 1], id="a-pool-count-above-the-fleet-limit"),
+            pytest.param([MAX_FLEET_HOMES, 1], id="pool-counts-totalling-more-than-the-fleet-limit"),
+        ],
+    )
+    def test_a_pool_larger_than_the_fleet_limit_is_refused_by_the_loaders_naming_it(
+        self, counts: list[int]
+    ) -> None:
+        """A shuffled pool holding more values than a dashboard fleet has homes is refused by the loaders, naming the pool and its total: a pool must total n_homes, which the import first bounds to MAX_FLEET_HOMES."""
+        document = _with_fleet_distribution(
+            pv={
+                "capacity_kw": {
+                    "type": "shuffled_pool",
+                    "values": [4.0, 5.0][: len(counts)],
+                    "counts": counts,
+                }
+            }
+        )
+
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                "shuffled_pool counts for 'pv.capacity_kw' must total n_homes (3), "
+                f"got {MAX_FLEET_HOMES + 1}"
+            ),
+        ):
+            fleet_form_from_scenario(document)
