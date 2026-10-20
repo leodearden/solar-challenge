@@ -102,5 +102,5 @@ module = ["solar_challenge.web.*"]
 disallow_untyped_decorators = false
 
 [tool.ruff.lint]
-# The rules tests/unit/test_lint.py holds the package to.
-select = ["F"]
+# The rules tests/unit/test_lint.py holds the package to; docs/lint-gate.md says why.
+select = ["E402", "F"]

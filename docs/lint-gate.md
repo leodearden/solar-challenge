@@ -1,6 +1,6 @@
 # Lint: The Gate Is a Test, Not `lint_command`
 
-**Task:** #246
+**Task:** #246; #994 (§4)
 **Rules:** [`pyproject.toml`](../pyproject.toml), table `[tool.ruff.lint]`
 **Test:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py)
 
@@ -32,3 +32,15 @@ A test travels with the tree it is in; the orchestrator's `lint_command` does no
 - A test can carry probes of known verdict, which fail if ruff stops reporting findings or
   stops applying the selection. A bare command that reports nothing looks the same as a
   clean package.
+
+## 4. Decision (task 994, 2026-10-20): E402 Joins the Selection
+
+The selection includes pycodestyle's E402: a module-level import sits above the module's
+other statements. A reader who meets an import further down has to stop and ask whether
+its place is load-bearing, for instance whether it breaks an import cycle. While nothing
+checked, such imports built up in the package unseen, until task 587 hoisted the last of
+them. An import that has to follow a statement carries `# noqa: E402`, with a comment
+saying why it comes there.
+
+pycodestyle as a whole (`E`) cannot join: its line-length rule, E501, flags over a thousand
+lines of the package.
