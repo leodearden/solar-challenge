@@ -1,0 +1,24 @@
+{"fleet": "tests/fixtures/fleet_generation/probe-weighted-heat-pump-type.yaml", "points": [
+{"sweep_value": null, "homes": [
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3404.759107019637}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 9.696842336094917, "annual_heat_demand_kwh": 6255.299962913488}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3674.769657699794}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3523.817278083611}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 9.17190749007981, "annual_heat_demand_kwh": 8382.511143830257}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2688.246912458437}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2681.341074983679}, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 8.773753930164956, "annual_heat_demand_kwh": 12000.0}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4429.515562251134}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 8.462250818314283, "annual_heat_demand_kwh": 9107.458522391493}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2814.988190280325}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3556.7625323409575}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2880.4165255958583}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2560.165178449577}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 7.762124466626627, "annual_heat_demand_kwh": 8995.847076362272}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3780.583415838354}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 8.649798127561473, "annual_heat_demand_kwh": 6482.453971994217}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3414.6597631991153}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4495.312400926168}, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 9.360862197971446, "annual_heat_demand_kwh": 7657.963575371752}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2959.3318032158113}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2640.4469991198516}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 7.601599219673965, "annual_heat_demand_kwh": 6740.1005715738775}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4193.167243762357}, "heat_pump": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4416.084766639628}, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.002179748222282, "annual_heat_demand_kwh": 8824.807628505034}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3439.9745520273327}, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 7.589697552317125, "annual_heat_demand_kwh": 11188.897082349715}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2646.0766876673956}, "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 9.114043434706604, "annual_heat_demand_kwh": 7920.614551622666}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3165.171250926696}, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 9.032162067975035, "annual_heat_demand_kwh": 8635.606816500898}}
+]}
+]}

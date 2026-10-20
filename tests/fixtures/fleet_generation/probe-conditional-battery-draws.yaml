@@ -1,0 +1,15 @@
+name: Probe - conditional battery draws
+fleet_distribution:
+  n_homes: 20
+  seed: 7
+  pv:
+    capacity_kw: {type: weighted_discrete, values: [3.0, 4.0, 5.0], weights: [1, 2, 1]}
+    azimuth: {type: uniform, min: 150, max: 210}
+    tilt: {type: normal, mean: 35, std: 8, min: 15, max: 50}
+  battery:
+    capacity_kwh: {type: weighted_discrete, values: [null, 0.0, 5.0, 10.0], weights: [3, 1, 4, 2]}
+    max_charge_kw: {type: normal, mean: 3.0, std: 0.5, min: 2.0, max: 4.0}
+    max_discharge_kw: {type: uniform, min: 2.0, max: 3.5}
+  load:
+    annual_consumption_kwh: {type: normal, mean: 3400, std: 800, min: 2000, max: 6000}
+    household_occupants: {type: uniform, min: 1, max: 5}

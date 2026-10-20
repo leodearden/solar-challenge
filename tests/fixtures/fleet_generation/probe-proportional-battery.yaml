@@ -1,0 +1,15 @@
+name: Probe - proportional_to battery
+fleet_distribution:
+  n_homes: 20
+  seed: 13
+  pv:
+    capacity_kw: {type: weighted_discrete, values: [3.0, 4.0, 5.0, 6.0], weights: [2, 4, 3, 1]}
+  battery:
+    capacity_kwh: {type: proportional_to, source: pv.capacity_kw, multiplier: 1.5, offset: 0.5}
+    max_charge_kw: {type: proportional_to, source: pv.capacity_kw, multiplier: 0.5}
+    max_discharge_kw: {type: normal, mean: 2.5, std: 0.3, min: 2.0, max: 3.0}
+  load:
+    annual_consumption_kwh: {type: normal, mean: 3400, std: 800, min: 2000, max: 6000}
+  heat_pump:
+    heat_pump_type: GSHP
+    thermal_capacity_kw: {type: proportional_to, source: pv.capacity_kw, multiplier: 2.0}

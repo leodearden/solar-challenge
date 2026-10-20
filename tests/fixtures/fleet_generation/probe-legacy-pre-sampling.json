@@ -1,0 +1,24 @@
+{"fleet": "tests/fixtures/fleet_generation/probe-legacy-pre-sampling.yaml", "points": [
+{"sweep_value": null, "homes": [
+{"pv": {"capacity_kw": 5.0, "tilt": 36.92798915763615}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.6093947949460663}, "load": {"annual_consumption_kwh": 2975.9292541837826}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0, "tilt": 32.203978697065644}, "battery": null, "load": {"annual_consumption_kwh": 3588.458450591904}, "heat_pump": {"heat_pump_type": "ASHP"}, "ev": null},
+{"pv": {"capacity_kw": 4.0, "tilt": 44.880371081173124}, "battery": null, "load": {"annual_consumption_kwh": 3239.9103330961584}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 17}},
+{"pv": {"capacity_kw": 5.0, "tilt": 33.80074285453316}, "battery": null, "load": {"annual_consumption_kwh": 3707.840077192389}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0, "tilt": 28.972142253986732}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 3.720706903796605}, "load": {"annual_consumption_kwh": 3751.440608216108}, "heat_pump": {"heat_pump_type": "ASHP"}, "ev": {"charger_type": "7kW", "arrival_hour": 16}},
+{"pv": {"capacity_kw": 4.0, "tilt": 34.26290372386642}, "battery": null, "load": {"annual_consumption_kwh": 2631.057718479626}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0, "tilt": 42.188547166811055}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 3.25170565315934}, "load": {"annual_consumption_kwh": 2526.335983109748}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 18}},
+{"pv": {"capacity_kw": 4.0, "tilt": 40.81049109901483}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.820809233513674}, "load": {"annual_consumption_kwh": 4174.938164192919}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 17}},
+{"pv": {"capacity_kw": 4.0, "tilt": 38.511417875457354}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.7436378464907865}, "load": {"annual_consumption_kwh": 3018.7080286560154}, "heat_pump": {"heat_pump_type": "ASHP"}, "ev": null},
+{"pv": {"capacity_kw": 4.0, "tilt": 39.65544389828748}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.76440012329941}, "load": {"annual_consumption_kwh": 2968.6619220933926}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0, "tilt": 26.446369548563567}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.927695990920313}, "load": {"annual_consumption_kwh": 4491.289671020926}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 16}},
+{"pv": {"capacity_kw": 4.0, "tilt": 31.962947742148273}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 3.4430195634470273}, "load": {"annual_consumption_kwh": 3440.527015044896}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0, "tilt": 32.398901976549624}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.9453519668023618}, "load": {"annual_consumption_kwh": 4172.9229025487775}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 17}},
+{"pv": {"capacity_kw": 5.0, "tilt": 42.21040981099818}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.932503042774465}, "load": {"annual_consumption_kwh": 3452.70641739867}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 4.0, "tilt": 41.199062465514025}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 3.029802666414407}, "load": {"annual_consumption_kwh": 3778.136281088324}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 19}},
+{"pv": {"capacity_kw": 3.0, "tilt": 36.04288297506184}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.9050240517063375}, "load": {"annual_consumption_kwh": 2801.232848047048}, "heat_pump": null, "ev": {"charger_type": "7kW", "arrival_hour": 17}},
+{"pv": {"capacity_kw": 4.0, "tilt": 26.15405152768029}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 3.12696385915865}, "load": {"annual_consumption_kwh": 3769.721316570377}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0, "tilt": 32.37586567244626}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.3690891295063077}, "load": {"annual_consumption_kwh": 4236.090614286593}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0, "tilt": 43.363626575426935}, "battery": null, "load": {"annual_consumption_kwh": 3546.3624207666026}, "heat_pump": {"heat_pump_type": "ASHP"}, "ev": null},
+{"pv": {"capacity_kw": 3.0, "tilt": 38.34650725643227}, "battery": null, "load": {"annual_consumption_kwh": 3982.5037124029805}, "heat_pump": null, "ev": null}
+]}
+]}

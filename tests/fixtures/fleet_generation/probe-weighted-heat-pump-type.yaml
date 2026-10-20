@@ -1,0 +1,12 @@
+name: Probe - weighted heat-pump type
+fleet_distribution:
+  n_homes: 20
+  seed: 11
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: {type: uniform, min: 2500, max: 4500}
+  heat_pump:
+    heat_pump_type: {type: weighted_discrete, values: [null, ASHP, GSHP], weights: [2, 2, 1]}
+    thermal_capacity_kw: {type: uniform, min: 6, max: 10}
+    annual_heat_demand_kwh: {type: normal, mean: 8000, std: 1500, min: 4000, max: 12000}

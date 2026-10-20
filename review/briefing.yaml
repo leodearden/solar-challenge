@@ -86,7 +86,11 @@ conventions:
       and expect identical homes; parallel execution order must never affect results. The
       `bristol_legacy` random-ordering mode exists specifically to preserve the original
       scenario's exact sampling sequence; it looks like a code smell but is intentional
-      backward-compatibility — do not "simplify" it away.
+      backward-compatibility — do not "simplify" it away. tests/unit/config/test_fleet_generation_pins.py
+      pins the drawn fields of every shipped fleet and of a probe set, both random orders included,
+      and only a change meant to move generated fleets regenerates those goldens
+      (`uv run --locked --extra dev python -m tests._fleet_generation_pins`), with an Unreleased on
+      main line in docs/domain-library-consumption.md.
 
   - rule: "mypy --strict must pass; do not widen ignore_missing_imports or add Any-typed config fields."
     why: >
