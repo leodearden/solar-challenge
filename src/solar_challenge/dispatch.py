@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import List, Literal, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.timebase import HOURS_PER_MINUTE
@@ -712,3 +713,74 @@ class ChargeWindow:
     def _opens_on(self, day: date) -> bool:
         """Whether the window opens on day."""
         return self.days == "daily" or day.weekday() in self.days
+
+
+def _window_decision(window: ChargeWindow, *, generation_kw: float, demand_kw: float) -> DispatchDecision:
+    """The decision of a step inside window: its PV excess charged, and no discharge."""
+    return DispatchDecision(charge_kw=max(0.0, generation_kw - demand_kw), discharge_kw=0.0)
+
+
+class ScheduledChargeStrategy(DispatchStrategy):
+    """In each window it force-charges the battery from the grid to the window's target and then holds it, and outside every window its base decides.
+
+    docs/scheduled-charge-windows.md gives the rules and the year harness that bills them.
+    """
+
+    def __init__(self, base: DispatchStrategy, windows: tuple[ChargeWindow, ...], tz: ZoneInfo) -> None:
+        """Wrap base in windows read on tz's wall clock: the first listed window open at a step decides it.
+
+        Raises:
+            ConfigurationError: If tz is not a ZoneInfo, naming it.
+        """
+        if not isinstance(tz, ZoneInfo):
+            raise ConfigurationError(
+                "ScheduledChargeStrategy's tz is the ZoneInfo on whose wall clock its windows open: "
+                f"got tz={tz!r}"
+            )
+        self._base = base
+        self._windows = tuple(windows)
+        self._tz = tz
+
+    @property
+    def name(self) -> str:
+        """Return strategy name: its base's, wrapped."""
+        return f"scheduled_charge({self._base.name})"
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
+    ) -> DispatchDecision:
+        """Decide the step: the first listed window open at timestamp decides it, else the base does, given every argument unchanged.
+
+        Raises:
+            ValueError: If timestamp is naive, so it has no wall-clock time on tz.
+        """
+        window = self._window_at(timestamp)
+        if window is None:
+            return self._base.decide_action(
+                timestamp=timestamp,
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery_soc_kwh=battery_soc_kwh,
+                battery_capacity_kwh=battery_capacity_kwh,
+                timestep_minutes=timestep_minutes,
+                grid_charge_ctx=grid_charge_ctx,
+            )
+        return _window_decision(window, generation_kw=generation_kw, demand_kw=demand_kw)
+
+    def _window_at(self, timestamp: datetime) -> Optional[ChargeWindow]:
+        """The first listed window open at timestamp, read on tz's wall clock, or None."""
+        if timestamp.utcoffset() is None:
+            raise ValueError(
+                f"ScheduledChargeStrategy reads each timestamp on {self._tz.key}'s wall clock, "
+                f"so it refuses a naive one: got {timestamp!r}"
+            )
+        wall_clock = timestamp.astimezone(self._tz).replace(tzinfo=None)
+        return next((window for window in self._windows if window.covers(wall_clock)), None)
