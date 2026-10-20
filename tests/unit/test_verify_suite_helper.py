@@ -44,10 +44,11 @@ def test_runs_the_projects_test_command_verbatim_in_its_root_and_the_given_envir
 
 
 def test_a_hung_suite_fails_the_calling_test_naming_the_variant_and_the_output_so_far(tmp_path: Path) -> None:
-    project = _project_with_test_command(tmp_path, "echo started; sleep 30")
+    """printf builds the marker as the suite runs, so only its output, never the test_command the failure quotes, can put it in the failure."""
+    project = _project_with_test_command(tmp_path, "printf OUT-%s SO-FAR; sleep 30")
 
     with pytest.raises(pytest.fail.Exception) as failure:
         run_verify_suite(project, os.environ, variant="in a probe", timeout_secs=1)
 
     assert "the verify suite in a probe hung for 1 s" in str(failure.value)
-    assert "started" in str(failure.value)
+    assert "OUT-SO-FAR" in str(failure.value)
