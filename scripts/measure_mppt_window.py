@@ -196,15 +196,17 @@ class Year:
 
 @dataclass(frozen=True)
 class _Strings:
-    """One MPPT input's hourly string voltage and array power, with its module's diode parameters."""
+    """One MPPT input's hourly string voltage and array power, with its module's diode parameters and the fraction of DC power the chain's system losses keep."""
 
     modules_per_string: int
     strings: int
     v_mp: pd.Series
     p_mp: pd.Series
     diode: pd.DataFrame
+    kept: float
 
     def power_at(self, string_v: float) -> pd.Series:
+        """The array's power with its strings held at string_v on their IV curve, less the system losses, as p_mp is."""
         module_v = string_v / self.modules_per_string
         current = pvlib.pvsystem.i_from_v(
             module_v,
@@ -214,7 +216,7 @@ class _Strings:
             self.diode["R_sh"],
             self.diode["nNsVth"],
         )
-        return module_v * current * self.modules_per_string * self.strings
+        return module_v * current * self.modules_per_string * self.strings * self.kept
 
 
 def _per_array(result: Any) -> tuple[Any, ...]:
@@ -223,8 +225,9 @@ def _per_array(result: Any) -> tuple[Any, ...]:
 
 
 def _strings(chain: ModelChain) -> tuple[_Strings, ...]:
+    kept = chain.results.losses
     return tuple(
-        _Strings(array.modules_per_string, array.strings, dc["v_mp"], dc["p_mp"], diode)
+        _Strings(array.modules_per_string, array.strings, dc["v_mp"], dc["p_mp"], diode, kept)
         for array, dc, diode in zip(
             chain.system.arrays,
             _per_array(chain.results.dc),
@@ -234,7 +237,7 @@ def _strings(chain: ModelChain) -> tuple[_Strings, ...]:
 
 
 def _producing(chain: ModelChain) -> pd.Series:
-    """Hours with sunlight on the cells; at night the diode solver leaves p_mp at about 1e-43 W."""
+    """Hours with sunlight on the cells; under NOCT-SAM pvlib fills each sunless hour's DC with 0."""
     return _per_array(chain.results.effective_irradiance)[0] > 0
 
 

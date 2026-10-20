@@ -46,6 +46,14 @@ In outline:
   a0f1102 (2026-10-01). pv.py's selection code and uv.lock are the same in all three.
   CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6. §7 was measured by the
   script on task 240's branch from main 684c9ec (2026-10-03), on the same versions.
+  **[Amended 2026-10-20, task 823: re-measured in full by the script, as task 823 leaves
+  it, on the model of task 823's commit 2be9d1b (from main 85b1896; same versions), on
+  the scaled TMY, in 8 minutes. That model differs from every earlier figure's in three
+  ways: the system losses ([pv-system-losses.md](pv-system-losses.md), task 252), the
+  configured inverter efficiency ([pv-inverter-efficiency.md](pv-inverter-efficiency.md),
+  task 236), and NOCT-SAM's cell temperature from the module's own NOCT and efficiency
+  ([pv-cell-temperature.md](pv-cell-temperature.md), task 823). §4–§7 carry the
+  re-measured figures as task-823 amendments.]**
 - **Weather.** The PVGIS TMY for `Location.bristol()`: year 1990, UTC-indexed, 8760
   hours, minimum air temperature −6.2 °C, cached as `tmy_5dc8c8bca218`. The script
   reads it through the weather cache and prints those facts, so a different TMY shows.
@@ -63,6 +71,11 @@ In outline:
   4328.13 kWh, as `simulate_home` does over a whole year. A producing hour has sunlight
   on the cells. Counting `p_mp > 0` instead would add 518 night hours, where the diode
   solver leaves about 1e-43 W.
+  **[Amended 2026-10-20, task 823: the 4328.13 kWh is the unscaled TMY's, without the
+  system losses, under SAPM; the default 4 kW's chain now gives 4052.83 kWh. Under
+  NOCT-SAM a sunless hour's cell temperature is NaN and pvlib fills its DC with 0, so
+  `p_mp` is exactly 0 there: on the year, `p_mp > 0` holds in exactly the 4226 producing
+  hours, where SAPM's chain on the same TMY gives 4744.]**
 - **Module.** The default CEC module, `Canadian_Solar_Inc__CS1U_400MS`
   (`pv.DEFAULT_CEC_MODULE`): 400.428 W at STC, `V_mp_ref` 44.1 V, `V_oc_ref` 53.4 V,
   `beta_oc` −0.147064 V/K. The CEC library has no V_mp temperature coefficient.
@@ -80,6 +93,10 @@ In outline:
   at the window's edge, off the maximum power point. Each out-of-window hour is
   re-evaluated there, on the module's IV curve (`pvlib.pvsystem.i_from_v` with the
   chain's diode parameters), and `sandia_multi` gets that power at the edge's voltage.
+  **[Amended 2026-10-20, task 823: the held power is now less the chain's system losses,
+  as its `p_mp` is. From task 252 until this change the script re-evaluated it without
+  them, so (b) read a hold at the edge as a gain: +2.1% median over the ceiling's 64
+  pairs on this model.]**
 - **Counting.** Configured capacities that wire the same modules to the same inverter
   give identical results, so §4 takes the current sizing's error over distinct
   inverter/wiring pairs; the census and headroom tables count configs. Medians are
@@ -99,6 +116,14 @@ the re-picks.]**
 - For the default 4 kW string, 1679 of its 4226 producing hours, carrying 38.3% of its
   DC energy, run above `V_mp_ref`.
 
+**[Amended 2026-10-20, task 823: NOCT-SAM runs the cells cooler on cold, sunny hours. The
+highest module V_mp is 1.0739 × `V_mp_ref` (47.4 V), at 1990-12-11 11:00 UTC: POA
+291 W/m², cell 4.1 °C, air 0.6 °C. 61 hours exceed 1.06 × `V_mp_ref`, from November to
+March, between 08:00 and 15:00 UTC, at 144–744 W/m², with cells at 2.7–9.9 °C. The default
+4 kW string runs above `V_mp_ref` for 2427 of its 4226 producing hours, which carry 63.2%
+of its DC energy. SAPM's chain on the same scaled TMY reads 1.0677, 7 hours, 1687 hours
+and 35.9%.]**
+
 **Proxy coefficient.**
 - `beta_oc / V_oc_ref` is −0.275 %/K. As a proxy for V_mp's coefficient it gives ×1.041
   at a 10 °C cell, ×1.069 at 0 °C and ×1.096 at −10 °C.
@@ -107,6 +132,10 @@ the re-picks.]**
   ×1.132), so the proxy understates it.
 - On this TMY cold cells occur only at low irradiance, so the 0 °C proxy (×1.069) still
   bounds the observed peak (×1.068).
+  **[Amended 2026-10-20, task 823: the re-measurement reproduced the factors above. Under
+  NOCT-SAM the observed peak, ×1.074, exceeds the 0 °C proxy's ×1.069, and the −10 °C
+  proxy's ×1.096 bounds it. A 0 °C design cell still leaves no hour above the ceiling
+  (the headroom amendment below).]**
 
 **Census.** 248 DC capacities, 0.3–25.0 kW in 0.1 kW steps, at each
 `inverter_capacity_kw`. "Unset" is default rating, i.e. the DC capacity.
@@ -118,6 +147,12 @@ the re-picks.]**
 | Most hours above, of 4226 producing | 1215 | 1215 | 0 | 1660 |
 | Largest overshoot | 52.4 V | 24.1 V | – | 51.0 V |
 
+**[Amended 2026-10-20, task 823: re-measured, unset / 3.0 / 3.68 / 5.0 kW: longest
+string within 10% of `Mppt_high` at STC, 69 / 176 / 112 / 96 configs, §7(h)'s counts,
+which do not depend on the weather; configs with any hour above `Mppt_high`,
+34 / 88 / 0 / 92; most hours above, of 4226 producing, 1898 / 1898 / 0 / 2411; largest
+overshoot 57.2 / 26.2 / – / 55.1 V.]**
+
 **Error of the current sizing**, over the 64 distinct inverter/wiring pairs with any
 hour above the ceiling:
 - (a) |ΔAC| ≤ 0.015%.
@@ -126,6 +161,12 @@ hour above the ceiling:
   1660 h, which carry 37.8% of its DC energy.
 - At default rating the maximum is 0.12% (21.5 kW, three strings of 18 under 800 V).
   7.4 kW, two strings of 9 under 400 V, is 0.11%.
+- **[Amended 2026-10-20, task 823: re-measured over the same 64 pairs, with (b)'s held
+  power less the system losses (§3): (a) |ΔAC| ≤ 0.028%. (b) The model overstates
+  annual AC by a median of 0.055%, and at most 0.46%: again 6.7 kW on the 5.0 kW
+  inverter, its string of 17 now above the 750 V ceiling for 2411 h, which carry 62.7%
+  of its DC energy. At default rating the maximum is 0.31% (21.5 kW, for 1898 h carrying
+  50.2%), and 7.3–7.4 kW read 0.28%.]**
 
 **Headroom alternative.** The ceiling check becomes modules × `V_mp_ref` ×
 (1 + (`beta_oc` / `V_oc_ref`)(T_cell − 25 °C)) ≤ `Mppt_high` at a design cell
@@ -156,6 +197,37 @@ left" is the most hours any config in the column still spends above the ceiling.
   PV15-208. The same 38 modules model 15,017 kWh on it, against 16,328–16,359 kWh on the
   inverters picked at 15.2 and 15.4 kW.
 
+**[Amended 2026-10-20, task 823: re-measured. The re-pick counts are §7(h)'s, which do
+not depend on the weather, and the fixed margins still make the same picks as 10 °C and
+−10 °C.]**
+
+| Design cell | | unset | 3.0 kW | 3.68 kW | 5.0 kW |
+|---|---|---|---|---|---|
+| 10 °C | re-picks | 32 | 88 | 0 | 60 |
+| | \|ΔAC\| median / max | 0.17 / 1.36% | 0.12 / 0.79% | – | 0.29 / 0.92% |
+| | mean ΔAC | −0.03% | −0.02% | – | −0.05% |
+| | hours left | 13 | 0 | 0 | 83 |
+| 0 °C | re-picks | 34 | 88 | 0 | 92 |
+| | \|ΔAC\| median / max | 0.26 / 1.36% | 0.12 / 0.79% | – | 0.25 / 1.69% |
+| | mean ΔAC | −0.07% | −0.02% | – | −0.14% |
+| | hours left | 0 | 0 | 0 | 0 |
+| −10 °C | re-picks | 69 | 176 | 4 | 96 |
+| | \|ΔAC\| median / max | 0.36 / 6.70% | 0.07 / 20.11% | 3.51 / 3.51% | 0.26 / 3.51% |
+| | mean ΔAC | −0.30% | −0.42% | +3.51% | +0.01% |
+| | hours left | 0 | 0 | 0 | 0 |
+
+- The −10 °C maxima: +6.70% at 15.3 kW, again a swap away from the Xantrex PV15-208
+  (14,513 kWh against 15,486 on the Yaskawa Solectria PVI 15kW). −20.11% at 0.7 kW on
+  3.0 kW moves two modules from task 240's QS1200 pick (803 kWh) to the SUNERGY LV 208
+  (642 kWh). +3.51% at 0.3–0.6 kW on 3.68 and 5.0 kW moves one module from the QS1200 to
+  the AEconversion INV500-90US.
+- Per configuration, against the (b) error each removes: 36 of the 214 configs that the
+  0 °C sizing re-picks move annual AC by less than their error. That is 8 of 34 at
+  default rating, none of 88 on 3.0 kW and 28 of 92 on 5.0 kW. The median re-pick in
+  those columns moves AC by 1.5, 4.8 and 2.9 times its error. §2's "more than ten times"
+  no longer holds, though in each column the median re-pick still moves AC by more than
+  its error.
+
 **Headline configs.**
 - 3, 4, 5 and 6 kWp never go above the ceiling, at default rating or on a 3.0, 3.68 or
   5.0 kW inverter. Some sizes between them do: 4.4 and 4.6 kWp at default rating spend
@@ -164,6 +236,11 @@ left" is the most hours any config in the column still spends above the ceiling.
   its inverter's 500 V ceiling.
 - On the 3.68 kW G98 inverter, no capacity from 0.3 to 25 kW exceeds 90.2% of the
   ceiling at STC.
+- **[Amended 2026-10-20, task 823: re-measured, 3, 4, 5 and 6 kWp still never go above
+  the ceiling, in any column. 4.4 and 4.6 kWp at default rating now spend 716 h above,
+  which the model overstates by at most 0.058%. On the 3.0 kW inverter, 3.5–3.8 kWp, one
+  string of 9 under the Pika X3001's 400 V, spend 1898 h above (0.29%). The default 4 kW
+  string reaches 473.6 V at its peak hour, under its inverter's 500 V ceiling.]**
 
 ## 5. Scope and When to Revisit
 
@@ -195,10 +272,19 @@ left" is the most hours any config in the column still spends above the ceiling.
   one 400 W module: 1407.5). Task 239 moved the check to the wired DC
   (`pv.wired_dc_capacity_kw`), under which all 248 read inside it; see
   [pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md).
+- **[Amended 2026-10-20, task 823: re-measured on §3's task-823 model, the 248
+  default-rated capacities give 943.8–1026.4 kWh per wired kWp (median 1008.2), all
+  inside 300–1200. The headline 3, 4, 5 and 6 kWp read 943.3–1013.2 kWh per nameplate
+  kWp.]**
 
 ## 7. Floor Side: Battery Inverter/Chargers (Task 240)
 
 These figures are on the scaled TMY (§3), unlike §4's and §6's.
+**[Amended 2026-10-20, task 823: they predate the system losses, the configured inverter
+efficiency and NOCT-SAM (§3's task-823 amendment). Their re-measurement follows (c)–(h).
+(a)'s decision stands: the hot-floor alternative still moves AC by far more than the
+error it removes ((f)). (b)'s catalogue facts do not depend on the weather or the model,
+and the re-measurement reproduced them.]**
 
 **(a) Decision (task 240, 2026-10-03).** Battery inverter/chargers are left out of the
 inverter candidates, and the floor stays checked at STC, as the ceiling is (§2).
@@ -229,6 +315,12 @@ inverter candidates, and the floor stays checked at STC, as the ceiling is (§2)
 - The SMA SI6048's 41 V floor takes 6.2% of a lone module's DC energy over 237 hours
   (0.03%). The 40 V floor of the GridPoint C36 and OutBack FXR3048A takes 1.3% over
   106 hours (under 0.01%).
+- **[Amended 2026-10-20, task 823: re-measured, the same 23 configs pick one. The
+  GS4048A and GS8048A's single-module strings fall below the 44 V floor for 1629 hours,
+  which carry 32.7% of their DC energy. The model overstates annual AC by 0.94% at
+  0.3–0.6 kW on the 3.68 kW inverter, 0.66% at 0.7–1.0 kW, and 0.45% at 7.2–7.3 kW at
+  default rating. The SI6048's floor takes 1.6% over 176 hours (0.008%), and the 40 V
+  floor 0.24% over 92 hours (under 0.01%).]**
 
 **(d) What leaving them out changed.** ΔAC is the change in annual AC from the battery
 inverter/charger to the new pick, on the same modules.
@@ -252,12 +344,22 @@ inverter/charger to the new pick, on the same modules.
   modules to the SUNERGY LV 208, a PV inverter whose 55.8 W tare is close to the
   GS4048A's 57.5 W.
 - The headline 3, 4, 5 and 6 kWp configs keep their picks.
+- **[Amended 2026-10-20, task 823: re-measured, the table's ΔAC reads, top to bottom,
+  +0.60%, −2.19%, −1.72%, +44.67%, +16.72%, +45.81%, −6.31% and +8.25%. 7.2 and 7.3 kW
+  now model more AC on the GS8048A's 18 parallel strings (7452 kWh) than on the Growatt
+  (7289) or the Motech (7324). A lone module reads 666–671 kWh per wired kWp on the
+  OutBack and GridPoint units, 897 on the SI6048 and 971 on the QS1200, against the
+  943.8–1026.4 that default-rated arrays read (§6's amendment).]**
 
 **(e) After.** The floor's worst error under §3's (b) is now 0.12%: the Huawei
 SUN2000-22KTL-US at 21.9–22.2 kW, three strings of 14 modules and one of 13 under its
 560 V floor, below it for 1129 hours that carry 8.6% of the DC energy. Next is 0.09%,
 the Fronius Symo Advanced 12.0 at 12.3–12.4 kW. 36 distinct inverter/wiring pairs spend
 any hour below the floor, against 42 with the battery inverter/chargers kept.
+**[Amended 2026-10-20, task 823: re-measured, the floor's worst error under §3's (b) is
+0.034%: the same Huawei at 21.9–22.2 kW, below its floor for 781 hours that carry 3.5% of
+the DC energy. Next is 0.025%, the same Fronius at 12.3–12.4 kW. The pair counts, 36 and
+42, are unchanged.]**
 
 **(f) Hot-floor alternative.** The floor check becomes modules × `V_mp_ref` ×
 (1 + (`beta_oc` / `V_oc_ref`)(T_cell − 25 °C)) ≥ `Mppt_low` at a design cell
@@ -288,6 +390,31 @@ left below" is the most hours any config in the column still spends below the fl
   on the default 4 kW array. At 55 and 65 °C, 23 and 29 configs move by up to 12.1%.
 - So, as §2 found for the ceiling, the floor stays checked at STC.
 
+**[Amended 2026-10-20, task 823: re-measured; the re-pick counts do not depend on the
+weather.]**
+
+| Design cell | | unset | 3.0 kW | 3.68 kW | 5.0 kW |
+|---|---|---|---|---|---|
+| 45 °C | re-picks | 6 | 0 | 0 | 0 |
+| | \|ΔAC\| median / max | 0.60 / 1.34% | – | – | – |
+| | mean ΔAC | −0.03% | – | – | – |
+| | hours left below | 203 | 0 | 0 | 184 |
+| 55 °C | re-picks | 19 | 0 | 0 | 4 |
+| | \|ΔAC\| median / max | 2.63 / 8.75% | – | – | 1.69 / 1.69% |
+| | mean ΔAC | +2.00% | – | – | −1.69% |
+| | hours left below | 92 | 0 | 0 | 0 |
+| 65 °C | re-picks | 25 | 0 | 0 | 4 |
+| | \|ΔAC\| median / max | 1.43 / 8.75% | – | – | 1.69 / 1.69% |
+| | mean ΔAC | +1.36% | – | – | −1.69% |
+| | hours left below | 45 | 0 | 0 | 0 |
+
+- At 45 °C, the re-picks at 12.3 and 12.4 kW move annual AC by −1.34% and −1.23%, about
+  fifty times the 0.025% error they remove. The four at 21.9–22.2 kW move it by +0.60%,
+  about eighteen times their 0.034%. Other configs keep up to 203 hours below the floor.
+- The TMY's hottest cell on the default 4 kW array is 58.9 °C under NOCT-SAM, against
+  56.6 °C under SAPM. At 55 and 65 °C, 23 and 29 configs move by up to 8.75%.
+- So the floor stays checked at STC.
+
 **(g) Ranking alternative.** Preferring fewer parallel strings cannot help the worst case
 in (c): a one-module array's only wiring is one single-module string.
 
@@ -305,3 +432,8 @@ has, so each change below is task 240's.
   At −10 °C: 69 / 176 / 4 / 96 (§4: 68 / 168 / 0 / 92).
 - Unchanged: the sizings that make identical picks, and the error of the current sizing,
   whose 64 distinct pairs are the same with or without the battery inverter/chargers.
+- **[Amended 2026-10-20, task 823: re-measured, every count above holds. The "kept"
+  rows show 33 default-rated configs with an hour above the ceiling and the STC rows
+  34, 7.3 kW being the difference. The 3.68 kW column's largest STC share is still
+  91.9%. The sizings that make identical picks, and the 64 pairs, the same with or
+  without the battery inverter/chargers, are unchanged.]**
