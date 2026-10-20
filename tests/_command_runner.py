@@ -3,8 +3,8 @@
 
 run_command starts a command as the orchestrator does: verbatim through `sh -c`,
 in the command's directory, with the DF_VERIFY_ROLE dark-factory sets for an
-OrchestratorCommand. The command runs in a session of its own, and nothing it
-started outlives a hang: at its timeout, every process in that session is killed.
+OrchestratorCommand. The command runs in a session of its own, and no process in
+that session outlives a hang: at its timeout, every one of them is killed.
 
 Usage::
 
@@ -28,6 +28,8 @@ from typing import Protocol
 from tests._orchestrator_config import OrchestratorCommand
 
 _STREAM_TAIL_CHARS = 5000
+
+_DRAIN_AFTER_KILL_SECS = 5
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,7 @@ def describe_outcome(outcome: Outcome) -> str:
 
 
 class CommandTimedOut(Exception):
-    """A command was still running at its timeout, so it was killed with every process it started.
+    """A command was still running at its timeout, so it was killed with every process in its session.
 
     It holds the command, the directory it ran in, its timeout, and what it printed
     to each stream before it was killed.
@@ -77,7 +79,7 @@ class CommandTimedOut(Exception):
     def __init__(self, command: str, directory: Path, timeout_secs: float, stdout: str, stderr: str) -> None:
         super().__init__(
             f"{command!r} in {directory} was still running after {timeout_secs} s, so it was killed with every "
-            f"process it started\n{_tails(stdout, stderr)}"
+            f"process in its session\n{_tails(stdout, stderr)}"
         )
         self.command = command
         self.directory = directory
@@ -95,9 +97,11 @@ def run_command(
     *env* holds, as dark-factory's verify (verify.py::_resolve_verify_env) and
     offline lane (offline_lane_runs.py::_lane_env) set it. The command runs in a
     session of its own, which no signal sent to this process reaches. If it is
-    still running after *timeout_secs*, it is killed with every process it started
-    and CommandTimedOut is raised; if the call ends any other way before the
-    command does, an interrupt or an error, they are killed too.
+    still running after *timeout_secs*, it is killed with every process in its
+    session and CommandTimedOut is raised; if the call ends any other way before
+    the command does, an interrupt or an error, they are killed too. A process
+    that left the session, as a daemonizing tool's does, is beyond that kill, and
+    the output it holds open is read for at most _DRAIN_AFTER_KILL_SECS more.
     """
     command_env = dict(os.environ if env is None else env)
     if isinstance(command, OrchestratorCommand):
@@ -116,11 +120,34 @@ def run_command(
         stdout, stderr = shell.communicate(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
         _kill_session(shell)
-        stdout, stderr = shell.communicate()
+        stdout, stderr = _drain(shell)
         raise CommandTimedOut(command.command, command.directory, timeout_secs, stdout, stderr) from None
     finally:
         _kill_session(shell)
     return subprocess.CompletedProcess(command.command, shell.returncode, stdout, stderr)
+
+
+def _drain(shell: subprocess.Popen[str]) -> tuple[str, str]:
+    """Return what *shell*, whose session was just killed, printed to each stream.
+
+    A stream ends once no process holds it, so a process that left the session
+    can hold it open past the kill. The streams are read for at most
+    _DRAIN_AFTER_KILL_SECS, then closed with what was read by then.
+    """
+    try:
+        stdout, stderr = shell.communicate(timeout=_DRAIN_AFTER_KILL_SECS)
+    except subprocess.TimeoutExpired as held_open:
+        for stream in (shell.stdout, shell.stderr):
+            if stream is not None:
+                stream.close()
+        shell.wait()
+        return _decoded(held_open.stdout), _decoded(held_open.stderr)
+    return stdout, stderr
+
+
+def _decoded(output: bytes | None) -> str:
+    """Return *output*, the bytes a timed-out read gathered, as text: Popen decodes only a read that finishes."""
+    return (output or b"").decode(errors="replace")
 
 
 def _kill_session(shell: subprocess.Popen[str]) -> None:

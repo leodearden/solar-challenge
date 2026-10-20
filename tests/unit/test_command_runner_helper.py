@@ -4,10 +4,12 @@
 Each test runs a throwaway command, plain sh, with no uv and no mocks.
 """
 
+import contextlib
 import os
 import shlex
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +32,24 @@ _HANG_TIMEOUTS_SECS = (0.5, 2.0, 8.0)
 
 # How a probe starts a hang command in a directory, with a timeout; it asserts the probe gave up on the hang.
 ProbeStart = Callable[[str, Path, float], None]
+
+_HOLDER_LIFETIME_SECS = 60
+
+_HOLDER_SCRIPT = """\
+import os
+import pathlib
+import sys
+import time
+
+pid_file, released_file, lifetime_secs = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), float(sys.argv[3])
+os.setsid()
+print("HELD-" + "OPEN", flush=True)
+part = pid_file.with_name(pid_file.name + ".part")
+part.write_text(str(os.getpid()))
+part.rename(pid_file)
+time.sleep(lifetime_secs)
+released_file.touch()
+"""
 
 
 def _project_with_a_lane_job_and_a_test_command(project_root: Path, command: str) -> Path:
@@ -89,6 +109,29 @@ def _pid_of_a_background_child_killed_in_a_hang(directory: Path, start: ProbeSta
         if pid_file.exists():
             return int(pid_file.read_text(encoding="utf-8"))
     pytest.fail(f"the hang started no background child in hangs of {_HANG_TIMEOUTS_SECS} s")
+
+
+def _holder_leaving_the_session(directory: Path, pid_file: Path, released_file: Path) -> str:
+    """Write a holder script into *directory* and return the command that runs it.
+
+    The holder leaves the probe's session, as a daemonizing tool's process does,
+    so the kill of that session never reaches it. It prints a marker built as it
+    runs, writes its pid to *pid_file*, holds the output it inherited open for
+    _HOLDER_LIFETIME_SECS, and touches *released_file* as it lets go.
+    """
+    script = directory / "holder.py"
+    script.write_text(_HOLDER_SCRIPT, encoding="utf-8")
+    return shlex.join([sys.executable, str(script), str(pid_file), str(released_file), str(_HOLDER_LIFETIME_SECS)])
+
+
+def _timed_out_once_the_holder_left_the_session(command: str, directory: Path, pid_file: Path) -> CommandTimedOut:
+    """Run *command*, which starts a holder writing *pid_file*, until it times out after the holder left the session."""
+    for timeout_secs in _HANG_TIMEOUTS_SECS:
+        with pytest.raises(CommandTimedOut) as timed_out:
+            run_command(ShellCommand(command, directory), timeout_secs=timeout_secs)
+        if pid_file.exists():
+            return timed_out.value
+    pytest.fail(f"the holder never left the probe's session in hangs of {_HANG_TIMEOUTS_SECS} s")
 
 
 def _process_exists(pid: int) -> bool:
@@ -216,6 +259,25 @@ def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: Prob
         f"process {background_pid}, which the hung command started in the background, outlived the probe that "
         "gave up on it, so a hung probe would leave its processes running after the test that started it ends"
     )
+
+
+def test_a_process_that_left_the_session_cannot_keep_a_timed_out_command_running_by_holding_its_output(
+    tmp_path: Path,
+) -> None:
+    """The kill never reaches that process, so the runner stops reading after a bound and fails with what it read."""
+    pid_file, released_file = tmp_path / "holder.pid", tmp_path / "holder.released"
+    holder = _holder_leaving_the_session(tmp_path, pid_file, released_file)
+
+    timed_out = _timed_out_once_the_holder_left_the_session(f"{holder} & sleep 30", tmp_path, pid_file)
+
+    held_open = not released_file.exists()
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(int(pid_file.read_text(encoding="utf-8")), signal.SIGKILL)
+    assert held_open, (
+        "the runner gave up on the timed-out command only once a process that had left its session let go of "
+        "its output, so such a process keeps a probe running for as long as it runs"
+    )
+    assert "HELD-OPEN" in str(timed_out)
 
 
 def test_an_outcome_is_described_by_its_exit_code_then_each_streams_own_tail() -> None:
