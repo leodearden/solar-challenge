@@ -151,7 +151,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, object, object
         pytest.fail(
             f"{item.nodeid} reached the network ({', '.join(dict.fromkeys(window.refused))}); "
             "a test not marked slow or e2e runs offline, with every fixture it sets up or tears down: "
-            "pass weather_data, seed the weather_cache fixture, or mark it slow if it needs a live service",
+            "pass simulate_home its weather, seed the weather_cache fixture, or mark it slow if it needs a live service",
             pytrace=False,
         )
     return torn_down
