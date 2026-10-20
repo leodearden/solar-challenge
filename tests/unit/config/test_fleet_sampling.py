@@ -9,7 +9,6 @@ from typing import Any, Optional
 import pytest
 
 from solar_challenge.config import (
-    DistributionSpec,
     FleetDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -17,7 +16,6 @@ from solar_challenge.config import (
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    _DistributionSampler,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
@@ -51,7 +49,7 @@ class TestAStatelessSpecDrawsItself:
     def test_its_draws_are_the_values_the_fleet_gives_its_homes(
         self, spec: WeightedDiscreteDistribution | NormalDistribution | UniformDistribution
     ) -> None:
-        """A spec's draws are the values the generator gives the fleet's homes, so a preview drawing through the spec matches the run.
+        """A spec's draws, from an RNG seeded with the fleet's seed, are the values the generator gives the fleet's homes.
 
         The fleet's pv.tilt is the only setting it draws from its RNG.
         """
@@ -319,57 +317,33 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
         )
 
 
-_TILT_POOL_OF_2_HOMES = ShuffledPoolDistribution(values=(30.0, 40.0), counts=(1, 1))
+class _PoolShortOfItsCounts(ShuffledPoolDistribution):
+    """A pool whose counts total its fleet's homes, but which expands to one value fewer."""
 
-_CONSUMPTION_OF_2_HOMES = NormalDistribution(mean=3400.0, std=800.0)
+    def create_pool(self) -> list[Optional[float]]:
+        """Return the pool's values expanded to its counts, less the last."""
+        return super().create_pool()[:-1]
 
 
-class TestTheSamplerRefusesASettingDrawnPastItsValues:
-    """A setting drawn ahead holds one value per home, and the sampler refuses a draw past them, naming the setting.
+class TestASettingDrawnPastItsValuesIsRefused:
+    """A setting drawn ahead holds one value per home, and generation refuses a draw past them, naming the setting.
 
-    The fleet generator refuses a pool not sized to the fleet before it draws, so no fleet it generates draws past a
-    setting's values: only the sampler, asked directly, can be.
+    The generator refuses a pool whose counts do not total the fleet's homes before it draws, so only a pool that
+    expands to fewer values than its counts give can run dry.
     """
 
-    @pytest.mark.parametrize(
-        ("fleet", "setting", "spec", "values"),
-        [
-            pytest.param(
-                FleetDistributionConfig(
-                    n_homes=2,
-                    pv=PVDistributionConfig(capacity_kw=4.0, tilt=_TILT_POOL_OF_2_HOMES),
-                    load=LoadDistributionConfig(),
-                ),
-                "pv.tilt",
-                _TILT_POOL_OF_2_HOMES,
-                [30.0, 40.0],
-                id="shuffled-pool",
-            ),
-            pytest.param(
-                FleetDistributionConfig(
-                    n_homes=2,
-                    pv=PVDistributionConfig(capacity_kw=4.0),
-                    load=LoadDistributionConfig(annual_consumption_kwh=_CONSUMPTION_OF_2_HOMES),
-                    seed=4,
-                    random_order="bristol_legacy",
-                ),
-                "load.annual_consumption_kwh",
-                _CONSUMPTION_OF_2_HOMES,
-                _draws(_CONSUMPTION_OF_2_HOMES, seed=4, n=2),
-                id="bristol-legacy-pre-sample",
-            ),
-        ],
-    )
-    def test_a_draw_past_the_values_of_a_setting_is_refused_naming_it(
-        self, fleet: FleetDistributionConfig, setting: str, spec: DistributionSpec, values: list[Optional[float]]
-    ) -> None:
-        """The two homes' draws hand out the setting's 2 values, and a third draw is refused."""
-        sampler = _DistributionSampler(fleet)
+    def test_a_pool_that_runs_dry_is_refused_naming_its_setting(self) -> None:
+        """The third of the fleet's 3 homes finds the pool's 2 values drawn, and its draw is refused."""
+        fleet = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(capacity_kw=4.0, tilt=_PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))),
+            load=LoadDistributionConfig(),
+        )
 
-        assert sorted([sampler.sample(spec, setting), sampler.sample(spec, setting)]) == sorted(values)
         with pytest.raises(ConfigurationError) as refusal:
-            sampler.sample(spec, setting)
-        assert str(refusal.value) == f"{setting} has no value left to draw: its 2 values, one per home, are all drawn"
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
 
 
 class TestASpecTheSamplerCannotDrawIsRefusedNamingTheSetting:
