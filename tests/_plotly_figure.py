@@ -2,10 +2,10 @@
 """Structured read access to the Plotly figure JSON a solar_challenge.web.charts builder returns:
 its traces, in drawing order or keyed by name, and the texts of its layout annotations or the
 annotations keyed by text; the nodes and links of a Sankey figure, keyed by node label; and the
-colours a figure writes, read as red, green and blue.
+colours a text writes or a figure draws, read as red, green and blue.
 
 A colour is written #rrggbb, rgb() or rgba(), in any case and with any whitespace inside the
-parentheses; an alpha is never read.
+parentheses; the alpha is read only to tell a fully transparent colour.
 
 Usage::
 
@@ -13,6 +13,7 @@ Usage::
         annotation_texts,
         annotations_by_text,
         colour_literals,
+        drawn_colours,
         opaque,
         sankey_link_colours,
         sankey_link_values,
@@ -33,7 +34,8 @@ Usage::
     assert sankey_link_values(figure)[("Grid", "Battery")] == 2.0
     assert opaque(sankey_link_colours(figure)[("Grid", "Demand")]) == COLOUR_PALETTE["grid_import"]
     assert sankey_node_colours(figure)["Battery"] == COLOUR_PALETTE["battery_charge"]
-    drawn = {rgb for _, rgb in colour_literals(figure)}
+    assert (245, 166, 35) in drawn_colours(figure).values()
+    written = [colour for colour, _ in colour_literals(stylesheet)]
 """
 
 import json
@@ -46,7 +48,7 @@ Rgb = tuple[int, int, int]
 
 _COLOUR_LITERAL = re.compile(
     r"#(?P<hex>[0-9a-f]{6})"
-    r"|rgba?\(\s*(?P<red>\d+)\s*,\s*(?P<green>\d+)\s*,\s*(?P<blue>\d+)\s*(?:,\s*[\d.]+\s*)?\)",
+    r"|rgba?\(\s*(?P<red>\d+)\s*,\s*(?P<green>\d+)\s*,\s*(?P<blue>\d+)\s*(?:,\s*(?P<alpha>[\d.]+)\s*)?\)",
     re.IGNORECASE,
 )
 
@@ -130,6 +132,22 @@ def colour_literals(text: str) -> Iterator[tuple[str, Rgb]]:
         yield match.group(), _rgb(match)
 
 
+def drawn_colours(figure: str) -> dict[str, Rgb]:
+    """Each colour *figure*'s traces and layout draw, keyed by how it is written, with its red, green and blue.
+
+    Not read: Plotly's default template, which no builder chooses, and a colour written rgba()
+    with an alpha of 0, which draws nothing.
+    """
+    drawn = json.loads(figure)
+    drawn.get("layout", {}).pop("template", None)
+    return {
+        match.group(): _rgb(match)
+        for text in _strings(drawn)
+        for match in _COLOUR_LITERAL.finditer(text)
+        if not _fully_transparent(match)
+    }
+
+
 def opaque(colour: str) -> str:
     """*colour* written as lower-case #rrggbb, without its alpha.
 
@@ -147,6 +165,22 @@ def _rgb(match: re.Match[str]) -> Rgb:
     else:
         red, green, blue = (int(match[channel]) for channel in ("red", "green", "blue"))
     return red, green, blue
+
+
+def _fully_transparent(match: re.Match[str]) -> bool:
+    return match["alpha"] is not None and float(match["alpha"]) == 0
+
+
+def _strings(node: object) -> Iterator[str]:
+    """Every string leaf of the dicts and lists under *node*."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
 
 
 def _annotations(figure: str) -> list[dict[str, Any]]:

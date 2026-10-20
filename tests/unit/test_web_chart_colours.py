@@ -32,9 +32,8 @@ checks enforce the invariants:
 
 import dataclasses
 import inspect
-import json
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -57,7 +56,7 @@ from tests._dashboard_sources import (
     tailwind_config_source,
 )
 from tests._finance_builders import make_fleet_results, make_sim_results
-from tests._plotly_figure import Rgb, colour_literals
+from tests._plotly_figure import Rgb, colour_literals, drawn_colours
 
 _CHART_COLOURS = frozenset(colour.lower() for colour in COLOUR_PALETTE.values())
 
@@ -91,25 +90,6 @@ def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
         "strings rather than Tailwind classes. Delete the copy. If a page must show a chart "
         "colour, pass it from COLOUR_PALETTE to the page."
     )
-
-
-def _strings(node: object) -> Iterator[str]:
-    """Every string leaf of the dicts and lists under *node*."""
-    if isinstance(node, str):
-        yield node
-    elif isinstance(node, dict):
-        for value in node.values():
-            yield from _strings(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _strings(value)
-
-
-def _drawn_colours(figure_json: str) -> dict[str, Rgb]:
-    """Each colour *figure_json* draws, by how it is written; Plotly's default template is skipped."""
-    figure = json.loads(figure_json)
-    figure["layout"].pop("template", None)
-    return dict(literal for text in _strings(figure) for literal in colour_literals(text))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -233,7 +213,7 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
     case: _FigureCase, recolouring: _Recolouring
 ) -> None:
     stale = sorted(
-        colour for colour, rgb in _drawn_colours(case.figure()).items() if rgb in recolouring.shipped
+        colour for colour, rgb in drawn_colours(case.figure()).items() if rgb in recolouring.shipped
     )
 
     assert stale == [], (
@@ -246,7 +226,7 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
 def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) -> None:
     assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
 
-    drawn = {rgb for case in _FIGURES.values() for rgb in _drawn_colours(case.figure()).values()}
+    drawn = {rgb for case in _FIGURES.values() for rgb in drawn_colours(case.figure()).values()}
     undrawn = sorted(role for role, substitute in recolouring.substitutes.items() if substitute not in drawn)
 
     assert undrawn == [], (
