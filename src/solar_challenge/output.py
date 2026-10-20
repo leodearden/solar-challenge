@@ -31,9 +31,9 @@ def _in_months(rows: _TimeIndexed, months: tuple[int, ...]) -> _TimeIndexed:
     return rows[rows.index.month.isin(months)]
 
 
-def _days_lasted(rows: pd.Series, window: SimulationWindow) -> float:
-    """The days *rows* last in all, each of its rows lasting *window*'s cadence."""
-    return len(rows) * window.cadence / timedelta(days=1)
+def _days_lasted(row_count: int, cadence: timedelta) -> float:
+    """The days *row_count* rows last in all, each lasting *cadence*."""
+    return row_count * cadence / timedelta(days=1)
 
 
 def export_to_csv(
@@ -131,9 +131,9 @@ def generate_summary_report(
             summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
 
             # Calculate average daily values
-            window = results.window
-            winter_days = _days_lasted(winter_hp_load, window)
-            summer_days = _days_lasted(summer_hp_load, window)
+            cadence = results.window.cadence
+            winter_days = _days_lasted(len(winter_hp_load), cadence)
+            summer_days = _days_lasted(len(summer_hp_load), cadence)
             winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
             summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
 
