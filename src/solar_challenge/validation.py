@@ -84,9 +84,9 @@ def _annual_equivalent_kwh(power_kw: pd.Series, window: SimulationWindow) -> flo
 
 
 def _check_annual_yield(
-    generation: pd.Series, config: PVConfig
+    generation: pd.Series, config: PVConfig, wired_kw: float
 ) -> Optional[ValidationResult]:
-    """A year's AC energy per kWp of the DC wired for config, against the UK benchmark band.
+    """A year's AC energy per kWp of wired_kw, the DC wired for config, against the UK benchmark band.
 
     generation is kW on evenly spaced rows, at any cadence. None when its window covers
     under 365 calendar days, since a yield benchmark needs a year of seasons; a window of
@@ -98,7 +98,6 @@ def _check_annual_yield(
     window = SimulationWindow.of_index(generation.index)
     if window.days < _YIELD_BENCHMARK_MIN_DAYS:
         return None
-    wired_kw = wired_dc_capacity_kw(config)
     yield_per_kwp = _annual_equivalent_kwh(generation, window) / wired_kw
     low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
     passed = low <= yield_per_kwp <= high
@@ -117,10 +116,9 @@ def _check_annual_yield(
 
 
 def _check_peak_within_capacity(
-    generation: pd.Series, config: PVConfig
+    generation: pd.Series, config: PVConfig, wired_kw: float
 ) -> ValidationResult:
-    """The peak against 10% over the DC wired for config."""
-    wired_kw = wired_dc_capacity_kw(config)
+    """The peak against 10% over wired_kw, the DC wired for config."""
     max_value = float(generation.max())
     max_allowed = wired_kw * 1.1
     passed = max_value <= max_allowed
@@ -165,10 +163,13 @@ def validate_pv_generation(
         List of ValidationResult objects
 
     Raises:
+        ValueError: Whatever create_pv_system raises for pv_config, whose wired DC
+            (pv.wired_dc_capacity_kw) the checks judge against.
         ValueError: If check_annual is set and SimulationWindow.of_index refuses
             generation's index.
     """
     results: list[ValidationResult] = []
+    wired_kw = wired_dc_capacity_kw(pv_config)
 
     # Check 1: No negative values
     min_value = float(generation.min())
@@ -188,7 +189,7 @@ def validate_pv_generation(
         ))
 
     # Check 2: Peak within 10% over the wired DC
-    results.append(_check_peak_within_capacity(generation, pv_config))
+    results.append(_check_peak_within_capacity(generation, pv_config, wired_kw))
 
     # Check 3: Night-time generation is approximately zero
     # Night defined as hours 22:00 - 05:00 (local time)
@@ -215,7 +216,7 @@ def validate_pv_generation(
 
     # Check 4: Annual yield per kWp wired within the UK benchmark band
     if check_annual:
-        annual_yield = _check_annual_yield(generation, pv_config)
+        annual_yield = _check_annual_yield(generation, pv_config, wired_kw)
         if annual_yield is not None:
             results.append(annual_yield)
 
@@ -502,6 +503,8 @@ def validate_simulation(
         ValidationReport with all check results
 
     Raises:
+        ValueError: Whatever create_pv_system raises for pv_config, whose wired DC
+            (pv.wired_dc_capacity_kw) validate_pv_generation judges the generation against
         ValueError: Naming battery_capacity_kwh, when the self-consumption
             benchmark reads one that is negative or not finite
         ValueError: If SimulationWindow.of_index refuses results' index, which the
