@@ -479,14 +479,13 @@ def _form_classes(obj: object) -> set[type]:
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
     """The annotations *signature* gives, by parameter name or "return"; a parameter or return without one has no entry."""
     annotations = {
-        name: parameter.annotation for name, parameter in signature.parameters.items()
+        name: parameter.annotation
+        for name, parameter in signature.parameters.items()
+        if parameter.annotation is not inspect.Parameter.empty
     }
-    annotations["return"] = signature.return_annotation
-    return {
-        name: annotation
-        for name, annotation in annotations.items()
-        if annotation is not inspect.Parameter.empty
-    }
+    if signature.return_annotation is not inspect.Signature.empty:
+        annotations["return"] = signature.return_annotation
+    return annotations
 
 
 def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
