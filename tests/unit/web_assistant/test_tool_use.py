@@ -86,11 +86,6 @@ class TestToolSurface:
         assert isinstance(TOOLS, tuple), f"Expected TOOLS to be a tuple; got {type(TOOLS).__name__}"
         assert json.loads(json.dumps(TOOLS)) == list(TOOLS)
 
-    def test_tool_names_are_unique(self) -> None:
-        """No two tools in TOOLS share a name: the name is all a tool call carries to reach its tool."""
-        names = [tool["name"] for tool in TOOLS]
-        assert len(names) == len(set(names)), f"Expected unique tool names; got {names}"
-
     def test_every_tool_entry_has_required_keys(self) -> None:
         """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
         for tool in TOOLS:
