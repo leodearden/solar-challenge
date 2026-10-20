@@ -189,13 +189,11 @@ class TestGetJobResults:
     def test_running_job_returns_409(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Running job returns 409 (conflict)."""
+        """A job not yet completed answers 409 with the error, its status and its progress."""
         mock_job_manager.job_state.return_value = _A_RUNNING_JOB
         resp = client.get("/api/jobs/job-running/results")
         assert resp.status_code == 409
-        data = resp.get_json()
-        assert "not yet completed" in data["error"]
-        assert data["status"] == "running"
+        assert resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 50.0}
 
     def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
         self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
