@@ -8,8 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityConfig, simulate_community
 from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
+    CommunityMetrics,
     SeasonSummary,
     aggregate_annual,
     aggregate_daily,
@@ -18,10 +20,11 @@ from solar_challenge.output import (
     calculate_grid_dependency_ratio,
     calculate_seasonal_metrics,
     calculate_self_consumption_ratio,
+    compute_community_metrics,
     export_to_csv,
     generate_summary_report,
 )
-from tests._finance_builders import make_home_config
+from tests._finance_builders import make_fleet_results_of, make_home_config
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -114,6 +117,15 @@ _SEASONAL_RUN_FREQS = (
     pytest.param("1min", id="minute-rows"),
     pytest.param("30min", id="half-hour-rows"),
 )
+
+
+def _energy_figures(metrics: CommunityMetrics) -> dict[str, float]:
+    """metrics' kWh figures and its self-sufficiency, each under its field name."""
+    return {
+        name: value
+        for name, value in asdict(metrics).items()
+        if name.endswith("_kwh") or name == "self_sufficiency"
+    }
 
 
 class TestExportToCSV:
@@ -254,6 +266,23 @@ class TestSeasonalBreakdowns:
                 "grid_dependency_ratio": summary.grid_dependency_ratio,
             }
         )
+
+
+class TestCommunityMetrics:
+    """compute_community_metrics integrates each row over as long as the community's rows last, so a half-hourly twin of a run has the minute run's figures."""
+
+    def test_a_half_hourly_twin_of_a_run_has_the_minute_runs_figures(self) -> None:
+        minute, half_hour = (
+            compute_community_metrics(
+                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig(sharing_mode="p2p"))
+            )
+            for freq in ("1min", "30min")
+        )
+
+        assert _energy_figures(half_hour) == pytest.approx(_energy_figures(minute), rel=1e-9)
+        assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
+        assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
+        assert half_hour.sharing_mode == minute.sharing_mode
 
 
 class TestRatioCalculations:
