@@ -683,8 +683,8 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "type": "number",
                         "description": (
                             "Household annual electricity consumption in kWh "
-                            "(e.g. 3100 for an Ofgem medium user)."
-                        ),
+                            "({:g}–{:g}; e.g. 3100 for an Ofgem medium user)."
+                        ).format(*FLEET_COMPONENTS["load"].fixed_range),
                     },
                     "goal": {
                         "type": "string",
