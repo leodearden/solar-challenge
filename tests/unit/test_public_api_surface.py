@@ -145,7 +145,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "set_weather_cache": "(cache: WeatherCache | None) -> None",
     "WeatherProvider": "(*args, **kwargs)",
     "PvgisTmy": "dataclass[eq, frozen] (cache: WeatherCache | None) -> None",
-    "PrefetchedWeather": "dataclass[frozen] (frames: dict[Location, DataFrame]) -> None",
+    "PrefetchedWeather": "dataclass[frozen] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
     "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
     "OFGEM_TDCV_BY_OCCUPANTS": "dict",

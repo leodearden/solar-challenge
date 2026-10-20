@@ -310,13 +310,21 @@ class PvgisTmy:
 
 @dataclass(frozen=True, eq=False)
 class PrefetchedWeather:
-    """Weather already in memory for the locations it holds; it pickles, so a worker reads no cache and no network."""
+    """Weather already in memory for the locations it holds; it pickles, so a worker reads no cache and no network.
 
-    frames: dict[Location, pd.DataFrame]
+    The locations it holds are fixed at construction. Its frames are the ones it is given, not copies, so a frame
+    changed in place is changed for every later get.
+    """
+
+    frames: Mapping[Location, pd.DataFrame]
 
     def __post_init__(self) -> None:
-        """Hold a copy of frames, so that the locations held are fixed at construction: a dict, since a mappingproxy does not pickle."""
-        object.__setattr__(self, "frames", dict(self.frames))
+        """Hold frames in a read-only mapping of its own, so that no later change adds or removes a location."""
+        object.__setattr__(self, "frames", MappingProxyType(dict(self.frames)))
+
+    def __reduce__(self) -> tuple[type["PrefetchedWeather"], tuple[dict[Location, pd.DataFrame]]]:
+        """Rebuild through the constructor from a dict of the frames, since a mappingproxy does not pickle."""
+        return (type(self), (dict(self.frames),))
 
     def get(self, location: Location) -> pd.DataFrame:
         """The frame held for location itself; LookupError naming location and the locations held, for any other."""

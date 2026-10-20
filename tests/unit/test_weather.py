@@ -475,7 +475,7 @@ class _CountingWeather:
 
 
 class TestPrefetchedWeather:
-    """PrefetchedWeather holds a copy of the frames it is given, or fetches, and answers only for their locations."""
+    """PrefetchedWeather holds the frames it is given, or fetches, in a read-only mapping of its own, and answers only for their locations."""
 
     BRISTOL = Location.bristol()
     BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
@@ -529,11 +529,24 @@ class TestPrefetchedWeather:
         with pytest.raises(LookupError):
             weather.get(self.BATH)
 
+    def test_its_frames_refuse_a_location_set_or_deleted_after_construction(self, fetched, bath_frame):
+        """frames raises TypeError at a location set or deleted, so get still answers for exactly the locations fetched."""
+        with pytest.raises(TypeError):
+            fetched.frames[self.UNHELD] = bath_frame
+        with pytest.raises(TypeError):
+            del fetched.frames[self.BATH]
+
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(LookupError):
+            fetched.get(self.UNHELD)
+
     def test_it_pickles_with_its_frames(self, fetched, bath_frame):
-        """A PrefetchedWeather restored from its pickle holds the same frames."""
+        """A PrefetchedWeather restored from its pickle holds the same frames, as read-only as the original's."""
         restored = pickle.loads(pickle.dumps(fetched))
 
         pd.testing.assert_frame_equal(restored.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(TypeError):
+            restored.frames[self.UNHELD] = bath_frame
 
 
 class TestGetTmyDataWithCache:

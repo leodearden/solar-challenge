@@ -472,8 +472,10 @@ returns a frame of hourly weather is one. `PvgisTmy(cache)` is a frozen
 dataclass whose `get(location)` returns the TMY `get_tmy_data` returns, read
 from `cache` and put there on a miss, or fetched on every call when `cache` is
 `None`; it raises `WeatherDataError` where `get_tmy_data` does.
-`PrefetchedWeather(frames)` is a frozen dataclass compared by identity, holding
-a copy of a dict from `Location` to frame: its `get(location)` returns the held
+`PrefetchedWeather(frames)` is a frozen dataclass compared by identity. Its
+`frames` is a read-only copy of the mapping from `Location` to frame it is
+given, so the locations it holds are fixed at construction; the frames
+themselves are the ones given, not copies. Its `get(location)` returns the held
 frame, and for any other location raises `LookupError` naming that location and
 those held; its `fetch(weather, locations)` calls `weather.get` once per
 distinct location, in first-seen order. Both pickle. `WeatherCache()` given no
