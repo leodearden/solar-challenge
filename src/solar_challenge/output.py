@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import (
+    SimulationResults,
+    calculate_summary,
+    grid_dependency_ratio,
+    heat_pump_load_ratio,
+    self_consumption_ratio,
+)
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
@@ -127,8 +133,8 @@ def generate_summary_report(
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
 
-            winter_hp_ratio = winter_hp_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
-            summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
+            winter_hp_ratio = heat_pump_load_ratio(heat_pump_load_kwh=winter_hp_kwh, demand_kwh=winter_demand_kwh)
+            summer_hp_ratio = heat_pump_load_ratio(heat_pump_load_kwh=summer_hp_kwh, demand_kwh=summer_demand_kwh)
 
             # Calculate average daily values
             cadence = results.window.cadence
@@ -195,66 +201,12 @@ def generate_summary_report(
     return report
 
 
-def calculate_self_consumption_ratio(results: SimulationResults) -> float:
-    """Calculate self-consumption ratio.
-
-    Self-consumption ratio = self_consumed / total_generation
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no generation)
-    """
-    summary = calculate_summary(results)
-    return summary.self_consumption_ratio
-
-
-def calculate_grid_dependency_ratio(results: SimulationResults) -> float:
-    """Calculate grid dependency ratio.
-
-    Grid dependency = grid_import / total_consumption
-
-    Lower values indicate more self-sufficiency.
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no consumption)
-    """
-    summary = calculate_summary(results)
-    return summary.grid_dependency_ratio
-
-
-def calculate_export_ratio(results: SimulationResults) -> float:
-    """Calculate export ratio.
-
-    Export ratio = grid_export / total_generation
-
-    Higher values indicate more excess PV.
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Ratio between 0 and 1 (or 0 if no generation)
-    """
-    summary = calculate_summary(results)
-    return summary.export_ratio
-
-
-def _share(part: float, whole: float) -> float:
-    """part / whole, or 0.0 when whole is not positive, the rule of calculate_summary's ratios."""
-    return float(part / whole) if whole > 0 else 0.0
-
-
 @dataclass(frozen=True, kw_only=True)
 class SeasonSummary:
     """One season of a run: its energy totals in kWh, and calculate_summary's two ratios of them.
 
-    self_consumption_ratio is self-consumption / generation and grid_dependency_ratio is grid
-    import / demand, each 0.0 when its denominator is not positive.
+    self_consumption_ratio and grid_dependency_ratio are home.self_consumption_ratio and
+    home.grid_dependency_ratio of the season's totals.
     """
 
     generation_kwh: float
@@ -279,8 +231,12 @@ def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSum
         generation_kwh=float(totals["generation_kwh"]),
         demand_kwh=float(totals["demand_kwh"]),
         self_consumption_kwh=float(totals["self_consumption_kwh"]),
-        self_consumption_ratio=_share(totals["self_consumption_kwh"], totals["generation_kwh"]),
-        grid_dependency_ratio=_share(totals["grid_import_kwh"], totals["demand_kwh"]),
+        self_consumption_ratio=self_consumption_ratio(
+            self_consumption_kwh=totals["self_consumption_kwh"], generation_kwh=totals["generation_kwh"]
+        ),
+        grid_dependency_ratio=grid_dependency_ratio(
+            grid_import_kwh=totals["grid_import_kwh"], demand_kwh=totals["demand_kwh"]
+        ),
     )
 
 
