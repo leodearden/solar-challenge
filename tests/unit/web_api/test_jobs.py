@@ -75,7 +75,7 @@ class TestGetJobStatus:
         mock_job_manager.job_state.return_value = None
         resp = client.get("/api/jobs/nonexistent-id")
         assert resp.status_code == 404
-        assert "error" in resp.get_json()
+        assert resp.get_json() == {"error": "Job not found"}
 
     def test_completed_job_status(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -137,8 +137,8 @@ class TestGetJobProgress:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
-        assert "event: error" in body
-        assert "Job not found" in body
+        assert parse_sse_events(body) == [SseFrame("error", {"error": "Job not found"})]
+        assert body == 'event: error\ndata: {"error": "Job not found"}\n\n'
 
     @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
     def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
@@ -184,6 +184,7 @@ class TestGetJobResults:
         mock_job_manager.job_state.return_value = None
         resp = client.get("/api/jobs/nonexistent/results")
         assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Job not found"}
 
     def test_running_job_returns_409(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
