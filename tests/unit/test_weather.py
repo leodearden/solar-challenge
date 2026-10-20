@@ -1,9 +1,11 @@
 """Tests for weather data handling."""
 
 import json
+import pickle
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from types import SimpleNamespace
 
@@ -13,11 +15,18 @@ import numpy as np
 from unittest.mock import call, patch
 
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
+    DEFAULT_CACHE_DIR,
     PVGIS_TMY_REQUEST,
+    PrefetchedWeather,
+    PvgisTmy,
     WeatherCache,
     WeatherDataError,
+    default_weather,
     get_tmy_data,
+    get_weather_cache,
     scale_tmy_to_annual_ghi,
+    set_weather_cache,
 )
 from solar_challenge.location import Location
 from tests._synthetic_weather import synthetic_june_weather
@@ -288,6 +297,256 @@ class TestWeatherCache:
         """Invalidate returns False if entry doesn't exist."""
         removed = cache.invalidate("tmy", bristol)
         assert removed is False
+
+
+class TestWeatherCacheDirectory:
+    """A WeatherCache's directory is the one it is given, else the one CACHE_DIR_VARIABLE names when set and non-empty, else DEFAULT_CACHE_DIR.
+
+    Each test sets or deletes the variable itself, so a shell that exports it cannot change the outcome,
+    and a test that lets WeatherCache() choose works in tmp_path, so the relative default lands there.
+    """
+
+    def test_given_no_directory_it_uses_the_one_the_variable_names(self, monkeypatch, tmp_path):
+        """WeatherCache() uses the directory the variable names, and creates it."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == tmp_path / "named"
+        assert (tmp_path / "named").is_dir()
+
+    @pytest.mark.parametrize(
+        "clear_variable",
+        [
+            pytest.param(lambda monkeypatch: monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False), id="unset"),
+            pytest.param(lambda monkeypatch: monkeypatch.setenv(CACHE_DIR_VARIABLE, ""), id="empty"),
+        ],
+    )
+    def test_given_no_directory_it_uses_the_default_when_the_variable_is_unset_or_empty(
+        self, monkeypatch, tmp_path, clear_variable
+    ):
+        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, and creates it."""
+        monkeypatch.chdir(tmp_path)
+        clear_variable(monkeypatch)
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == DEFAULT_CACHE_DIR
+        assert (tmp_path / DEFAULT_CACHE_DIR).is_dir()
+
+    def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
+        """WeatherCache(cache_dir=...) uses the directory it is given and never creates the one the variable names."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache(cache_dir=tmp_path / "given")
+
+        assert cache.cache_dir == tmp_path / "given"
+        assert not (tmp_path / "named").exists()
+
+
+class TestPvgisTmy:
+    """PvgisTmy(cache) serves PVGIS's scaled TMY from its cache, else fetches it and puts it there; PvgisTmy(None) fetches on every get."""
+
+    @pytest.fixture
+    def june_day(self):
+        """The frame seeded_cache holds as Bristol's TMY."""
+        return synthetic_june_weather("2024-06-21")
+
+    @pytest.fixture
+    def seeded_cache(self, tmp_path, june_day):
+        """A cache of the test's own, not the installed one, holding june_day as Bristol's TMY."""
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+        cache.put(june_day, "tmy", Location.bristol())
+        return cache
+
+    def test_get_returns_the_tmy_its_cache_holds_exactly(self, seeded_cache, june_day, pvgis_requests):
+        """get returns the TMY its cache holds, exactly as it was put, and requests nothing from PVGIS."""
+        result = PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
+        self, tmp_path, weather_cache, pvgis_requests
+    ):
+        """A get its cache cannot answer fetches the scaled TMY once and puts it in that cache, not the installed
+        one; a later get is served from that cache with no request."""
+        bristol = Location.bristol()
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+
+        first = PvgisTmy(cache).get(bristol)
+
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), first, check_exact=True)
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
+        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
+        pd.testing.assert_frame_equal(PvgisTmy(cache).get(bristol), first, check_exact=True)
+
+    def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
+        """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the installed cache."""
+        weather = PvgisTmy(None)
+
+        weather.get(Location.bristol())
+        weather.get(Location.bristol())
+
+        assert pvgis_requests.tmy.call_count == 2
+        assert pvgis_requests.hourly.call_count == 2
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+    def test_it_pickles_with_its_cache_directory(self, seeded_cache, june_day, pvgis_requests):
+        """A PvgisTmy restored from its pickle reads the same cache directory, so it serves the same TMY."""
+        restored = pickle.loads(pickle.dumps(PvgisTmy(seeded_cache)))
+
+        assert restored.cache.cache_dir == seeded_cache.cache_dir
+        pd.testing.assert_frame_equal(restored.get(Location.bristol()), june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+
+class TestDefaultWeather:
+    """default_weather() is PvgisTmy over get_weather_cache(): the cache set_weather_cache installed, else a new WeatherCache() at each call."""
+
+    @pytest.fixture
+    def no_cache_installed(self, monkeypatch, tmp_path):
+        """No cache installed and the variable unset, working in tmp_path, so that WeatherCache() resolves its default there."""
+        set_weather_cache(None)
+        monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
+        monkeypatch.chdir(tmp_path)
+
+    def test_get_weather_cache_with_none_installed_follows_the_variable_at_each_call(
+        self, no_cache_installed, monkeypatch, tmp_path
+    ):
+        """With no cache installed, each get_weather_cache() is a cache in the directory the variable names at that call."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "first"))
+        assert get_weather_cache().cache_dir == tmp_path / "first"
+
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "second"))
+        assert get_weather_cache().cache_dir == tmp_path / "second"
+
+    def test_set_weather_cache_overrides_the_variable(self, weather_cache, monkeypatch, tmp_path):
+        """get_weather_cache() returns the installed cache, whatever directory the variable names."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        assert get_weather_cache() is weather_cache
+
+    def test_default_weather_reads_the_installed_cache(self, weather_cache, pvgis_requests):
+        """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
+        june_day = synthetic_june_weather("2024-06-21")
+        weather_cache.put(june_day, "tmy", Location.bristol())
+
+        result = default_weather().get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    def test_default_weather_with_none_installed_reads_the_directory_the_variable_names(
+        self, no_cache_installed, monkeypatch, tmp_path, pvgis_requests
+    ):
+        """With no cache installed, default_weather() serves the TMY held in the directory the variable names, exactly,
+        and requests nothing from PVGIS."""
+        june_day = synthetic_june_weather("2024-06-21")
+        WeatherCache(cache_dir=tmp_path / "named").put(june_day, "tmy", Location.bristol())
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        result = default_weather().get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+
+@dataclass
+class _CountingWeather:
+    """A WeatherProvider by its get alone: it serves frames and records each location it is asked for."""
+
+    frames: dict[Location, pd.DataFrame]
+    asked: list[Location] = field(default_factory=list)
+
+    def get(self, location: Location) -> pd.DataFrame:
+        self.asked.append(location)
+        return self.frames[location]
+
+
+class TestPrefetchedWeather:
+    """PrefetchedWeather holds the frames it is given, or fetches, in a read-only mapping of its own, and answers only for their locations."""
+
+    BRISTOL = Location.bristol()
+    BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
+    UNHELD = Location(51.48, -3.18)
+
+    @pytest.fixture
+    def bristol_frame(self):
+        """A clear 21 June."""
+        return synthetic_june_weather("2024-06-21")
+
+    @pytest.fixture
+    def bath_frame(self):
+        """The same day as bristol_frame at half its irradiance, so that the two differ."""
+        return synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(0.5,))
+
+    @pytest.fixture
+    def counting(self, bristol_frame, bath_frame):
+        """A counting provider serving bristol_frame at BRISTOL and bath_frame at BATH."""
+        return _CountingWeather({self.BRISTOL: bristol_frame, self.BATH: bath_frame})
+
+    @pytest.fixture
+    def fetched(self, counting):
+        """What fetch makes of counting for BRISTOL, BATH and BRISTOL again."""
+        return PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+    def test_fetch_gets_each_distinct_location_once_in_first_seen_order(self, counting):
+        """fetch asks its provider for each distinct location once, in the order the locations are first seen."""
+        PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+        assert counting.asked == [self.BRISTOL, self.BATH]
+
+    def test_get_returns_the_frame_held_for_a_location(self, fetched, bristol_frame, bath_frame):
+        """get returns the frame held for each location it holds."""
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        pd.testing.assert_frame_equal(fetched.get(self.BRISTOL), bristol_frame, check_exact=True)
+
+    def test_get_refuses_a_location_it_does_not_hold_naming_it_and_those_it_holds(self, fetched):
+        """get refuses a location it does not hold with a LookupError naming that location and each one it holds."""
+        with pytest.raises(LookupError) as refusal:
+            fetched.get(self.UNHELD)
+
+        for location in (self.UNHELD, self.BRISTOL, self.BATH):
+            assert repr(location) in str(refusal.value)
+
+    def test_it_holds_a_copy_of_the_frames_it_was_given(self, bristol_frame, bath_frame):
+        """A location added to the given dict after construction is not held: the held locations are fixed then."""
+        given = {self.BRISTOL: bristol_frame}
+        weather = PrefetchedWeather(given)
+        given[self.BATH] = bath_frame
+
+        with pytest.raises(LookupError):
+            weather.get(self.BATH)
+
+    def test_its_frames_refuse_a_location_set_or_deleted_after_construction(self, fetched, bath_frame):
+        """frames raises TypeError at a location set or deleted, so get still answers for exactly the locations fetched."""
+        with pytest.raises(TypeError):
+            fetched.frames[self.UNHELD] = bath_frame
+        with pytest.raises(TypeError):
+            del fetched.frames[self.BATH]
+
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(LookupError):
+            fetched.get(self.UNHELD)
+
+    def test_it_pickles_with_its_frames(self, fetched, bath_frame):
+        """A PrefetchedWeather restored from its pickle holds the same frames, as read-only as the original's."""
+        restored = pickle.loads(pickle.dumps(fetched))
+
+        pd.testing.assert_frame_equal(restored.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(TypeError):
+            restored.frames[self.UNHELD] = bath_frame
 
 
 class TestGetTmyDataWithCache:

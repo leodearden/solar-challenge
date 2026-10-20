@@ -129,7 +129,8 @@ conventions:
       points at pyproject's license expression for the bundled third-party code.)
 
   - rule: >
-      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names),
+      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (the names
+      FROZEN_SURFACE in tests/unit/test_public_api_surface.py pins),
       the signatures of the exported callables, and the public members of the exported classes
       (the methods, classmethods, properties, class constants and instance attributes each class
       body defines or declares) are consumed by a separate, pinned repo. The contract also covers

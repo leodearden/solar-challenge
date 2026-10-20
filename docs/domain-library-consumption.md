@@ -465,6 +465,29 @@ so it prices a fleet whose index lacks one middle row with no error. The fleets
 results are unchanged. Consumers that build a `FleetResults` on another index
 re-check it when they re-pin.
 
+**Unreleased on main** (task 808): `WeatherProvider`, `PvgisTmy` and
+`PrefetchedWeather` join `__all__`; the 0.5.0 tag has none of them.
+`WeatherProvider` is a `typing.Protocol`: any object whose `get(location)`
+returns a frame of hourly weather is one. `PvgisTmy(cache)` is a frozen
+dataclass whose `get(location)` returns the TMY `get_tmy_data` returns, read
+from `cache` and put there on a miss, or fetched on every call when `cache` is
+`None`; it raises `WeatherDataError` where `get_tmy_data` does.
+`PrefetchedWeather(frames)` is a frozen dataclass compared by identity. Its
+`frames` is a read-only copy of the mapping from `Location` to frame it is
+given, so the locations it holds are fixed at construction; the frames
+themselves are the ones given, not copies. Its `get(location)` returns the held
+frame, and for any other location raises `LookupError` naming that location and
+those held; its `fetch(weather, locations)` calls `weather.get` once per
+distinct location, in first-seen order. Both pickle. `WeatherCache()` given no
+directory uses the one `SOLAR_CHALLENGE_WEATHER_CACHE_DIR` names, when it is set
+and non-empty, else `.cache/weather` under the working directory, as on the
+tag; so `get_tmy_data`, with no cache installed, reads and fills that
+directory. With none installed, `get_weather_cache()` returns a new
+`WeatherCache()` on each call, so a change to the variable takes effect at the
+next call; the tag builds one on the first call and returns it ever after.
+`set_weather_cache` still overrides both. Consumers need no change when they
+re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

@@ -5,7 +5,7 @@ This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
 specification that future maintainers must update when the public surface changes.
 
 Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 69 public
+  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 72 public
                      names (test_all_equals_frozen_set)
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, a dataclass's following its kind, e.g.
@@ -41,6 +41,7 @@ import inspect
 import subprocess
 import sys
 import types
+import typing
 from collections.abc import Mapping
 
 import solar_challenge
@@ -56,7 +57,7 @@ from tests._surface_forms import (
 
 
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the exact 69 public names, each with its frozen surface form
+# H2 surface-lock: the exact 72 public names, each with its frozen surface form
 #
 # The keys mirror PRD §3.1, grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
@@ -142,6 +143,9 @@ FROZEN_SURFACE: dict[str, str] = {
     "WeatherCache": "(cache_dir: Path | None = None) -> None",
     "get_weather_cache": "() -> WeatherCache",
     "set_weather_cache": "(cache: WeatherCache | None) -> None",
+    "WeatherProvider": "(*args, **kwargs)",
+    "PvgisTmy": "dataclass[eq, frozen] (cache: WeatherCache | None) -> None",
+    "PrefetchedWeather": "dataclass[frozen] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
     "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
     "OFGEM_TDCV_BY_OCCUPANTS": "dict",
@@ -160,7 +164,7 @@ def test_all_equals_frozen_set() -> None:
     Fails on any add/remove to __all__ without updating FROZEN_SET.
     The symmetric-difference message names the exact drifted symbol(s).
 
-    Also asserts len==69 explicitly — a bare set-compare would silently pass
+    Also asserts len==72 explicitly — a bare set-compare would silently pass
     if __all__ contained a duplicate entry (set collapses duplicates).
     """
     actual = set(solar_challenge.__all__)
@@ -169,9 +173,9 @@ def test_all_equals_frozen_set() -> None:
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
     )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 69, (
+    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 72, (
         f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 69 each)"
+        f"FROZEN_SET has {len(FROZEN_SET)} (expected 72 each)"
     )
     # Document the CLI-excluded invariant explicitly
     assert "get_cli_app" not in solar_challenge.__all__, (
@@ -404,6 +408,16 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "clear": "(self) -> int",
         "invalidate": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> bool",
     },
+    "WeatherProvider": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PvgisTmy": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PrefetchedWeather": {
+        "get": "(self, location: Location) -> DataFrame",
+        "fetch": "classmethod (cls, weather: WeatherProvider, locations: Iterable[Location]) -> PrefetchedWeather",
+    },
     # --- load (load.py) ---
     "LoadConfig": {
         "get_annual_consumption": "(self) -> float",
@@ -487,7 +501,7 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
-_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum)
+_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic)
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:

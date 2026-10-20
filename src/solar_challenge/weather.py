@@ -6,11 +6,12 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Optional
+from typing import Optional, Protocol
 
 import pandas as pd
 from pvlib.iotools import get_pvgis_hourly, get_pvgis_tmy
@@ -20,6 +21,9 @@ from solar_challenge.location import Location
 
 # Default cache directory
 DEFAULT_CACHE_DIR = Path(".cache/weather")
+
+CACHE_DIR_VARIABLE = "SOLAR_CHALLENGE_WEATHER_CACHE_DIR"
+"""The environment variable naming the directory WeatherCache() uses when given none."""
 
 IRRADIANCE_COLUMNS = ("ghi", "dni", "dhi")
 """The TMY's irradiance columns, in W/m²: global horizontal, direct normal and diffuse horizontal."""
@@ -47,7 +51,7 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
         "map_variables": True,
     }
 )
-"""The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
+"""The arguments of PvgisTmy's get_pvgis_tmy request, except the point's latitude and longitude."""
 
 
 class WeatherDataError(RuntimeError):
@@ -93,16 +97,19 @@ class WeatherCache:
     _KEY_VERSION = 2
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
 
-    2: get_tmy_data caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
+    2: PvgisTmy.get caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
         """Initialize the cache.
 
         Args:
-            cache_dir: Directory for cache files. Defaults to .cache/weather/
+            cache_dir: Directory for cache files. Given none, the directory CACHE_DIR_VARIABLE names when it is
+                set and non-empty, else DEFAULT_CACHE_DIR, under the working directory
         """
-        self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
+        if cache_dir is None:
+            cache_dir = Path(os.environ.get(CACHE_DIR_VARIABLE) or DEFAULT_CACHE_DIR)
+        self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _make_key(self, prefix: str, location: Location,
@@ -256,22 +263,107 @@ class WeatherCache:
         return removed
 
 
+class WeatherProvider(Protocol):
+    """Supplies the hourly weather a simulation at a location runs on."""
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """One year of hourly weather for location: temp_air, ghi, dni and dhi at least, on a DatetimeIndex."""
+        ...
+
+
+@dataclass(frozen=True)
+class PvgisTmy:
+    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there; with no cache, fetched on every get."""
+
+    cache: WeatherCache | None
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The scaled TMY for location, as its cache holds it, else as fetched from PVGIS.
+
+        Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
+        the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
+
+        Returns:
+            DataFrame with columns including:
+            - temp_air: Ambient temperature (°C)
+            - ghi: Global horizontal irradiance (W/m²)
+            - dni: Direct normal irradiance (W/m²)
+            - dhi: Diffuse horizontal irradiance (W/m²)
+            - wind_speed: Wind speed at 10m (m/s)
+            Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+            the timezone it was put in.
+
+        Raises:
+            WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
+                or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
+                ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
+        """
+        if self.cache is None:
+            return _fetch_scaled_tmy(location)
+        cached = self.cache.get("tmy", location)
+        if cached is not None:
+            return cached
+        tmy = _fetch_scaled_tmy(location)
+        self.cache.put(tmy, "tmy", location)
+        return tmy
+
+
+@dataclass(frozen=True, eq=False)
+class PrefetchedWeather:
+    """Weather already in memory for the locations it holds; it pickles, so a worker reads no cache and no network.
+
+    The locations it holds are fixed at construction. Its frames are the ones it is given, not copies, so a frame
+    changed in place is changed for every later get.
+    """
+
+    frames: Mapping[Location, pd.DataFrame]
+
+    def __post_init__(self) -> None:
+        """Hold frames in a read-only mapping of its own, so that no later change adds or removes a location."""
+        object.__setattr__(self, "frames", MappingProxyType(dict(self.frames)))
+
+    def __reduce__(self) -> tuple[type["PrefetchedWeather"], tuple[dict[Location, pd.DataFrame]]]:
+        """Rebuild through the constructor from a dict of the frames, since a mappingproxy does not pickle."""
+        return (type(self), (dict(self.frames),))
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The frame held for location itself; LookupError naming location and the locations held, for any other."""
+        if location not in self.frames:
+            raise LookupError(
+                f"A PrefetchedWeather answers only for the locations it holds: asked for {location!r}, "
+                f"it holds {list(self.frames)!r}"
+            )
+        return self.frames[location]
+
+    @classmethod
+    def fetch(cls, weather: WeatherProvider, locations: Iterable[Location]) -> "PrefetchedWeather":
+        """weather.get once for each distinct location, in this process, in first-seen order."""
+        return cls({location: weather.get(location) for location in dict.fromkeys(locations)})
+
+
 # Global cache instance (can be replaced for testing)
 _weather_cache: Optional[WeatherCache] = None
 
 
 def get_weather_cache() -> WeatherCache:
-    """Get or create the global weather cache."""
-    global _weather_cache
-    if _weather_cache is None:
-        _weather_cache = WeatherCache()
-    return _weather_cache
+    """The cache installed with set_weather_cache, else a new WeatherCache(), so that CACHE_DIR_VARIABLE is read at each call."""
+    return WeatherCache() if _weather_cache is None else _weather_cache
 
 
 def set_weather_cache(cache: Optional[WeatherCache]) -> None:
     """Set the global weather cache (for testing)."""
     global _weather_cache
     _weather_cache = cache
+
+
+def default_weather() -> PvgisTmy:
+    """The weather a composition root uses when it is given none.
+
+    Until the surface bump it is PvgisTmy over get_weather_cache(), so it reads the cache set_weather_cache
+    installs. At the bump it becomes PvgisTmy(WeatherCache()); docs/prds/weather-as-explicit-input.md says why,
+    in its decisions 3 and 9.
+    """
+    return PvgisTmy(get_weather_cache())
 
 
 def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
@@ -296,43 +388,24 @@ def get_tmy_data(
 ) -> pd.DataFrame:
     """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
 
-    The TMY's ghi, dni and dhi are multiplied by one factor so that the year's GHI equals the mean annual GHI
-    of PVGIS's 2005-2020 hourly series at the point; docs/tmy-irradiation-scaling.md has the measurements
-    and the rejected alternatives. The scaled TMY is cached, and a cached TMY is returned as stored.
+    It is default_weather()'s get, or PvgisTmy(None)'s when use_cache is False; PvgisTmy.get says what it
+    returns and raises.
 
     Args:
         location: Location object with latitude, longitude, and altitude
         use_cache: Whether to use caching (default True)
-
-    Returns:
-        DataFrame with columns including:
-        - temp_air: Ambient temperature (°C)
-        - ghi: Global horizontal irradiance (W/m²)
-        - dni: Direct normal irradiance (W/m²)
-        - dhi: Diffuse horizontal irradiance (W/m²)
-        - wind_speed: Wind speed at 10m (m/s)
-        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
-        the timezone it was put in.
-
-    Raises:
-        WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
-            or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
-            ValueError then being the cause; a WeatherDataError is a RuntimeError
     """
-    if use_cache:
-        cached_data = get_weather_cache().get("tmy", location)
-        if cached_data is not None:
-            return cached_data
+    return (default_weather() if use_cache else PvgisTmy(None)).get(location)
 
+
+def _fetch_scaled_tmy(location: Location) -> pd.DataFrame:
+    """PVGIS's TMY for location, scaled to the mean annual GHI of PVGIS's CLIMATE_YEARS hourly series at location."""
     pvgis_tmy = _fetch_pvgis_tmy(location)
     annual_ghi_kwh_per_m2 = _fetch_mean_annual_ghi_kwh_per_m2(location)
     try:
-        tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
+        return scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
     except ValueError as e:
         raise WeatherDataError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
-    if use_cache:
-        get_weather_cache().put(tmy, "tmy", location)
-    return tmy
 
 
 def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
