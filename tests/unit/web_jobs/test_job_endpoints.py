@@ -36,7 +36,8 @@ def client(app: Flask) -> FlaskClient:
 def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClient:
     """A client of the JobManager create_app built, whose jobs run the real simulate_home.
 
-    Bristol's TMY is a clear day on 1 June 2024, the first day of every days window the API simulates.
+    Its jobs run on the weather create_app bound, the test's own weather cache. There Bristol's TMY is a
+    clear day on 1 June 2024, the first day of every days window the API simulates.
     """
     weather_cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
     return app.test_client()
@@ -353,6 +354,26 @@ class TestJobCompletion:
             time.sleep(1)
 
         assert status == "completed", f"Job did not complete, last status: {status}"
+
+    def test_a_two_home_fleet_job_completes_with_its_results_stored(
+        self, app: Flask, real_simulation_client: FlaskClient
+    ) -> None:
+        """Each home of the fleet runs on the weather create_app bound, and the fleet's summary is stored for its run."""
+        submit_resp = real_simulation_client.post(
+            "/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST, {**A_HOME_JOB_REQUEST, "pv_kw": 3.0}]}
+        )
+        assert submit_resp.status_code == 201
+        job_id = submit_resp.get_json()["job_id"]
+        run_id = submit_resp.get_json()["run_id"]
+
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
+
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
+        assert results_resp.status_code == 200
+        results_data = results_resp.get_json()
+        assert (results_data["run_id"], results_data["type"]) == (run_id, "fleet")
+        assert results_data["summary"]["n_homes"] == 2
+        assert results_data["summary"]["per_home_generation_min_kwh"] > 0
 
 
 class TestSimulateFleetEndpoint:
