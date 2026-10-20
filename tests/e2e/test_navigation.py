@@ -4,7 +4,10 @@ These tests exercise the interactive UI chrome that wraps every page:
 sidebar navigation, theme toggle, and sidebar collapse/expand.  They run
 against the live Flask server provided by the ``live_server`` fixture.
 A page load lays the sidebar and the main column out in the sidebar state
-localStorage stores, before Alpine starts, so only the sidebar toggle slides them.
+localStorage stores, and draws the button of the sidebar group holding the
+current page highlighted, all before Alpine starts, so nothing in the sidebar
+or the main column transitions as Alpine starts; only the sidebar toggle slides
+them.
 """
 
 import pytest
@@ -241,43 +244,49 @@ _SIDEBAR_OPEN = {"sidebar_width": 256, "content_left": 256}
 _SIDEBAR_COLLAPSED = {"sidebar_width": 64, "content_left": 64}
 
 # Records in window.sidebarProbe.load how the sidebar and the main column load, at two moments:
-# - before_alpine: their layout at readystatechange 'interactive'. That fires once the page is parsed,
-#   before any deferred script runs, Alpine included. Reading the layout there makes the browser
-#   compute the page's style, so a later change Alpine makes to a transitioned property must start
-#   a transition.
-# - slides_as_alpine_starts: the CSS transitions running at Alpine's alpine:initialized event, which
-#   fires once Alpine has applied its bindings. Only transitions on the desktop sidebar (the first
-#   <aside>, the element _desktop_sidebar locates) or anything in it, or on #main-content or anything
-#   holding it, count.
+# - before_alpine: what is drawn at readystatechange 'interactive'. That fires once the page is parsed,
+#   before any deferred script runs, Alpine included. What is drawn is the layout, and the labels of the
+#   desktop sidebar's group buttons drawn with a background, i.e. highlighted. Reading it there makes the
+#   browser compute the page's style, so a later change Alpine makes to a transitioned property must
+#   start a transition.
+# - transitions_as_alpine_starts: the CSS transitions running at Alpine's alpine:initialized event, which
+#   fires once Alpine has applied its bindings; a colour fade counts as much as a slide. Only transitions
+#   on the desktop sidebar (the first <aside>, the element _desktop_sidebar locates) or anything in it,
+#   or on #main-content or anything holding it, count.
 _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const sidebar = () => document.querySelector('aside');
     const content = () => document.getElementById('main-content');
-    const layout = () => ({
-        sidebar_width: sidebar().getBoundingClientRect().width,
-        content_left: content().getBoundingClientRect().left,
+    const drawn = () => ({
+        layout: {
+            sidebar_width: sidebar().getBoundingClientRect().width,
+            content_left: content().getBoundingClientRect().left,
+        },
+        highlighted_groups: [...sidebar().querySelectorAll('nav button')]
+            .filter(button => getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)')
+            .map(button => button.textContent.trim()),
     });
     const describe = target => target === sidebar() ? 'sidebar'
         : target.contains(content()) ? 'main column'
         : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
-    const slides = () => document.getAnimations()
+    const transitions = () => document.getAnimations()
         .filter(animation => animation instanceof CSSTransition)
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    window.sidebarProbe = {layout, slides, load: {}};
+    window.sidebarProbe = {drawn, transitions, load: {}};
     document.addEventListener('readystatechange', () => {
-        if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = layout();
+        if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
     document.addEventListener('alpine:initialized', () => {
-        window.sidebarProbe.load.slides_as_alpine_starts = slides();
+        window.sidebarProbe.load.transitions_as_alpine_starts = transitions();
     });
 })()"""
 
-# Clicks the toggle in the page and returns the slides one task later: the click's class changes
+# Clicks the toggle in the page and returns the transitions one task later: the click's class changes
 # have taken effect by then, and no 300 ms transition can have ended.
-_CLICK_AND_READ_THE_SLIDES = """async toggle => {
+_CLICK_AND_READ_THE_TRANSITIONS = """async toggle => {
     toggle.click();
     await new Promise(resolve => setTimeout(resolve));
-    return window.sidebarProbe.slides();
+    return window.sidebarProbe.transitions();
 }"""
 
 
@@ -294,9 +303,15 @@ def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None
     page.goto(url)
 
 
-def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, float]]:
-    """What the recorder saw as the page loaded, and the layout now; it reads load on its own because the probe holds functions."""
-    return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.layout()")
+def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, object]]:
+    """What the recorder saw as the page loaded, and what is drawn now; it reads load on its own because the probe holds functions."""
+    return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.drawn()")
+
+
+def _highlighted_groups_once_nothing_transitions(page: Page) -> list[str]:
+    """The labels of the desktop sidebar's highlighted group buttons, read once no transition is running, so a colour fade under way is not read as a highlight half drawn."""
+    page.wait_for_function("() => window.sidebarProbe.transitions().length === 0")
+    return page.evaluate("() => window.sidebarProbe.drawn().highlighted_groups")
 
 
 @pytest.mark.parametrize(
@@ -307,19 +322,34 @@ def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, fl
         pytest.param("false", _SIDEBAR_COLLAPSED, "Expand sidebar", id="collapsed"),
     ],
 )
-def test_a_page_load_lays_out_the_sidebar_in_its_stored_state_before_alpine_starts_and_slides_nothing(
-    page: Page, live_server: str, stored_state: str | None, layout: dict[str, int], toggle_title: str
+@pytest.mark.parametrize(
+    ("path", "highlighted_groups"),
+    [
+        pytest.param("/", [], id="dashboard"),
+        pytest.param("/simulate/home", ["Simulate"], id="single-home"),
+        pytest.param("/scenarios/builder", ["Scenarios"], id="builder"),
+        pytest.param("/history/runs", ["History"], id="runs"),
+    ],
+)
+def test_a_page_load_draws_the_sidebar_in_its_stored_state_with_the_current_pages_group_highlighted_before_alpine_starts_and_transitions_nothing(
+    page: Page,
+    live_server: str,
+    path: str,
+    highlighted_groups: list[str],
+    stored_state: str | None,
+    layout: dict[str, int],
+    toggle_title: str,
 ) -> None:
-    """The dashboard's sidebar and main column are laid out in the stored state before Alpine starts, and neither slides as it starts.
+    """A page's sidebar and main column are drawn in the stored state, with the button of the group holding the page (if any) highlighted, before Alpine starts; nothing in them transitions as Alpine starts; and they are drawn the same once it has.
 
-    The toggle's title shows that Alpine has started and agrees with the stored state. The page is
-    the dashboard because its sidebar holds no current-page group, whose highlight Alpine fades in
-    on load on a grouped page.
+    The toggle's title shows that Alpine has started and agrees with the stored state. The dashboard
+    holds no group, so its sidebar highlights none.
     """
-    _open_with_the_sidebar_stored(page, live_server + "/", stored_state)
+    _open_with_the_sidebar_stored(page, live_server + path, stored_state)
 
     expect(_sidebar_toggle(page)).to_have_attribute("title", toggle_title)
-    assert _how_the_sidebar_loaded(page) == ({"before_alpine": layout, "slides_as_alpine_starts": []}, layout)
+    drawn = {"layout": layout, "highlighted_groups": highlighted_groups}
+    assert _how_the_sidebar_loaded(page) == ({"before_alpine": drawn, "transitions_as_alpine_starts": []}, drawn)
 
 
 @pytest.mark.parametrize(
@@ -342,14 +372,14 @@ def test_the_sidebar_toggle_slides_the_sidebar_and_the_main_column(
     _open_with_the_sidebar_stored(page, live_server + "/", stored_state)
     expect(_sidebar_toggle(page)).to_have_attribute("title", title_before)
 
-    slides = _sidebar_toggle(page).evaluate(_CLICK_AND_READ_THE_SLIDES)
+    transitions = _sidebar_toggle(page).evaluate(_CLICK_AND_READ_THE_TRANSITIONS)
 
-    assert {"sidebar width", "main column margin-left"} <= set(slides), f"The toggle started only these slides: {slides}"
+    assert {"sidebar width", "main column margin-left"} <= set(transitions), f"The toggle started only these transitions: {transitions}"
     expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
 
 
 def test_the_next_page_load_starts_in_the_state_the_sidebar_toggle_left(page: Page, live_server: str) -> None:
-    """Once the toggle has collapsed the sidebar, and again once it has expanded it, a reload lays it out in that state before Alpine starts and slides nothing."""
+    """Once the toggle has collapsed the sidebar, and again once it has expanded it, a reload lays it out in that state before Alpine starts and transitions nothing."""
     _open_with_the_sidebar_stored(page, live_server + "/", None)
     expect(_sidebar_toggle(page)).to_have_attribute("title", "Collapse sidebar")
 
@@ -358,4 +388,25 @@ def test_the_next_page_load_starts_in_the_state_the_sidebar_toggle_left(page: Pa
         expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
         page.reload()
         expect(_sidebar_toggle(page)).to_have_attribute("title", title_after)
-        assert _how_the_sidebar_loaded(page) == ({"before_alpine": layout, "slides_as_alpine_starts": []}, layout)
+        drawn = {"layout": layout, "highlighted_groups": []}
+        assert _how_the_sidebar_loaded(page) == ({"before_alpine": drawn, "transitions_as_alpine_starts": []}, drawn)
+
+
+def test_a_group_opened_from_its_button_is_highlighted_until_closed_and_the_current_pages_group_stays_highlighted(
+    page: Page, live_server: str
+) -> None:
+    """Opening the Scenarios group highlights its button and closing it removes the highlight, while the Simulate group holding the page stays highlighted.
+
+    It presses Enter on the button instead of clicking it, because a mouse click leaves the pointer
+    on the button, and its hover background would read as a highlight.
+    """
+    _open_with_the_sidebar_stored(page, live_server + "/simulate/home", None)
+    expect(_sidebar_toggle(page)).to_have_attribute("title", "Collapse sidebar")
+    scenarios = _desktop_sidebar(page).get_by_role("button", name="Scenarios")
+
+    highlighted_groups = [_highlighted_groups_once_nothing_transitions(page)]
+    for _ in range(2):
+        scenarios.press("Enter")
+        highlighted_groups.append(_highlighted_groups_once_nothing_transitions(page))
+
+    assert highlighted_groups == [["Simulate"], ["Simulate", "Scenarios"], ["Simulate"]]
