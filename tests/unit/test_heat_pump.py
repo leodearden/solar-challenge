@@ -2,6 +2,7 @@
 
 import doctest
 import re
+from typing import get_args
 
 import numpy as np
 import pandas as pd
@@ -10,13 +11,10 @@ import solar_challenge.heat_pump
 from solar_challenge.heat_pump import (
     HeatPumpConfig,
     BASE_TEMPERATURE_C,
-    ASHP_COP_INTERCEPT,
-    ASHP_COP_SLOPE,
-    ASHP_COP_MIN,
-    ASHP_COP_MAX,
-    GSHP_COP_BASE,
-    GSHP_COP_MIN,
-    GSHP_COP_MAX,
+    COP_CURVES,
+    CopCurve,
+    HEAT_PUMP_TYPES,
+    HeatPumpType,
     calculate_cop,
     generate_heat_pump_load,
     heating_degree_deficit_c,
@@ -82,14 +80,6 @@ class TestHeatPumpConfigDefaults:
 class TestHeatPumpConfigValidation:
     """Test parameter validation."""
 
-    def test_invalid_heat_pump_type(self):
-        """Invalid heat pump type raises error."""
-        with pytest.raises(ValueError, match="Heat pump type"):
-            HeatPumpConfig(
-                heat_pump_type="WSHP",  # Invalid type
-                thermal_capacity_kw=8.0
-            )
-
     def test_capacity_must_be_positive(self):
         """Thermal capacity <= 0 raises error."""
         with pytest.raises(ValueError, match="capacity must be positive"):
@@ -136,13 +126,92 @@ class TestHeatPumpConfigValidation:
             )
 
 
+class TestCopCurve:
+    """A CopCurve's COP is its line in the outdoor temperature, held between its minimum and maximum."""
+
+    @pytest.mark.parametrize(
+        ("outdoor_temp_c", "cop"),
+        [
+            pytest.param(-4.0, 2.0, id="line-at-1.0-held-up-to-minimum"),
+            pytest.param(0.0, 3.0, id="intercept"),
+            pytest.param(1.0, 3.5, id="on-the-line"),
+            pytest.param(4.0, 4.0, id="line-at-5.0-held-down-to-maximum"),
+        ],
+    )
+    def test_cop_is_the_line_held_between_minimum_and_maximum(self, outdoor_temp_c, cop):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=2.0, maximum=4.0)
+
+        assert curve.cop(outdoor_temp_c) == cop
+
+    def test_equal_bounds_give_a_constant_cop(self):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=3.0, maximum=3.0)
+
+        assert curve.cop(-10.0) == 3.0
+        assert curve.cop(10.0) == 3.0
+
+    @pytest.mark.parametrize(
+        ("minimum", "maximum"),
+        [
+            pytest.param(0.0, 4.0, id="zero-minimum"),
+            pytest.param(-1.0, 4.0, id="negative-minimum"),
+            pytest.param(4.5, 4.0, id="minimum-above-maximum"),
+        ],
+    )
+    def test_bounds_must_satisfy_zero_below_minimum_at_most_maximum(self, minimum, maximum):
+        with pytest.raises(ValueError, match=re.escape(f"got minimum={minimum}, maximum={maximum}")):
+            CopCurve(intercept=3.0, slope=0.5, minimum=minimum, maximum=maximum)
+
+
+class TestHeatPumpTypes:
+    """HeatPumpType's Literal states the heat-pump types once; the runtime vocabulary and the COP curves follow it."""
+
+    def test_the_literal_the_vocabulary_and_the_cop_curves_name_the_same_types(self):
+        assert set(get_args(HeatPumpType)) == set(COP_CURVES) == set(HEAT_PUMP_TYPES)
+
+    @pytest.mark.parametrize(
+        "call_with_xshp",
+        [
+            pytest.param(lambda: HeatPumpConfig("XSHP", 8.0), id="heat-pump-config"),
+            pytest.param(lambda: calculate_cop("XSHP", 0.0), id="calculate-cop"),
+        ],
+    )
+    def test_a_type_outside_heat_pump_types_is_refused_naming_every_type(self, call_with_xshp):
+        with pytest.raises(ValueError, match=re.escape("Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'")):
+            call_with_xshp()
+
+
 class TestCalculateCOP:
     """Test COP calculation for different heat pump types."""
 
-    def test_ashp_cop_at_zero_degrees(self):
-        """ASHP COP at 0°C matches intercept."""
-        cop = calculate_cop("ASHP", 0.0)
-        assert cop == pytest.approx(ASHP_COP_INTERCEPT, rel=0.001)
+    @pytest.mark.parametrize(
+        ("heat_pump_type", "expected"),
+        [
+            pytest.param("ASHP", [1.8, 2.0, 2.5, 3.2, 4.5, 4.5], id="ASHP"),
+            pytest.param("GSHP", [3.4, 3.7, 3.8, 3.94, 4.2, 4.6], id="GSHP"),
+        ],
+    )
+    def test_cop_at_the_prds_temperatures(self, heat_pump_type, expected):
+        """The COPs of the PRD's §3.3, written as literals rather than read from COP_CURVES, so that an edited curve fails."""
+        temperatures = (-20.0, -5.0, 0.0, 7.0, 20.0, 40.0)
+
+        assert [calculate_cop(heat_pump_type, t) for t in temperatures] == pytest.approx(expected, abs=1e-12)
+
+    @pytest.mark.parametrize(
+        ("heat_pump_type", "outdoor_temp_c", "cop"),
+        [
+            pytest.param("ASHP", -50.0, 1.8, id="ASHP-floor"),
+            pytest.param("ASHP", 50.0, 4.5, id="ASHP-ceiling"),
+            pytest.param("GSHP", -60.0, 3.2, id="GSHP-floor"),
+            pytest.param("GSHP", 60.0, 4.8, id="GSHP-ceiling"),
+        ],
+    )
+    def test_each_type_is_held_to_its_floor_and_ceiling(self, heat_pump_type, outdoor_temp_c, cop):
+        assert calculate_cop(heat_pump_type, outdoor_temp_c) == pytest.approx(cop, abs=1e-12)
+
+    @pytest.mark.parametrize("outdoor_temp_c", (-60.0, -20.0, -5.0, 0.0, 7.0, 20.0, 40.0, 60.0))
+    @pytest.mark.parametrize("heat_pump_type", HEAT_PUMP_TYPES)
+    def test_cop_is_the_types_curve_in_cop_curves(self, heat_pump_type, outdoor_temp_c):
+        assert calculate_cop(heat_pump_type, outdoor_temp_c) == COP_CURVES[heat_pump_type].cop(outdoor_temp_c)
 
     def test_ashp_cop_increases_with_temperature(self):
         """ASHP COP increases with outdoor temperature."""
@@ -151,28 +220,6 @@ class TestCalculateCOP:
         cop_plus_10 = calculate_cop("ASHP", 10.0)
 
         assert cop_minus_10 < cop_zero < cop_plus_10
-
-    def test_ashp_cop_linear_relationship(self):
-        """ASHP COP follows linear relationship in mid-range."""
-        # At temperatures where we're not hitting min/max bounds
-        temp = 5.0
-        expected_cop = ASHP_COP_INTERCEPT + ASHP_COP_SLOPE * temp
-        actual_cop = calculate_cop("ASHP", temp)
-        assert actual_cop == pytest.approx(expected_cop, rel=0.001)
-
-    def test_ashp_cop_min_bound(self):
-        """ASHP COP doesn't go below minimum."""
-        # Very cold temperature should hit minimum
-        cop = calculate_cop("ASHP", -20.0)
-        assert cop >= ASHP_COP_MIN
-        assert cop == pytest.approx(ASHP_COP_MIN, rel=0.001)
-
-    def test_ashp_cop_max_bound(self):
-        """ASHP COP doesn't exceed maximum."""
-        # Very warm temperature should hit maximum
-        cop = calculate_cop("ASHP", 30.0)
-        assert cop <= ASHP_COP_MAX
-        assert cop == pytest.approx(ASHP_COP_MAX, rel=0.001)
 
     def test_gshp_cop_more_stable(self):
         """GSHP COP is more stable than ASHP across temperatures."""
@@ -185,28 +232,6 @@ class TestCalculateCOP:
         ashp_variation = abs(ashp_cop_warm - ashp_cop_cold)
 
         assert gshp_variation < ashp_variation
-
-    def test_gshp_cop_at_base_temp(self):
-        """GSHP COP near base value at typical temperatures."""
-        cop = calculate_cop("GSHP", 10.0)
-        # Should be close to base, slightly influenced by temperature
-        assert cop >= GSHP_COP_MIN
-        assert cop <= GSHP_COP_MAX
-
-    def test_gshp_cop_min_bound(self):
-        """GSHP COP doesn't go below minimum."""
-        cop = calculate_cop("GSHP", -30.0)
-        assert cop >= GSHP_COP_MIN
-
-    def test_gshp_cop_max_bound(self):
-        """GSHP COP doesn't exceed maximum."""
-        cop = calculate_cop("GSHP", 40.0)
-        assert cop <= GSHP_COP_MAX
-
-    def test_invalid_heat_pump_type_raises(self):
-        """Invalid heat pump type raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid heat pump type"):
-            calculate_cop("INVALID", 10.0)
 
     def test_gshp_generally_higher_cop(self):
         """GSHP generally has higher COP than ASHP in cold weather."""
