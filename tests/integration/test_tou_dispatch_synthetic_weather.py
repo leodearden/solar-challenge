@@ -19,7 +19,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
 
 pytestmark = [
@@ -49,8 +49,8 @@ def greedy_and_tou() -> tuple[SimulationResults, SimulationResults]:
     tou_home = dataclasses.replace(home, dispatch_strategy="tou_optimized")
     weather = _sunny_then_sunless_weather()
     return (
-        simulate_home(home, SUNNY_DAY, SUNLESS_DAY, weather_data=weather),
-        simulate_home(tou_home, SUNNY_DAY, SUNLESS_DAY, weather_data=weather),
+        simulate_home(home, SUNNY_DAY, SUNLESS_DAY, weather=weather_for(home, weather)),
+        simulate_home(tou_home, SUNNY_DAY, SUNLESS_DAY, weather=weather_for(tou_home, weather)),
     )
 
 

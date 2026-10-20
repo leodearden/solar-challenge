@@ -24,7 +24,7 @@ from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, r
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import PrefetchedWeather
-from tests._synthetic_weather import sunless_weather, synthetic_june_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
 @pytest.fixture
@@ -430,7 +430,7 @@ class TestSimulateHomeImportPricing:
         )
         day = pd.Timestamp("2024-06-21")
 
-        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+        results = simulate_home(home, day, day, weather=weather_for(home, june21_weather_data))
 
         assert results.tariff_rate.tolist() == [tariff.get_rate(minute) for minute in results.tariff_rate.index]
         assert results.import_cost.sum() > 0
@@ -444,7 +444,7 @@ class TestSimulateHomeImportPricing:
         home = HomeConfig(PVConfig(capacity_kw=4.0), LoadConfig(annual_consumption_kwh=3000.0, seed=42))
         day = pd.Timestamp("2024-06-21")
 
-        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+        results = simulate_home(home, day, day, weather=weather_for(home, june21_weather_data))
 
         assert results.grid_import.sum() > 0
         assert (results.tariff_rate == 0.0).all()
@@ -483,7 +483,7 @@ class TestSimulateHomeSEGPricing:
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
+            weather=weather_for(seg_home_config, june21_weather_data),
         )
         assert results.grid_export.sum() > 0, "Expected grid export > 0 on sunny summer day"
 
@@ -493,7 +493,7 @@ class TestSimulateHomeSEGPricing:
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
+            weather=weather_for(seg_home_config, june21_weather_data),
         )
         summary = calculate_summary(results)
 
@@ -508,7 +508,7 @@ class TestSimulateHomeSEGPricing:
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
+            weather=weather_for(seg_home_config, june21_weather_data),
         )
         summary = calculate_summary(results)
 
@@ -524,7 +524,7 @@ class TestSimulateHomeSEGPricing:
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
+            weather=weather_for(seg_home_config, june21_weather_data),
         )
         summary = calculate_summary(results)
 
@@ -561,7 +561,7 @@ class TestSimulateHomeSEGNonRegression:
                 no_seg_config,
                 start_date=pd.Timestamp("2024-06-21"),
                 end_date=pd.Timestamp("2024-06-21"),
-                weather_data=june21_weather_data,
+                weather=weather_for(no_seg_config, june21_weather_data),
             )
         # Non-vacuous: some export actually occurred on this sunny day.
         assert results.grid_export.sum() > 0, "Expected grid export on a sunny day"
@@ -576,7 +576,7 @@ class TestSimulateHomeSEGNonRegression:
         day = pd.Timestamp("2024-06-21")
 
         with pytest.warns(UserWarning, match="seg_tariff") as caught:
-            simulate_home(no_seg_config, day, day, weather_data=june21_weather_data)
+            simulate_home(no_seg_config, day, day, weather=weather_for(no_seg_config, june21_weather_data))
 
         assert [warning.filename for warning in caught if "seg_tariff" in str(warning.message)] == [__file__]
 
@@ -600,7 +600,7 @@ class TestSimulateHomeSEGNonRegression:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
+            weather=weather_for(config, june21_weather_data),
         )
         summary = calculate_summary(results)
         total_export_kwh = results.grid_export.sum() / 60.0
@@ -629,7 +629,7 @@ class TestSimulateHomeExportValuationWithoutATariff:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            results = simulate_home(home, day, day, weather_data=june21_weather_data)
+            results = simulate_home(home, day, day, weather=weather_for(home, june21_weather_data))
 
         assert results.grid_export.sum() > 0
         np.testing.assert_allclose(
@@ -697,6 +697,10 @@ class TestSimulateHomeTakesItsWeather:
 
         with pytest.raises(LookupError, match=re.escape(repr(home.location))):
             simulate_home(home, _MIDSUMMER, _MIDSUMMER, weather=bristol_only)
+
+    def test_a_run_without_weather_is_refused_naming_it(self) -> None:
+        with pytest.raises(TypeError, match="weather"):
+            simulate_home(_edinburgh_home(), _MIDSUMMER, _MIDSUMMER)
 
 
 class TestCalculateSummary:

@@ -35,7 +35,7 @@ from solar_challenge.output import compute_community_metrics, generate_community
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
 from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 pytestmark = pytest.mark.integration
 
@@ -131,7 +131,7 @@ def _build_injected_fleet(
         ),
     ]
     all_configs = exporter_configs + importer_configs
-    results = [simulate_home(h, start, end, weather_data=weather) for h in all_configs]
+    results = [simulate_home(h, start, end, weather=weather_for(h, weather)) for h in all_configs]
     return FleetResults(per_home_results=results, home_configs=all_configs)
 
 

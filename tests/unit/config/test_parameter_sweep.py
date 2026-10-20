@@ -21,7 +21,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache
+from solar_challenge.weather import WeatherCache, default_weather
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -135,6 +135,7 @@ class TestPVParameterSweepPreservesDegradation:
             ),
             period.get_start_timestamp(),
             period.get_end_timestamp(),
+            weather=default_weather(),
         )
         assert point.parameter_value == value
         assert isinstance(point.results, SimulationResults)
@@ -234,7 +235,9 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
         [point] = self._sweep(2.0)
 
         period = SimulationPeriod(start_date=self._DAY, end_date=self._DAY)
-        expected = simulate_home(self._home(2), period.get_start_timestamp(), period.get_end_timestamp())
+        expected = simulate_home(
+            self._home(2), period.get_start_timestamp(), period.get_end_timestamp(), weather=default_weather()
+        )
         assert point.parameter_value == 2.0
         assert isinstance(point.results, SimulationResults)
         pd.testing.assert_series_equal(point.results.demand, expected.demand)

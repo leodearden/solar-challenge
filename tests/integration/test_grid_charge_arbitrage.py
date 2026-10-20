@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.home import calculate_summary, simulate_home
-from tests._synthetic_weather import sunless_weather
+from tests._synthetic_weather import sunless_weather, weather_for
 
 pytestmark = pytest.mark.integration
 
@@ -82,8 +82,8 @@ def test_grid_charge_lowers_net_cost() -> None:
     start = end = pd.Timestamp("2024-01-15")
     weather = sunless_weather("2024-01-15", temp_air=8.0)
 
-    res_on = simulate_home(home_on, start, end, weather_data=weather)
-    res_off = simulate_home(home_off, start, end, weather_data=weather)
+    res_on = simulate_home(home_on, start, end, weather=weather_for(home_on, weather))
+    res_off = simulate_home(home_off, start, end, weather=weather_for(home_off, weather))
 
     summary_on = calculate_summary(res_on)
     summary_off = calculate_summary(res_off)
@@ -116,7 +116,7 @@ def test_energy_balance_holds_with_grid_charging() -> None:
     # simulate_home with validate_balance=True asserts at every timestep internally;
     # if the balance is violated it raises. Passing here proves #27's split-source
     # accounting keeps the energy balance closed.
-    res = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)
+    res = simulate_home(home_on, start, end, weather=weather_for(home_on, weather), validate_balance=True)
 
     # With zero PV and grid-charging, we must have drawn from the grid
     assert res.grid_import.sum() > 0, "Expected non-zero grid import"

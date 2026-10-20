@@ -27,7 +27,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache, get_tmy_data
+from solar_challenge.weather import WeatherCache, default_weather
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -681,44 +681,6 @@ class TestParallelMatchesSequential:
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
-class TestSimulateHomeWeatherData:
-    """Test optional weather_data parameter in simulate_home."""
-
-    def test_accepts_weather_data_parameter(self):
-        """simulate_home accepts pre-fetched weather data."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        )
-        start = _JUNE_DAY
-        end = _JUNE_DAY
-
-        # Pre-fetch weather data
-        weather = get_tmy_data(config.location)
-
-        # Should work with provided weather data
-        result = simulate_home(config, start, end, weather_data=weather)
-
-        assert isinstance(result, SimulationResults)
-        assert len(result.generation) == 1440  # 1 day at minute resolution
-
-    def test_fetches_weather_when_none(self):
-        """simulate_home fetches weather data when not provided."""
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        )
-        start = _JUNE_DAY
-        end = _JUNE_DAY
-
-        # Should work without weather data
-        result = simulate_home(config, start, end, weather_data=None)
-
-        assert isinstance(result, SimulationResults)
-        assert len(result.generation) == 1440
-
-
-@pytest.mark.usefixtures("bristol_june_tmy")
 class TestMultiSweepIter:
     """Test simulate_multi_sweep_iter for cross-sweep parallelism."""
 
@@ -948,7 +910,7 @@ class TestMultiSweepResults:
 
 
 class TestParallelFleetWeather:
-    """Parallel workers simulate each home from its location's TMY in the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals."""
+    """Parallel workers simulate each home on its location's TMY from the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals: each worker receives its home's weather in its job."""
 
     _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
     _LOAD =LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
@@ -959,8 +921,9 @@ class TestParallelFleetWeather:
     ) -> None:
         """Serve a clear 21 June as Bristol's TMY and the same day at half its irradiance as Bath's.
 
-        The test runs in an empty working directory, so a worker that falls back to
-        the default weather cache finds nothing there and writes nothing to the repository.
+        Workers receive their weather in the job. The test runs in an empty working directory,
+        so a worker that read the default weather itself would find nothing there and write
+        nothing to the repository.
         """
         monkeypatch.chdir(tmp_path)
         weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
@@ -982,7 +945,7 @@ class TestParallelFleetWeather:
                 for location in (Location.bristol(), self._BATH)
             ]
         )
-        alone = [simulate_home(home, _JUNE_DAY, _JUNE_DAY) for home in fleet.homes]
+        alone = [simulate_home(home, _JUNE_DAY, _JUNE_DAY, weather=default_weather()) for home in fleet.homes]
         assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
             "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
         )
@@ -997,7 +960,7 @@ class TestParallelFleetWeather:
                     obj=f"{home.name}'s results with parallel={parallel}",
                 )
 
-    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
     def test_multi_sweep_gives_each_home_the_results_simulate_home_gives_it_here(
         self, worker_start_method: str
     ) -> None:
@@ -1032,7 +995,7 @@ class TestParallelFleetWeather:
                 for home, in_sweep in zip(fleet.homes, fleet_results.per_home_results, strict=True):
                     pd.testing.assert_frame_equal(
                         in_sweep.to_dataframe(),
-                        simulate_home(home, _JUNE_DAY, _JUNE_DAY).to_dataframe(),
+                        simulate_home(home, _JUNE_DAY, _JUNE_DAY, weather=default_weather()).to_dataframe(),
                         check_exact=True,
                         obj=f"{home.name} of the {pv_kw} kW sweep with parallel={parallel}",
                     )

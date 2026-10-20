@@ -1,6 +1,6 @@
 """Integration tests for Economy 7 tariff support.
 
-The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
+Every simulation is given clear June days as Bristol's weather, so these tests run offline.
 test_winter_period_costs passes in a January week of its own.
 """
 
@@ -18,20 +18,12 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.fixture
-def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
-
-
-@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestEconomy7TariffIntegration:
     """Test comprehensive Economy 7 tariff integration."""
@@ -87,7 +79,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(7)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -104,7 +98,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(1)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
 
         # Economy 7 default: off-peak 00:30-07:30
         off_peak_times = results.tariff_rate.index[
@@ -131,7 +127,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(3)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
 
         # Import costs should be non-negative
         assert (results.import_cost >= 0).all()
@@ -156,7 +154,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(3)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
 
         # Export revenue should be non-negative
         assert (results.export_revenue >= 0).all()
@@ -170,7 +170,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(7)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
         summary = calculate_summary(results)
 
         # Financial totals should match sum of time series
@@ -196,8 +198,12 @@ class TestEconomy7TariffIntegration:
 
         # Simulate with both tariffs (both have tariff_config but no seg_tariff → warns)
         with pytest.warns(UserWarning, match="seg_tariff"):
-            economy7_results = simulate_home(economy7_config, start, end)
-            flat_results = simulate_home(flat_rate_config, start, end)
+            economy7_results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
+            flat_results = simulate_home(
+                flat_rate_config, start, end, weather=weather_for(flat_rate_config, _JUNE_DAYS.hourly_weather())
+            )
 
         # Calculate summaries
         economy7_summary = calculate_summary(economy7_results)
@@ -227,7 +233,12 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(7)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(pv_only_economy7_config, start, end)
+            results = simulate_home(
+                pv_only_economy7_config,
+                start,
+                end,
+                weather=weather_for(pv_only_economy7_config, _JUNE_DAYS.hourly_weather()),
+            )
 
         # Simulation completes successfully
         assert isinstance(results, SimulationResults)
@@ -252,7 +263,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(1)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
         df = results.to_dataframe()
 
         # Tariff columns should be present
@@ -278,7 +291,7 @@ class TestEconomy7TariffIntegration:
         )
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end, weather_data=january_week)
+            results = simulate_home(economy7_config, start, end, weather=weather_for(economy7_config, january_week))
         summary = calculate_summary(results)
 
         # Winter should have lower generation, higher imports
@@ -297,7 +310,9 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(7)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end)
+            results = simulate_home(
+                economy7_config, start, end, weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather())
+            )
         summary = calculate_summary(results)
 
         # Summer should have high generation
@@ -326,7 +341,7 @@ class TestEconomy7TariffIntegration:
 
         start, end = _JUNE_DAYS.window(2)
 
-        results = simulate_home(config, start, end)
+        results = simulate_home(config, start, end, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
         # Should complete successfully
         assert isinstance(results, SimulationResults)
@@ -361,7 +376,7 @@ class TestEconomy7TariffIntegration:
         start, end = _JUNE_DAYS.window(1)
 
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(config, start, end)
+            results = simulate_home(config, start, end, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
         # Check custom off-peak times (01:00-08:00)
         off_peak_times = results.tariff_rate.index[
@@ -382,7 +397,13 @@ class TestEconomy7TariffIntegration:
 
         # validate_balance=True is default, should not raise
         with pytest.warns(UserWarning, match="seg_tariff"):
-            results = simulate_home(economy7_config, start, end, validate_balance=True)
+            results = simulate_home(
+                economy7_config,
+                start,
+                end,
+                validate_balance=True,
+                weather=weather_for(economy7_config, _JUNE_DAYS.hourly_weather()),
+            )
         assert results is not None
 
         # All values should be non-negative

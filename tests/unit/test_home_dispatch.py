@@ -18,7 +18,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _TOU_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
@@ -32,7 +32,7 @@ _TOU_HOME = HomeConfig(
 
 def _simulate_june_21(home: HomeConfig) -> SimulationResults:
     day = pd.Timestamp("2024-06-21")
-    return simulate_home(home, day, day, weather_data=synthetic_june_weather(day))
+    return simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather(day)))
 
 
 @pytest.mark.parametrize(

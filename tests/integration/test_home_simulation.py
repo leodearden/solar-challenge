@@ -1,6 +1,6 @@
 """Integration tests for single home simulation.
 
-The weather cache serves clear June days as Bristol's TMY, so these tests run offline.
+Every simulation is given clear June days as Bristol's weather, so these tests run offline.
 """
 
 import pytest
@@ -16,19 +16,12 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
+from tests._synthetic_weather import weather_for
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.fixture
-def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
-
-
-@pytest.mark.usefixtures("bristol_june_tmy")
 @pytest.mark.integration
 class TestSingleHomeSimulation:
     """Test VAL-005: Integration test for single home simulation."""
@@ -59,7 +52,9 @@ class TestSingleHomeSimulation:
         """Simulates PV-only home for 7 days successfully."""
         start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_only_config, start, end)
+        results = simulate_home(
+            pv_only_config, start, end, weather=weather_for(pv_only_config, _JUNE_DAYS.hourly_weather())
+        )
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -78,7 +73,9 @@ class TestSingleHomeSimulation:
         """Simulates home with battery for 7 days successfully."""
         start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
 
         # All result fields populated
         assert len(results.generation) == 7 * 1440
@@ -94,14 +91,22 @@ class TestSingleHomeSimulation:
         start, end = _JUNE_DAYS.window(2)
 
         # validate_balance=True is default, should not raise
-        results = simulate_home(pv_battery_config, start, end, validate_balance=True)
+        results = simulate_home(
+            pv_battery_config,
+            start,
+            end,
+            validate_balance=True,
+            weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather()),
+        )
         assert results is not None
 
     def test_no_negative_values(self, pv_battery_config):
         """All output values are non-negative."""
         start, end = _JUNE_DAYS.window(3)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
 
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
@@ -116,7 +121,9 @@ class TestSingleHomeSimulation:
         """Summary statistics are in reasonable ranges."""
         start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
         summary = calculate_summary(results)
 
         # 7 days of simulation
@@ -137,7 +144,9 @@ class TestSingleHomeSimulation:
         """Results can be converted to DataFrame."""
         start, end = _JUNE_DAYS.window(1)
 
-        results = simulate_home(pv_only_config, start, end)
+        results = simulate_home(
+            pv_only_config, start, end, weather=weather_for(pv_only_config, _JUNE_DAYS.hourly_weather())
+        )
         df = results.to_dataframe()
 
         assert isinstance(df, pd.DataFrame)
