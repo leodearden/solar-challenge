@@ -5,14 +5,15 @@
 with its irradiance scaled, so a test can put a sunny day next to a sunless one.
 ``sunless_weather`` is one day with no sun at a constant air temperature, on any date.
 Both index their hours from midnight of the day they are given, in Europe/London, the
-timezone of the simulated demand.
+timezone of the simulated demand. ``weather_for`` gives such a frame to simulate_home as
+one home's weather.
 
 Usage::
 
-    from tests._synthetic_weather import sunless_weather, synthetic_june_weather
+    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
     sunny_then_sunless = synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(1.0, 0.0))
-    results = simulate_home(config, start, end, weather_data=sunny_then_sunless)
+    results = simulate_home(config, start, end, weather=weather_for(config, sunny_then_sunless))
 
     no_pv_in_january = sunless_weather("2024-01-15", temp_air=8.0)
 """
@@ -20,9 +21,15 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
+from solar_challenge.weather import PrefetchedWeather
+
+if TYPE_CHECKING:
+    from solar_challenge.home import HomeConfig
 
 _HOURS_PER_DAY = 24
 _TIMEZONE = "Europe/London"
@@ -76,6 +83,14 @@ def sunless_weather(day: str | pd.Timestamp, *, temp_air: float) -> pd.DataFrame
         index=_hourly_index(day, days=1),
         dtype=float,
     )
+
+
+def weather_for(home: HomeConfig, frame: pd.DataFrame) -> PrefetchedWeather:
+    """*frame* given to simulate_home as *home*'s weather.
+
+    It is held at the home's location alone, so a run of a home elsewhere is refused, naming both locations.
+    """
+    return PrefetchedWeather({home.location: frame})
 
 
 def _hourly_index(first_day: str | pd.Timestamp, days: int) -> pd.DatetimeIndex:

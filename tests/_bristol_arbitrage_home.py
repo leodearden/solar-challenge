@@ -8,8 +8,9 @@ is the scenario's own and cannot drift from it.
 Usage::
 
     from tests._bristol_arbitrage_home import bristol_arbitrage_home
+    from tests._synthetic_weather import weather_for
 
-    results = simulate_home(bristol_arbitrage_home(), start, end, weather_data=weather)
+    results = simulate_home(bristol_arbitrage_home(), start, end, weather=weather_for(bristol_arbitrage_home(), weather))
 """
 
 from pathlib import Path
