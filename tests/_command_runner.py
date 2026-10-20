@@ -37,6 +37,12 @@ class ShellCommand:
     command: str
     directory: Path
 
+    def __post_init__(self) -> None:
+        assert self.directory.is_dir(), (
+            f"the shell command {self.command!r} runs in {self.directory}, which is not a directory, so it cannot "
+            "start there"
+        )
+
 
 class Outcome(Protocol):
     """How a run ended: its exit code and what it printed to each stream."""

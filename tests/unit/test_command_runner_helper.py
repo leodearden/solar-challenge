@@ -168,6 +168,17 @@ def test_a_shell_command_runs_in_the_given_environments_role_and_gets_none_of_it
     assert result.stdout == f"{printed}\n", describe_outcome(result)
 
 
+def test_a_shell_command_whose_directory_is_not_a_directory_fails_naming_it_and_the_directory(tmp_path: Path) -> None:
+    """As an OrchestratorCommand does, so no command reaches Popen's FileNotFoundError, which names neither."""
+    absent = tmp_path / "absent"
+
+    with pytest.raises(AssertionError) as failure:
+        ShellCommand("true", absent)
+
+    assert repr("true") in str(failure.value)
+    assert str(absent) in str(failure.value)
+
+
 def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_its_timeout_and_its_output_so_far(
     tmp_path: Path,
 ) -> None:
