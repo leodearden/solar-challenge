@@ -8,7 +8,7 @@ Test classes, in file order:
   - TestCommunityBillingTimeOfUse: time-of-use import billing via simulate_community
   - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community
   - TestCommunityResultsSharingMode: sharing_mode carried onto CommunityResults
-  - TestCommunityRowLength: the row length simulate_community reads from the fleet index's window, and the indexes it refuses
+  - TestCommunityRowLength: the row length simulate_community and compute_community_metrics read from the index's window, and the indexes they refuse
 """
 from __future__ import annotations
 
@@ -832,7 +832,7 @@ _CONFIG_FOR_EACH_PATH = (
 
 
 class TestCommunityRowLength:
-    """Each row lasts the fleet index's cadence, as its window reads it: a single row's comes from its freq. An index no window describes is refused before any row is dispatched or billed."""
+    """Each row lasts the fleet index's cadence, as its window reads it: a single row's comes from its freq. An index no window describes is refused before any row is dispatched, billed or counted into the metrics."""
 
     @pytest.fixture
     def single_row(self) -> pd.DatetimeIndex:
@@ -843,18 +843,40 @@ class TestCommunityRowLength:
         billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.0)
         return CommunityConfig(sharing_mode="p2p", billing=billing)
 
-    def test_metrics_count_a_single_row_as_one_minute(self, single_row: pd.DatetimeIndex) -> None:
+    @pytest.mark.parametrize(
+        ("freq", "row_hours"),
+        [pytest.param("min", 1 / 60, id="minute"), pytest.param("30min", 0.5, id="half-hour")],
+    )
+    def test_metrics_count_a_single_row_as_long_as_its_freq(self, freq: str, row_hours: float) -> None:
         # The exporter sends out 2 kW and the importer draws 1.5 kW, so netting leaves 0.5 kW of export.
-        fleet = _make_fleet(single_row, [([3.0], [1.0]), ([0.0], [1.5])])
+        row = pd.date_range("2024-06-21 12:00", periods=1, freq=freq, tz="Europe/London")
+        fleet = _make_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
 
         m = compute_community_metrics(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
 
-        assert m.dt_h == pytest.approx(1 / 60)
-        assert m.unshared_import_kwh == pytest.approx(1.5 / 60)
-        assert m.unshared_export_kwh == pytest.approx(2.0 / 60)
+        assert m.dt_h == pytest.approx(row_hours)
+        assert m.unshared_import_kwh == pytest.approx(1.5 * row_hours)
+        assert m.unshared_export_kwh == pytest.approx(2.0 * row_hours)
         assert m.community_import_kwh == pytest.approx(0.0)
-        assert m.community_export_kwh == pytest.approx(0.5 / 60)
-        assert m.total_demand_kwh == pytest.approx(2.5 / 60)
+        assert m.community_export_kwh == pytest.approx(0.5 * row_hours)
+        assert m.total_demand_kwh == pytest.approx(2.5 * row_hours)
+
+    def test_metrics_refuse_results_on_an_unevenly_spaced_index(self) -> None:
+        # The first and last gaps are both one minute; only the gap before position 5 is two.
+        minutes = pd.date_range("2024-06-21 12:00", periods=10, freq="min", tz="Europe/London").delete(5)
+        zeros = pd.Series(0.0, index=minutes)
+        results = CommunityResults(
+            grid_import=zeros,
+            grid_export=zeros,
+            battery_charge=zeros,
+            battery_discharge=zeros,
+            battery_soc=zeros,
+            fleet_results=_make_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)]),
+            sharing_mode="p2p",
+        )
+
+        with pytest.raises(ValueError, match="evenly spaced"):
+            compute_community_metrics(results)
 
     def test_billing_prices_a_single_row_as_one_minute(
         self, single_row: pd.DatetimeIndex, billed_p2p: CommunityConfig

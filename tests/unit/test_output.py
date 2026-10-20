@@ -8,20 +8,22 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityConfig, simulate_community
 from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
+    CommunityMetrics,
     SeasonSummary,
-    aggregate_annual,
     aggregate_daily,
     aggregate_monthly,
     calculate_export_ratio,
     calculate_grid_dependency_ratio,
     calculate_seasonal_metrics,
     calculate_self_consumption_ratio,
+    compute_community_metrics,
     export_to_csv,
     generate_summary_report,
 )
-from tests._finance_builders import make_home_config
+from tests._finance_builders import make_fleet_results_of, make_home_config
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -75,13 +77,13 @@ def _run_with_distinct_rising_series(
     )
 
 
-def _seasonal_run() -> SimulationResults:
-    """Two February days, the spring, and half a June day, each day steady at its own levels, on one unbroken minute index.
+def _seasonal_run(freq: str = "1min") -> SimulationResults:
+    """Two February days, the spring, and half a June day, each day steady at its own levels, on one index whose rows are freq apart.
 
     The first February day's battery stores its PV surplus and meets part of the sunless second
-    day's demand. Every minute balances as a simulated one does.
+    day's demand. Every row balances as a simulated one does.
     """
-    index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq="1min", tz="Europe/London")
+    index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq=freq, tz="Europe/London")
     days = index.normalize()
     winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
     winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
@@ -108,6 +110,21 @@ def _seasonal_run() -> SimulationResults:
         tariff_rate=zeros,
         heat_pump_load=steady(winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=0.25),
     )
+
+
+_SEASONAL_RUN_FREQS = (
+    pytest.param("1min", id="minute-rows"),
+    pytest.param("30min", id="half-hour-rows"),
+)
+
+
+def _energy_figures(metrics: CommunityMetrics) -> dict[str, float]:
+    """metrics' kWh figures and its self-sufficiency, each under its field name."""
+    return {
+        name: value
+        for name, value in asdict(metrics).items()
+        if name.endswith("_kwh") or name == "self_sufficiency"
+    }
 
 
 class TestExportToCSV:
@@ -183,8 +200,9 @@ class TestGenerateSummaryReport:
 class TestSeasonalBreakdowns:
     """Winter (December to February) and summer (June to August) each count only their own rows."""
 
-    def test_report_tables_each_seasons_heat_pump_figures(self):
-        lines = generate_summary_report(_seasonal_run()).splitlines()
+    @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
+    def test_report_tables_each_seasons_heat_pump_figures(self, freq: str) -> None:
+        lines = generate_summary_report(_seasonal_run(freq)).splitlines()
 
         # Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
         # Summer: 0.25 kW × 12 h = 3 kWh, 25% of 1 kW × 12 h, over half a day.
@@ -193,8 +211,9 @@ class TestSeasonalBreakdowns:
         assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
         assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
 
-    def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self):
-        seasons = calculate_seasonal_metrics(_seasonal_run())
+    @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
+    def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self, freq: str) -> None:
+        seasons = calculate_seasonal_metrics(_seasonal_run(freq))
 
         # Winter self-consumption: 5 kW × 24 h plus the battery's 1 kW × 24 h = 144 kWh, where
         # min(generation, demand) would give 120. Winter import: 4 kW × 24 h = 96 kWh of 240.
@@ -206,7 +225,8 @@ class TestSeasonalBreakdowns:
                 "self_consumption_kwh": 144.0,
                 "self_consumption_ratio": 0.75,
                 "grid_dependency_ratio": 0.4,
-            }
+            },
+            rel=1e-9,
         )
         assert asdict(seasons.summer) == pytest.approx(
             {
@@ -215,7 +235,8 @@ class TestSeasonalBreakdowns:
                 "self_consumption_kwh": 12.0,
                 "self_consumption_ratio": 0.25,
                 "grid_dependency_ratio": 0.0,
-            }
+            },
+            rel=1e-9,
         )
 
     def test_a_battery_homes_summer_day_has_its_summarys_figures(self):
@@ -244,6 +265,23 @@ class TestSeasonalBreakdowns:
                 "grid_dependency_ratio": summary.grid_dependency_ratio,
             }
         )
+
+
+class TestCommunityMetrics:
+    """compute_community_metrics integrates each row over as long as the community's rows last, so a half-hourly twin of a run has the minute run's figures."""
+
+    def test_a_half_hourly_twin_of_a_run_has_the_minute_runs_figures(self) -> None:
+        minute, half_hour = (
+            compute_community_metrics(
+                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig(sharing_mode="p2p"))
+            )
+            for freq in ("1min", "30min")
+        )
+
+        assert _energy_figures(half_hour) == pytest.approx(_energy_figures(minute), rel=1e-9)
+        assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
+        assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
+        assert half_hour.sharing_mode == minute.sharing_mode
 
 
 class TestRatioCalculations:
@@ -434,25 +472,4 @@ class TestPeriodTotalsAndPeaks:
             summary.peak_generation_kw
         )
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
-
-
-class TestAggregateAnnual:
-    """Test OUT-008: Annual aggregation."""
-
-    def test_returns_dict(self, sample_results):
-        """Returns dictionary with annual totals."""
-        annual = aggregate_annual(sample_results)
-
-        assert isinstance(annual, dict)
-        assert "generation_kwh" in annual
-        assert "demand_kwh" in annual
-
-    def test_includes_all_metrics(self, sample_results):
-        """Includes all summary metrics."""
-        annual = aggregate_annual(sample_results)
-
-        assert "self_consumption_ratio" in annual
-        assert "grid_dependency_ratio" in annual
-        assert "export_ratio" in annual
-        assert "simulation_days" in annual
 

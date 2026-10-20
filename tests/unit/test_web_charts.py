@@ -33,19 +33,20 @@ from tests._synthetic_weather import sunless_weather, synthetic_june_weather, we
 
 
 def _steady_run(
-    days: int,
+    first_day: str,
+    last_day: str,
     *,
     demand_kw: float = 0.0,
     heat_pump_kw: float | None = None,
     import_cost_gbp: float = 0.0,
     export_revenue_gbp: float = 0.0,
 ) -> SimulationResults:
-    """A run of ``days`` days at one row a minute, every series steady.
+    """A run at one row a minute over whole Europe/London days, first_day's midnight to last_day's 23:59, every series steady.
 
     Demand, heat pump, import cost and export revenue are at the levels given,
     every other series is zero, and there is no heat pump unless heat_pump_kw is given.
     """
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq="min", tz="Europe/London")
+    index = pd.date_range(first_day, f"{last_day} 23:59", freq="min", tz="Europe/London")
 
     def steady(level: float) -> pd.Series:
         return pd.Series(level, index=index)
@@ -107,6 +108,12 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResult
         }
     )
     return simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
+
+
+def _drawn(figure: str | None) -> bool:
+    """Whether a chart builder that can decline drew its chart: its Plotly figure JSON, which holds data, rather than None."""
+    assert figure is None or "data" in json.loads(figure)
+    return figure is not None
 
 
 class TestChartFunctions:
@@ -185,11 +192,49 @@ class TestChartFunctions:
 
     def test_heat_pump_analysis_returns_its_charts_frozen(self) -> None:
         """A reader of the heat-pump charts cannot rewrite a figure in them."""
-        charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
+        charts = heat_pump_analysis(_steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
         assert charts is not None
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             charts.load_share_chart = "{}"  # type: ignore[misc]
+
+
+class TestChartDisplayGates:
+    """Each display gate counts the calendar days of the run's window, which a timedelta overcounts by one across the autumn fall-back."""
+
+    @pytest.mark.parametrize(
+        ("last_day", "days", "drawn"),
+        [
+            pytest.param("2024-12-28", 89, False, id="89-days-not-drawn"),
+            pytest.param("2024-12-29", 90, True, id="90-days-drawn"),
+        ],
+    )
+    def test_monthly_summary_draws_only_a_window_of_at_least_90_calendar_days(
+        self, last_day: str, days: int, drawn: bool
+    ) -> None:
+        results = _steady_run("2024-10-01", last_day)
+        assert results.window.days == days
+
+        figure = monthly_summary(results)
+
+        assert _drawn(figure) is drawn
+
+    @pytest.mark.parametrize(
+        ("last_day", "days", "drawn"),
+        [
+            pytest.param("2024-12-26", 179, False, id="179-days-not-drawn"),
+            pytest.param("2024-12-27", 180, True, id="180-days-drawn"),
+        ],
+    )
+    def test_seasonal_comparison_draws_only_a_window_of_at_least_180_calendar_days(
+        self, last_day: str, days: int, drawn: bool
+    ) -> None:
+        results = _steady_run("2024-07-01", last_day)
+        assert results.window.days == days
+
+        figure = seasonal_comparison(results)
+
+        assert _drawn(figure) is drawn
 
 
 class TestBatterySocChartLimitLines:
@@ -299,7 +344,7 @@ class TestChartTotals:
     """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
 
     def test_heat_pump_share_is_the_runs_heat_pump_and_other_kwh(self) -> None:
-        charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
+        charts = heat_pump_analysis(_steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
         assert charts is not None
 
         pie = traces(charts.load_share_chart)[0]
@@ -310,7 +355,9 @@ class TestChartTotals:
 
     def test_financial_bars_are_each_days_pounds(self) -> None:
         by_name = traces_by_name(
-            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
+            financial_breakdown(
+                _steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+            )
         )
 
         # £0.002 and £0.001 a minute, for 1440 minutes a day.
@@ -324,7 +371,9 @@ class TestFinancialBreakdownNetCostLine:
 
     def test_is_the_running_total_of_each_days_import_cost_less_its_export_revenue(self) -> None:
         line = traces_by_name(
-            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
+            financial_breakdown(
+                _steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+            )
         )["Cumulative Net Cost"]
 
         # £2.88 of import cost less £1.44 of export revenue each day.

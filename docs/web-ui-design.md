@@ -272,7 +272,7 @@ The as-built chart colours are `COLOUR_PALETTE` in `src/solar_challenge/web/char
 5. **Monthly Summary**
    - Type: Stacked bar per month
    - Series: all energy categories
-   - Only shown for simulations >= 90 days
+   - Only shown for a run whose window covers at least 90 calendar days
 
 6. **Financial Breakdown**
    - Type: Dual-axis chart
@@ -284,7 +284,7 @@ The as-built chart colours are `COLOUR_PALETTE` in `src/solar_challenge/web/char
    - Type: Grouped bars
    - Groups: Winter (Dec-Feb) vs Summer (Jun-Aug)
    - Metrics: generation, demand, self-consumption ratio, grid dependency
-   - Only shown for simulations >= 180 days
+   - Only shown for a run whose window covers at least 180 calendar days
 
 8. **Heat Pump Analysis** (conditional)
    - COP vs outdoor temperature scatter plot

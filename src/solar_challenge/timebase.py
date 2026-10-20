@@ -12,13 +12,6 @@ HOURS_PER_MINUTE = 1 / 60
 """Hours in one minute: minutes times this is hours. It says nothing about a series' cadence; SimulationWindow.step_hours is how long one row lasts."""
 
 
-def step_hours(index: pd.DatetimeIndex) -> float:
-    """The hours one row of index lasts: the gap between its first two rows, or one minute when it has fewer."""
-    if len(index) < 2:
-        return HOURS_PER_MINUTE
-    return float((index[1] - index[0]).total_seconds()) / 3600.0
-
-
 def covered_days(first_day: date, last_day: date) -> int:
     """The calendar days from first_day to last_day, both counted.
 

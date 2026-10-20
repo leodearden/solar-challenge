@@ -3,13 +3,14 @@
 
 import math
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, calculate_summary
-from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
+from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -28,6 +29,11 @@ _TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
 def _in_months(rows: _TimeIndexed, months: tuple[int, ...]) -> _TimeIndexed:
     """The rows of *rows* whose timestamps fall in *months*."""
     return rows[rows.index.month.isin(months)]
+
+
+def _days_lasted(row_count: int, cadence: timedelta) -> float:
+    """The days *row_count* rows last in all, each lasting *cadence*."""
+    return row_count * cadence / timedelta(days=1)
 
 
 def export_to_csv(
@@ -125,8 +131,9 @@ def generate_summary_report(
             summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
 
             # Calculate average daily values
-            winter_days = len(winter_hp_load) * HOURS_PER_MINUTE / 24 if len(winter_hp_load) > 0 else 1
-            summer_days = len(summer_hp_load) * HOURS_PER_MINUTE / 24 if len(summer_hp_load) > 0 else 1
+            cadence = results.window.cadence
+            winter_days = _days_lasted(len(winter_hp_load), cadence)
+            summer_days = _days_lasted(len(summer_hp_load), cadence)
             winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
             summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
 
@@ -333,52 +340,6 @@ def aggregate_monthly(results: SimulationResults) -> pd.DataFrame:
     return _aggregate_by_period(results, "ME")
 
 
-def aggregate_annual(
-    results: SimulationResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> dict[str, float]:
-    """Aggregate results to annual totals.
-
-    Args:
-        results: Simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, seg_revenue_gbp is included in the returned dictionary.
-
-    Returns:
-        Dictionary with annual energy totals in kWh, and optionally SEG revenue in GBP
-    """
-    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-
-    annual: dict[str, float] = {
-        "generation_kwh": summary.total_generation_kwh,
-        "demand_kwh": summary.total_demand_kwh,
-        "self_consumption_kwh": summary.total_self_consumption_kwh,
-        "grid_import_kwh": summary.total_grid_import_kwh,
-        "grid_export_kwh": summary.total_grid_export_kwh,
-        "battery_charge_kwh": summary.total_battery_charge_kwh,
-        "battery_discharge_kwh": summary.total_battery_discharge_kwh,
-        "peak_generation_kw": summary.peak_generation_kw,
-        "peak_demand_kw": summary.peak_demand_kw,
-        "self_consumption_ratio": summary.self_consumption_ratio,
-        "grid_dependency_ratio": summary.grid_dependency_ratio,
-        "export_ratio": summary.export_ratio,
-        "simulation_days": float(summary.simulation_days),
-    }
-
-    if summary.seg_revenue_gbp is not None:
-        annual["seg_revenue_gbp"] = summary.seg_revenue_gbp
-
-    # Include heat pump metrics if present
-    if summary.total_heat_pump_load_kwh is not None:
-        annual["heat_pump_load_kwh"] = summary.total_heat_pump_load_kwh
-    if summary.peak_heat_pump_load_kw is not None:
-        annual["peak_heat_pump_load_kw"] = summary.peak_heat_pump_load_kw
-    if summary.heat_pump_load_ratio is not None:
-        annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
-
-    return annual
-
-
 @dataclass
 class CommunityMetrics:
     """Pre-computed kWh aggregates for a community simulation result.
@@ -407,20 +368,24 @@ class CommunityMetrics:
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:
     """Derive kWh aggregates from a :class:`~solar_challenge.community.CommunityResults`.
 
-    Each row's kWh is its kW times :func:`~solar_challenge.timebase.step_hours`
-    of the series index, so the figures hold at any cadence (1-minute
-    operational or hourly TMY).
+    Each figure integrates its kW series over the window
+    :meth:`~solar_challenge.timebase.SimulationWindow.of_index` reads from the
+    community's index, so the figures hold at any cadence.
+
+    Raises:
+        ValueError: As :meth:`~solar_challenge.timebase.SimulationWindow.of_index`
+            does, for an index no window describes.
     """
     cr = community_results
     fleet = cr.fleet_results
 
-    dt_h = step_hours(cr.grid_import.index)
+    window = SimulationWindow.of_index(cr.grid_import.index)
 
-    community_import_kwh = float(cr.grid_import.sum()) * dt_h
-    community_export_kwh = float(cr.grid_export.sum()) * dt_h
-    unshared_import_kwh = float(fleet.total_grid_import.sum()) * dt_h
-    unshared_export_kwh = float(fleet.total_grid_export.sum()) * dt_h
-    total_demand_kwh = float(fleet.total_demand.sum()) * dt_h
+    community_import_kwh = window.energy_kwh(cr.grid_import)
+    community_export_kwh = window.energy_kwh(cr.grid_export)
+    unshared_import_kwh = window.energy_kwh(fleet.total_grid_import)
+    unshared_export_kwh = window.energy_kwh(fleet.total_grid_export)
+    total_demand_kwh = window.energy_kwh(fleet.total_demand)
 
     if total_demand_kwh > 0:
         self_sufficiency = max(0.0, 1.0 - community_import_kwh / total_demand_kwh)
@@ -430,7 +395,7 @@ def compute_community_metrics(community_results: "CommunityResults") -> Communit
     sharing_mode = cr.sharing_mode
 
     return CommunityMetrics(
-        dt_h=dt_h,
+        dt_h=window.step_hours,
         community_import_kwh=community_import_kwh,
         community_export_kwh=community_export_kwh,
         unshared_import_kwh=unshared_import_kwh,
@@ -439,8 +404,8 @@ def compute_community_metrics(community_results: "CommunityResults") -> Communit
         self_sufficiency=self_sufficiency,
         import_reduction_kwh=unshared_import_kwh - community_import_kwh,
         export_reduction_kwh=unshared_export_kwh - community_export_kwh,
-        battery_charge_kwh=float(cr.battery_charge.sum()) * dt_h,
-        battery_discharge_kwh=float(cr.battery_discharge.sum()) * dt_h,
+        battery_charge_kwh=window.energy_kwh(cr.battery_charge),
+        battery_discharge_kwh=window.energy_kwh(cr.battery_discharge),
         sharing_mode=sharing_mode,
     )
 
@@ -452,8 +417,9 @@ def generate_community_report(
     """Generate a markdown report for a community energy sharing simulation.
 
     Mirrors :func:`generate_summary_report` in structure.  All kWh figures are
-    derived via :func:`compute_community_metrics` using an index-inferred
-    timestep so the report is correct for any series cadence.
+    derived via :func:`compute_community_metrics` over the window the
+    community's index describes, so the report is correct for any series
+    cadence.
 
     Args:
         community_results: Output of :func:`~solar_challenge.community.simulate_community`.
