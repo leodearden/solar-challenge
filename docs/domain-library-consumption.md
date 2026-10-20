@@ -506,6 +506,23 @@ default module, and modules from `create_simple_module_params`, which carry
 PVWatts module without `STC` re-baseline its figures, and consumers that pass a
 module with neither key add its `STC`, when they re-pin.
 
+**Unreleased on main** (task 823): `create_pv_system`, `create_model_chain` and
+`simulate_pv_output` give every array pvlib's NOCT-SAM cell temperature, from
+the module's own `T_NOCT` and efficiency (its rating over `A_c` × 1000); the
+0.5.0 tag gives every module SAPM's generic open-rack glass/glass set
+([pv-cell-temperature.md](pv-cell-temperature.md)). Every PV figure moves: on
+Bristol's scaled TMY, with the default system losses, the default 4 kW goes
+from 3977 to 4053 kWh a year, 993.1 to 1012.1 kWh per wired kWp (+1.9%;
+measured with pvlib 0.15.1 on this change). Custom module parameters lacking
+`T_NOCT` or `A_c` take the default module's value of that key, and a `T_NOCT`
+or `A_c` with which NOCT-SAM cannot heat the cells above the air raises
+`ValueError` naming it. `create_simple_module_params` writes `A_c` from its
+`efficiency` in place of an `"efficiency"` key nothing read, so its efficiency
+now acts on output. A run chain's `results.cell_temperature` is NaN in hours
+with no sun. The figures the lines above quote were measured under SAPM.
+Consumers re-baseline every figure that depends on PV generation when they
+re-pin, bills and the cost-recovery rate included.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
