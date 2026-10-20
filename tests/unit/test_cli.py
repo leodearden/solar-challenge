@@ -42,6 +42,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache, WeatherDataError
+from tests._cli_table_text import table_text
 from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
@@ -440,20 +441,10 @@ home:
         result = runner.invoke(app, ["config", "show", "config.yaml"], catch_exceptions=False)
 
         assert result.exit_code == 0
-        rows = _table_text(result.stdout)
+        rows = table_text(result.stdout)
         assert f"home.name {_TEXT_RICH_WOULD_PARSE}" in rows
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
-
-
-def _table_text(output: str) -> str:
-    """A Rich table's rows folded onto one line, each row reading as its cells joined by single spaces.
-
-    CliRunner renders Rich tables at 80 columns, and a long last cell wraps onto
-    continuation lines whose other cells are blank. Folding the column rule "│" and all
-    whitespace to single spaces rejoins each row.
-    """
-    return " ".join(output.replace("│", " ").split())
 
 
 # Ends inside the battery block, so a case can append a battery key.
@@ -622,7 +613,7 @@ home:
         result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 1
-        assert f"ERROR {refusal}" in _table_text(result.stdout)
+        assert f"ERROR {refusal}" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
         "document",
@@ -651,7 +642,7 @@ home:
         result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 0
-        assert "OK Configuration is valid" in _table_text(result.stdout)
+        assert "OK Configuration is valid" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
         "scenario_file",
@@ -686,7 +677,7 @@ home:
         result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
 
         assert result.exit_code == 1
-        assert "ERROR Unrecognised keys in home.load: '[bold]x';" in _table_text(
+        assert "ERROR Unrecognised keys in home.load: '[bold]x';" in table_text(
             result.stdout
         )
 
@@ -735,8 +726,8 @@ home:
         result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 0
-        assert f"WARNING {warning}" in _table_text(result.stdout)
-        assert _table_text(result.stdout).count("WARNING") == 1
+        assert f"WARNING {warning}" in table_text(result.stdout)
+        assert table_text(result.stdout).count("WARNING") == 1
 
     @pytest.mark.parametrize(
         "document",
@@ -758,9 +749,9 @@ home:
         result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 0
-        assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
-        assert _table_text(result.stdout).count(_TOU_ADVISORY) == 1
-        assert "OK Configuration is valid" not in _table_text(result.stdout)
+        assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)
+        assert table_text(result.stdout).count(_TOU_ADVISORY) == 1
+        assert "OK Configuration is valid" not in table_text(result.stdout)
         assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
     def test_a_loader_advisory_raised_before_a_refusal_is_shown_beside_it(
@@ -775,8 +766,8 @@ home:
         )
 
         assert result.exit_code == 1
-        assert "ERROR Tilt must be 0-90 degrees, got 100.0" in _table_text(result.stdout)
-        assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
+        assert "ERROR Tilt must be 0-90 degrees, got 100.0" in table_text(result.stdout)
+        assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)
 
 
 class TestErrorHandling:
