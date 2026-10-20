@@ -318,3 +318,33 @@ class TestScheduledChargeStrategyWindows:
 
         assert decision is base.decision
         assert len(base.calls) == 1
+
+
+class TestScheduledChargeStrategyInputs:
+    """Inside a window, where its base is not consulted, the strategy refuses the inputs its sibling strategies refuse, with their messages."""
+
+    @pytest.mark.parametrize(
+        ("argument", "value", "message"),
+        [
+            pytest.param("generation_kw", -1.0, "non-negative", id="negative-generation"),
+            pytest.param("demand_kw", -1.0, "non-negative", id="negative-demand"),
+            pytest.param("battery_soc_kwh", -1.0, "non-negative", id="negative-soc"),
+            pytest.param("battery_capacity_kwh", 0.0, "positive", id="no-capacity"),
+            pytest.param("timestep_minutes", 0.0, "positive", id="no-timestep"),
+        ],
+    )
+    def test_a_bad_input_inside_a_window_is_refused(self, argument: str, value: float, message: str) -> None:
+        base = _base()
+        arguments: dict[str, float] = {
+            "generation_kw": 0.0,
+            "demand_kw": 0.5,
+            "battery_soc_kwh": 2.0,
+            "battery_capacity_kwh": 5.0,
+            "timestep_minutes": 1.0,
+        }
+
+        with pytest.raises(ValueError, match=message):
+            ScheduledChargeStrategy(base, (_NIGHTLY,), _LONDON).decide_action(
+                timestamp=datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON), **(arguments | {argument: value})
+            )
+        assert base.calls == []
