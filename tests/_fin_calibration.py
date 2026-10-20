@@ -12,17 +12,24 @@ once for both:
 - FIN_SCF: the spreadsheet's with-battery self-consumption fraction, 0.70;
 - make_fin_finance: the [FIN] FinanceConfig, under the self-consumption override
   its caller prices own-use with;
+- make_fin_spreadsheet_curve: the spreadsheet's flat revenue curve for a fleet of
+  the [FIN] install, at FIN_SCF;
 - make_physics_column_scenario: the fleet that each suite's slow physics column
   simulates through PVGIS.
 
 Usage::
 
-    from tests._fin_calibration import FIN_SCF, make_fin_finance, make_physics_column_scenario
+    from tests._fin_calibration import (
+        FIN_SCF, make_fin_finance, make_fin_spreadsheet_curve, make_physics_column_scenario,
+    )
 
     sol = solve_cost_recovery_rate(
         make_physics_column_scenario(), make_fin_finance(self_consumption_override=None)
     )
     spreadsheet_finance = make_fin_finance(self_consumption_override=FIN_SCF)
+    spreadsheet_curve = make_fin_spreadsheet_curve(
+        n_homes=2, asset_life_years=spreadsheet_finance.asset_life_years
+    )
 """
 from __future__ import annotations
 
@@ -31,7 +38,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
-from solar_challenge.finance import FinanceConfig
+from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
 from solar_challenge.load import LoadConfig
 from tests._finance_builders import make_sized_home
 
@@ -101,6 +108,22 @@ def make_fin_finance(*, self_consumption_override: float | None) -> FinanceConfi
         own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
         retained_cash_floor_per_home_per_year_gbp=27.0,
         grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+
+
+def make_fin_spreadsheet_curve(*, n_homes: int, asset_life_years: int) -> MultiYearCurve:
+    """The spreadsheet's flat revenue curve for *n_homes* homes of the [FIN] install, at FIN_SCF.
+
+    It spans *asset_life_years*, which is the asset life of the finance the curve is priced with.
+    """
+    return spreadsheet_revenue_curve(
+        n_homes=n_homes,
+        pv_kwp=FIN_GOLDEN["inp_kWp"],
+        kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
+        self_consumption_fraction=FIN_SCF,
+        own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+        export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
+        asset_life_years=asset_life_years,
     )
 
 
