@@ -8,6 +8,7 @@ import collections.abc
 import datetime
 import enum
 import fractions
+import functools
 import pathlib
 import sys
 import types
@@ -399,6 +400,19 @@ def test_an_enum_form_is_its_members_in_definition_order() -> None:
         OFF_PEAK = "off_peak"
 
     assert surface_form(Period) == "PEAK='peak', OFF_PEAK='off_peak'"
+
+
+def test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wraps() -> None:
+    def settle(share: fractions.Fraction, rate: int, *, fee: Optional[float] = None) -> None: ...
+
+    assert (
+        surface_form(functools.partial(settle, rate=1))
+        == "(share: Fraction, *, rate: int = 1, fee: float | None = None) -> None"
+    )
+    assert (
+        surface_form(functools.partial(settle, fractions.Fraction(1, 2)))
+        == "(rate: int, *, fee: float | None = None) -> None"
+    )
 
 
 def test_a_constant_form_is_its_type_qualified_name() -> None:
