@@ -49,7 +49,7 @@ fleet_distribution:
     capacity_kwh: 5.0         # inp_Batt_kWh = Sensitivity!B7 (5 kWh basis)
 
   load:
-    annual_consumption_kwh: 3400  # UK TDCV benchmark
+    annual_consumption_kwh: 3400  # the Bristol scenarios' own assumption
 
 # Financial parameters — [FIN] named-cell basis for H6 gate
 # Reconciles to Capital_Stack!B6 = £775,000 (5 kWh per home).

@@ -143,7 +143,7 @@ for real fleet projections.
 
 **The 0.70 assumption bills more own-use than a household consumes.** Applied to the
 named yield, it gives 0.70 × 5.5 × 1,050 = 4,042.5 kWh/home of own-use, but the
-calibration scenario's homes demand 3,400 kWh/yr (UK TDCV,
+calibration scenario's homes demand 3,400 kWh/yr (the Bristol scenarios' own assumption,
 `scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
 demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
 15 p own-use rate instead of the 6 p export rate credits
@@ -192,7 +192,8 @@ scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
   0.70 by design — physics is the correct path for real projections. The slow
   3-day physics column is a smoke report, not evidence of that difference
 - The spreadsheet's 0.70 × 5,775 = 4,042.5 kWh/home of own-use exceeds the 3,400 kWh
-  TDCV demand by 642.5 kWh (£57.825/home/yr at 15 p rather than 6 p).
+  demand the calibration scenario assumes by 642.5 kWh (£57.825/home/yr at 15 p rather
+  than 6 p).
   `spreadsheet_revenue_curve` keeps it uncapped for method-agreement; the simulator's
   override path caps own-use at demand (`docs/cost-recovery-finance-model.md` §3,
   *Override (spreadsheet-assumption) path*)
