@@ -22,7 +22,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import Database, init_db
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
@@ -746,7 +746,7 @@ class TestRunHomeSimulation:
 
 
 class TestRunFleetSimulation:
-    """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
+    """Tests for run_fleet_simulation(n_homes, params, job_manager, db_path, data_dir) -> dict, *params* being the per-home fields."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_fleet_job stubbed."""
@@ -757,8 +757,8 @@ class TestRunFleetSimulation:
     def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
         """run_fleet_simulation returns {run_id, results_url} for fleet."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        result = run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-f", (
@@ -771,8 +771,8 @@ class TestRunFleetSimulation:
     def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
         """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -791,8 +791,8 @@ class TestRunFleetSimulation:
     def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
         """n_homes=9999 results in configs list clamped to <= 100."""
         jm = self._make_jm()
-        params = {"n_homes": 9999, "pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(9999, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -804,8 +804,8 @@ class TestRunFleetSimulation:
     def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
         """n_homes=0 is clamped to at least 1 (no empty fleet)."""
         jm = self._make_jm()
-        params = {"n_homes": 0, "pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(0, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -817,10 +817,10 @@ class TestRunFleetSimulation:
     def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 999, "location": "bristol", "days": 7}
+        params = {"pv_kw": 999, "location": "bristol", "days": 7}
 
         try:
-            result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+            result = run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
         except Exception as exc:
             raise AssertionError(
                 f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
@@ -837,7 +837,8 @@ class TestRunFleetSimulation:
         jm.submit_fleet_job.side_effect = RuntimeError(submit_failure)
 
         result = run_fleet_simulation(
-            {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7},
+            3,
+            {"pv_kw": 4, "location": "bristol", "days": 7},
             jm,
             str(tmp_path / "t.db"),
             str(tmp_path),
@@ -850,8 +851,8 @@ class TestRunFleetSimulation:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
-        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol"}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
+        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -871,8 +872,8 @@ class TestRunFleetSimulation:
         """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
-        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": None}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
+        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -894,8 +895,8 @@ class TestRunFleetSimulation:
         """A start and end the model sends are the window the fleet runs, not overridden by the 7-day default."""
         jm = self._make_jm()
         result = run_fleet_simulation(
+            2,
             {
-                "n_homes": 2,
                 "pv_kw": 4,
                 "location": "bristol",
                 "start": "2024-03-01",
@@ -919,7 +920,8 @@ class TestRunFleetSimulation:
         """A location the model sends that resolve_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_fleet_simulation(
-            {"n_homes": 3, "pv_kw": 4, "days": 7, "location": "Cardiff"},
+            3,
+            {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
             str(tmp_path / "t.db"),
             str(tmp_path),

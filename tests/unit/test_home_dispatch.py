@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name.
+"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name, and the demand each dispatch path's results carry.
 
 A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
 and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
@@ -13,11 +13,12 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import DispatchStrategyConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
-from solar_challenge.load import LoadConfig
+from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig
-from tests._synthetic_weather import synthetic_june_weather
+from solar_challenge.timebase import SimulationWindow
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _TOU_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
@@ -31,7 +32,7 @@ _TOU_HOME = HomeConfig(
 
 def _simulate_june_21(home: HomeConfig) -> SimulationResults:
     day = pd.Timestamp("2024-06-21")
-    return simulate_home(home, day, day, weather_data=synthetic_june_weather(day))
+    return simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather(day)))
 
 
 @pytest.mark.parametrize(
@@ -96,3 +97,30 @@ def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_
     assert (tou.battery_discharge[cheap] == 0.0).all()
     assert (tou.battery_discharge[~cheap] > 0.0).any()
     assert (self_consumption.battery_discharge[cheap] > 0.0).any()
+
+
+@pytest.mark.parametrize(
+    ("home", "strategy_name"),
+    [
+        pytest.param(_TOU_HOME, "tou_optimized", id="tariff-tou-path"),
+        pytest.param(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"), "self_consumption", id="strategy-path"),
+    ],
+)
+def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_kw_in_hours(home, strategy_name):
+    """Each row's demand comes back at the kW its load profile asked for only while each engine call is handed the row's step in minutes and the results turn each row's kWh back into kW over the same step in hours.
+
+    So it fails if either engine call is handed step_hours where step_minutes belongs, or if the
+    conversion multiplies by step_hours.
+    """
+    day = pd.Timestamp("2024-06-21")
+
+    results = _simulate_june_21(home)
+
+    load_profile = generate_load_profile(
+        home.load_config, day, day, timezone=home.location.timezone, ev_config=home.ev_config
+    )
+    assert results.strategy_name == strategy_name
+    assert (results.battery_charge > 0).any()
+    assert (results.battery_discharge > 0).any()
+    assert results.window == SimulationWindow.of_index(load_profile.index)
+    pd.testing.assert_series_equal(results.demand, load_profile, check_names=False, rtol=1e-12, atol=0.0)

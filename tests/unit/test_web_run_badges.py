@@ -8,7 +8,6 @@ each one, in a browser, carries the classes the server-drawn badge has for the s
 """
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -21,7 +20,6 @@ from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
 from tests._server_drawn_badges import dashboard_macros_of, server_drawn_badge, server_drawn_classes
-from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
 
 _BADGE = {"inline-flex", "items-center", "px-2.5", "py-0.5", "rounded-full", "text-xs", "font-medium"}
@@ -36,12 +34,6 @@ def _colours(palette: str) -> set[str]:
         f"dark:bg-{palette}-900/30",
         f"dark:text-{palette}-400",
     }
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """The dashboard app, with an empty store."""
-    return build_test_app(tmp_path)
 
 
 @pytest.fixture

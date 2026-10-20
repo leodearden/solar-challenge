@@ -47,18 +47,11 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._run_storage_layout import stored_run_dir
-from tests._web_app import build_test_app
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
 
 
 @pytest.fixture

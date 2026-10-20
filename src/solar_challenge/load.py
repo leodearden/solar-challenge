@@ -10,7 +10,7 @@ from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
@@ -30,6 +30,28 @@ OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
 }
 
 
+def household_occupant_count(occupants: float) -> int:
+    """Return *occupants* as the household occupant count a LoadConfig holds, a whole number from 1 to 10.
+
+    LoadConfig holds every count it is given to this rule. A caller holding a count as a
+    float, such as a drawn or swept value, passes it through here to give LoadConfig the
+    int its field is typed as. A whole-number float such as 3.0, or a numpy integer,
+    gives the plain int it equals.
+
+    Raises:
+        ValueError: If *occupants* is below 1 or above 10, or is not a whole number; a
+            bool, Python's or numpy's, is not one.
+    """
+    if not occupants >= 1:
+        raise ValueError(f"Household occupants must be at least 1, got {occupants}")
+    if occupants > 10:
+        raise ValueError(f"Household occupants seems unrealistic: {occupants}")
+    whole_occupants = whole_number(occupants)
+    if whole_occupants is None:
+        raise ValueError(f"Household occupants must be a whole number, got {occupants}")
+    return whole_occupants
+
+
 @dataclass(frozen=True)
 class LoadConfig:
     """Configuration for household load profile.
@@ -37,10 +59,8 @@ class LoadConfig:
     Attributes:
         annual_consumption_kwh: Target annual electricity consumption in kWh.
             If not specified and household_occupants is set, derived from Ofgem TDCV.
-        household_occupants: Number of household occupants, a whole number from
-            1 to 10. A whole-number float such as 3.0 is held as the int 3; a
-            bool, Python's or numpy's, is refused. Affects consumption and
-            profile shape.
+        household_occupants: Number of household occupants, held to the rule
+            household_occupant_count states. Affects consumption and profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
@@ -58,21 +78,9 @@ class LoadConfig:
 
     def __post_init__(self) -> None:
         """Validate load configuration parameters."""
-        # Validate household_occupants
-        if not self.household_occupants >= 1:
-            raise ValueError(
-                f"Household occupants must be at least 1, got {self.household_occupants}"
-            )
-        if self.household_occupants > 10:
-            raise ValueError(
-                f"Household occupants seems unrealistic: {self.household_occupants}"
-            )
-        whole_occupants = whole_number(self.household_occupants)
-        if whole_occupants is None:
-            raise ValueError(
-                f"Household occupants must be a whole number, got {self.household_occupants}"
-            )
-        object.__setattr__(self, "household_occupants", whole_occupants)
+        object.__setattr__(
+            self, "household_occupants", household_occupant_count(self.household_occupants)
+        )
 
         # Validate annual_consumption if provided
         if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
@@ -513,25 +521,30 @@ def _generate_elexon_profile(
 
 
 def energy_kwh(profile: pd.Series) -> float:
-    """Integrate a 1-minute power Series to total energy in kWh.
+    """The energy in kWh a kW profile delivers: each row's kW times the hours its row lasts, the cadence SimulationWindow.of_index reads from its index.
 
     Args:
-        profile: Power series in kW with 1-minute resolution
+        profile: Power series in kW
 
     Returns:
         Total energy in kWh
+
+    Raises:
+        ValueError: As SimulationWindow.of_index does, if the profile's index is not
+            a DatetimeIndex, is empty, has one row and no fixed-duration freq, or is
+            not evenly spaced.
     """
-    return float(profile.sum() * HOURS_PER_MINUTE)
+    return SimulationWindow.of_index(profile.index).energy_kwh(profile)
 
 
 def scale_profile_to_energy(
     profile: pd.Series,
     target_kwh: float,
 ) -> pd.Series:
-    """Scale a 1-minute power profile so that its total energy is target_kwh.
+    """Scale a power profile so that its energy_kwh is target_kwh.
 
     Args:
-        profile: Power series in kW with 1-minute resolution
+        profile: Power series in kW
         target_kwh: Target total energy in kWh
 
     Returns:
@@ -539,7 +552,8 @@ def scale_profile_to_energy(
 
     Raises:
         ValueError: If the profile's energy is zero, since no factor scales it
-            to target_kwh.
+            to target_kwh; or as energy_kwh does, if no window describes the
+            profile's index.
     """
     current_kwh = energy_kwh(profile)
     if current_kwh == 0:

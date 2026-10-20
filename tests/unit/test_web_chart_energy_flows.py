@@ -101,10 +101,6 @@ _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
         # The winter bars' categories, then the summer bars'.
         ["Generation (kWh)", "Demand (kWh)", "Self-Consumption (kWh)"] * 2,
     ),
-    "overlaid_power_flows": (
-        lambda: [trace["name"] for trace in traces(charts.overlaid_power_flows([_year()], ["Run A"]))],
-        ["Run A - Generation", "Run A - Demand"],
-    ),
     "fleet_distribution_histograms_subplot_title": (
         # make_subplots writes the subplot titles as layout annotations, in subplot order.
         lambda: annotation_texts(charts.fleet_distribution_histograms([_summary()] * 2))[:1],

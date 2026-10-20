@@ -16,7 +16,7 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
-from tests._synthetic_weather import sunless_weather, synthetic_june_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(strategy_grid_charge_config, night_weather_data),
         )
         assert results.battery_charge.sum() > 0, (
             "Expected battery_charge > 0: grid charging should engage via Strategy path "
@@ -119,7 +119,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(strategy_grid_charge_config, night_weather_data),
         )
         initial_soc = results.battery_soc.iloc[0]
         assert results.battery_soc.max() > initial_soc, (
@@ -153,7 +153,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(config_no_tariff, night_weather_data),
         )
         assert results.battery_charge.sum() == pytest.approx(0.0), (
             "Expected battery_charge == 0: without tariff, grid charging should be inert"
@@ -387,7 +387,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(tou_grid_charge_home_config, night_weather_data),
         )
         assert results.grid_charge_cost is not None, (
             "grid_charge_cost should be a Series when tariff_config is set"
@@ -414,7 +414,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(tou_grid_charge_home_config, night_weather_data),
         )
         assert results.grid_charge_cost is not None
 
@@ -469,7 +469,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(tou_grid_charge_home_config, night_weather_data),
         )
         assert results.grid_charge_cost is not None
 
@@ -498,7 +498,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_data,
+            weather=weather_for(flat_tariff_no_gc_home_config, night_weather_data),
         )
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0), (
@@ -529,7 +529,7 @@ class TestSimulateHomeGridCharge:
             arbitrage_home_grid_charging_to_70_percent,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=synthetic_june_weather("2024-06-21"),
+            weather=weather_for(arbitrage_home_grid_charging_to_70_percent, synthetic_june_weather("2024-06-21")),
         )
 
         assert results.grid_charge is not None
@@ -545,11 +545,12 @@ class TestSimulateHomeGridCharge:
 
     def test_an_untariffed_run_has_no_grid_charge_series(self, night_weather_data: pd.DataFrame) -> None:
         """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost."""
+        home = dataclasses.replace(bristol_arbitrage_home(), tariff_config=None)
         results = simulate_home(
-            dataclasses.replace(bristol_arbitrage_home(), tariff_config=None),
+            home,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=night_weather_data,
+            weather=weather_for(home, night_weather_data),
         )
 
         assert results.grid_charge_cost is None

@@ -16,9 +16,10 @@ gives the reason.
 
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -31,13 +32,9 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import (
-    NotAJsonObject,
-    get_database,
-    get_job_manager,
-    get_storage,
-    request_json_object,
-)
+from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
+from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
+from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_DAYS_SENTINEL,
@@ -46,6 +43,18 @@ from solar_challenge.web.simulation_params import (
     MAX_WINDOW_DAYS,
     parse_home_config,
     with_default_days,
+)
+from solar_challenge.web.sse import (
+    CHAT_DELTA,
+    CHAT_DONE,
+    CHAT_FAILED,
+    CHAT_TOOL,
+    ChatDelta,
+    ChatDone,
+    ChatFailed,
+    ChatToolCall,
+    event_stream,
+    sse_frame,
 )
 from solar_challenge.web.storage import RunStorage
 
@@ -235,7 +244,7 @@ def suggest_config(
 ) -> dict[str, Any]:
     """Return rule-of-thumb PV and battery sizing for a household.
 
-    Uses the PRD §11.4 heuristics:
+    Uses the heuristics of docs/prds/web-ai-assistant.md §11, open question 4:
     - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
     - Battery kWh ≈ daily_demand × 0.5 × 1.2  (≈ 50 % of daily demand with 1.2× usable-capacity headroom)
 
@@ -256,7 +265,7 @@ def suggest_config(
         - ``note``                    (str)   — indicative-estimate disclaimer
         Never raises.
     """
-    # Base heuristics (PRD §11.4)
+    # Base heuristics
     pv_kwp: float = annual_consumption_kwh / _UK_YIELD_KWH_PER_KWP
 
     # Battery: cover a share of daily demand (rule-of-thumb shortfall for a typical
@@ -290,6 +299,9 @@ def suggest_config(
 # The days a trigger tool's simulation spans when the model sends no window.
 _TRIGGER_TOOL_DEFAULT_DAYS = 7
 
+# The most homes run_fleet_simulation submits: a larger n_homes is clamped to it, to protect the single-worker JobManager.
+_FLEET_TOOL_MAX_HOMES = 100
+
 # The window both trigger tools take, days or a start and end, as parse_date_range reads it.
 _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
@@ -319,182 +331,6 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
         ),
     },
 }
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions — fixed order for prompt-cache stability.  The tools render
-# ahead of the cached system block, so they belong to the cached prompt prefix;
-# any change in their order or content between requests misses the cache.
-# TOOLS is a tuple so its order cannot change at runtime.  Its entries stay
-# plain dicts: the SDK hands nested schema values to JSON encoding as they
-# are, and JSON encoding rejects read-only mappings.
-# ---------------------------------------------------------------------------
-TOOLS: Sequence[Mapping[str, Any]] = (
-    # --- Advisory tools: answered in-process, no database or job access ---
-    {
-        "name": "explain_metric",
-        "description": (
-            "Return a grounded definition and UK benchmark band for a named "
-            "solar/battery simulation metric.  Use this when the user asks what "
-            "a metric means or how their value compares to typical UK households."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "metric": {
-                    "type": "string",
-                    "description": (
-                        "The metric name, e.g. 'self_consumption_ratio', "
-                        "'self_sufficiency', 'grid_export', 'battery_cycles'."
-                    ),
-                },
-            },
-            "required": ["metric"],
-        },
-    },
-    {
-        "name": "suggest_config",
-        "description": (
-            "Return rule-of-thumb PV and battery sizing recommendations for a "
-            "household, based on annual electricity consumption and an optimisation "
-            "goal.  Results are indicative estimates; always recommend running a "
-            "full simulation to confirm."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "annual_consumption_kwh": {
-                    "type": "number",
-                    "description": (
-                        "Household annual electricity consumption in kWh "
-                        "(e.g. 3100 for an Ofgem medium user)."
-                    ),
-                },
-                "goal": {
-                    "type": "string",
-                    "description": (
-                        "Optimisation goal: 'self_sufficiency' (maximise "
-                        "independence from the grid) or 'bill_savings' "
-                        "(minimise electricity bills)."
-                    ),
-                },
-            },
-            "required": ["annual_consumption_kwh", "goal"],
-        },
-    },
-    # --- Read-only DB tools: look up past runs in the runs table ---
-    {
-        "name": "get_run_results",
-        "description": (
-            "Fetch the results and summary of a specific simulation run by its "
-            "id or name.  Returns key output metrics and status information. "
-            "Use this when the user asks about a particular run's results."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "run_id_or_name": {
-                    "type": "string",
-                    "description": (
-                        "The run id (UUID) or run name to look up.  "
-                        "Resolves by exact id first, then most-recent name match."
-                    ),
-                },
-            },
-            "required": ["run_id_or_name"],
-        },
-    },
-    {
-        "name": "list_recent_runs",
-        "description": (
-            "List recent simulation runs in reverse chronological order.  "
-            "Returns identifying fields and key summary metrics for each run. "
-            "Use this when the user asks what simulations have been run recently."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "limit": {
-                    "type": "integer",
-                    "description": (
-                        "Maximum number of runs to return (1–50, default 10). "
-                        "Values <= 0 are treated as the default (10)."
-                    ),
-                },
-            },
-            "required": ["limit"],
-        },
-    },
-    # --- Trigger tools: submit home and fleet simulation jobs to the JobManager ---
-    {
-        "name": "run_home_simulation",
-        "description": (
-            "Submit a single-home simulation job and return the run id and a "
-            "URL to the results page.  Use this when the user asks to run or "
-            "start a home simulation with specific PV/battery parameters."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "pv_kw": {
-                    "type": "number",
-                    "description": "PV array capacity in kW (0.5–20).",
-                },
-                "battery_kwh": {
-                    "type": "number",
-                    "description": "Battery capacity in kWh (0 = no battery).",
-                },
-                "consumption_kwh": {
-                    "type": "number",
-                    "description": "Annual household electricity consumption in kWh ({:g}–{:g}).".format(
-                        *FLEET_COMPONENTS["load"].fixed_range
-                    ),
-                },
-                "occupants": {
-                    "type": "integer",
-                    "description": "Number of household occupants (default 3).",
-                },
-                "location": {
-                    "type": "string",
-                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
-                },
-                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
-            },
-            "required": ["pv_kw"],
-        },
-    },
-    {
-        "name": "run_fleet_simulation",
-        "description": (
-            "Submit a homogeneous N-home fleet simulation job and return the "
-            "run id and a URL to the fleet results page.  Use this when the "
-            "user asks to run a fleet or multi-home simulation."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "n_homes": {
-                    "type": "integer",
-                    "description": "Number of homes in the fleet (1–100).",
-                },
-                "pv_kw": {
-                    "type": "number",
-                    "description": "PV capacity per home in kW (0.5–20).",
-                },
-                "battery_kwh": {
-                    "type": "number",
-                    "description": "Battery capacity per home in kWh (0 = no battery).",
-                },
-                "location": {
-                    "type": "string",
-                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
-                },
-                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
-            },
-            "required": ["n_homes"],
-        },
-    },
-)
 
 
 def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
@@ -592,7 +428,7 @@ def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
 
 
 def run_home_simulation(
-    params: dict[str, Any],
+    params: Mapping[str, Any],
     job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
@@ -605,7 +441,7 @@ def run_home_simulation(
     or the job submission fails.  Never raises.
 
     Args:
-        params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
+        params:      Flat parameters (pv_kw, battery_kwh, occupants,
                      location, days or start/end, name, …) — same shape as
                      the JSON body accepted by POST /api/simulate/home, and
                      its window is read as that endpoint reads it.  Params
@@ -641,23 +477,24 @@ def run_home_simulation(
 
 
 def run_fleet_simulation(
-    params: dict[str, Any],
+    n_homes: int,
+    params: Mapping[str, Any],
     job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
-    Builds a homogeneous N-home fleet by parsing the per-home param dict
-    (minus ``n_homes``) once with ``parse_home_config`` and repeating the
-    resulting frozen ``HomeConfig`` ``n_homes`` times.  ``n_homes``
-    is clamped to [1, 100] to protect the single-worker JobManager.
+    Builds a homogeneous fleet by parsing the per-home *params* once with
+    ``parse_home_config`` and repeating the resulting frozen ``HomeConfig``
+    for each home.  *n_homes* is clamped to [1, _FLEET_TOOL_MAX_HOMES] to
+    protect the single-worker JobManager.
 
     Args:
-        params:      Flat parameter dict including ``n_homes`` plus the per-home
-                     fields accepted by ``parse_home_config``
-                     (pv_kw, battery_kwh, location, days or start/end, …).
-                     Params that send no window run
+        n_homes:     The number of homes in the fleet, before the clamp.
+        params:      The per-home fields accepted by ``parse_home_config``
+                     (pv_kw, battery_kwh, location, days or start/end, …),
+                     without ``n_homes``.  Params that send no window run
                      _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
@@ -667,29 +504,23 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    # Clamp n_homes to [1, 100]
-    try:
-        n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
-    except (ValueError, TypeError):
-        n_homes = 1
-
-    # Build per-home dict by excluding the fleet-level n_homes key
-    per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
+    fleet_size = max(1, min(n_homes, _FLEET_TOOL_MAX_HOMES))
 
     # Validate once; if it fails, return early without submitting
     try:
         home_config_0, start_date, end_date, name = parse_home_config(
-            with_default_days(per_home, _TRIGGER_TOOL_DEFAULT_DAYS)
+            with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
         )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
-    # The fleet is homogeneous by design (PRD §4, "Fleet trigger scope"): every
-    # home gets the same parameters; fleets that vary per home come from
-    # distribution configs, which this tool does not take.  HomeConfig is a frozen
-    # dataclass, so all N entries can share one immutable object — re-parsing N
-    # times would add no diversity and only waste CPU.
-    configs: list[Any] = [home_config_0] * n_homes
+    # The fleet is homogeneous by design (docs/prds/web-ai-assistant.md §4,
+    # "Fleet trigger scope"): every home gets the same parameters; fleets that
+    # vary per home come from distribution configs, which this tool does not
+    # take.  HomeConfig is a frozen dataclass, so all N entries can share one
+    # immutable object — re-parsing N times would add no diversity and only
+    # waste CPU.
+    configs: list[Any] = [home_config_0] * fleet_size
 
     try:
         _job_id, run_id = job_manager.submit_fleet_job(
@@ -706,52 +537,336 @@ def run_fleet_simulation(
     return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
 
 
-def dispatch_tool(
-    name: str,
-    tool_input: dict[str, Any],
-    *,
-    storage: RunStorage,
-    job_manager: JobManager,
-) -> dict[str, Any]:
-    """Route a tool call to its handler and return the result dict.
+@dataclass(frozen=True)
+class ToolContext:
+    """The collaborators a tool call runs with.
 
-    Args:
-        name:        The tool name as sent by the model.
-        tool_input:  The validated input dict from the model's tool_use block.
-        storage:     The app's RunStorage: the run-lookup tools read its runs,
-                     and the jobs the trigger tools submit record their runs in
-                     its database and their artefacts under its data_dir.
-        job_manager: The app's JobManager, which the trigger tools submit jobs to.
-
-    Returns:
-        The handler's result dict, or ``{"error": "..."}`` for unknown names.
-        Never raises.
+    *storage* is the app's RunStorage: the lookup tools read its runs, and the
+    jobs the trigger tools submit record their runs in its database and their
+    artefacts under its data_dir. *job_manager* is the app's JobManager, which
+    the trigger tools submit jobs to.
     """
-    if name == "explain_metric":
-        metric: str = str(tool_input.get("metric", ""))
-        return explain_metric(metric)
-    if name == "suggest_config":
-        try:
-            annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
-        except (ValueError, TypeError):
-            return {"error": "annual_consumption_kwh must be numeric"}
-        goal: str = str(tool_input.get("goal", ""))
-        return suggest_config(annual_kwh, goal)
-    if name == "get_run_results":
-        run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, storage)
-    if name == "list_recent_runs":
-        try:
-            limit: int = int(tool_input.get("limit", 10))
-        except (ValueError, TypeError):
-            limit = 10
-        return list_recent_runs(limit, storage.database)
-    if name == "run_home_simulation":
-        return run_home_simulation(dict(tool_input), job_manager, storage.database.path, storage.data_dir)
-    if name == "run_fleet_simulation":
-        return run_fleet_simulation(dict(tool_input), job_manager, storage.database.path, storage.data_dir)
-    all_names = ", ".join(t["name"] for t in TOOLS)
-    return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
+
+    storage: RunStorage
+    job_manager: JobManager
+
+
+def _as_text(value: Any, field: str) -> str:
+    """Return *value*, a text field as the model sent it, refusing one that is not a string.
+
+    Raises:
+        ValueError: If *value* is not a str; the error names *field* and the value sent.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string, got {value!r}")
+    return value
+
+
+@dataclass(frozen=True)
+class _Tool:
+    """A tool the model can call: the *schema* the model reads, and the *run* that answers a call."""
+
+    schema: Mapping[str, Any]
+    run: Callable[[Mapping[str, Any], ToolContext], dict[str, Any]]
+
+    @property
+    def name(self) -> str:
+        """The name the model calls this tool by."""
+        return str(self.schema["name"])
+
+    def answer(self, tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Return the result of the call that sent *tool_input*, run in *context*.
+
+        Raises:
+            ValueError: When *tool_input* does not send a field the schema requires,
+                naming each one it does not send, or when the run refuses a value
+                *tool_input* sends.
+        """
+        required = self.schema["input_schema"].get("required", ())
+        unsent = [field_name for field_name in required if field_name not in tool_input]
+        if unsent:
+            raise ValueError("; ".join(f"{field_name} is required" for field_name in unsent))
+        return self.run(tool_input, context)
+
+
+def _call_explain_metric(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer an explain_metric call: explain the metric *tool_input* names."""
+    return explain_metric(_as_text(tool_input["metric"], "metric"))
+
+
+def _call_suggest_config(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer a suggest_config call: size a system for the consumption and goal *tool_input* sends."""
+    annual_kwh = as_finite_float_within(
+        tool_input["annual_consumption_kwh"],
+        "annual_consumption_kwh",
+        *FLEET_COMPONENTS["load"].fixed_range,
+    )
+    return suggest_config(annual_kwh, _as_text(tool_input["goal"], "goal"))
+
+
+def _call_get_run_results(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer a get_run_results call: look up the run *tool_input* names among *context*'s runs."""
+    return get_run_results(
+        _as_text(tool_input["run_id_or_name"], "run_id_or_name"),
+        context.storage,
+    )
+
+
+def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer a list_recent_runs call: list *context*'s latest runs, up to the limit *tool_input* sends."""
+    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.storage.database)
+
+
+def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer a run_home_simulation call: submit the home *tool_input* describes to *context*'s JobManager."""
+    return run_home_simulation(
+        tool_input, context.job_manager, context.storage.database.path, context.storage.data_dir
+    )
+
+
+def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer a run_fleet_simulation call: submit the fleet *tool_input* describes to *context*'s JobManager."""
+    per_home = {key: value for key, value in tool_input.items() if key != "n_homes"}
+    return run_fleet_simulation(
+        as_whole_number(tool_input["n_homes"], "n_homes"),
+        per_home,
+        context.job_manager,
+        context.storage.database.path,
+        context.storage.data_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool table — one record per tool, in a fixed order for prompt-cache
+# stability.  The tools render ahead of the cached system block, so they
+# belong to the cached prompt prefix; any change in their order or content
+# between requests misses the cache.
+# ---------------------------------------------------------------------------
+_TOOL_TABLE: tuple[_Tool, ...] = (
+    # --- Advisory tools: answered in-process, no database or job access ---
+    _Tool(
+        schema={
+            "name": "explain_metric",
+            "description": (
+                "Return a grounded definition and UK benchmark band for a named "
+                "solar/battery simulation metric.  Use this when the user asks what "
+                "a metric means or how their value compares to typical UK households."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "metric": {
+                        "type": "string",
+                        "description": (
+                            "The metric name, e.g. 'self_consumption_ratio', "
+                            "'self_sufficiency', 'grid_export', 'battery_cycles'."
+                        ),
+                    },
+                },
+                "required": ["metric"],
+            },
+        },
+        run=_call_explain_metric,
+    ),
+    _Tool(
+        schema={
+            "name": "suggest_config",
+            "description": (
+                "Return rule-of-thumb PV and battery sizing recommendations for a "
+                "household, based on annual electricity consumption and an optimisation "
+                "goal.  Results are indicative estimates; always recommend running a "
+                "full simulation to confirm."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "annual_consumption_kwh": {
+                        "type": "number",
+                        "description": (
+                            "Household annual electricity consumption in kWh "
+                            "({:g}–{:g}; e.g. 3100 for an Ofgem medium user)."
+                        ).format(*FLEET_COMPONENTS["load"].fixed_range),
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "Optimisation goal: 'self_sufficiency' (maximise "
+                            "independence from the grid) or 'bill_savings' "
+                            "(minimise electricity bills)."
+                        ),
+                    },
+                },
+                "required": ["annual_consumption_kwh", "goal"],
+            },
+        },
+        run=_call_suggest_config,
+    ),
+    # --- Read-only DB tools: look up past runs in the runs table ---
+    _Tool(
+        schema={
+            "name": "get_run_results",
+            "description": (
+                "Fetch the results and summary of a specific simulation run by its "
+                "id or name.  Returns key output metrics and status information. "
+                "Use this when the user asks about a particular run's results."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "run_id_or_name": {
+                        "type": "string",
+                        "description": (
+                            "The run id (UUID) or run name to look up.  "
+                            "Resolves by exact id first, then most-recent name match."
+                        ),
+                    },
+                },
+                "required": ["run_id_or_name"],
+            },
+        },
+        run=_call_get_run_results,
+    ),
+    _Tool(
+        schema={
+            "name": "list_recent_runs",
+            "description": (
+                "List recent simulation runs in reverse chronological order.  "
+                "Returns identifying fields and key summary metrics for each run. "
+                "Use this when the user asks what simulations have been run recently."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum number of runs to return (1–50, default 10). "
+                            "Values <= 0 are treated as the default (10)."
+                        ),
+                    },
+                },
+                "required": ["limit"],
+            },
+        },
+        run=_call_list_recent_runs,
+    ),
+    # --- Trigger tools: submit home and fleet simulation jobs to the JobManager ---
+    _Tool(
+        schema={
+            "name": "run_home_simulation",
+            "description": (
+                "Submit a single-home simulation job and return the run id and a "
+                "URL to the results page.  Use this when the user asks to run or "
+                "start a home simulation with specific PV/battery parameters."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pv_kw": {
+                        "type": "number",
+                        "description": "PV array capacity in kW (0.5–20).",
+                    },
+                    "battery_kwh": {
+                        "type": "number",
+                        "description": "Battery capacity in kWh (0 = no battery).",
+                    },
+                    "consumption_kwh": {
+                        "type": "number",
+                        "description": "Annual household electricity consumption in kWh ({:g}–{:g}).".format(
+                            *FLEET_COMPONENTS["load"].fixed_range
+                        ),
+                    },
+                    "occupants": {
+                        "type": "integer",
+                        "description": "Number of household occupants (default 3).",
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                    },
+                    **_TRIGGER_TOOL_WINDOW_PROPERTIES,
+                },
+                "required": ["pv_kw"],
+            },
+        },
+        run=_call_run_home_simulation,
+    ),
+    _Tool(
+        schema={
+            "name": "run_fleet_simulation",
+            "description": (
+                "Submit a homogeneous N-home fleet simulation job and return the "
+                "run id and a URL to the fleet results page.  Use this when the "
+                "user asks to run a fleet or multi-home simulation."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "n_homes": {
+                        "type": "integer",
+                        "description": f"Number of homes in the fleet (1–{_FLEET_TOOL_MAX_HOMES}).",
+                    },
+                    "pv_kw": {
+                        "type": "number",
+                        "description": "PV capacity per home in kW (0.5–20).",
+                    },
+                    "battery_kwh": {
+                        "type": "number",
+                        "description": "Battery capacity per home in kWh (0 = no battery).",
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                    },
+                    **_TRIGGER_TOOL_WINDOW_PROPERTIES,
+                },
+                "required": ["n_homes"],
+            },
+        },
+        run=_call_run_fleet_simulation,
+    ),
+)
+
+# The tools' schemas, as every chat request offers them.  TOOLS is a tuple so
+# its order cannot change at runtime.  Its entries stay plain dicts: the SDK
+# hands nested schema values to JSON encoding as they are, and JSON encoding
+# rejects read-only mappings.
+TOOLS: Sequence[Mapping[str, Any]] = tuple(tool.schema for tool in _TOOL_TABLE)
+
+
+def _tools_by_name(tools: Sequence[_Tool]) -> Mapping[str, _Tool]:
+    """Return *tools* keyed by name, in their order.
+
+    Raises:
+        ValueError: When more than one of *tools* has the same name, naming each such name.
+    """
+    repeated = [name for name, uses in Counter(tool.name for tool in tools).items() if uses > 1]
+    if repeated:
+        raise ValueError(
+            f"Tool names must be unique, but these name more than one tool: {', '.join(repeated)}"
+        )
+    return MappingProxyType({tool.name: tool for tool in tools})
+
+
+_TOOL_BY_NAME = _tools_by_name(_TOOL_TABLE)
+
+
+def dispatch_tool(name: str, tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+    """Answer the model's call of the tool *name* with *tool_input*, running the tool in *context*.
+
+    Returns the tool's result, its handler's own error dict included.  An
+    unknown *name*, and an input the tool refuses (a required field it does
+    not send, or a value a field's reader refuses), come back as
+    ``{"error": ...}`` naming the problem, so the model can correct its call.
+    Never raises.
+    """
+    tool = _TOOL_BY_NAME.get(name)
+    if tool is None:
+        return {"error": f"Unknown tool '{name}'. Available tools: {', '.join(_TOOL_BY_NAME)}."}
+    try:
+        return tool.answer(tool_input, context)
+    except ValueError as refusal:
+        return {"error": str(refusal)}
 
 
 def _session_id() -> str:
@@ -808,31 +923,9 @@ def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
     The SDK types both counts ``Optional[int]``; a count it reports as None adds 0.
     """
     return {
-        field: totals.get(field, 0) + (getattr(usage, field, None) or 0)
-        for field in ("cache_creation_input_tokens", "cache_read_input_tokens")
+        key: totals.get(key, 0) + (getattr(usage, key, None) or 0)
+        for key in ("cache_creation_input_tokens", "cache_read_input_tokens")
     }
-
-
-def _sse_frame(event: str, payload: Mapping[str, Any]) -> str:
-    """Return the SSE frame that sends *event* with *payload* as its JSON data."""
-    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
-
-
-def _error_frame(message: str) -> str:
-    """Return the SSE ``error`` frame carrying *message*."""
-    return _sse_frame("error", {"message": message})
-
-
-def _event_stream(frames: Iterable[str]) -> Response:
-    """Return the 200 ``text/event-stream`` response sending *frames*, uncached and unbuffered by proxies."""
-    return Response(
-        frames,
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 def _has_text(content: str) -> bool:
@@ -994,7 +1087,7 @@ class _ReplyRecord:
 
     reply: str = ""
     tools_run: tuple[str, ...] = ()
-    cache_usage: Mapping[str, int] = MappingProxyType({})
+    cache_usage: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
     def after(self, event: _ReplyEvent) -> "_ReplyRecord":
         """Return this record with *event* added."""
@@ -1011,7 +1104,6 @@ class _ReplyRecord:
         assert_never(event)
 
 
-_DONE_FRAME = _sse_frame("done", {})
 _NO_REPLY_TEXT = "[No reply text was received.]"
 
 
@@ -1029,7 +1121,7 @@ class _TurnEnding:
     metadata: Mapping[str, Any]
 
 
-_FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
+_FINISHED = _TurnEnding(sse_frame(CHAT_DONE, ChatDone()), _NO_REPLY_TEXT, MappingProxyType({}))
 _CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
 
 
@@ -1040,7 +1132,9 @@ def _failed(error: Exception) -> _TurnEnding:
     """
     notice = f"Streaming error: {error}"
     return _TurnEnding(
-        _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
+        sse_frame(CHAT_FAILED, ChatFailed(notice)),
+        notice,
+        MappingProxyType({"error": str(error), "truncated": True}),
     )
 
 
@@ -1077,9 +1171,9 @@ class _TurnRecorder:
 def _sse_frames(event: _ReplyEvent) -> tuple[str, ...]:
     """Return the SSE frames that show *event* to the client: ``delta`` for reply text, ``tool`` for a tool call, none for the rest."""
     if isinstance(event, _ReplyText):
-        return (_sse_frame("delta", {"text": event.text}),)
+        return (sse_frame(CHAT_DELTA, ChatDelta(event.text)),)
     if isinstance(event, _ToolCalled):
-        return (_sse_frame("tool", {"name": event.name}),)
+        return (sse_frame(CHAT_TOOL, ChatToolCall(event.name)),)
     if isinstance(event, (_ToolRan, _ModelCallEnded)):
         return ()
     assert_never(event)
@@ -1118,6 +1212,11 @@ def _refusal(user_message: str) -> str | None:
     return None
 
 
+def _refused_turn(reason: str) -> Response:
+    """The response that refuses a chat turn: one ``failed`` frame carrying *reason*."""
+    return event_stream([sse_frame(CHAT_FAILED, ChatFailed(reason))])
+
+
 def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
     """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
 
@@ -1132,7 +1231,8 @@ def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str
     messages = request_messages(
         get_chat_history(database, session_id), user_message, _run_context(run_id, storage)
     )
-    run_tool = partial(dispatch_tool, storage=storage, job_manager=get_job_manager())
+    context = ToolContext(storage=storage, job_manager=get_job_manager())
+    run_tool = partial(dispatch_tool, context=context)
     return _turn_frames(
         user_message,
         _reply_events(client, _model_request(model, messages), run_tool),
@@ -1148,28 +1248,25 @@ def chat() -> Response:
     A ``run_id`` puts that run's summary in front of the message as context.
     A body that is not a JSON object, an unset ANTHROPIC_API_KEY, a message
     without text and a client that cannot be built are each answered with a
-    lone ``error`` frame, and no turn is stored.
+    lone ``failed`` frame, and no turn is stored.
 
-    SSE frame contract:
-    - ``event: delta`` / ``data: {"text": "<token>"}``  — streamed token
-    - ``event: tool``  / ``data: {"name": "<tool>"}``   — the model called a tool
-    - ``event: done``  / ``data: {}``                   — stream complete
-    - ``event: error`` / ``data: {"message": "<msg>"}`` — error (no 500)
+    The frames are web/sse.py's chat catalogue: ``delta`` and ``tool`` while the
+    reply streams, then ``done``, or ``failed`` carrying the notice to show.
 
     Returns:
-        ``text/event-stream`` 200 response (even on error).
+        ``text/event-stream`` 200 response, even when the turn fails.
     """
     try:
         data = request_json_object()
     except NotAJsonObject as refusal:
-        return _event_stream([_error_frame(str(refusal))])
+        return _refused_turn(str(refusal))
     user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:
-        return _event_stream([_error_frame(refusal_reason)])
+        return _refused_turn(refusal_reason)
     try:
         client = _create_client()
     except Exception as exc:
-        return _event_stream([_error_frame(f"Could not initialise Anthropic client: {exc}")])
+        return _refused_turn(f"Could not initialise Anthropic client: {exc}")
     run_id: str = str(data.get("run_id", "")).strip()
-    return _event_stream(_answer_frames(client, user_message, run_id))
+    return event_stream(_answer_frames(client, user_message, run_id))

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import atexit
+import functools
 import logging
 import os
 from pathlib import Path
@@ -9,11 +9,14 @@ from typing import Any
 
 from flask import Flask, render_template
 
+from solar_challenge.home import simulate_home
+from solar_challenge.weather import default_weather
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
 from solar_challenge.web.database import init_db
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
 from solar_challenge.web.scenarios import bp as scenarios_bp
 from solar_challenge.web.storage import RunStorage
@@ -72,6 +75,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         queues) that is not shared across processes.  Multi-worker
         deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
         missing from workers that did not create them.
+        A host other than ``solar-challenge web start`` must call
+        ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
+
+    .. note::
+        Its jobs simulate on ``default_weather()`` as resolved when create_app
+        runs, so a weather cache installed, or SOLAR_CHALLENGE_WEATHER_CACHE_DIR
+        set, after it does not reach them. The dashboard's fleet job still
+        reads that provider once per home; S16 brings it prefetch.
 
     Args:
         test_config: Optional configuration dict to override defaults.
@@ -123,16 +134,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution
-    job_manager = JobManager()
+    job_manager = JobManager(simulate_home=functools.partial(simulate_home, weather=default_weather()))
     app.extensions["job_manager"] = job_manager
 
     # Recover jobs stuck from previous server shutdown
     recovered = recover_stale_jobs(database)
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
-
-    # Register shutdown handler
-    atexit.register(job_manager.shutdown)
 
     _register_blueprints(app)
 
@@ -149,14 +157,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
 
 def _register_blueprints(app: Flask) -> None:
-    """Register the blueprint of each feature area on *app*."""
+    """Register each of the dashboard's blueprints on *app*."""
     app.register_blueprint(routes_bp)
     app.register_blueprint(history_bp, url_prefix="/history")
     app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
     app.register_blueprint(api_bp)
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
-
-
-if __name__ == "__main__":
-    application = create_app()
-    application.run(debug=True)
+    app.register_blueprint(plotly_js_bp)

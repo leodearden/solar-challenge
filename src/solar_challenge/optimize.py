@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Discrete install-config sweep and optimisation tools (W3).
+"""Discrete install-config sweep and optimisation tools.
 
-This module provides the homogeneous-install config enumerator that is the
-foundation of the W3 cost-recovery sweep (PRD §3.1/§3.2/§10-A/§10-B).
+Enumerates homogeneous-install fleet scenarios over discrete PV, battery and
+inverter sizes, ranks them by householder outlay at the solved cost-recovery
+own-use rate, and measures how one-at-a-time assumption changes move that
+rank.  The design is specified in docs/prds/discrete-install-config-sweep.md.
 
 Public API
 ----------
@@ -11,14 +13,14 @@ ConfigResult          — per-config evaluation result (cost-recovery + baseline
 RankedSweep           — aggregated sweep output (ranked feasible configs + infeasible set)
 enumerate_configs     — cartesian-product enumerator → eager list (small grids)
 iter_configs          — generator variant of enumerate_configs (large grids / streaming)
-run_sweep             — drive all configs through W2 cost-recovery + rank by outlay
+run_sweep             — drive all configs through the cost-recovery solve + rank by outlay
 rank                  — pure stable sort over any ConfigResult sequence (5-key ascending)
 feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
 pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
 cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
 SensitivityAxis       — one OAT axis: name, swept values, per-value rankings + top configs
 SensitivityPanel      — aggregated OAT output (axes, baseline_top, rank_stability scalar)
-sensitivity_panel     — OAT assumption sensitivity over the W3 cost-recovery rank
+sensitivity_panel     — OAT assumption sensitivity over the cost-recovery rank
 apply_knob            — copy of a fleet ScenarioConfig with one sensitivity knob set
 SENSITIVITY_BANDS     — board-facing swept values per sensitivity knob (grid services from flex)
 """
@@ -58,7 +60,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ConfigPoint:
-    """A single discrete install specification for the W3 sweep.
+    """A single discrete install specification for the install-config sweep.
 
     Attributes:
         pv_kwp: PV DC rated capacity in kWp (must be > 0 and finite).
@@ -95,7 +97,7 @@ class ConfigPoint:
 
 
 # ---------------------------------------------------------------------------
-# ConfigResult — per-config evaluation output (W3 task B, PRD §3.1)
+# ConfigResult — per-config evaluation output
 # ---------------------------------------------------------------------------
 
 
@@ -103,7 +105,7 @@ class ConfigPoint:
 class ConfigResult:
     """Full evaluation result for one (ConfigPoint, ScenarioConfig) pair.
 
-    Produced by :func:`run_sweep` (one per grid cell).  Combines the W2
+    Produced by :func:`run_sweep` (one per grid cell).  Combines finance's
     cost-recovery solve with baseline economics so the board can rank configs
     both by householder outlay and by project-economics trade-offs.
 
@@ -145,10 +147,10 @@ class ConfigResult:
     """Install specification for this grid cell."""
 
     solution: "CostRecoverySolution"
-    """W2 cost-recovery solve result."""
+    """Cost-recovery solve result."""
 
     representative_outlay_gbp: float
-    """Representative home annual outlay at the solved rate (£).  W3 rank key."""
+    """Representative home annual outlay at the solved rate (£).  Primary rank key."""
 
     solved_own_use_rate_pence_per_kwh: float
     """Solved own-use rate (p/kWh, ≥ 0)."""
@@ -182,7 +184,7 @@ class ConfigResult:
 
 
 # ---------------------------------------------------------------------------
-# RankedSweep — aggregated sweep output (W3 task B, PRD §3.1)
+# RankedSweep — aggregated sweep output
 # ---------------------------------------------------------------------------
 
 
@@ -315,7 +317,7 @@ def enumerate_configs(
     Args:
         base: Fleet :class:`~solar_challenge.config.ScenarioConfig`; must have
             ``homes`` populated (``base.homes`` non-empty).  Single-home
-            scenarios are rejected because the W3 sweep operates at fleet level.
+            scenarios are rejected because the sweep operates at fleet level.
         pv_kwp: Discrete PV DC capacities in kWp (non-empty).
         battery_kwh: Discrete values for :attr:`ConfigPoint.battery_kwh`, the
             battery nameplate (total) capacities in kWh (non-empty; 0.0 = no
@@ -333,7 +335,7 @@ def enumerate_configs(
 
 
 # ---------------------------------------------------------------------------
-# Public pure helpers (W3 task C)
+# Public pure helpers
 # ---------------------------------------------------------------------------
 
 __all__ = [
@@ -356,7 +358,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# OAT sensitivity dataclasses (W3 task D)
+# OAT sensitivity dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -448,7 +450,7 @@ SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
 
 
 # ---------------------------------------------------------------------------
-# OAT knob application (W3 task D)
+# OAT knob application
 # ---------------------------------------------------------------------------
 
 def _repriced_at_seg_rate(
@@ -521,7 +523,7 @@ def sensitivity_panel(
         Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
     ] = None,
 ) -> SensitivityPanel:
-    """Compute a one-at-a-time (OAT) sensitivity panel over the W3 cost-recovery rank.
+    """Compute a one-at-a-time (OAT) sensitivity panel over the cost-recovery rank.
 
     For each axis (knob name + values), every value is swept in isolation while
     all other knobs stay at their baseline levels.  The panel floor
@@ -760,7 +762,7 @@ def feasible_split(
 
 
 def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
-    """Sort ConfigResults by the W3 rank key (pure, stable, no filtering).
+    """Sort ConfigResults by the sweep's rank key (pure, stable, no filtering).
 
     Sort key (five levels, all applied for determinism):
 
@@ -819,7 +821,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
       usable windows.
     - Household load profile (``load_config``) and home-level dispatch strategy
       (``HomeConfig.dispatch_strategy``) — occupancy diversity and the board
-      dispatch are preserved (PRD §3.2, W-H2).
+      dispatch are preserved (docs/prds/discrete-install-config-sweep.md §3.2).
 
     .. note::
         Because battery power limits, state-of-charge limits and
@@ -839,7 +841,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
     - A battery, and the home already has one →
       ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
       preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
-      ``efficiency``, and all other base fields (PRD §3.2 / design decision 2).
+      ``efficiency``, and all other base fields.
     - A battery, and the home has NO battery → a fresh
       :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
       (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).
@@ -871,7 +873,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
 
 
 # ---------------------------------------------------------------------------
-# run_sweep — W3 task B: per-config cost-recovery evaluation + ranking
+# run_sweep — per-config cost-recovery evaluation + ranking
 # ---------------------------------------------------------------------------
 
 
@@ -887,9 +889,10 @@ def _age0_baseline_outlay(
     and returns
     ``bill_distribution(..., finance, sim_days).representative.total_outlay_gbp``.
 
-    This is the 'second pure post-sim evaluation' from PRD §3.3 — the baseline
-    outlay at the *configured* ``own_use_rate`` (15 p/kWh), independent of the
-    retained-cash floor.
+    This is the 'second pure post-sim evaluation' of
+    docs/prds/discrete-install-config-sweep.md §3.3: the baseline outlay at the
+    *configured* ``own_use_rate`` (15 p/kWh), independent of the retained-cash
+    floor.
 
     Args:
         scenario: Fleet scenario (must have at least one home).
@@ -936,9 +939,9 @@ def _evaluate_config(
     simulate: Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"],
     retained_cash_floor_gbp: Optional[float],
 ) -> ConfigResult:
-    """Evaluate one (ConfigPoint, ScenarioConfig) pair against the W2 contract.
+    """Evaluate one (ConfigPoint, ScenarioConfig) pair with finance's cost-recovery functions.
 
-    Calls three W2 primitives in sequence:
+    Makes three calls in sequence:
 
     1. :func:`~solar_challenge.finance.solve_cost_recovery_rate` → *rank* fields.
     2. :func:`~solar_challenge.finance.project_multi_year` +
@@ -1006,7 +1009,7 @@ def run_sweep(
         Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
     ] = None,
 ) -> RankedSweep:
-    """Drive a cartesian config grid through W2 cost-recovery evaluation and rank results.
+    """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
     For each (ConfigPoint, ScenarioConfig) pair produced by :func:`enumerate_configs`:
 

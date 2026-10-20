@@ -25,20 +25,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._html_page import headings, texts, texts_after
 from tests._plotly_figure import traces, traces_by_name
-from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:

@@ -19,7 +19,12 @@ from solar_challenge.battery import BatteryConfig, compute_soh
 from solar_challenge.finance import project_multi_year
 from solar_challenge.fleet import FleetResults
 from solar_challenge.pv import calculate_degradation_factor
-from tests._finance_builders import make_fleet_results, make_scenario_and_finance, make_sim_results
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_and_finance,
+    make_sim_results,
+)
 
 
 def _make_degrading_simulate(
@@ -32,7 +37,7 @@ def _make_degrading_simulate(
 
     The injected simulate reads pv_config.system_age_years from each home in
     the FleetConfig, computes a degradation factor, and scales the energy
-    output accordingly.  This makes fleet_self_consumption_kwh decline with age
+    output accordingly.  This makes fleet_billed_own_use_kwh decline with age
     in a controlled, verifiable way.
     """
     def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
@@ -142,8 +147,8 @@ class TestProjectMultiYearSOH:
         expected_age0 = calculate_degradation_factor(0.0, rate)
         assert curve.points[0].pv_soh == pytest.approx(expected_age0, rel=1e-6)
 
-        # Check fleet_self_consumption declines from year 0 to year 24
-        assert curve.points[24].fleet_self_consumption_kwh < curve.points[0].fleet_self_consumption_kwh
+        # Check fleet_billed_own_use_kwh declines from year 0 to year 24
+        assert curve.points[24].fleet_billed_own_use_kwh < curve.points[0].fleet_billed_own_use_kwh
 
     def test_no_battery_soh_defaults_to_one(self) -> None:
         """battery_soh == 1.0 for all years when the fleet has no batteries."""
@@ -234,7 +239,7 @@ def _make_battery_ageing_simulate(
                     discharge_kwh=discharge,
                 )
             )
-        return FleetResults(per_home_results=per_home, home_configs=list(fc.homes))
+        return make_fleet_results_of(per_home, homes=fc.homes)
 
     return _simulate
 

@@ -16,17 +16,25 @@ empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
 jobs inside their simulations until the test releases them.
 
+Every browser context a test opens refuses each request to another origin
+than the live server's, as if the network were down, and the test errors at
+teardown, naming each refused URL.
+
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
 
-It imports nothing from playwright: tests/unit/test_e2e_job_wait.py and
-tests/unit/test_e2e_network_change_reruns.py run copies of this module in
-the verify environment, which lacks the e2e extra.
+It imports playwright's and pytest-playwright's types for annotations only,
+so nothing from the e2e extra when it loads: tests/unit/test_e2e_job_wait.py
+and tests/unit/test_e2e_network_change_reruns.py run copies of this module
+in the verify environment, which lacks that extra.
 """
+
+from __future__ import annotations
 
 import functools
 import json
+import re
 import socket
 import sqlite3
 import threading
@@ -35,7 +43,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -45,8 +53,7 @@ from flask import Flask
 from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
@@ -55,6 +62,11 @@ from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
+from tests._web_runs import store_fleet_run, store_home_run
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext, Route
+    from pytest_playwright import CreateContextCallback
 
 
 def _find_free_port() -> int:
@@ -182,6 +194,49 @@ def dashboard_macros(_e2e_app: Flask) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Requests to other origins
+# ---------------------------------------------------------------------------
+
+
+def _urls_outside(origin: str) -> re.Pattern[str]:
+    """A pattern matching every URL outside *origin*.
+
+    Playwright matches a pattern in its driver; a predicate would stop every request the browser makes to ask this process.
+    """
+    return re.compile(f"^(?!{re.escape(origin)}/)")
+
+
+@pytest.fixture
+def new_context(
+    new_context: CreateContextCallback, live_server: str, request: pytest.FixtureRequest
+) -> Iterator[Callable[..., BrowserContext]]:
+    """Wrap pytest-playwright's new_context so that each browser context it opens refuses every request to another origin than the live server's, as if the network were down.
+
+    It opens the context fixture's browser context, and so the page fixture's, as well as each one a test opens itself.
+    At teardown the test errors, naming each URL refused.
+    """
+    refused: list[str] = []
+
+    def _refuse(route: Route) -> None:
+        refused.append(route.request.url)
+        route.abort("internetdisconnected")
+
+    def new_context_refusing_other_origins(**kwargs: Any) -> BrowserContext:
+        context = new_context(**kwargs)
+        context.route(_urls_outside(live_server), _refuse)
+        return context
+
+    yield new_context_refusing_other_origins
+    if refused:
+        pytest.fail(
+            f"{request.node.nodeid} requested other origins ({', '.join(dict.fromkeys(refused))}); "
+            "an e2e test's browser reaches only the live server: serve each file a page loads from the app, "
+            "as tests/unit/test_web_page_scripts.py describes for scripts",
+            pytrace=False,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Seeded data fixtures
 # ---------------------------------------------------------------------------
 
@@ -194,7 +249,7 @@ def _save_seeded_home_run(
     The battery gives the run's results page its battery stat cards. Returns (run_id, run_name).
     """
     home = replace(make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), name=run_name)
-    storage.save_home_run(run_id, home, results, calculate_summary(results))
+    store_home_run(storage, run_id, home, results)
     return run_id, run_name
 
 
@@ -256,13 +311,7 @@ def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     """
     run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
     fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
-    _e2e_storage.save_fleet_run(
-        run_id,
-        fleet,
-        calculate_fleet_summary(fleet),
-        [calculate_summary(home_results) for home_results in fleet.per_home_results],
-        name=run_name,
-    )
+    store_fleet_run(_e2e_storage, run_id, fleet, name=run_name)
     return run_id, run_name
 
 

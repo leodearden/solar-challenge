@@ -15,7 +15,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, resolve_location
+from solar_challenge.web.request_boundary import LOCATION_PRESETS, NotAJsonObject, resolve_location
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_END,

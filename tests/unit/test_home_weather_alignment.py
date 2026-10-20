@@ -16,6 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import align_tmy_to_index
+from tests._synthetic_weather import weather_for
 
 
 @pytest.fixture
@@ -282,7 +283,7 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         pd.testing.assert_index_equal(
@@ -308,7 +309,7 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         assert results.heat_pump_load is not None
@@ -334,7 +335,7 @@ class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
             config,
             start_date=pd.Timestamp("2024-02-28"),
             end_date=pd.Timestamp("2024-02-29"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         feb_28 = results.generation.loc["2024-02-28"]
@@ -358,7 +359,7 @@ class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
             config,
             start_date=pd.Timestamp("2024-02-28"),
             end_date=pd.Timestamp("2024-02-29"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         assert results.heat_pump_load is not None

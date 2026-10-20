@@ -22,7 +22,7 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
     sample_distribution,
 )
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -93,13 +93,30 @@ class TestPreviewDistribution:
         assert all(2.0 <= s <= 8.0 for s in samples)
 
     def test_unknown_distribution_returns_400(self, client: FlaskClient) -> None:
-        """Unknown distribution type returns 400."""
+        """A type the distribution editor does not offer is a 400 naming type and the type sent."""
         resp = client.post(
             "/api/fleet/preview-distribution",
             json={"type": "banana", "params": {}},
         )
         assert resp.status_code == 400
-        assert "Unknown" in resp.get_json()["error"]
+        assert resp.get_json() == {
+            "error": "type must be one of normal, uniform, weighted_discrete, shuffled_pool, "
+            "got 'banana'"
+        }
+
+    def test_params_without_what_the_type_is_drawn_from_return_400_naming_the_field(
+        self, client: FlaskClient
+    ) -> None:
+        """Params without a parameter the type is drawn from, a normal's mean, are a 400 naming its field under params, not samples drawn with an invented default."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": "normal", "params": {}},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "params.mean must be given: the preview draws a normal distribution from "
+            "its mean and std"
+        }
 
     def test_default_n_samples(self, client: FlaskClient) -> None:
         """Default n_samples is 100."""
@@ -408,6 +425,27 @@ class TestFleetFromDistribution:
             resolve_location(location)
         assert resp.get_json() == {"error": str(refusal.value)}
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("heat_pump", "ASHP", id="heat-pump-the-fleet-has-no-overlay-for"),
+            pytest.param(
+                "tarif", {"type": "flat_rate", "rate_per_kwh": 0.3}, id="misspelt-tariff"
+            ),
+        ],
+    )
+    def test_unrecognised_key_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, key: str, value: object
+    ) -> None:
+        """A top-level key the fleet form does not have is refused by name, not dropped from a fleet run without it; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: value},
+        )
+        assert resp.status_code == 400
+        assert f"Unrecognised fleet form keys: {key!r};" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
@@ -659,6 +697,85 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        ("patch", "missing"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "uniform"}}},
+                ("min", "max"),
+                id="battery-uniform-without-its-range",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "uniform", "min": 2.0}}},
+                ("max",),
+                id="pv-uniform-without-its-max",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"type": "normal", "mean": 20.0}}},
+                ("std",),
+                id="pv-tilt-normal-without-its-std",
+            ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": {"type": "weighted_discrete"}}},
+                ("weights",),
+                id="load-weighted-discrete-without-its-rows",
+            ),
+        ],
+    )
+    def test_distribution_without_a_parameter_or_its_rows_returns_400_carrying_the_grammars_refusal_naming_it_and_queues_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        patch: dict,
+        missing: tuple[str, ...],
+    ) -> None:
+        """A distribution sent without a parameter or its rows reaches config.py's grammar without them, not with an invented default, and is a 400 whose error is the grammar's refusal naming each missing key; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        for key in missing:
+            assert repr(key) in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_row_without_its_weight_returns_400_naming_it_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A weighted_discrete row without its weight is a 400 naming the row and the row sent, not a row of weight 1; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [{"value": 4.0}]}},
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "pv.capacity_kw.values[0] must be a mapping with 'value' and 'weight', "
+            "got {'value': 4.0}"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_distribution_type_the_editor_does_not_offer_returns_400_naming_its_type_field(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A block setting's distribution of a type the fleet page's editor does not offer, a fixed pv.tilt, is a 400 naming its type field and the type sent, not the grammar's refusal of the spec cut down to its type; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "pv": {"capacity_kw": 4.0, "tilt": {"type": "fixed", "value": 30.0}},
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "pv.tilt.type must be one of normal, uniform, weighted_discrete, "
+            "shuffled_pool, got 'fixed'"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
         "pv",
         [
             pytest.param({"type": "normal", "mean": 4.0, "std": 1.0}, id="normal"),
@@ -740,6 +857,26 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "count",
+        [pytest.param(1, id="short of n_homes"), pytest.param(3, id="beyond n_homes")],
+    )
+    def test_shuffled_pool_not_sized_to_n_homes_returns_400_carrying_the_grammars_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, count: int
+    ) -> None:
+        """A shuffled_pool whose count is not the body's 2 homes reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
+        body = {
+            **self._VALID_BODY,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [{"value": 4.0, "count": count}]}},
+        }
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "pv.capacity_kw" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

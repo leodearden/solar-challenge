@@ -20,8 +20,6 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
-from flask.testing import FlaskClient
 
 from tests._web_app import build_test_app
 
@@ -48,23 +46,6 @@ _SKIP_REASON = (
     "PVGIS endpoint not reachable (offline / sandboxed CI). "
     "Set SOLAR_OFFLINE=0 or ensure network access to run this test."
 )
-
-
-# ---------------------------------------------------------------------------
-# Fixtures — real app, real JobManager (no mock)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a real Flask app with temporary database and data dir."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a test client against the real app."""
-    return app.test_client()
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +87,7 @@ class TestFleetFromDistributionE2E:
     """End-to-end slow test: real 3-home distribution fleet runs to completion."""
 
     def test_distribution_fleet_completes_and_lands_in_history(
-        self, client: FlaskClient
+        self, tmp_path: Path
     ) -> None:
         """Submit a 3-home distribution fleet, poll to completion, assert history entry.
 
@@ -116,6 +97,8 @@ class TestFleetFromDistributionE2E:
         3. Assert status == "completed".
         4. Assert the run appears in history with n_homes == 3.
         """
+        client = build_test_app(tmp_path).test_client()
+
         # 1. Submit
         submit_resp = client.post(
             "/api/simulate/fleet-from-distribution",

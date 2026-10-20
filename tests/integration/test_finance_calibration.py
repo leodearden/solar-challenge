@@ -30,10 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
     parse_finance_config,
@@ -46,9 +44,8 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
-from solar_challenge.home import HomeConfig
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
+from tests._fin_calibration import make_physics_column_scenario
+from tests._finance_builders import make_scenario_of, make_sized_home
 
 
 # ---------------------------------------------------------------------------
@@ -95,19 +92,8 @@ _FIN_SCF = 0.70
 
 
 # ---------------------------------------------------------------------------
-# Helper builders (mirrors test_finance_economics.py pattern)
+# Helper builders; the homes and scenarios come from tests/_finance_builders.py
 # ---------------------------------------------------------------------------
-
-
-def _make_home_config_fin(
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> HomeConfig:
-    """Build a [FIN]-aligned HomeConfig (5.5 kWp + 5.0 kWh, Bristol defaults)."""
-    pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
-    load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
-    batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
-    return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
 
 
 def _make_scenario_fin(
@@ -115,11 +101,11 @@ def _make_scenario_fin(
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
 ) -> ScenarioConfig:
-    """Build a homogeneous [FIN]-aligned ScenarioConfig for calibration tests."""
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-    homes = [_make_home_config_fin(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
-             for _ in range(n_homes)]
-    return ScenarioConfig(name="FIN-Calibration", period=period, homes=homes)
+    """make_scenario_of's scenario of *n_homes* homes, each fitted with the [FIN] install.
+
+    The install is a *pv_kwp* kWp array and a *battery_kwh* kWh battery.
+    """
+    return make_scenario_of([make_sized_home(pv_kwp=pv_kwp, battery_kwh=battery_kwh)] * n_homes)
 
 
 def _make_finance_fin(
@@ -236,7 +222,7 @@ class TestSpreadsheetRevenueCurve:
         assert len(curve1.points) == len(curve2.points)
         for pt1, pt2 in zip(curve1.points, curve2.points):
             assert pt1.fleet_revenue_gbp == pt2.fleet_revenue_gbp
-            assert pt1.fleet_self_consumption_kwh == pt2.fleet_self_consumption_kwh
+            assert pt1.fleet_billed_own_use_kwh == pt2.fleet_billed_own_use_kwh
             assert pt1.fleet_export_kwh == pt2.fleet_export_kwh
         assert curve1.interp_error_estimate == curve2.interp_error_estimate
         assert curve1.sampled_ages == curve2.sampled_ages
@@ -256,7 +242,7 @@ class TestSpreadsheetRevenueCurve:
             assert pt2.fleet_revenue_gbp == pytest.approx(2.0 * pt1.fleet_revenue_gbp, rel=1e-10)
 
     def test_energy_fields_consistent_with_scf(self) -> None:
-        """fleet_self_consumption_kwh and fleet_export_kwh must reflect scf."""
+        """fleet_billed_own_use_kwh and fleet_export_kwh must reflect scf."""
         n_homes = 100
         pv_kwp = 5.5
         kwh_per_kwp = 1050.0
@@ -267,7 +253,7 @@ class TestSpreadsheetRevenueCurve:
         )
         fleet_gen = float(n_homes) * pv_kwp * kwh_per_kwp
         for pt in curve.points:
-            assert pt.fleet_self_consumption_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
+            assert pt.fleet_billed_own_use_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
             assert pt.fleet_export_kwh == pytest.approx((1.0 - scf) * fleet_gen, rel=1e-10)
 
 
@@ -702,14 +688,7 @@ class TestCalibrationPhysicsColumn:
         simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
         differ from 0.70, no physics==spreadsheet assertion.
         """
-        # Small fleet, short window for speed
-        homes = [_make_home_config_fin(pv_kwp=5.5, battery_kwh=5.0)] * 2
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-        scenario = ScenarioConfig(
-            name="FIN-Cal-Physics-Test",
-            period=period,
-            homes=homes,
-        )
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin()
         physics_finance = dataclasses.replace(finance, self_consumption_override=None)
 
@@ -736,7 +715,7 @@ class TestCalibrationPhysicsColumn:
             f"  Physics DSCR:            {physics_econ.min_dscr:.4f}\n"
             f"  Spreadsheet IRR:         {ss_econ.equity_irr*100:.2f}%\n"
             f"  Physics IRR:             {physics_econ.equity_irr*100:.2f}%\n"
-            f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}"
+            f"  Physics billed own-use:  {physics_curve.points[0].fleet_billed_own_use_kwh:.1f}"
             " kWh/yr (window annualised)\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}"
             " kWh/yr (window annualised)\n"

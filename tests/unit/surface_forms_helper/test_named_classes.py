@@ -11,9 +11,11 @@ import decimal
 import enum
 import fractions
 import functools
+import gc
 import pathlib
 import sys
 import types
+import weakref
 from dataclasses import InitVar, dataclass
 from typing import (
     TYPE_CHECKING,
@@ -191,6 +193,235 @@ def test_a_name_its_module_imports_only_for_type_checking_names_the_class_that_i
     def f(amount: "Decimal") -> None: ...
 
     assert named_classes(f) == {decimal.Decimal}
+
+
+def test_a_name_its_module_imports_only_for_type_checking_names_the_class_its_own_import_binds_whatever_an_earlier_module_of_the_same_name_imported(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+    assert named_classes(earlier.audit) == {fractions.Fraction}
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    assert named_classes(later.audit) == {decimal.Decimal}
+
+
+def test_a_routine_whose_module_another_module_of_the_same_name_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_both(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.audit)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
+def test_a_routine_relabelled_with_another_modules_name_names_the_class_the_module_whose_globals_it_carries_binds_the_name_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "publishing", "from decimal import Decimal as Share\n")
+    relabelling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "relabelling",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n"
+        "\n"
+        "audit.__module__ = 'publishing'\n",
+    )
+    renaming = imported_module(
+        tmp_path,
+        monkeypatch,
+        "renaming",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "__name__ = 'publishing'\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    assert named_classes(relabelling.audit) == {fractions.Fraction}
+    assert named_classes(renaming.audit) == {fractions.Fraction}
+
+
+def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_name_replaced_it_in_sys_modules_raises_a_lookup_error_naming_it_and_the_replacement(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n"
+        "\n"
+        "class Lone:\n"
+        "    share: 'Share'\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "class Plain:\n"
+        "    share: 'Share'\n",
+    )
+
+    with pytest.raises(LookupError) as replaced:
+        named_classes(earlier.Plain)
+    with pytest.raises(LookupError) as unbound:
+        named_classes(earlier.Lone)
+
+    assert "auditing.Plain" in str(replaced.value)
+    assert later.__file__ in str(replaced.value)
+    assert "auditing.Lone" in str(unbound.value)
+    assert later.__file__ in str(unbound.value)
+
+
+def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "def build():\n"
+        "    class Local:\n"
+        "        def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "    return Local\n",
+    )
+    local = earlier.build()
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "def build():\n"
+        "    class Local:\n"
+        "        def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "    return Local\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(local)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
+def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_the_classes_its_forms_name() -> None:
+    assert named_classes(types.ModuleType) == set()
+    assert named_classes(types.FunctionType) == set()
+
+
+def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
+    assert named_classes(str.join) == set()
+    assert named_classes(", ".join) == set()
+    assert named_classes(vars(dict)["fromkeys"]) == set()
+    assert named_classes(object.__init__) == set()
+    assert named_classes((1).__add__) == set()
+
+
+def test_a_routine_or_class_whose_signature_annotates_nothing_names_no_class_though_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "def audit(share): ...\n\n\nclass Audit:\n    def __init__(self, share): ...\n"
+    earlier = imported_module(tmp_path_factory.mktemp("earlier"), monkeypatch, "auditing", source)
+    imported_module(tmp_path_factory.mktemp("later"), monkeypatch, "auditing", source)
+
+    assert named_classes(earlier.audit) == set()
+    assert named_classes(earlier.Audit) == set()
+
+
+def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_once_dropped(
+    tmp_path: pathlib.Path,
+) -> None:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        settling = imported_module(
+            tmp_path,
+            monkeypatch,
+            "settling",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from decimal import Decimal\n"
+            "\n"
+            "def settle(amount: 'Decimal') -> None: ...\n",
+        )
+        assert named_classes(settling.settle) == {decimal.Decimal}
+    dropped = weakref.ref(settling)
+    del settling
+    gc.collect()
+
+    assert dropped() is None
 
 
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:

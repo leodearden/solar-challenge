@@ -16,6 +16,7 @@ from solar_challenge.load import (
     OFGEM_TDCV_BY_OCCUPANTS,
     energy_kwh,
     generate_load_profile,
+    household_occupant_count,
     scale_profile_to_energy,
 )
 
@@ -137,6 +138,36 @@ class TestLoadConfigValidation:
         assert config.household_occupants == 3
 
 
+class TestHouseholdOccupantCount:
+    """household_occupant_count is LoadConfig's occupant rule, for a caller holding a count that is not an int."""
+
+    @pytest.mark.parametrize(
+        "occupants",
+        [pytest.param(3.0, id="float"), pytest.param(np.int64(3), id="numpy-int64")],
+    )
+    def test_a_whole_number_count_is_given_as_the_int_it_equals(self, occupants: float) -> None:
+        count = household_occupant_count(occupants)
+
+        assert type(count) is int
+        assert count == 3
+
+    @pytest.mark.parametrize(
+        ("occupants", "refusal"),
+        [
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="below-one"),
+            pytest.param(11, "Household occupants seems unrealistic: 11", id="above-ten"),
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+        ],
+    )
+    def test_a_count_that_is_not_a_whole_number_from_1_to_10_is_refused_naming_it(
+        self, occupants: float, refusal: str
+    ) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            household_occupant_count(occupants)
+        assert str(exc_info.value) == refusal
+
+
 class TestGenerateLoadProfile:
     """Test LOAD-002/LOAD-006: Elexon profile generation."""
 
@@ -253,7 +284,7 @@ class TestElexonProfileShape:
 
 
 class TestEnergyKwh:
-    """energy_kwh integrates a 1-minute kW profile to its energy in kWh."""
+    """energy_kwh integrates a kW profile, each row over the hours its row lasts, to its energy in kWh."""
 
     def test_calculates_from_minute_profile(self):
         """A day at a constant 1 kW is 24 kWh: the window's own energy."""
@@ -265,10 +296,29 @@ class TestEnergyKwh:
         total = energy_kwh(profile)
         assert total == pytest.approx(24.0, rel=0.001)
 
-    def test_empty_profile_returns_zero(self):
-        """An empty profile has zero energy."""
-        profile = pd.Series([], dtype=float)
-        assert energy_kwh(profile) == 0.0
+    def test_a_half_hourly_profile_counts_each_row_as_half_an_hour(self):
+        """A week at a constant 0.4 kW is 67.2 kWh, whatever the cadence of its rows."""
+        week_of_half_hours = pd.date_range(
+            "2023-06-01", "2023-06-07 23:30", freq="30min", tz="Europe/London"
+        )
+        profile = pd.Series(0.4, index=week_of_half_hours)
+
+        assert energy_kwh(profile) == pytest.approx(67.2, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("profile", "match"),
+        [
+            pytest.param(
+                pd.Series([], index=pd.DatetimeIndex([], tz="Europe/London"), dtype=float),
+                "empty",
+                id="empty",
+            ),
+            pytest.param(pd.Series([1.0, 2.0, 3.0]), "RangeIndex", id="range-index"),
+        ],
+    )
+    def test_a_profile_no_window_describes_is_refused(self, profile: pd.Series, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            energy_kwh(profile)
 
 
 class TestScaleProfileToEnergy:
@@ -298,7 +348,7 @@ class TestScaleProfileToEnergy:
 
     def test_raises_on_zero_consumption(self):
         """Raises error when profile has zero consumption."""
-        profile = pd.Series([0.0] * 100)
+        profile = pd.Series(0.0, index=pd.date_range("2024-01-01", periods=100, freq="1min"))
         with pytest.raises(ValueError, match="zero"):
             scale_profile_to_energy(profile, target_kwh=100.0)
 

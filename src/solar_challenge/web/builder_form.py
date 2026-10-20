@@ -10,7 +10,7 @@ a scenario with no tariff, or no SEG.
 """
 
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,30 +22,38 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, read_pool_counts
+from solar_challenge.web.fleet_config import (
+    DISTRIBUTION_KEYS,
+    MAX_FLEET_HOMES,
+    distribution_grammar_spec,
+)
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
-from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
+from solar_challenge.web.request_boundary import (
+    LOCATION_PRESETS,
+    NotAJsonObject,
+    refuse_unrecognised_keys,
+    require_json_object,
+)
 
 _BUILDER_FORM = "Builder form"
 
-#: Reads a column of distribution rows, given as (field, value sent) cells, as its numbers.
-_ColumnReader = Callable[[list[tuple[str, Any]]], Sequence[float]]
+#: The suffix of the builder form field carrying each key of the editor's distribution
+#: whose field is not named for the key itself: scenario-builder.js componentFormData's
+#: wire contract.
+_FIELD_SUFFIX_OVERRIDES: Mapping[str, str] = {
+    "type": "distribution_type",
+    "values": "wd_values",
+    "entries": "sp_entries",
+}
 
 
-def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
-    """Each of *keys*, mapped to the form field that carries it for the component with *prefix*."""
-    return {key: f"{prefix}_{key}" for key in keys}
+def _distribution_fields(component: FleetComponent) -> dict[str, str]:
+    """Each key of the editor's distribution, mapped to the builder form field carrying it for *component*: the component's key, then the key or its suffix override."""
+    return {
+        key: f"{component.key}_{_FIELD_SUFFIX_OVERRIDES.get(key, key)}"
+        for key in DISTRIBUTION_KEYS
+    }
 
-
-_DISTRIBUTION_FIELDS = (
-    "distribution_type",
-    "mean",
-    "std",
-    "min",
-    "max",
-    "wd_values",
-    "sp_entries",
-)
 
 _CUSTOM_LOCATION_FORM_KEYS: Mapping[str, str] = {
     coordinate: coordinate for coordinate in ("latitude", "longitude", "altitude")
@@ -67,7 +75,7 @@ _RECOGNISED_KEYS = frozenset(
     | {
         form_key
         for component in FLEET_COMPONENTS.values()
-        for form_key in _prefixed(component.key, *_DISTRIBUTION_FIELDS).values()
+        for form_key in _distribution_fields(component).values()
     }
 )
 
@@ -83,7 +91,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             MAX_FLEET_HOMES, or counts totalling more.
     """
     form = require_json_object(form, _BUILDER_FORM)
-    _refuse_unrecognised_keys(form)
+    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
     fields = _present_fields(form)
 
     document: dict[str, Any] = {
@@ -173,8 +181,8 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
 
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and a shuffled pool smaller than the fleet with IndexError.
-    Anything else it raises is a defect in the loader, not a refusal, so it propagates.
+    a config it builds.  Anything else it raises is a defect in the loader, not a refusal,
+    so it propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
@@ -182,7 +190,7 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
         path.write_text(scenario_yaml(document), encoding="utf-8")
         try:
             load_fleet_config(path)
-        except (ConfigurationError, ValueError, IndexError) as exc:
+        except (ConfigurationError, ValueError) as exc:
             errors.append(str(exc))
     try:
         parse_seg_rate(document["seg"])
@@ -210,15 +218,6 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
         except ValueError as exc:
             errors.append(f"period.{key} is not a date: {exc}")
     return errors
-
-
-def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:
-    unrecognised = sorted(form.keys() - _RECOGNISED_KEYS)
-    if unrecognised:
-        raise ValueError(
-            f"Unrecognised builder form keys: {', '.join(map(repr, unrecognised))}; "
-            f"recognised keys: {', '.join(sorted(_RECOGNISED_KEYS))}"
-        )
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
@@ -253,49 +252,20 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
-    """*component*'s block: the distribution the form sets a type for, else the form's fixed value."""
-    form_keys = _prefixed(component.key, *_DISTRIBUTION_FIELDS)
-    if form_keys["distribution_type"] in fields:
-        return {component.grammar_key: _distribution_spec(fields, form_keys)}
-    return _present_numbers(fields, {component.grammar_key: component.fixed_field})
-
-
-def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) -> dict[str, Any]:
-    """The distribution the form's fields describe, as the grammar spells it.
-
-    *form_keys* maps each distribution field to the form field carrying it for one component.
+    """*component*'s block: the distribution the form sets a type for, written by the fleet form's reader, distribution_grammar_spec, else the form's fixed value.
 
     Raises:
-        ValueError: naming the distribution type, when the builder offers no such distribution.
+        ValueError: From distribution_grammar_spec, naming the builder's field, or for a
+            fixed value that is not a finite number.
     """
-    type_field = form_keys["distribution_type"]
-    distribution_type = fields[type_field]
-    parameters: Mapping[str, Any]
-    if distribution_type == "normal":
-        parameters = _present_numbers(
-            fields, {key: form_keys[key] for key in ("mean", "std", "min", "max")}
-        )
-    elif distribution_type == "uniform":
-        parameters = _present_numbers(fields, {key: form_keys[key] for key in ("min", "max")})
-    elif distribution_type == "weighted_discrete":
-        parameters = _row_lists(
-            fields, form_keys["wd_values"], "weight", "weights", _finite_floats
-        )
-    elif distribution_type == "shuffled_pool":
-        entries_field = form_keys["sp_entries"]
-        parameters = _row_lists(
-            fields,
-            entries_field,
-            "count",
-            "counts",
-            lambda counts: read_pool_counts(counts, entries_field),
-        )
-    else:
-        raise ValueError(
-            f"{type_field} must be one of normal, uniform, weighted_discrete or "
-            f"shuffled_pool, got {distribution_type!r}"
-        )
-    return {"type": distribution_type, **parameters}
+    distribution_fields = _distribution_fields(component)
+    if distribution_fields["type"] in fields:
+        distribution = {
+            key: fields[field] for key, field in distribution_fields.items() if field in fields
+        }
+        spec = distribution_grammar_spec(distribution, distribution_fields)
+        return {component.grammar_key: spec}
+    return _present_numbers(fields, {component.grammar_key: component.fixed_field})
 
 
 def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
@@ -310,43 +280,3 @@ def _present_numbers(fields: Mapping[str, Any], form_keys: Mapping[str, str]) ->
         for grammar_key, form_key in form_keys.items()
         if form_key in fields
     }
-
-
-def _row_lists(
-    fields: Mapping[str, Any],
-    rows_field: str,
-    column: str,
-    grammar_key: str,
-    read_column: _ColumnReader,
-) -> dict[str, list[float]]:
-    """The values, and the *grammar_key* list of each row's *column*, of the form's *rows_field* rows.
-
-    Each row is an object holding a value and its *column*.  A form without the rows
-    gives neither list.  Each value is read by as_finite_float.  The column is read whole,
-    by *read_column*, from each row's cell with its field, ``rows_field[index].column``,
-    so its rule may bound each cell or the column's total.
-
-    Raises:
-        ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or a value is not a finite number; or *read_column*'s refusal.
-    """
-    if rows_field not in fields:
-        return {}
-    rows = fields[rows_field]
-    if not isinstance(rows, list):
-        raise ValueError(f"{rows_field} must be a list of rows, got {rows!r}")
-    values: list[float] = []
-    cells: list[tuple[str, Any]] = []
-    for index, row in enumerate(rows):
-        if not isinstance(row, Mapping) or not {"value", column} <= row.keys():
-            raise ValueError(
-                f"{rows_field}[{index}] must be an object with 'value' and {column!r}, got {row!r}"
-            )
-        values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
-        cells.append((f"{rows_field}[{index}].{column}", row[column]))
-    return {"values": values, grammar_key: list(read_column(cells))}
-
-
-def _finite_floats(cells: list[tuple[str, Any]]) -> list[float]:
-    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
-    return [as_finite_float(value, field) for field, value in cells]

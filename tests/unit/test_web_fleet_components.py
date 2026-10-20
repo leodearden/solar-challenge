@@ -4,13 +4,11 @@
 import math
 from collections.abc import Mapping
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.fleet_components import (
@@ -19,19 +17,6 @@ from solar_challenge.web.fleet_components import (
     FleetComponent,
 )
 from tests._html_page import counts_of, element_attributes, headings
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 def _editor_scopes(page: str) -> list[str | None]:

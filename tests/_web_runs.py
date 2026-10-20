@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Save runs to the web dashboard's RunStorage as a finished simulation job saves them.
 
-A test seeds a stored run from results it built, without simulating. The summaries
-saved with a run are derived as JobManager's runners in src/solar_challenge/web/jobs.py
-derive them.
+A test seeds a stored run from results it built, without simulating. The helpers save
+through the RunStorage methods a finished job saves through, save_home_run_from_results
+and save_fleet_run_from_results, so a seeded run's summaries are derived where a job's are.
 
 Usage::
 
@@ -16,9 +16,6 @@ Usage::
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import calculate_summary
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -36,14 +33,7 @@ def store_fleet_run(
     created_at: str | None = None,
 ) -> None:
     """Save *fleet_results* to *storage* as fleet run *run_id*, with the fleet and per-home summaries a finished fleet job saves."""
-    storage.save_fleet_run(
-        run_id=run_id,
-        fleet_results=fleet_results,
-        fleet_summary=calculate_fleet_summary(fleet_results),
-        per_home_summaries=[calculate_summary(results) for results in fleet_results.per_home_results],
-        name=name,
-        created_at=created_at,
-    )
+    storage.save_fleet_run_from_results(run_id, fleet_results, name=name, created_at=created_at)
 
 
 def store_home_run(
@@ -57,12 +47,4 @@ def store_home_run(
     created_at: str | None = None,
 ) -> None:
     """Save *config*'s *results* to *storage* as home run *run_id*, with the summary a finished home job saves."""
-    storage.save_home_run(
-        run_id=run_id,
-        config=config,
-        results=results,
-        summary=calculate_summary(results),
-        name=name,
-        status=status,
-        created_at=created_at,
-    )
+    storage.save_home_run_from_results(run_id, config, results, name=name, status=status, created_at=created_at)

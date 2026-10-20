@@ -5,9 +5,11 @@ uv.lock pins every dependency, so the per-task verify and every other lane job
 test only the pinned releases. A consumer that installs this package and
 re-locks gets the newest releases its declared ranges admit instead. This
 module copies the tree, upgrades the copy's uv.lock to those releases, and runs
-the orchestrator verify suite there verbatim, on the .python-version pin. An
-upstream release that breaks this code then files a fix task before a consumer
-meets it.
+the orchestrator verify suite there verbatim, on the .python-version pin. The
+run deselects the one test the upgrade breaks by design:
+tests/unit/test_dependency_floors.py's floor test, which holds only for the
+committed pyproject.toml and uv.lock pair. An upstream release that breaks this
+code then files a fix task before a consumer meets it.
 
 The orchestrator's offline lane runs this module after each merge to main, as
 its newest-releases job. tests/conftest.py keeps this directory out of every
@@ -36,7 +38,10 @@ pytestmark = pytest.mark.slow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-_SUITE = "tests/newest_releases"
+# This copy upgrades uv.lock and leaves pyproject.toml as it is, so the floor test's rule, floor == lock, is false
+# here by construction. --deselect matches every parametrisation by node-id prefix. A rename of the floor test stops
+# the match, so the test then runs here, fails and turns the lane red: the coupling cannot fail silently.
+_FLOOR_TEST = "tests/unit/test_dependency_floors.py::test_every_declared_floor_is_the_locked_release"
 
 # It exists only so a hung resolution or download fails this test by name.
 _UV_TIMEOUT_SECS = 900
@@ -100,8 +105,7 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
         f"extra into a scratch environment; uv's stderr:\n{fetched.stderr}"
     )
 
-    # The suite must never collect this canary, even if tests/conftest.py stops ignoring it.
-    env = {**isolated_uv_env(tmp_path / "venv"), "PYTEST_ADDOPTS": f"--ignore={_SUITE}"}
+    env = {**isolated_uv_env(tmp_path / "venv"), "PYTEST_ADDOPTS": f"--deselect={_FLOOR_TEST}"}
     result = run_verify_suite(project, env, variant="on the newest releases")
 
     assert result.returncode == 0, (

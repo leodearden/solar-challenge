@@ -29,7 +29,7 @@ from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._plotly_figure import annotation_texts, annotations_by_text, sankey_link_values, traces, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._synthetic_weather import sunless_weather, synthetic_june_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
 def _steady_run(
@@ -66,9 +66,29 @@ def _steady_run(
     )
 
 
-def _one_day_summary(**totals: float) -> SummaryStatistics:
+def _one_day_summary(
+    *,
+    total_generation_kwh: float,
+    total_demand_kwh: float,
+    total_self_consumption_kwh: float,
+    total_grid_import_kwh: float,
+    total_grid_export_kwh: float,
+    total_battery_charge_kwh: float,
+    total_battery_discharge_kwh: float,
+    total_grid_charge_kwh: float,
+) -> SummaryStatistics:
     """A one-day run's summary with the totals given, so a test writes every total the Sankey reads."""
-    return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
+    return dataclasses.replace(
+        calculate_summary(make_sim_results(days=1)),
+        total_generation_kwh=total_generation_kwh,
+        total_demand_kwh=total_demand_kwh,
+        total_self_consumption_kwh=total_self_consumption_kwh,
+        total_grid_import_kwh=total_grid_import_kwh,
+        total_grid_export_kwh=total_grid_export_kwh,
+        total_battery_charge_kwh=total_battery_charge_kwh,
+        total_battery_discharge_kwh=total_battery_discharge_kwh,
+        total_grid_charge_kwh=total_grid_charge_kwh,
+    )
 
 
 def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:
@@ -86,7 +106,7 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResult
             "end": day,
         }
     )
-    return simulate_home(config, start_date=start_date, end_date=end_date, weather_data=weather)
+    return simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
 
 
 class TestChartFunctions:
@@ -258,11 +278,12 @@ class TestSankeyBatteryCharge:
 
         The summary is calculate_summary's of simulate_home's results, the summary /results/home loads and draws.
         """
+        home = bristol_arbitrage_home()
         results = simulate_home(
-            bristol_arbitrage_home(),
+            home,
             start_date=pd.Timestamp("2024-01-15"),
             end_date=pd.Timestamp("2024-01-15"),
-            weather_data=sunless_weather("2024-01-15", temp_air=8.0),
+            weather=weather_for(home, sunless_weather("2024-01-15", temp_air=8.0)),
         )
         summary = calculate_summary(results)
 

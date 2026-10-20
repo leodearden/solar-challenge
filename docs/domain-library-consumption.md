@@ -431,6 +431,81 @@ web app stores, is spaced one minute apart, so its amounts are unchanged;
 consumers that build results at another spacing re-check their totals when they
 re-pin.
 
+**Unreleased on main** (task 708): an EV whose `EVConfig.smart_charging_mode`
+is `"solar"` or `"off_peak"` now charges only while it is home. Each day's
+session is one unbroken run inside the stay from `arrival_hour` to
+`departure_hour`, covering as much of the mode's window (10:00–16:00, or
+Economy 7's 00:30–07:30) as it can, on either day of an overnight stay, and
+starting as early as it can. A window too short for the charge is used whole,
+with the rest charged just before it opens, or from arrival when that is later.
+On the 0.5.0 tag such a session started when the window opened and could run
+past departure: a 3.6 kW, 35 kWh off-peak EV home from 18:00 to 07:00 charged
+from 00:30 until 10:14, and now charges from 21:16 until 07:00. The tag also
+looked only at the arrival day's solar window, and only at the next night's
+off-peak window for an overnight stay: a 7 kW, 35 kWh solar EV home from 18:00
+to 12:00 charged from 18:00 until 23:00, and now charges from 07:00 until 12:00
+the next morning. `"none"` is unchanged. The demand that `simulate_home` and
+`simulate_fleet` return changes for homes with such EVs, and so do the figures
+built on it, `solve_cost_recovery_rate`'s included; consumers re-baseline them
+when they re-pin.
+
+**Unreleased on main** (task 779): `simulate_community` reads each row's length
+from the window of the fleet's index, `SimulationWindow.of_index` of
+`FleetResults.total_grid_export`'s index. It does so in both sharing modes,
+whether or not it bills. The community battery steps at the window's cadence,
+and billing prices each row's kWh over it. It now raises `ValueError` for a
+fleet index no window describes: an empty index; one row without a
+fixed-duration `freq`; unevenly spaced rows, naming the first position whose
+gap differs and both gaps; or an index that is not a `DatetimeIndex`, naming
+its type and dtype. The 0.5.0 tag reads the length from the index's first two
+rows, and takes one minute for a single row or an empty index. The only
+refusal it states is of a billed index whose last gap differs from its first,
+so it prices a fleet whose index lacks one middle row with no error. The fleets
+`simulate_fleet` returns are spaced one minute apart, so their community
+results are unchanged. Consumers that build a `FleetResults` on another index
+re-check it when they re-pin.
+
+**Unreleased on main** (task 808): `WeatherProvider`, `PvgisTmy` and
+`PrefetchedWeather` join `__all__`; the 0.5.0 tag has none of them.
+`WeatherProvider` is a `typing.Protocol`: any object whose `get(location)`
+returns a frame of hourly weather is one. `PvgisTmy(cache)` is a frozen
+dataclass whose `get(location)` returns the TMY `get_tmy_data` returns, read
+from `cache` and put there on a miss, or fetched on every call when `cache` is
+`None`; it raises `WeatherDataError` where `get_tmy_data` does.
+`PrefetchedWeather(frames)` is a frozen dataclass compared by identity. Its
+`frames` is a read-only copy of the mapping from `Location` to frame it is
+given, so the locations it holds are fixed at construction; the frames
+themselves are the ones given, not copies. Its `get(location)` returns the held
+frame, and for any other location raises `LookupError` naming that location and
+those held; its `fetch(weather, locations)` calls `weather.get` once per
+distinct location, in first-seen order. Both pickle. `WeatherCache()` given no
+directory uses the one `SOLAR_CHALLENGE_WEATHER_CACHE_DIR` names, when it is set
+and non-empty, else `.cache/weather` under the working directory, as on the
+tag; so `get_tmy_data`, with no cache installed, reads and fills that
+directory. With none installed, `get_weather_cache()` returns a new
+`WeatherCache()` on each call, so a change to the variable takes effect at the
+next call; the tag builds one on the first call and returns it ever after.
+`set_weather_cache` still overrides both. Consumers need no change when they
+re-pin.
+
+**Unreleased on main** (task 812): `create_pv_system`, and so
+`create_model_chain` and `simulate_pv_output`, count `custom_module_params`
+with PVWatts parameters (`pdc0` and `gamma_pdc`) in modules of their `pdc0`,
+the power pvlib's PVWatts DC model multiplies by the module count, and any
+other module in modules of its `STC`. The 0.5.0 tag counts every module
+without an `STC` key as 400 W. So 4 kW of
+`{"pdc0": 300.0, "gamma_pdc": -0.004}` now wires 13 modules, 3.9 kWp, where
+the tag wires 10, 3.0 kWp. On Bristol's scaled TMY, with the default system
+losses, that raises its annual AC from 2948 to 3857 kWh (+30.8%; measured with
+pvlib 0.15.1 on main 067b13e and on this change). Custom module parameters
+with neither PVWatts parameters nor an `STC`, such as a row of pvlib's
+`SandiaMod` library, raise `ValueError` naming `pdc0` and `STC`, with or
+without `custom_inverter_params`; the tag counts them as 400 W modules. The
+default module, and modules from `create_simple_module_params`, which carry
+`pdc0` and `STC` at one value, are counted as on the tag. Consumers that pass a
+PVWatts module without `STC` re-baseline its figures, and consumers that pass a
+module with neither key add its `STC`, when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
@@ -451,16 +526,25 @@ are registered, but no submodule is imported until a public name is accessed.
 
 ### Lazy pvlib dependency
 
-Accessing any name from `pv` or `weather` triggers `importlib.import_module`
-for that submodule, which pulls `pvlib` transitively:
+Accessing any name from `config`, `fleet`, `home`, `pv` or `weather` imports
+`pvlib` transitively.  `pv` and `weather` import it directly; `home` imports
+`pv`, `fleet` imports `home`, and `config` imports `home`, `fleet` and `pv`:
 
 ```python
 sc = solar_challenge
 mc = sc.create_model_chain(...)    # ← first access imports pv.py + pvlib
 tmy = sc.get_tmy_data(...)         # ← first access imports weather.py + pvlib
+cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 ```
 
-Consumers that want to avoid the pvlib cost must not touch these symbols.
+Accessing a name from any other public submodule (`battery`, `community`,
+`dispatch`, `finance`, `flow`, `gridservices`, `load`, `location`, `seg`,
+`tariff`) leaves `pvlib` unloaded; `tests/unit/test_lazy_pvlib_submodules.py`
+pins this split.  Consumers that want to avoid the pvlib cost must not touch the
+`config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
+run it: a function that imports one of those submodules at call time, as a
+`finance` function may when it runs its default simulation, loads `pvlib` when
+called.
 
 ### Network I/O
 
@@ -477,9 +561,12 @@ import solar_challenge
 solar_challenge.set_weather_cache(my_test_cache)
 ```
 
-The fleet simulators in `solar_challenge.fleet` read weather through the installed
-cache in the calling process and hand it to their worker processes, so an injected
-cache serves a parallel fleet whatever the multiprocessing start method.
+The fleet simulators in `solar_challenge.fleet` fetch each distinct home location's
+weather once, in the calling process, from `weather.default_weather()`, which reads the
+cache `set_weather_cache` installs, else `WeatherCache()`. Each worker job then carries a
+`PrefetchedWeather` holding its own home's location alone, so an injected cache serves a
+parallel fleet under any multiprocessing start method, and a worker reads no cache and
+no network.
 
 A cache directory written before that scaling is ignored, because its entries' keys
 changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`, which

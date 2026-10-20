@@ -1,31 +1,28 @@
 """End-to-end tests for the Fleet Results page (/results/fleet/<id>).
 
 Uses the seeded_fleet_run fixture (no live simulation needed) to verify
-the page's title, its action links, its chart tabs, and that it renders
-without errors.
+the page's title, its action links, its chart tabs, that it renders
+without errors, and that the charts of Aggregate, the tab shown on load,
+end as wide as their containers once the page settles.
 """
 
 import pytest
 from playwright.sync_api import Page, expect
+
+from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
+from tests.e2e._results_page import show_chart_tab
 
 pytestmark = pytest.mark.e2e
 
 
 # -- The page's chart tabs --------------------------------------------------
 
-
+# The charts each tab shows for seeded_fleet_run, the tab selected on load last.
 _CHART_IDS_BY_TAB = {
     "Per-Home": ("chart-heatmap", "chart-box-plots"),
     "Distributions": ("chart-distribution-histograms",),
     "Aggregate": ("chart-aggregate-timeline", "chart-grid-impact"),
 }
-
-
-def _show_tab(page: Page, tab_name: str) -> None:
-    """Click tab_name's tab and wait until Plotly has drawn each of its charts, visible."""
-    page.get_by_role("tab", name=tab_name, exact=True).click()
-    for chart_id in _CHART_IDS_BY_TAB[tab_name]:
-        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
 
 
 # -- The page is titled with the run's name ---------------------------------
@@ -99,10 +96,16 @@ def test_fleet_results_tabs_each_show_only_their_own_charts(
     """
     run_id, _ = seeded_fleet_run
     page.goto(live_server + f"/results/fleet/{run_id}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
 
     for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
-        _show_tab(page, tab_name)
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(tab_name)
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(selected_tab).to_have_accessible_name(tab_name)
         expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
 
 
@@ -123,7 +126,25 @@ def test_fleet_results_page_shows_every_tab_without_errors(
     response = page.goto(live_server + f"/results/fleet/{run_id}")
     assert response is not None
     assert response.status == 200
-    for tab_name in _CHART_IDS_BY_TAB:
-        _show_tab(page, tab_name)
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
 
     assert page_errors == [], f"Errors on /results/fleet/{run_id}: {page_errors}"
+
+
+# -- Each chart is drawn as wide as its container ---------------------------
+
+
+def test_each_aggregate_chart_is_as_wide_as_its_container_once_the_page_settles(
+    page: Page,
+    live_server: str,
+    seeded_fleet_run: tuple[str, str],
+) -> None:
+    """The Aggregate charts are drawn while base.html's main column slides in on load, and each ends as wide as its container."""
+    run_id, _ = seeded_fleet_run
+    page.goto(live_server + f"/results/fleet/{run_id}")
+    aggregate_chart_ids = _CHART_IDS_BY_TAB["Aggregate"]
+    for chart_id in aggregate_chart_ids:
+        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
+
+    assert charts_not_as_wide_as_their_containers(page, aggregate_chart_ids) == []

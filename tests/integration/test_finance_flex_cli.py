@@ -11,69 +11,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
 from tests._cli_fleet_simulator import invoke_finance_run
+from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
-# §A — Helper factories (adapted from test_cost_recovery_cli.py)
+# §A — The patched CLI tests' scenario writer
 # ---------------------------------------------------------------------------
-
-
-def _make_home_config() -> HomeConfig:
-    """Build a minimal HomeConfig for fixture use."""
-    return HomeConfig(
-        pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
-        load_config=LoadConfig(annual_consumption_kwh=3500.0),
-        location=Location.bristol(),
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    n_minutes: int = 525600,
-) -> SimulationResults:
-    """Build a minimal SimulationResults series."""
-    idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results(n_homes: int = 5) -> FleetResults:
-    """Build a minimal FleetResults for offline testing."""
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [_make_sim_results() for _ in range(n_homes)]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _write_scenario(
@@ -122,8 +72,8 @@ def _write_scenario(
 
 @pytest.fixture(scope="module")
 def flex_fleet_results() -> FleetResults:
-    """Module-scoped: build FleetResults once per module."""
-    return _make_fleet_results()
+    """Five default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year."""
+    return make_fleet_results(n_homes=5, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
 
 
 # ---------------------------------------------------------------------------
@@ -305,13 +255,12 @@ class TestFinanceFlexNamedScenario:
     """
 
     def test_bristol_flex_scenario_renders_central_block(
-        self, tmp_path: Path
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
-        fr = _make_fleet_results()
 
-        result = invoke_finance_run([str(scenario_path)], fr)
+        result = invoke_finance_run([str(scenario_path)], flex_fleet_results)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"

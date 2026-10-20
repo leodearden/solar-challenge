@@ -9,6 +9,7 @@ import pytest
 
 from solar_challenge.home import SimulationResults
 from solar_challenge.pv import PVConfig, create_simple_module_params, wired_dc_capacity_kw
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.validation import (
     ValidationReport,
     ValidationResult,
@@ -114,29 +115,42 @@ def _create_simulation_results(
     )
 
 
-def _days_of_generation(days: int, total_kwh: float) -> pd.Series:
-    """days of 1-minute generation, zero at night, whose energy is total_kwh."""
-    index = _create_minute_index(days)
+def _minute_index_over(first_day: str, last_day: str) -> pd.DatetimeIndex:
+    """1-minute rows on the UK clock from first_day's midnight to last_day's last minute."""
+    return pd.date_range(first_day, f"{last_day} 23:59", freq="1min", tz="Europe/London")
+
+
+def _generation_over(index: pd.DatetimeIndex, total_kwh: float) -> pd.Series:
+    """1-minute generation on index, zero at night, whose energy is total_kwh."""
     shape = _create_valid_generation(index, capacity_kw=1.0)
     return shape * (total_kwh / (shape.sum() / 60))
 
 
 def _year_of_generation(total_kwh: float) -> pd.Series:
-    """A year of 1-minute generation, zero at night, whose energy is total_kwh."""
-    return _days_of_generation(365, total_kwh)
+    """1-minute generation over calendar 2023, zero at night, whose energy is total_kwh; its window's annualisation_scale is 1."""
+    return _generation_over(_minute_index_over("2023-01-01", "2023-12-31"), total_kwh)
 
 
 def _annual_yield_check(results: list[ValidationResult]) -> ValidationResult:
     return next(r for r in results if r.check_name == "annual_yield_range")
 
 
+def _annual_consumption_check(results: list[ValidationResult]) -> ValidationResult:
+    return next(r for r in results if r.check_name == "annual_consumption_target")
+
+
 def _peak_check(results: list[ValidationResult]) -> ValidationResult:
     return next(r for r in results if r.check_name == "peak_within_capacity")
 
 
-# Wires four 250 W modules, 1.0 kWp; the default 400.428 W module would wire three, 1.2 kWp.
+# Wires four 250 W modules, 1.0 kWp; DEFAULT_CEC_MODULE (400.428 W at STC) would wire three, 1.2 kWp.
 _PVWATTS_250_W_AT_1_1_KW = PVConfig(
     capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
+)
+
+# Wires thirteen 300 W modules, 3.9 kWp, counted by its pdc0.
+_PVWATTS_300_W_WITHOUT_STC_AT_4_KW = PVConfig(
+    capacity_kw=4.0, custom_module_params={"pdc0": 300.0, "gamma_pdc": -0.004}
 )
 
 
@@ -268,6 +282,14 @@ class TestValidatePVGeneration:
 
         assert ("annual_yield_range" in [r.check_name for r in results]) is checked
 
+    def test_the_annual_yield_refuses_an_index_its_window_cannot_be_read_from(self) -> None:
+        """Text, as read_csv leaves an export across a clock change, describes no window."""
+        index = _minute_index_over("2024-03-30", "2024-04-01")
+        generation = _generation_over(index, 10.0).set_axis(index.astype(str))
+
+        with pytest.raises(ValueError, match="SimulationWindow.of_index reads a DatetimeIndex"):
+            validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=True)
+
 
 class TestAnnualYieldPerWiredKwp:
     """A year's yield is per kWp of the modules the PV model wires, not per configured kW."""
@@ -306,7 +328,7 @@ class TestAnnualYieldPerWiredKwp:
         assert result.value == pytest.approx(kwh_per_wired_kwp)
 
     def test_0_3_kw_is_judged_per_the_one_400_428_w_module_it_wires(self) -> None:
-        """0.3 kW wires one 400.428 W module, so 400.428 kWh a year is 1000 kWh/kWp."""
+        """0.3 kW wires one DEFAULT_CEC_MODULE (400.428 W at STC), so 400.428 kWh a year is 1000 kWh/kWp."""
         generation = _year_of_generation(400.428)
 
         result = _annual_yield_check(
@@ -377,24 +399,52 @@ class TestAnnualYieldPerWiredKwp:
         assert result.passed is True
         assert result.value == pytest.approx(kwh_per_wired_kwp)
 
+    def test_a_pvwatts_module_without_an_stc_is_judged_per_the_dc_its_pdc0_wires(self) -> None:
+        generation = _year_of_generation(1000.0 * 3.9)
 
-class TestAnnualYieldPer365Days:
-    """A run of more than 365 days is judged on its yield per 365 days, as validate_consumption judges its annual total."""
+        result = _annual_yield_check(
+            validate_pv_generation(
+                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=True
+            )
+        )
+
+        assert result.value == pytest.approx(1000.0)
+        assert "3.90 kWp" in result.message
+
+
+class TestAnnualYieldScaledByItsWindow:
+    """A window of 365 days or more is judged on its yield times its annualisation_scale, the rule validate_consumption scales by."""
 
     @pytest.mark.parametrize(
-        ("days", "kwh_per_wired_kwp", "passed"),
+        ("first_day", "last_day", "days", "year_days", "kwh_per_wired_kwp", "passed"),
         [
-            pytest.param(730, 1000.0, True, id="two-years-at-a-typical-yield"),
-            pytest.param(730, 250.0, False, id="two-years-at-a-yield-below-the-band"),
-            pytest.param(400, 1000.0, True, id="400-days-at-a-typical-yield"),
+            pytest.param("2024-01-01", "2024-12-31", 366, 366.0, 1000.0, True, id="leap-year-2024"),
+            pytest.param("2023-01-01", "2024-12-31", 731, 365.25, 1000.0, True, id="2023-and-2024"),
+            pytest.param(
+                "2023-01-01", "2024-12-31", 731, 365.25, 250.0, False,
+                id="2023-and-2024-below-the-band",
+            ),
+            pytest.param(
+                "2024-01-01", "2025-02-03", 400, 365.25, 1000.0, True,
+                id="400-days-across-a-year-end",
+            ),
         ],
     )
-    def test_a_run_longer_than_a_year_is_judged_on_its_yield_per_365_days(
-        self, days: int, kwh_per_wired_kwp: float, passed: bool
+    def test_a_yield_is_judged_per_year_of_its_window(
+        self,
+        first_day: str,
+        last_day: str,
+        days: int,
+        year_days: float,
+        kwh_per_wired_kwp: float,
+        passed: bool,
     ) -> None:
         pv_config = PVConfig(capacity_kw=4.0)
         wired_kw = wired_dc_capacity_kw(pv_config)
-        generation = _days_of_generation(days, kwh_per_wired_kwp * wired_kw * days / 365)
+        generation = _generation_over(
+            _minute_index_over(first_day, last_day),
+            kwh_per_wired_kwp * wired_kw * days / year_days,
+        )
 
         result = _annual_yield_check(
             validate_pv_generation(generation, pv_config, check_annual=True)
@@ -408,7 +458,7 @@ class TestPeakWithinWiredCapacity:
     """The peak may exceed the DC of the modules the PV model wires by 10%."""
 
     def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(self) -> None:
-        """0.7 kW wires two 400.428 W modules, 0.80 kWp.
+        """0.7 kW wires two DEFAULT_CEC_MODULE (400.428 W at STC) modules, 0.80 kWp.
 
         Behind a 1.0 kW inverter the model's AC peaked at 0.804 kW, as
         docs/pv-annual-yield-benchmark.md §4 records.
@@ -433,6 +483,19 @@ class TestPeakWithinWiredCapacity:
         assert result.passed is False
         assert result.expected_range is not None
         assert result.expected_range[1] == pytest.approx(1.1)
+
+    def test_a_pvwatts_module_without_an_stc_is_judged_per_the_dc_its_pdc0_wires(self) -> None:
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=4.0)
+
+        result = _peak_check(
+            validate_pv_generation(
+                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=False
+            )
+        )
+
+        assert "3.90 kWp" in result.message
+        assert result.expected_range is not None
+        assert result.expected_range[1] == pytest.approx(3.9 * 1.1)
 
 
 class TestValidateConsumption:
@@ -503,29 +566,47 @@ class TestValidateConsumption:
         if target_check:
             assert target_check[0].passed is True
 
-    @pytest.mark.parametrize("days", [30, 730])
-    def test_the_annual_target_is_judged_on_the_window_scaled_to_365_days(
-        self, days: int
+    @pytest.mark.parametrize(
+        ("first_day", "last_day", "year_days"),
+        [
+            pytest.param("2023-01-01", "2023-12-31", 365.0, id="2023"),
+            pytest.param("2024-01-01", "2024-12-31", 366.0, id="2024"),
+            pytest.param("2024-06-01", "2024-06-30", 366.0, id="june-2024"),
+            pytest.param("2023-01-01", "2024-12-31", 365.25, id="2023-and-2024"),
+            pytest.param("2024-01-01", "2025-02-03", 365.25, id="400-days-from-2024"),
+        ],
+    )
+    def test_the_annual_total_is_the_window_energy_times_its_annualisation_scale(
+        self, first_day: str, last_day: str, year_days: float
     ) -> None:
-        demand = pd.Series(3400.0 / (365 * 24), index=_create_minute_index(days))
+        """Each window's clock changes cancel, so 0.5 kW delivers 12 kWh a calendar day."""
+        demand = pd.Series(0.5, index=_minute_index_over(first_day, last_day))
+        window = SimulationWindow.of_index(demand.index)
 
-        results = validate_consumption(demand, target_annual_kwh=3400.0)
+        target = _annual_consumption_check(validate_consumption(demand, target_annual_kwh=4383.0))
 
-        target_check = next(r for r in results if r.check_name == "annual_consumption_target")
-        assert target_check.passed is True
-        assert target_check.value == pytest.approx(3400.0)
+        assert target.value == pytest.approx(window.energy_kwh(demand) * window.annualisation_scale)
+        assert target.value == pytest.approx(12.0 * year_days)
 
     def test_a_window_across_the_spring_clock_change_is_scaled_from_its_calendar_days(
         self,
     ) -> None:
+        """March 2024's 743 hours are scaled by 2024's 366 days over its 31 calendar days."""
         march = pd.date_range("2024-03-01", "2024-03-31 23:59", freq="1min", tz="Europe/London")
         assert len(march) == (31 * 24 - 1) * 60
-        demand = pd.Series(3400.0 * 31 / 365 / (len(march) / 60), index=march)
+        demand = pd.Series(3400.0 * 31 / 366 / (len(march) / 60), index=march)
 
-        results = validate_consumption(demand, target_annual_kwh=3400.0)
+        target = _annual_consumption_check(validate_consumption(demand, target_annual_kwh=3400.0))
 
-        target_check = next(r for r in results if r.check_name == "annual_consumption_target")
-        assert target_check.value == pytest.approx(3400.0)
+        assert target.value == pytest.approx(3400.0)
+
+    def test_the_annual_target_refuses_unevenly_spaced_rows(self) -> None:
+        index = pd.date_range(
+            "2024-06-01", periods=24 * 60, freq="1min", tz="Europe/London"
+        ).delete(700)
+
+        with pytest.raises(ValueError, match="evenly spaced rows: the gap before position 700"):
+            validate_consumption(pd.Series(0.5, index=index), target_annual_kwh=3400.0)
 
 
 class TestSelfConsumptionBenchmarks:
@@ -679,7 +760,7 @@ class TestValidateSimulation:
     def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:
         """Per the 1.0 kWp of four 250 W modules: 800 kWh/kWp, and a 1.1 kW peak limit."""
         results = dataclasses.replace(
-            _create_simulation_results(_create_minute_index(365)),
+            _create_simulation_results(_minute_index_over("2023-01-01", "2023-12-31")),
             generation=_year_of_generation(800.0),
         )
 

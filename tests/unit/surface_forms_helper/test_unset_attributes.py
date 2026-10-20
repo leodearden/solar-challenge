@@ -26,6 +26,17 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
     assert unset_attributes(Reading) == set()
 
 
+def test_a_declared_attribute_only_a_method_other_than_init_or_post_init_sets_is_unset() -> None:
+    class Meter:
+        reading: float
+
+        def reset(self) -> None:
+            self.reading = 0.0
+
+    assert not hasattr(Meter(), "reading")
+    assert unset_attributes(Meter) == {"reading"}
+
+
 def test_a_name_the_class_body_only_annotates_as_a_class_variable_in_a_string_is_never_unset() -> None:
     class Meter:
         UNITS: "ClassVar[str]"
@@ -70,3 +81,13 @@ def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_ini
         assert member_forms(cls) == {"history": "attribute list[float]"}
         assert not hasattr(cls("data"), "history")
         assert unset_attributes(cls) == set()
+
+
+def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
+    class Meter:
+        reading: float
+
+        def __init__(self, name: str) -> None:
+            setattr(self, name, 0.0)
+
+    assert unset_attributes(Meter, reviewed={"setattr(self, name, 0.0)"}) == {"reading"}

@@ -36,21 +36,17 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.jobs import JobEvent, JobEventType
+from solar_challenge.web.number_fields import as_finite_float, as_whole_number_within
 from solar_challenge.web.presets import (
     PresetNameTaken,
     home_preset_named,
     home_presets,
     save_config_preset,
 )
-from solar_challenge.web.shared import (
-    NotAJsonObject,
-    get_database,
-    get_job_manager,
-    get_storage,
-    request_json_object,
-    require_json_object,
-)
+from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
+from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
+from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
@@ -232,17 +228,10 @@ def get_job_progress(job_id: str) -> Response:
                 return
 
             # Send heartbeat
-            yield ":heartbeat\n\n"
+            yield HEARTBEAT
             time.sleep(2)
 
-    return Response(
-        stream_with_context(generate_events()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return event_stream(stream_with_context(generate_events()))
 
 
 @api_bp.route("/jobs/<job_id>/results", methods=["GET"])
@@ -499,6 +488,8 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "annual_consumption_kwh": "consumption_kwh",
 }
 
+_MAX_SWEEP_POINTS = 50
+
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
 
@@ -513,9 +504,9 @@ def simulate_sweep() -> tuple[Response, int]:
 
     Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
-      - min: float
-      - max: float
-      - steps: int (>= 2)
+      - min: finite number (default 1.0)
+      - max: finite number (default 10.0)
+      - steps: whole number, 2 to _MAX_SWEEP_POINTS (default 5)
       - mode: "linear" | "geometric"
       - base_config: JSON object (optional, default {}), the home config
         every sweep point starts from.  A window it sends is read as
@@ -525,9 +516,12 @@ def simulate_sweep() -> tuple[Response, int]:
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
-        ones), an invalid range, a base_config that is not a JSON object (the
-        error names the type sent), or a point whose home config is invalid,
-        a window parse_home_config refuses included.
+        ones), a min, max or steps it cannot use, or a steps outside 2 to
+        _MAX_SWEEP_POINTS (the error names the field and the value sent), an
+        invalid range, a min and max too far apart for the sweep's points to
+        be computed (the error names both), a base_config that is not a JSON
+        object (the error names the type sent), or a point whose home config
+        is invalid, a window parse_home_config refuses included.
         Every 400 comes before any job is submitted.
     """
     data = request_json_object()
@@ -539,13 +533,11 @@ def simulate_sweep() -> tuple[Response, int]:
             "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
         }), 400
     try:
-        min_val = float(data.get("min", 1.0))
-        max_val = float(data.get("max", 10.0))
-        steps = int(data.get("steps", 5))
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": f"Invalid numeric parameter: {exc}"}), 400
-    if steps < 2:
-        return jsonify({"error": "Steps must be at least 2"}), 400
+        min_val = as_finite_float(data.get("min", 1.0), "min")
+        max_val = as_finite_float(data.get("max", 10.0), "max")
+        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, _MAX_SWEEP_POINTS)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if min_val >= max_val:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
@@ -555,11 +547,17 @@ def simulate_sweep() -> tuple[Response, int]:
     if mode == "geometric":
         if min_val <= 0:
             return jsonify({"error": "Min must be positive for geometric sweep"}), 400
-        log_min = math.log(min_val)
-        log_max = math.log(max_val)
-        values = [math.exp(log_min + (log_max - log_min) * i / (steps - 1)) for i in range(steps)]
+        ratio = max_val / min_val
+        values = [min_val * ratio ** (i / (steps - 1)) for i in range(steps)]
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
+    if not all(math.isfinite(v) for v in values):
+        return jsonify({
+            "error": (
+                f"min {min_val!r} and max {max_val!r} are too far apart to sweep:"
+                " computing the points between them overflows a float"
+            ),
+        }), 400
 
     rounded_values = [round(v, 3) for v in values]
 

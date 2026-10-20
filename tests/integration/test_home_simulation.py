@@ -1,6 +1,6 @@
 """Integration tests for single home simulation.
 
-These tests make real PVGIS API calls and may be slow.
+Every simulation is given clear June days as Bristol's weather, so these tests run offline.
 """
 
 import pytest
@@ -16,9 +16,12 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from tests._seeded_tmy import ClearJuneDays
+from tests._synthetic_weather import weather_for
+
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.mark.slow
 @pytest.mark.integration
 class TestSingleHomeSimulation:
     """Test VAL-005: Integration test for single home simulation."""
@@ -47,10 +50,11 @@ class TestSingleHomeSimulation:
 
     def test_simulates_7_days_pv_only(self, pv_only_config):
         """Simulates PV-only home for 7 days successfully."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")  # 7 days
+        start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_only_config, start, end)
+        results = simulate_home(
+            pv_only_config, start, end, weather=weather_for(pv_only_config, _JUNE_DAYS.hourly_weather())
+        )
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -67,10 +71,11 @@ class TestSingleHomeSimulation:
 
     def test_simulates_7_days_with_battery(self, pv_battery_config):
         """Simulates home with battery for 7 days successfully."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")
+        start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
 
         # All result fields populated
         assert len(results.generation) == 7 * 1440
@@ -83,19 +88,25 @@ class TestSingleHomeSimulation:
 
     def test_energy_balance_validates(self, pv_battery_config):
         """Energy balance validates throughout simulation."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-22")  # 2 days to keep fast
+        start, end = _JUNE_DAYS.window(2)
 
         # validate_balance=True is default, should not raise
-        results = simulate_home(pv_battery_config, start, end, validate_balance=True)
+        results = simulate_home(
+            pv_battery_config,
+            start,
+            end,
+            validate_balance=True,
+            weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather()),
+        )
         assert results is not None
 
     def test_no_negative_values(self, pv_battery_config):
         """All output values are non-negative."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")
+        start, end = _JUNE_DAYS.window(3)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
 
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
@@ -108,10 +119,11 @@ class TestSingleHomeSimulation:
 
     def test_summary_statistics_reasonable(self, pv_battery_config):
         """Summary statistics are in reasonable ranges."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-27")
+        start, end = _JUNE_DAYS.window(7)
 
-        results = simulate_home(pv_battery_config, start, end)
+        results = simulate_home(
+            pv_battery_config, start, end, weather=weather_for(pv_battery_config, _JUNE_DAYS.hourly_weather())
+        )
         summary = calculate_summary(results)
 
         # 7 days of simulation
@@ -130,10 +142,11 @@ class TestSingleHomeSimulation:
 
     def test_dataframe_conversion(self, pv_only_config):
         """Results can be converted to DataFrame."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
+        start, end = _JUNE_DAYS.window(1)
 
-        results = simulate_home(pv_only_config, start, end)
+        results = simulate_home(
+            pv_only_config, start, end, weather=weather_for(pv_only_config, _JUNE_DAYS.hourly_weather())
+        )
         df = results.to_dataframe()
 
         assert isinstance(df, pd.DataFrame)

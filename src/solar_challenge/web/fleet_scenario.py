@@ -27,14 +27,16 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_config import (
+    FLEET_DISTRIBUTION_FORM_KEYS,
     apply_fleet_overlay,
     distribution_form_spec,
     form_to_fleet_distribution_config,
     read_fleet_seed,
     read_fleet_size,
 )
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.request_boundary import refuse_unrecognised_keys, resolve_location
 from solar_challenge.web.simulation_params import (
+    DATE_RANGE_KEYS,
     parse_date_range,
     parse_seg_tariff,
     read_iso_date,
@@ -42,6 +44,13 @@ from solar_challenge.web.simulation_params import (
 )
 
 _NAMELESS_FLEET_NAME = "Fleet Distribution Simulation"
+
+#: The top-level keys of a fleet form: those parse_fleet_form reads, itself or through the readers it calls.
+_FLEET_FORM_KEYS: frozenset[str] = (
+    FLEET_DISTRIBUTION_FORM_KEYS
+    | DATE_RANGE_KEYS
+    | {"name", "location", "tariff", "dispatch_strategy", "seg"}
+)
 
 #: The exceptions this module's readers raise for a fleet form or scenario they refuse, each naming why.
 FLEET_FORM_REFUSALS: tuple[type[Exception], ...] = (ValueError, TypeError, ConfigurationError)
@@ -85,13 +94,17 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
 
     Each value is read once, as given, by the reader the loaders read it with, so the
     simulate endpoint and the export, which both read the form here, refuse it at the same
-    value with the same message.
+    value with the same message.  A form with a top-level key the fleet form does not have
+    is refused, naming it, before any value is read.
 
     Raises:
+        ValueError: For a top-level key the fleet form does not have, naming each one and
+            listing the fleet form's keys.
         ValueError, TypeError: From the form's distribution conversion, location, SEG or
             date range, or for a date that does not parse.
         ConfigurationError: For a block the loaders refuse, or homes they cannot generate.
     """
+    refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     distribution = form_to_fleet_distribution_config(dict(form))
     fleet = parse_fleet_distribution_config(distribution)
     location = _fleet_form_location(form)

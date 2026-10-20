@@ -2,11 +2,15 @@
 """Tests for the tool-use path of the AI assistant's chat.
 
 That is the TOOLS surface the chat offers the model, dispatch_tool's routing to
-the handlers, and the tool-use loop in POST /assistant/chat that runs the model's
-tool calls.
+the handlers and its refusal of a malformed input, and the tool-use loop in
+POST /assistant/chat that runs the model's tool calls.
 """
 
 import json
+import math
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,7 @@ from solar_challenge.web.assistant import (
     METRIC_TABLE,
     TOOL_CALL_LIMIT_NOTICE,
     TOOLS,
+    ToolContext,
     dispatch_tool,
     explain_metric,
     get_run_results,
@@ -30,6 +35,8 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import Database
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
@@ -51,17 +58,17 @@ from tests.unit.web_assistant._fakes import (
 )
 
 
-def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
-    """The storage and job_manager ``dispatch_tool`` requires, the storage's database and run files in *tmp_path*.
+def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
+    """The ToolContext ``dispatch_tool`` runs a tool in, rooted in *tmp_path*.
 
-    For tests that do not care which values they pass; keyword *overrides*
-    replace individual entries for those that do.
+    For tests that do not care which collaborators the tool gets; keyword
+    *overrides* replace individual fields for those that do.
     """
-    return {
-        "storage": RunStorage(Database(tmp_path / "assistant.db"), tmp_path),
-        "job_manager": autospecced_job_manager(),
-        **overrides,
-    }
+    defaults = ToolContext(
+        storage=RunStorage(Database(tmp_path / "assistant.db"), tmp_path),
+        job_manager=autospecced_job_manager(),
+    )
+    return replace(defaults, **overrides)
 
 
 @pytest.fixture
@@ -73,19 +80,12 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
 class TestToolSurface:
     """Tests for the TOOLS surface and the dispatch_tool router."""
 
-    def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
-        names = [t["name"] for t in TOOLS]
-        assert names == [
-            "explain_metric",
-            "suggest_config",
-            "get_run_results",
-            "list_recent_runs",
-            "run_home_simulation",
-            "run_fleet_simulation",
-        ], (
-            f"Expected the fixed tool order, got {names}"
-        )
+    def test_tools_is_a_tuple_of_plain_dicts_the_sdk_can_json_encode(self) -> None:
+        """TOOLS is a tuple, so the order of the tools in the cached prompt prefix cannot change
+        at runtime, and its schemas come back from a JSON round trip unchanged, so none holds a
+        read-only mapping, which the SDK's JSON encoding rejects."""
+        assert isinstance(TOOLS, tuple), f"Expected TOOLS to be a tuple; got {type(TOOLS).__name__}"
+        assert json.loads(json.dumps(TOOLS)) == list(TOOLS)
 
     def test_every_tool_entry_has_required_keys(self) -> None:
         """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
@@ -107,12 +107,26 @@ class TestToolSurface:
                 f"input_schema.required must be non-empty list for {tool['name']!r}"
             )
 
+    @pytest.mark.parametrize("schema", TOOLS, ids=lambda schema: schema["name"])
+    def test_each_offered_tool_refuses_a_call_without_its_required_fields_naming_them(
+        self, tmp_path: Path, schema: Mapping[str, Any]
+    ) -> None:
+        """A call to a tool TOOLS offers that sends none of its fields is answered with an error
+        naming every field its schema requires, and nothing else: the name reaches the tool that
+        holds this schema, and that tool applies the schema's required list."""
+        result = dispatch_tool(schema["name"], {}, tool_context(tmp_path))
+
+        assert list(result) == ["error"], f"Expected an error and nothing else; got {result!r}"
+        assert "Unknown tool" not in result["error"], f"Expected the tool to be found; got {result!r}"
+        unnamed = [field for field in schema["input_schema"]["required"] if field not in result["error"]]
+        assert not unnamed, f"Expected the error to name {unnamed}; got {result['error']!r}"
+
     def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
         """dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
         result = dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
-            **dispatch_dependencies(tmp_path),
+            tool_context(tmp_path),
         )
         expected = explain_metric("self_consumption_ratio")
         assert result == expected, (
@@ -124,27 +138,22 @@ class TestToolSurface:
         result = dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
-            **dispatch_dependencies(tmp_path),
+            tool_context(tmp_path),
         )
         expected = suggest_config(3100, "self_sufficiency")
         assert result == expected, (
             f"dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
-    def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
-        """dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
-        try:
-            result = dispatch_tool(
-                "nonexistent_tool",
-                {},
-                **dispatch_dependencies(tmp_path),
-            )
-        except Exception as exc:
-            raise AssertionError(
-                f"dispatch_tool should not raise for unknown tool; got: {exc!r}"
-            ) from exc
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key in result: {result}"
+    def test_an_unknown_tool_name_is_answered_with_the_available_tools_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        """A call naming no tool is answered, not raised, with an error that lists the tools
+        TOOLS offers, in TOOLS' order, so the model can call one it was offered instead."""
+        result = dispatch_tool("nonexistent_tool", {}, tool_context(tmp_path))
+
+        available = ", ".join(tool["name"] for tool in TOOLS)
+        assert result == {"error": f"Unknown tool 'nonexistent_tool'. Available tools: {available}."}
 
 
 class TestToolUseLoop:
@@ -252,7 +261,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """stream() receives TOOLS as its 'tools' kwarg; TestToolSurface pins TOOLS' order."""
+        """stream() receives TOOLS, in TOOLS' order, as its 'tools' kwarg."""
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
         ])
@@ -373,7 +382,7 @@ class TestToolUseLoop:
         event_types = [e.event for e in events]
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
     def test_thinking_before_a_tool_call_is_replayed_unchanged(
         self,
@@ -400,7 +409,7 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         event_types = [e.event for e in parse_sse_events(resp.get_data(as_text=True))]
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
         calls = anthropic_api.calls
         assert len(calls) == 2, f"Expected stream() called exactly 2 times; got {len(calls)}"
@@ -453,7 +462,7 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         event_types = [e.event for e in parse_sse_events(resp.get_data(as_text=True))]
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
-        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+        assert "failed" not in event_types, f"Unexpected failed frame; got: {event_types}"
 
         calls = anthropic_api.calls
         assert len(calls) == 2, f"Expected stream() called exactly 2 times; got {len(calls)}"
@@ -495,7 +504,7 @@ class TestRunLookupToolSurface:
         )
 
     def test_dispatch_get_run_results_with_storage(self, tmp_path: Path) -> None:
-        """dispatch_tool('get_run_results', {...}, storage=...) returns the handler's dict for that storage."""
+        """dispatch_tool('get_run_results', {...}) with the seeded storage in its context returns the handler's dict."""
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
             db_path,
@@ -510,14 +519,14 @@ class TestRunLookupToolSurface:
         result = dispatch_tool(
             "get_run_results",
             {"run_id_or_name": "disp-run-001"},
-            **dispatch_dependencies(tmp_path, storage=storage),
+            tool_context(tmp_path, storage=storage),
         )
         expected = get_run_results("disp-run-001", storage)
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
     def test_dispatch_list_recent_runs_with_storage(self, tmp_path: Path) -> None:
-        """dispatch_tool('list_recent_runs', {'limit': 5}, storage=...) returns the handler's dict for the storage's Database."""
+        """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded storage in its context returns the handler's dict."""
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
             db_path,
@@ -531,11 +540,31 @@ class TestRunLookupToolSurface:
         result = dispatch_tool(
             "list_recent_runs",
             {"limit": 5},
-            **dispatch_dependencies(tmp_path, storage=RunStorage(Database(db_path), tmp_path)),
+            tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)),
         )
         expected = list_recent_runs(5, Database(db_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
+
+    def test_dispatch_list_recent_runs_with_a_limit_of_zero_lists_runs_as_the_handler_does(
+        self, tmp_path: Path
+    ) -> None:
+        """A limit of 0 is a whole number, so it is not refused: list_recent_runs' own rule for a
+        limit <= 0 decides how many runs it lists."""
+        db_path = tmp_path / "disp_lrr_zero.db"
+        seed_run(
+            db_path,
+            run_id="disp-lrr-zero",
+            name="lrr-zero-run",
+            status="completed",
+            created_at="2026-04-01T12:00:00+00:00",
+            summary={"self_consumption_ratio": 0.5},
+        )
+
+        result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)))
+
+        assert "error" not in result, f"Expected runs, not an error; got {result!r}"
+        assert result == list_recent_runs(0, Database(db_path))
 
     def test_end_to_end_get_run_results_tool_use_signal(
         self,
@@ -651,7 +680,7 @@ class TestSimulationToolSurface:
         ]
 
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
-        """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
+        """dispatch_tool('run_home_simulation', {...}) with a mock job_manager in its context returns handler result."""
         jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
@@ -663,8 +692,7 @@ class TestSimulationToolSurface:
         via_dispatch = dispatch_tool(
             "run_home_simulation",
             params,
-            storage=RunStorage(Database(tmp_path / "t.db"), tmp_path),
-            job_manager=jm2,
+            tool_context(tmp_path, job_manager=jm2),
         )
 
         assert direct == via_dispatch, (
@@ -672,25 +700,44 @@ class TestSimulationToolSurface:
         )
 
     def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
-        """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
+        """dispatch_tool('run_fleet_simulation', {...}) with a mock job_manager in its context returns handler result."""
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
         jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
-        direct = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        direct = run_fleet_simulation(
+            2, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, str(tmp_path / "t.db"), str(tmp_path)
+        )
 
         jm2 = autospecced_job_manager()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
         via_dispatch = dispatch_tool(
             "run_fleet_simulation",
             params,
-            storage=RunStorage(Database(tmp_path / "t.db"), tmp_path),
-            job_manager=jm2,
+            tool_context(tmp_path, job_manager=jm2),
         )
 
         assert direct == via_dispatch, (
             f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
         )
+
+    @pytest.mark.parametrize(("n_homes", "fleet_size"), [(0, 1), (10**6, 100)])
+    def test_dispatch_run_fleet_simulation_clamps_n_homes_as_the_handler_does(
+        self, tmp_path: Path, n_homes: int, fleet_size: int
+    ) -> None:
+        """An n_homes outside 1–100 is a whole number, so it is not refused: run_fleet_simulation
+        clamps it, and submits a fleet of the nearest size it allows."""
+        jm = autospecced_job_manager()
+        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+
+        result = dispatch_tool(
+            "run_fleet_simulation",
+            {"n_homes": n_homes, "pv_kw": 4, "days": 7},
+            tool_context(tmp_path, job_manager=jm),
+        )
+
+        assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
+        assert len(jm.submit_fleet_job.call_args.kwargs["configs"]) == fleet_size
 
 
 class TestSimulationToolUseSignal:
@@ -898,8 +945,8 @@ class TestSimulationToolUseSignal:
         resp = client.post("/assistant/chat", json={"message": "run it with a heat pump"})
         events = parse_sse_events(resp.get_data(as_text=True))
 
-        error_events = [e for e in events if e.event == "error"]
-        assert not error_events, f"Expected no 'error' SSE frame; events: {events}"
+        failed_events = [e for e in events if e.event == "failed"]
+        assert not failed_events, f"Expected no 'failed' SSE frame; events: {events}"
         assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
         assert len(anthropic_api.calls) == 2, (
             f"Expected stream() called exactly 2 times; got {len(anthropic_api.calls)}"
@@ -918,3 +965,142 @@ class TestSimulationToolUseSignal:
         )
         jm.submit_home_job.assert_not_called()
         jm.submit_fleet_job.assert_not_called()
+
+
+class TestMalformedToolInput:
+    """A tool input the model leaves a field out of, or sends a value its field's reader refuses, comes back to it as an error naming the field."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "field"),
+        [
+            pytest.param(
+                "run_fleet_simulation", {"n_homes": math.inf, "pv_kw": 4}, "n_homes", id="n_homes-infinite"
+            ),
+            pytest.param(
+                "suggest_config", {"goal": "bill_savings"}, "annual_consumption_kwh", id="consumption-absent"
+            ),
+            pytest.param(
+                "suggest_config",
+                {"annual_consumption_kwh": -5, "goal": "bill_savings"},
+                "annual_consumption_kwh",
+                id="consumption-negative",
+            ),
+            pytest.param(
+                "suggest_config",
+                {"annual_consumption_kwh": True, "goal": "bill_savings"},
+                "annual_consumption_kwh",
+                id="consumption-boolean",
+            ),
+            pytest.param(
+                "suggest_config",
+                {"annual_consumption_kwh": 10**400, "goal": "bill_savings"},
+                "annual_consumption_kwh",
+                id="consumption-too-large-for-a-float",
+            ),
+            pytest.param("list_recent_runs", {"limit": math.inf}, "limit", id="limit-infinite"),
+        ],
+    )
+    def test_a_malformed_tool_input_comes_back_to_the_model_as_an_error_naming_the_field(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        field: str,
+    ) -> None:
+        """The model's next call receives a tool_result whose only key is an error naming the
+        field, and the value it sent if it sent one; the turn goes on to its reply, and nothing
+        is submitted."""
+        jm = autospecced_job_manager()
+        app.extensions["job_manager"] = jm
+
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_malformed_input", tool_name, tool_input),
+            make_end_turn_stream(["Let me fix that."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "go ahead"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        failed_events = [e for e in events if e.event == "failed"]
+        assert not failed_events, f"Expected no 'failed' SSE frame; events: {events}"
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
+        assert len(anthropic_api.calls) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(anthropic_api.calls)}"
+        )
+        content = anthropic_api.calls[1]["messages"][-1]["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        result = json.loads(tool_result_block["content"])
+        assert list(result) == ["error"], f"Expected an error and nothing else; got {result!r}"
+        assert field in result["error"], f"Expected the error to name {field}; got {result['error']!r}"
+        if field in tool_input:
+            assert repr(tool_input[field]) in result["error"], (
+                f"Expected the error to show the value sent, {tool_input[field]!r}; got {result['error']!r}"
+            )
+        jm.submit_home_job.assert_not_called()
+        jm.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "field"),
+        [
+            pytest.param("explain_metric", {"metric": 5}, "metric", id="explain_metric"),
+            pytest.param(
+                "suggest_config", {"annual_consumption_kwh": 3100, "goal": None}, "goal", id="suggest_config"
+            ),
+            pytest.param("get_run_results", {"run_id_or_name": 7}, "run_id_or_name", id="get_run_results"),
+        ],
+    )
+    def test_a_text_field_that_is_not_a_string_is_refused_naming_the_field_and_the_value(
+        self, tmp_path: Path, tool_name: str, tool_input: dict[str, Any], field: str
+    ) -> None:
+        """A text field sent as anything but a string is refused, not read as that value's str()."""
+        result = dispatch_tool(tool_name, tool_input, tool_context(tmp_path))
+
+        assert result == {"error": f"{field} must be a string, got {tool_input[field]!r}"}
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "read_field"),
+        [
+            pytest.param(
+                "list_recent_runs",
+                {"limit": 2.5},
+                partial(as_whole_number, 2.5, "limit"),
+                id="limit-fraction",
+            ),
+            pytest.param(
+                "run_fleet_simulation",
+                {"n_homes": True, "pv_kw": 4},
+                partial(as_whole_number, True, "n_homes"),
+                id="n_homes-boolean",
+            ),
+            pytest.param(
+                "suggest_config",
+                {"annual_consumption_kwh": 0, "goal": "bill_savings"},
+                partial(
+                    as_finite_float_within, 0, "annual_consumption_kwh", *FLEET_COMPONENTS["load"].fixed_range
+                ),
+                id="consumption-zero",
+            ),
+        ],
+    )
+    def test_a_number_field_is_refused_as_the_shared_number_reader_refuses_it(
+        self,
+        tmp_path: Path,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        read_field: Callable[[], object],
+    ) -> None:
+        """A number field reads through web/number_fields.py's reader for its kind, so a value that
+        reader refuses comes back with that reader's own error. The sizing tool reads consumption
+        over the range the trigger tools take, so it refuses zero."""
+        with pytest.raises(ValueError) as refusal:
+            read_field()
+
+        assert dispatch_tool(tool_name, tool_input, tool_context(tmp_path)) == {"error": str(refusal.value)}

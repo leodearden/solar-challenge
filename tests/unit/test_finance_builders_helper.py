@@ -7,15 +7,19 @@ import dataclasses
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
+    make_pv_config,
     make_scenario,
     make_scenario_and_finance,
+    make_scenario_of,
     make_sim_results,
+    make_sized_home,
 )
 
 
@@ -151,6 +155,22 @@ def test_home_config_is_the_default_home_with_the_given_battery() -> None:
     assert dataclasses.replace(home, battery_config=None) == make_home_config()
 
 
+def test_sized_home_is_the_default_home_fitted_with_the_given_install() -> None:
+    home = make_sized_home(pv_kwp=5.5, battery_kwh=5.0, inverter_kw=3.6)
+
+    assert home.pv_config == dataclasses.replace(make_pv_config(), capacity_kw=5.5, inverter_capacity_kw=3.6)
+    assert home.battery_config == BatteryConfig(capacity_kwh=5.0)
+    assert dataclasses.replace(home, pv_config=make_pv_config(), battery_config=None) == make_home_config()
+
+
+def test_sized_home_has_no_battery_and_an_inverter_sized_to_the_array_by_default() -> None:
+    home = make_sized_home(pv_kwp=3.0)
+
+    assert home.battery_config is None
+    assert home.pv_config.inverter_capacity_kw is None
+    assert home.pv_config.effective_inverter_capacity_kw == 3.0
+
+
 def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     scenario = make_scenario(n_homes=2, seg_tariff_pence_per_kwh=5.0)
 
@@ -163,6 +183,16 @@ def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     assert default_scenario.seg_tariff_pence_per_kwh is None
 
 
+def test_scenario_carries_the_given_finance_block() -> None:
+    finance = FinanceConfig(standing_charge_pence_per_day=28.0)
+
+    scenario = make_scenario(n_homes=2, finance=finance)
+
+    assert scenario.finance is finance
+    assert scenario.homes == [make_home_config()] * 2
+    assert make_scenario().finance is None
+
+
 def test_scenario_builders_give_every_home_the_given_battery() -> None:
     battery = BatteryConfig(capacity_kwh=5.0)
     battery_home = make_home_config(battery_config=battery)
@@ -171,6 +201,15 @@ def test_scenario_builders_give_every_home_the_given_battery() -> None:
 
     assert make_scenario(n_homes=2, battery_config=battery).homes == [battery_home] * 2
     assert scenario.homes == [battery_home] * 2
+
+
+def test_scenario_of_holds_exactly_the_given_homes() -> None:
+    homes = [make_sized_home(pv_kwp=4.0, battery_kwh=5.0), make_sized_home(pv_kwp=3.0)]
+
+    scenario = make_scenario_of(homes)
+
+    assert scenario.homes == homes
+    assert dataclasses.replace(scenario, homes=[make_home_config()]) == make_scenario()
 
 
 @pytest.mark.parametrize(

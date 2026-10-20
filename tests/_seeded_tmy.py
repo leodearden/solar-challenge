@@ -9,6 +9,12 @@ Usage::
     june_days.seed_as_bristol_tmy(weather_cache)
     start, end = june_days.window(2)
     results = simulate_fleet(config, start, end)
+
+The days can also be given to simulate_home as one home's weather, with no cache::
+
+    from tests._synthetic_weather import weather_for
+
+    results = simulate_home(home, start, end, weather=weather_for(home, june_days.hourly_weather()))
 """
 
 from __future__ import annotations
@@ -24,7 +30,10 @@ from tests._synthetic_weather import synthetic_june_weather
 
 @dataclass(frozen=True)
 class ClearJuneDays:
-    """*count* consecutive clear June days from *first_day*, for a test to seed as Bristol's TMY and simulate within."""
+    """*count* consecutive clear June days from *first_day*, for a test to seed as Bristol's TMY and simulate within.
+
+    The days can also be given to simulate_home through ``weather_for(home, june_days.hourly_weather())``.
+    """
 
     first_day: pd.Timestamp
     count: int
@@ -32,13 +41,13 @@ class ClearJuneDays:
     def __post_init__(self) -> None:
         assert self.count >= 1, f"ClearJuneDays needs at least one day, not count={self.count}"
 
+    def hourly_weather(self) -> pd.DataFrame:
+        """The hourly weather of these days, each the clear June day."""
+        return synthetic_june_weather(self.first_day, irradiance_scale_per_day=(1.0,) * self.count)
+
     def seed_as_bristol_tmy(self, weather_cache: WeatherCache) -> None:
         """Put these days in *weather_cache* as Bristol's TMY, which get_tmy_data then reads in place of PVGIS."""
-        weather_cache.put(
-            synthetic_june_weather(self.first_day, irradiance_scale_per_day=(1.0,) * self.count),
-            "tmy",
-            Location.bristol(),
-        )
+        weather_cache.put(self.hourly_weather(), "tmy", Location.bristol())
 
     def window(self, days: int) -> tuple[pd.Timestamp, pd.Timestamp]:
         """The start and end dates of a simulation over the first *days* of these days."""

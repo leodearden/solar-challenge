@@ -26,24 +26,10 @@ class Preset:
     rate: float
 
 
-_source_by_name: dict[str, str] = {}
-
-
 def imported_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
 ) -> types.ModuleType:
-    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until the test ends.
-
-    Raises ValueError naming *name* if an earlier call in this process imported it from
-    another source.
-    """
-    if _source_by_name.get(name, source) != source:
-        raise ValueError(
-            f"The module name {name!r} was already imported from another source: the "
-            "helper under test reads a module's `if TYPE_CHECKING:` imports once per "
-            "name, so give this test's module a name no other test uses"
-        )
-    _source_by_name[name] = source
+    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until *monkeypatch* is undone or a later call imports another module of that name."""
     path = tmp_path / f"{name}.py"
     path.write_text(source)
     spec = importlib.util.spec_from_file_location(name, path)

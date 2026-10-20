@@ -3,12 +3,10 @@
 import dataclasses
 import io
 import json
-import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
@@ -19,7 +17,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
@@ -27,31 +25,18 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
-    overlaid_power_flows,
 )
-from solar_challenge.web.database import Database, init_db
-from solar_challenge.web.shared import LOCATION_PRESETS
+from solar_challenge.web.database import Database
+from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
+from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
 
 
 @pytest.fixture
@@ -831,33 +816,6 @@ class TestComparisonCharts:
         ]
         result = comparison_radar(summaries, ["Empty Run"])
         assert result and result != "{}"
-
-    def test_overlaid_power_flows_returns_json(self) -> None:
-        """Test overlaid_power_flows returns a non-empty JSON string."""
-        index = pd.date_range("2024-06-01", periods=60, freq="min")
-        gen = pd.Series(np.sin(np.arange(60) * 0.1) * 2, index=index)
-        dem = pd.Series(np.ones(60) * 0.5, index=index)
-        zeros = pd.Series(np.zeros(60), index=index)
-
-        results = SimulationResults(
-            generation=gen,
-            demand=dem,
-            self_consumption=dem,
-            battery_charge=zeros,
-            battery_discharge=zeros,
-            battery_soc=zeros,
-            grid_import=zeros,
-            grid_export=zeros,
-            import_cost=zeros,
-            export_revenue=zeros,
-            tariff_rate=zeros,
-            strategy_name="greedy",
-        )
-
-        output = overlaid_power_flows([results, results], ["Run A", "Run B"])
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        assert "data" in parsed
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,8 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -56,6 +57,14 @@ class _ManualClock:
 
     def advance(self, seconds: float) -> None:
         self._now += seconds
+
+
+class TestJobManagerConstruction:
+    """A JobManager is built with the home simulation its jobs run; it has none of its own."""
+
+    def test_a_manager_is_given_its_home_simulator(self) -> None:
+        with pytest.raises(TypeError, match="simulate_home"):
+            JobManager()
 
 
 class TestJobManagerDirect:
@@ -137,7 +146,7 @@ class TestJobManagerDirect:
 
     def test_get_events_unknown_job_yields_nothing(self) -> None:
         """Test that get_events for an unknown job yields no events."""
-        jm = JobManager(max_workers=1)
+        jm = JobManager(max_workers=1, simulate_home=RecordingSimulation())
         events = list(jm.get_events("nonexistent-job-id"))
         assert events == []
 
@@ -174,6 +183,35 @@ _JOBS_LOGGER = "solar_challenge.web.jobs"
 
 def _records_logged_by_jobs_py(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.name == _JOBS_LOGGER]
+
+
+class _RecordKeeper(logging.Handler):
+    """Keeps every record it handles, in order."""
+
+    def __init__(self, level: int) -> None:
+        super().__init__(level)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _errors_logged_by_jobs_py_kept_out_of_the_report() -> Iterator[list[logging.LogRecord]]:
+    """Collect the ERROR records jobs.py logs in the block, and pass none on to pytest, which would write them into the test's report.
+
+    tests/unit/test_xdist_sendable_reports.py says why a report must not hold them.
+    """
+    jobs_logger = logging.getLogger(_JOBS_LOGGER)
+    keeper = _RecordKeeper(logging.ERROR)
+    propagated_before = jobs_logger.propagate
+    jobs_logger.addHandler(keeper)
+    jobs_logger.propagate = False
+    try:
+        yield keeper.records
+    finally:
+        jobs_logger.propagate = propagated_before
+        jobs_logger.removeHandler(keeper)
 
 
 def _ids_tracked_by(manager: JobManager, ids: list[str]) -> list[str]:
@@ -367,7 +405,7 @@ class TestJobManagerState:
         job_id = _submit_home_job(first, tmp_path)
         assert first.wait_until_idle(timeout=30)
 
-        assert JobManager(max_workers=1).job_state(job_id) is None
+        assert JobManager(max_workers=1, simulate_home=RecordingSimulation()).job_state(job_id) is None
         assert job_row(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
@@ -616,7 +654,7 @@ class TestJobManagerRefusedRows:
         storage = _run_storage(tmp_path)
         _refuse_new_rows(storage, table)
         ids = CountingIds()
-        manager = JobManager(max_workers=1, new_id=ids)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation(), new_id=ids)
 
         with pytest.raises(sqlite3.IntegrityError, match=f"refuses new {table} rows"):
             submit_job(manager, tmp_path)
@@ -703,17 +741,16 @@ class TestJobManagerUnrecordedFailures:
         assert list(manager.get_events(job_id))[-1] == JobEvent("error", state)
 
     def test_a_failure_whose_message_sqlite_cannot_store_is_logged_for_each_table_and_still_reported(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path
     ) -> None:
         manager = JobManager(
             max_workers=1, simulate_home=_a_simulation_failing_with_a_message_sqlite_cannot_store, new_id=CountingIds()
         )
 
-        with caplog.at_level(logging.ERROR, logger=_JOBS_LOGGER):
+        with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
             job_id = _submit_home_job(manager, tmp_path)
             assert manager.wait_until_idle(timeout=30)
 
-        records = _records_logged_by_jobs_py(caplog)
         assert [(record.levelno, record.getMessage()) for record in records] == [
             (
                 logging.ERROR,
@@ -729,7 +766,7 @@ class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
     def test_a_shut_down_manager_refuses_new_jobs(self, tmp_path: Path) -> None:
-        manager = JobManager(max_workers=1)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation())
 
         manager.shutdown()
 
@@ -741,7 +778,7 @@ class TestJobManagerShutdown:
         self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
         ids = CountingIds()
-        manager = JobManager(max_workers=1, new_id=ids)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation(), new_id=ids)
         manager.shutdown()
 
         with pytest.raises(RuntimeError, match="after shutdown"):
@@ -752,7 +789,7 @@ class TestJobManagerShutdown:
         assert _run_storage(tmp_path).list_runs() == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:
-        managers = [JobManager(max_workers=1), JobManager(max_workers=1)]
+        managers = [JobManager(max_workers=1, simulate_home=RecordingSimulation()) for _ in range(2)]
 
         shutdown_all_managers()
 
@@ -766,7 +803,7 @@ class TestJobManagerShutdown:
         # is not garbage-collected from the WeakSet before the first shutdown
         # call — without this the WeakSet could be empty and the test would
         # pass trivially without exercising the double-shutdown path.
-        jm = JobManager(max_workers=1)
+        jm = JobManager(max_workers=1, simulate_home=RecordingSimulation())
 
         shutdown_all_managers()
         shutdown_all_managers()  # must not raise
@@ -780,7 +817,7 @@ class TestJobManagerWaitUntilIdle:
     """Tests for JobManager.wait_until_idle, which blocks until no job is queued or running."""
 
     def test_a_manager_never_given_a_job_is_idle(self) -> None:
-        assert JobManager(max_workers=1).wait_until_idle(timeout=0) is True
+        assert JobManager(max_workers=1, simulate_home=RecordingSimulation()).wait_until_idle(timeout=0) is True
 
     def test_waiting_returns_false_when_the_timeout_passes_while_a_job_runs(
         self, blocking_simulation: BlockingSimulation, tmp_path: Path
@@ -828,7 +865,7 @@ class TestJobManagerWaitUntilIdle:
         assert manager.wait_until_idle(timeout=30) is True
 
     def test_a_job_the_manager_refused_does_not_keep_it_busy(self, tmp_path: Path) -> None:
-        manager = JobManager(max_workers=1)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation())
         manager.shutdown()
         with pytest.raises(RuntimeError, match="after shutdown"):
             _submit_home_job(manager, tmp_path)
@@ -840,18 +877,18 @@ class TestLiveManagers:
     """Tests for live_managers(), the snapshot of every JobManager not yet garbage-collected."""
 
     def test_live_managers_reports_a_newly_constructed_manager(self) -> None:
-        manager = JobManager(max_workers=1)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation())
 
         assert manager in live_managers()
 
     def test_an_earlier_snapshot_does_not_gain_managers_constructed_after_it(self) -> None:
         snapshot = live_managers()
-        manager = JobManager(max_workers=1)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation())
 
         assert manager not in snapshot
 
     def test_live_managers_includes_shut_down_managers(self) -> None:
-        manager = JobManager(max_workers=1)
+        manager = JobManager(max_workers=1, simulate_home=RecordingSimulation())
         manager.shutdown()
 
         assert manager in live_managers()
