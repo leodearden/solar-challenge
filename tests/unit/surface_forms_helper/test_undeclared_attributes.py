@@ -8,6 +8,7 @@ from dataclasses import InitVar, dataclass
 import pytest
 
 from tests._surface_forms import undeclared_attributes, unset_attributes
+from tests.unit.surface_forms_helper._fixtures import imported_module
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
@@ -225,3 +226,32 @@ def test_reviewed_given_as_one_string_raises_a_type_error_naming_it_from_undecla
     for scan in (undeclared_attributes, unset_attributes):
         with pytest.raises(TypeError, match=re.escape(text)):
             scan(Meter, reviewed=text)
+
+
+def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sys_modules_raises_a_lookup_error_from_undeclared_attributes_and_unset_attributes(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "metering",
+        "class Meter:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.early = 1\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "metering",
+        "class Meter:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.late = 1\n",
+    )
+
+    with pytest.raises(LookupError) as undeclared:
+        undeclared_attributes(earlier.Meter)
+    with pytest.raises(LookupError) as unset:
+        unset_attributes(earlier.Meter)
+
+    assert later.__file__ in str(undeclared.value)
+    assert later.__file__ in str(unset.value)
