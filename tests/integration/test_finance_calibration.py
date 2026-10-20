@@ -42,7 +42,13 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
-from tests._fin_calibration import FIN_GOLDEN, FIN_SCF, make_fin_finance, make_physics_column_scenario
+from tests._fin_calibration import (
+    FIN_GOLDEN,
+    FIN_SCF,
+    make_fin_finance,
+    make_fin_spreadsheet_curve,
+    make_physics_column_scenario,
+)
 from tests._finance_builders import make_scenario_of, make_sized_home
 
 
@@ -54,14 +60,12 @@ from tests._finance_builders import make_scenario_of, make_sized_home
 
 def _make_scenario_fin(
     n_homes: int = 100,
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
+    battery_kwh: float = FIN_GOLDEN["inp_Batt_kWh"],
 ) -> ScenarioConfig:
-    """make_scenario_of's scenario of *n_homes* homes, each fitted with the [FIN] install.
-
-    The install is a *pv_kwp* kWp array and a *battery_kwh* kWh battery.
-    """
-    return make_scenario_of([make_sized_home(pv_kwp=pv_kwp, battery_kwh=battery_kwh)] * n_homes)
+    """make_scenario_of's scenario of *n_homes* homes of the [FIN] PV array, each with a *battery_kwh* kWh battery."""
+    return make_scenario_of(
+        [make_sized_home(pv_kwp=FIN_GOLDEN["inp_kWp"], battery_kwh=battery_kwh)] * n_homes
+    )
 
 
 def _make_finance_fin() -> FinanceConfig:
@@ -335,27 +339,15 @@ class TestCalibrationCapexMethodAgreement:
     - Delta = £125,000 = 100 × 5 kWh × £250 (pure battery-size, §2.3)
     """
 
-    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> MultiYearCurve:
-        """Build the [FIN]-assumption spreadsheet revenue curve."""
-        return spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
-            asset_life_years=asset_life_years,
-        )
-
     def test_capex_5kwh_matches_capital_stack_b6(self) -> None:
         """Capex for 100 × 5.5kWp + 5kWh must equal Capital_Stack!B6 = £775,000 exactly.
 
         Arithmetic: 100 × (5.5×£1000 + £1000 + 5.0kWh×£250) = 100×£7,750 = £775,000
         Cell ref: Capital_Stack!B6 = £775,000
         """
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin()
         finance = _make_finance_fin()
-        curve = self._make_spreadsheet_curve()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
         econ = project_economics(curve, scenario, finance)
 
@@ -368,9 +360,9 @@ class TestCalibrationCapexMethodAgreement:
 
     def test_capex_5kwh_exact_arithmetic(self) -> None:
         """Exact arithmetic check: 100×(5.5×1000+1000+5×250)=775000 matches cell."""
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin()
         finance = _make_finance_fin()
-        curve = self._make_spreadsheet_curve()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
         econ = project_economics(curve, scenario, finance)
 
@@ -386,17 +378,9 @@ class TestCalibrationCapexMethodAgreement:
         Cell ref: Workings!C94 = £900,000
         """
         # 10 kWh fleet (Workings build-up basis)
-        scenario_10kwh = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=10.0)
+        scenario_10kwh = _make_scenario_fin(battery_kwh=10.0)
         finance = _make_finance_fin()
-        curve = spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=5.5,
-            kwh_per_kwp=1050.0,
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0,
-            export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
         econ_10kwh = project_economics(curve, scenario_10kwh, finance)
 
@@ -413,15 +397,10 @@ class TestCalibrationCapexMethodAgreement:
         This is the §2.3 '£775k ↔ £900k' reconciliation:
         Pure battery-size difference (inp_Batt_kWh=5 vs Workings 10 kWh), NOT an error.
         """
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
         finance = _make_finance_fin()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
+        econ_5 = project_economics(curve, _make_scenario_fin(), finance)
         econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
@@ -459,17 +438,9 @@ class TestCalibrationDscrIrrMethodAgreement:
 
     def _build_econ(self) -> ProjectEconomics:
         """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
-        curve = spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
-            asset_life_years=25,
-        )
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
         finance = _make_finance_fin()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        scenario = _make_scenario_fin()
         return project_economics(curve, scenario, finance)
 
     def test_min_dscr_meets_covenant_floor(self) -> None:
@@ -525,17 +496,9 @@ class TestCalibrationG6Guards:
 
     def _build_spreadsheet_econ(self) -> ProjectEconomics:
         """Build spreadsheet-input ProjectEconomics."""
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
-        return project_economics(
-            curve,
-            _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0),
-            _make_finance_fin(),
-        )
+        finance = _make_finance_fin()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        return project_economics(curve, _make_scenario_fin(), finance)
 
     def test_spreadsheet_column_produces_project_economics(self) -> None:
         """spreadsheet_revenue_curve → project_economics returns a ProjectEconomics."""
@@ -554,14 +517,9 @@ class TestCalibrationG6Guards:
         The delta (£125k) must NOT be asserted as zero. It is the reconciliation
         between the 5 kWh (Capital_Stack!B6) and 10 kWh (Workings!C94) bases.
         """
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
         finance = _make_finance_fin()
-        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        econ_5 = project_economics(curve, _make_scenario_fin(), finance)
         econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
@@ -640,12 +598,7 @@ class TestCalibrationPhysicsColumn:
         physics_econ = project_economics(physics_curve, scenario, physics_finance)
 
         # Spreadsheet column (analytic)
-        ss_curve = spreadsheet_revenue_curve(
-            n_homes=2, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
+        ss_curve = make_fin_spreadsheet_curve(n_homes=2, asset_life_years=finance.asset_life_years)
         # Adjust scenario to match 2 homes for capex assertion
         ss_econ = project_economics(ss_curve, scenario, finance)
 

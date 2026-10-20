@@ -37,11 +37,16 @@ from solar_challenge.finance import (
     project_economics,
     project_multi_year,
     solve_cost_recovery_rate,
-    spreadsheet_revenue_curve,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
-from tests._fin_calibration import FIN_GOLDEN, FIN_SCF, make_fin_finance, make_physics_column_scenario
+from tests._fin_calibration import (
+    FIN_GOLDEN,
+    FIN_SCF,
+    make_fin_finance,
+    make_fin_spreadsheet_curve,
+    make_physics_column_scenario,
+)
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -55,7 +60,7 @@ from tests._finance_builders import (
 # [FIN] fixture builders over tests/_finance_builders.py and tests/_fin_calibration.py
 # ---------------------------------------------------------------------------
 
-_FIN_HOME = make_sized_home(pv_kwp=5.5, battery_kwh=5.0)
+_FIN_HOME = make_sized_home(pv_kwp=FIN_GOLDEN["inp_kWp"], battery_kwh=FIN_GOLDEN["inp_Batt_kWh"])
 
 
 def _make_fleet_results_fin_cr6(
@@ -705,20 +710,14 @@ def _spreadsheet_economics_cr6(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
 ) -> "ProjectEconomics":  # type: ignore[name-defined]
-    """[FIN]-assumption ProjectEconomics for ``scenario``: spreadsheet_revenue_curve → project_economics.
+    """[FIN]-assumption ProjectEconomics for ``scenario``: make_fin_spreadsheet_curve → project_economics.
 
     Physics-free and network-free.  Capex, debt and debt service depend on the
     scenario's homes and ``finance`` alone, so callers that read only those do not
     depend on the curve's revenue.
     """
-    curve = spreadsheet_revenue_curve(
-        n_homes=len(scenario.homes),
-        pv_kwp=FIN_GOLDEN["inp_kWp"],
-        kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
-        self_consumption_fraction=FIN_SCF,
-        own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-        export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
-        asset_life_years=finance.asset_life_years,
+    curve = make_fin_spreadsheet_curve(
+        n_homes=len(scenario.homes), asset_life_years=finance.asset_life_years
     )
     return project_economics(curve, scenario, finance)
 
