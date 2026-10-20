@@ -577,7 +577,7 @@ class TestScenarioAPI:
     def test_a_saved_fleet_preset_whose_config_is_json_but_not_an_object_answers_500_naming_it(
         self, app: Flask, client: FlaskClient, config_json: str
     ) -> None:
-        """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as a saved home preset's such config is unreadable."""
+        """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as one whose config is not JSON is."""
         insert_saved_fleet_preset(app.config["DATABASE"], "Not an object", config_json)
         assert "Not an object" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
 
