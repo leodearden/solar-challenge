@@ -250,7 +250,7 @@ are normative.
 P = TypeVar("P", bound="DataclassInstance")
 @dataclass(frozen=True)
 class SseEvent(Generic[P]):
-    name: str                      # __post_init__ refuses "" and any CR, LF or ':'
+    name: str                      # __post_init__ refuses "" and any whitespace or ':'
     payload_type: type[P]
 def sse_frame(event: SseEvent[P], payload: P, *, event_id: int | None = None, retry_ms: int | None = None) -> str: ...
     # "event: {name}\n" ["id: {event_id}\n"] ["retry: {retry_ms}\n"] "data: {json.dumps(asdict(payload))}\n\n";
@@ -301,6 +301,10 @@ class RunStorage:
     def mark_run_completed(self, run_id: str) -> None: ...         # running → completed, stamps completed_at
     def mark_run_failed(self, run_id: str, message: str) -> None: ...   # running → failed; absent row: no-op
 ```
+
+`SseEvent` forbids all whitespace in an event name. The test reader `tests/_sse.parse_sse_events`
+refuses only leading or trailing whitespace and keeps an inner space as written; its docstring
+gives the reason. The difference is deliberate, so do not align the two.
 
 **Invariants (each enforced at the place named):**
 
