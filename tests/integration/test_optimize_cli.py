@@ -342,26 +342,28 @@ class TestGenerateConfigRankingReportTable1:
         assert "n/a" in report, f"'n/a' for NaN IRR not found:\n{report}"
 
     def test_recommendation_marker_on_cheapest(self) -> None:
-        """The cheapest feasible config (results[0]) must be flagged as RECOMMENDATION."""
+        """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        assert "RECOMMENDATION" in report.upper() or "★" in report or "recommended" in report.lower(), (
-            f"RECOMMENDATION marker not found:\n{report}"
-        )
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "4.0 kWp / 0.0 kWh / 5.0 kW ★ RECOMMENDATION",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "5.0 kWp / 5.0 kWh / 5.0 kW",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Config"]
+            for label in expected
+        }
+        assert shown == expected, f"RECOMMENDATION marker not on the cheapest config alone:\n{report}"
 
     def test_infeasible_section_lists_config_dims(self) -> None:
-        """Infeasible ConfigPoints must appear in a separate section by their dims."""
+        """Infeasible ConfigPoints must appear by their dims in the Infeasible Configurations section's table."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Infeasible config: 6.0 kWp, 10.0 kWh, 5.0 kW
-        assert "6.0" in report, f"infeasible pv_kwp=6.0 not found:\n{report}"
-        assert "10.0" in report, f"infeasible battery_kwh=10.0 not found:\n{report}"
-        # Some 'infeasible' heading
-        assert "infeasible" in report.lower(), (
-            f"No infeasible section heading:\n{report}"
-        )
+        dims = "6.0 kWp / 10.0 kWh / 5.0 kW"
+        row = _config_row(report, "### Infeasible Configurations", dims)
+        assert row["Config"] == dims, f"infeasible config's Config cell is not exactly its dims:\n{report}"
 
     def test_empty_infeasible_no_infeasible_section(self) -> None:
         """When there are no infeasible configs, the infeasible section is omitted."""
