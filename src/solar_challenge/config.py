@@ -10,7 +10,7 @@ import math
 import random
 import re
 import warnings
-from dataclasses import dataclass, field, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
@@ -71,6 +71,10 @@ class WeightedDiscreteDistribution:
                 "WeightedDiscreteDistribution: weights cannot all be zero"
             )
 
+    def draw(self, rng: random.Random) -> Optional[float]:
+        """Draw one of the values from *rng*, each with its weight's share of the chance."""
+        return rng.choices(list(self.values), weights=list(self.weights), k=1)[0]
+
 
 @dataclass(frozen=True)
 class NormalDistribution:
@@ -94,6 +98,15 @@ class NormalDistribution:
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ConfigurationError("NormalDistribution: min cannot be greater than max")
 
+    def draw(self, rng: random.Random) -> float:
+        """Draw a value from *rng*'s normal distribution of mean and std, clamped to whichever of min and max is set."""
+        value = rng.gauss(self.mean, self.std)
+        if self.min is not None:
+            value = max(self.min, value)
+        if self.max is not None:
+            value = min(self.max, value)
+        return value
+
 
 @dataclass(frozen=True)
 class UniformDistribution:
@@ -110,6 +123,10 @@ class UniformDistribution:
     def __post_init__(self) -> None:
         if self.min > self.max:
             raise ConfigurationError("UniformDistribution: min cannot be greater than max")
+
+    def draw(self, rng: random.Random) -> float:
+        """Draw a value from *rng* uniformly between min and max."""
+        return rng.uniform(self.min, self.max)
 
 
 @dataclass(frozen=True)
@@ -418,10 +435,9 @@ class FleetDistributionConfig:
         heat_pump: Heat pump distribution configuration (optional)
         ev: EV distribution configuration (optional)
         seed: Random seed for reproducibility (optional)
-        random_order: Order of random operations ("default" or "bristol_legacy")
-            - "default": Shuffle pools first, then sample normal distributions per home
-            - "bristol_legacy": Sample all normal distributions first, then shuffle pools
-              (matches exact behavior of create_bristol_phase1_scenario)
+        random_order: One of _RANDOM_ORDERS' keys, naming what is drawn ahead of the first
+            home and in which order ("bristol_legacy" reproduces
+            create_bristol_phase1_scenario's sequence)
         dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
             None means greedy.  A battery given BatteryDistributionConfig.dispatch_strategy
             dispatches with that instead.
@@ -440,26 +456,69 @@ class FleetDistributionConfig:
     def __post_init__(self) -> None:
         if self.n_homes < 1:
             raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
-        if self.random_order not in ("default", "bristol_legacy"):
+        if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
             raise ConfigurationError(
-                f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', "
-                f"got '{self.random_order}'"
+                f"FleetDistributionConfig: random_order must be "
+                f"{' or '.join(repr(order) for order in _RANDOM_ORDERS)}, got '{self.random_order}'"
             )
         _refuse_pools_not_sized_to_the_fleet(self)
+
+
+#: The fleet's components, as FleetDistributionConfig names them. Their order is the default
+#: shuffle order: every random order shuffles the pools it does not shuffle first component
+#: by component in this order, field order within a component. It is not the order in which
+#: a home draws them.
+_FLEET_COMPONENTS: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
+
+
+@dataclass(frozen=True)
+class _RandomOrder:
+    """What a fleet's random order draws for every home before the first home is built.
+
+    First each pre_sampled setting's values, then the pools of the shuffled_first settings
+    in that order, then every other pool in the default shuffle order: component by
+    component in _FLEET_COMPONENTS, field order within a component.
+
+    Attributes:
+        pre_sampled: Paths of the settings whose weighted discrete, normal or uniform
+            values are all drawn ahead, e.g. 'load.annual_consumption_kwh'
+        shuffled_first: Paths of the settings whose pools are shuffled before any other pool
+    """
+
+    pre_sampled: tuple[str, ...] = ()
+    shuffled_first: tuple[str, ...] = ()
+
+
+#: create_bristol_phase1_scenario's random call order, which review/briefing.yaml's
+#: reproducibility rule says to keep.
+_BRISTOL_LEGACY_ORDER = _RandomOrder(
+    pre_sampled=("load.annual_consumption_kwh",),
+    shuffled_first=("pv.capacity_kw", "battery.capacity_kwh", "heat_pump.heat_pump_type", "ev.charger_type"),
+)
+
+_RANDOM_ORDERS: Mapping[str, _RandomOrder] = MappingProxyType({
+    "default": _RandomOrder(),
+    "bristol_legacy": _BRISTOL_LEGACY_ORDER,
+})
+
+
+def _component_settings(config: FleetDistributionConfig) -> Iterator[tuple[str, object]]:
+    """Each setting of *config*'s components with its path, e.g. ('pv.tilt', spec), component by component in _FLEET_COMPONENTS."""
+    for name in _FLEET_COMPONENTS:
+        component = getattr(config, name)
+        if component is None:
+            continue
+        for parameter in fields(component):
+            yield f"{name}.{parameter.name}", getattr(component, parameter.name)
 
 
 def _shuffled_pools(
     config: FleetDistributionConfig,
 ) -> Iterator[tuple[str, ShuffledPoolDistribution]]:
     """Each shuffled pool among *config*'s component parameters, with its path, e.g. ('pv.capacity_kw', pool)."""
-    for component_field in fields(config):
-        component = getattr(config, component_field.name)
-        if not is_dataclass(component):
-            continue
-        for parameter in fields(component):
-            spec = getattr(component, parameter.name)
-            if isinstance(spec, ShuffledPoolDistribution):
-                yield f"{component_field.name}.{parameter.name}", spec
+    for path, setting in _component_settings(config):
+        if isinstance(setting, ShuffledPoolDistribution):
+            yield path, setting
 
 
 def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
@@ -1305,39 +1364,6 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     return block_type.build(data, param_name)
 
 
-def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
-    """Sample a single value from a distribution specification.
-
-    Args:
-        spec: Distribution specification
-        rng: Random number generator
-
-    Returns:
-        Sampled value (float or None)
-    """
-    if spec is None:
-        return None
-    if isinstance(spec, (int, float)):
-        return float(spec)
-
-    if isinstance(spec, WeightedDiscreteDistribution):
-        return rng.choices(list(spec.values), weights=list(spec.weights), k=1)[0]
-
-    if isinstance(spec, NormalDistribution):
-        value = rng.gauss(spec.mean, spec.std)
-        if spec.min is not None:
-            value = max(spec.min, value)
-        if spec.max is not None:
-            value = min(spec.max, value)
-        return value
-
-    if isinstance(spec, UniformDistribution):
-        return rng.uniform(spec.min, spec.max)
-
-    # Should not reach here
-    raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
-
-
 _PV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
     "capacity_kw", "azimuth", "tilt", "module_efficiency", "inverter_efficiency",
     "system_age_years", "degradation_rate_per_year",
@@ -1558,65 +1584,72 @@ def parse_fleet_distribution_config(
 
 
 class _DistributionSampler:
-    """Helper class to handle sampling from distributions with pool support.
+    """Draws a fleet's settings home by home, from one RNG seeded with the fleet's seed.
 
-    For ShuffledPoolDistribution, creates and shuffles the pool once,
-    then yields values sequentially. For other distributions, samples
-    each time (or uses pre-sampled values if pre_sample was called).
+    Before the first home it draws ahead what the fleet's random order says, each
+    setting's values under the setting's path. A setting drawn ahead hands out its
+    values in order, one per home; any other setting is drawn afresh from its spec.
     """
 
-    def __init__(self, rng: random.Random) -> None:
-        self._rng = rng
-        self._pools: dict[int, list[Optional[float]]] = {}
-        self._pool_indices: dict[int, int] = {}
-        self._presampled: dict[int, list[Optional[float]]] = {}
-        self._presample_indices: dict[int, int] = {}
+    def __init__(self, config: FleetDistributionConfig) -> None:
+        self._rng = random.Random(config.seed)
+        self._drawn_ahead: dict[str, list[Optional[float]]] = {}
+        self._handed_out: dict[str, int] = {}
+        order = _RANDOM_ORDERS[config.random_order]
+        settings = dict(_component_settings(config))
+        for setting in order.pre_sampled:
+            spec = settings.get(setting)
+            if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
+                self._drawn_ahead[setting] = [spec.draw(self._rng) for _ in range(config.n_homes)]
+        pools = dict(_shuffled_pools(config))
+        shuffled_first = [setting for setting in order.shuffled_first if setting in pools]
+        for setting in shuffled_first + [setting for setting in pools if setting not in shuffled_first]:
+            values = pools[setting].create_pool()
+            self._rng.shuffle(values)
+            self._drawn_ahead[setting] = values
 
-    def pre_sample(self, spec: DistributionSpec, n: int) -> None:
-        """Pre-sample n values from the distribution (for legacy mode)."""
-        if spec is None or isinstance(spec, (int, float)):
-            return  # Fixed values don't need pre-sampling
-        if isinstance(spec, ShuffledPoolDistribution):
-            return  # Shuffled pools are handled separately
-        spec_id = id(spec)
-        if spec_id not in self._presampled:
-            samples = [_sample_from_distribution(spec, self._rng) for _ in range(n)]
-            self._presampled[spec_id] = samples
-            self._presample_indices[spec_id] = 0
+    def sample(self, spec: DistributionSpec, setting: str) -> Optional[float]:
+        """Draw the next home's value of *setting* from *spec*.
 
-    def prepare(self, spec: DistributionSpec) -> None:
-        """Prepare a distribution for sampling (creates pool if needed)."""
-        if isinstance(spec, ShuffledPoolDistribution):
-            spec_id = id(spec)
-            if spec_id not in self._pools:
-                pool = spec.create_pool()
-                self._rng.shuffle(pool)
-                self._pools[spec_id] = pool
-                self._pool_indices[spec_id] = 0
+        A setting drawn ahead hands out its next value. Any other is drawn afresh: None
+        gives None, a fixed number gives itself as a float, and a weighted discrete,
+        normal or uniform spec draws from the RNG.
 
-    def sample(self, spec: DistributionSpec) -> Optional[float]:
-        """Sample a value from the distribution."""
-        spec_id = id(spec)
+        Args:
+            spec: The setting's distribution specification
+            setting: The setting's path in the fleet distribution, e.g. 'pv.tilt'
 
-        # Check for pre-sampled values first
-        if spec_id in self._presampled:
-            idx = self._presample_indices[spec_id]
-            value = self._presampled[spec_id][idx]
-            self._presample_indices[spec_id] = idx + 1
-            return value
+        Returns:
+            Sampled value (float or None)
 
-        # Check for shuffled pool
-        if isinstance(spec, ShuffledPoolDistribution):
-            pool = self._pools[spec_id]
-            idx = self._pool_indices[spec_id]
-            value = pool[idx]
-            self._pool_indices[spec_id] = idx + 1
-            return value
+        Raises:
+            ConfigurationError: If *setting* was drawn ahead and every value of it is
+                handed out, or if *spec* cannot be drawn afresh, as a proportional_to
+                without its source's value or a pool not drawn ahead for *setting*
+                cannot, naming *setting*.
+        """
+        if setting in self._drawn_ahead:
+            return self._next_value_drawn_ahead(setting)
+        if spec is None:
+            return None
+        if isinstance(spec, (int, float)):
+            return float(spec)
+        if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
+            return spec.draw(self._rng)
+        raise ConfigurationError(f"{setting} cannot be drawn from {spec!r}")
 
-        return _sample_from_distribution(spec, self._rng)
+    def _next_value_drawn_ahead(self, setting: str) -> Optional[float]:
+        values = self._drawn_ahead[setting]
+        handed_out = self._handed_out.get(setting, 0)
+        if handed_out == len(values):
+            raise ConfigurationError(
+                f"{setting} has no value left to draw: its {len(values)} values, one per home, are all drawn"
+            )
+        self._handed_out[setting] = handed_out + 1
+        return values[handed_out]
 
-    def sample_count(self, spec: DistributionSpec) -> Optional[float]:
-        """Sample a count from *spec*.
+    def sample_count(self, spec: DistributionSpec, setting: str) -> Optional[float]:
+        """Sample a count of *setting* from *spec*.
 
         A finite draw from a normal or uniform distribution is rounded to the
         nearest whole number, a half rounding up: a draw clamped to a min of 2.5
@@ -1624,10 +1657,14 @@ class _DistributionSampler:
         does for a draw of 0.45 under a min of 0.4. A fixed value is returned as
         the spec gives it, and any other value as drawn, a draw that is not
         finite included.
+
+        Args:
+            spec: The setting's distribution specification
+            setting: The setting's path in the fleet distribution, e.g. 'load.household_occupants'
         """
         if isinstance(spec, (int, float)):
             return spec
-        value = self.sample(spec)
+        value = self.sample(spec, setting)
         if (
             value is not None
             and isinstance(spec, (NormalDistribution, UniformDistribution))
@@ -1638,7 +1675,7 @@ class _DistributionSampler:
         return value
 
     def sample_with_context(
-        self, spec: DistributionSpec, context: dict[str, Optional[float]]
+        self, spec: DistributionSpec, context: dict[str, Optional[float]], setting: str
     ) -> Optional[float]:
         """Sample with support for ProportionalDistribution.
 
@@ -1649,6 +1686,7 @@ class _DistributionSampler:
         Args:
             spec: Distribution specification
             context: Dict mapping field paths to sampled values
+            setting: The setting's path in the fleet distribution, e.g. 'battery.capacity_kwh'
 
         Returns:
             Sampled value (float or None)
@@ -1664,7 +1702,7 @@ class _DistributionSampler:
                     "Use expand_sweep_configs() to expand sweep values first."
                 )
             return source_val * multiplier + spec.offset
-        return self.sample(spec)
+        return self.sample(spec, setting)
 
 
 def generate_homes_from_distribution(
@@ -1687,80 +1725,32 @@ def generate_homes_from_distribution(
 
     Raises:
         ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
-            naming the pool; if a sampled PV capacity is not positive; or if a sampled
-            heat pump type is not 'ASHP' or 'GSHP'.
+            naming the pool; if a setting's spec cannot be drawn for it, e.g. a
+            proportional_to outside the battery and heat pump settings, naming the
+            setting; if a sampled PV capacity is not positive; or if a sampled heat
+            pump type is not 'ASHP' or 'GSHP'.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
     """
     _refuse_pools_not_sized_to_the_fleet(config)
-    rng = random.Random(config.seed)
-    sampler = _DistributionSampler(rng)
+    sampler = _DistributionSampler(config)
     homes: list[HomeConfig] = []
-
-    # Collect all distribution specs
-    all_specs: list[DistributionSpec] = [
-        config.pv.capacity_kw,
-        config.pv.azimuth,
-        config.pv.tilt,
-        config.pv.module_efficiency,
-        config.pv.inverter_efficiency,
-        config.pv.system_age_years,
-        config.pv.degradation_rate_per_year,
-        config.load.annual_consumption_kwh,
-        config.load.household_occupants,
-    ]
-    if config.battery is not None:
-        all_specs.extend([
-            config.battery.capacity_kwh,
-            config.battery.max_charge_kw,
-            config.battery.max_discharge_kw,
-        ])
-    if config.heat_pump is not None:
-        all_specs.extend([
-            config.heat_pump.thermal_capacity_kw,
-            config.heat_pump.annual_heat_demand_kwh,
-        ])
-    if config.ev is not None:
-        all_specs.extend([
-            config.ev.charger_type,
-            config.ev.arrival_hour,
-            config.ev.departure_hour,
-            config.ev.required_charge_kwh,
-        ])
-
-    if config.random_order == "bristol_legacy":
-        # Bristol legacy order: pre-sample all normal distributions first,
-        # then shuffle pools. This matches the exact random call order of
-        # create_bristol_phase1_scenario().
-        # Order: consumption (normal) -> pv shuffle -> battery shuffle -> ev shuffle
-        sampler.pre_sample(config.load.annual_consumption_kwh, config.n_homes)
-        sampler.prepare(config.pv.capacity_kw)
-        if config.battery is not None:
-            sampler.prepare(config.battery.capacity_kwh)
-        if config.heat_pump is not None and not isinstance(config.heat_pump.heat_pump_type, str):
-            # Only prepare if heat_pump_type is a distribution (not a direct string value)
-            sampler.prepare(config.heat_pump.heat_pump_type)
-        if config.ev is not None:
-            sampler.prepare(config.ev.charger_type)
-        # Other specs don't need special handling (fixed values)
-    else:
-        # Default order: prepare all shuffled pools upfront
-        for spec in all_specs:
-            sampler.prepare(spec)
 
     for i in range(config.n_homes):
         # Sample PV parameters
-        pv_capacity = sampler.sample(config.pv.capacity_kw)
+        pv_capacity = sampler.sample(config.pv.capacity_kw, "pv.capacity_kw")
         if pv_capacity is None or pv_capacity <= 0:
             raise ConfigurationError(f"PV capacity must be positive, got {pv_capacity}")
 
-        pv_azimuth = sampler.sample(config.pv.azimuth)
-        pv_tilt = sampler.sample(config.pv.tilt)
-        pv_module_eff = sampler.sample(config.pv.module_efficiency)
-        pv_inverter_eff = sampler.sample(config.pv.inverter_efficiency)
-        pv_age = sampler.sample(config.pv.system_age_years)
-        pv_degradation = sampler.sample(config.pv.degradation_rate_per_year)
+        pv_azimuth = sampler.sample(config.pv.azimuth, "pv.azimuth")
+        pv_tilt = sampler.sample(config.pv.tilt, "pv.tilt")
+        pv_module_eff = sampler.sample(config.pv.module_efficiency, "pv.module_efficiency")
+        pv_inverter_eff = sampler.sample(config.pv.inverter_efficiency, "pv.inverter_efficiency")
+        pv_age = sampler.sample(config.pv.system_age_years, "pv.system_age_years")
+        pv_degradation = sampler.sample(
+            config.pv.degradation_rate_per_year, "pv.degradation_rate_per_year"
+        )
 
         pv_config = PVConfig(
             capacity_kw=pv_capacity,
@@ -1779,16 +1769,16 @@ def generate_homes_from_distribution(
         battery_config: Optional[BatteryConfig] = None
         if config.battery is not None:
             battery_capacity = sampler.sample_with_context(
-                config.battery.capacity_kwh, context
+                config.battery.capacity_kwh, context, "battery.capacity_kwh"
             )
             if battery_capacity is not None and has_battery(
                 battery_capacity, "battery.capacity_kwh"
             ):
                 charge_kw = sampler.sample_with_context(
-                    config.battery.max_charge_kw, context
+                    config.battery.max_charge_kw, context, "battery.max_charge_kw"
                 )
                 discharge_kw = sampler.sample_with_context(
-                    config.battery.max_discharge_kw, context
+                    config.battery.max_discharge_kw, context, "battery.max_discharge_kw"
                 )
                 battery_config = BatteryConfig(
                     capacity_kwh=battery_capacity,
@@ -1799,8 +1789,12 @@ def generate_homes_from_distribution(
                 )
 
         # Sample load parameters
-        annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
-        occupants_draw = sampler.sample_count(config.load.household_occupants)
+        annual_consumption = sampler.sample(
+            config.load.annual_consumption_kwh, "load.annual_consumption_kwh"
+        )
+        occupants_draw = sampler.sample_count(
+            config.load.household_occupants, "load.household_occupants"
+        )
 
         # Derive per-home seed for reproducible stochastic load profiles
         home_seed: Optional[int] = None
@@ -1828,7 +1822,9 @@ def generate_homes_from_distribution(
             elif isinstance(config.heat_pump.heat_pump_type, WeightedDiscreteDistribution):
                 # Sample from distribution (values can include None)
                 # Note: WeightedDiscreteDistribution is typed for floats but used with strings here
-                heat_pump_type = sampler.sample(config.heat_pump.heat_pump_type)  # type: ignore[assignment]
+                heat_pump_type = sampler.sample(  # type: ignore[assignment]
+                    config.heat_pump.heat_pump_type, "heat_pump.heat_pump_type"
+                )
             else:
                 heat_pump_type = None
 
@@ -1844,10 +1840,10 @@ def generate_homes_from_distribution(
                 heat_pump_type_literal = cast(Literal['ASHP', 'GSHP'], heat_pump_type)
 
                 thermal_capacity = sampler.sample_with_context(
-                    config.heat_pump.thermal_capacity_kw, context
+                    config.heat_pump.thermal_capacity_kw, context, "heat_pump.thermal_capacity_kw"
                 )
                 annual_heat_demand = sampler.sample_with_context(
-                    config.heat_pump.annual_heat_demand_kwh, context
+                    config.heat_pump.annual_heat_demand_kwh, context, "heat_pump.annual_heat_demand_kwh"
                 )
                 heat_pump_config = HeatPumpConfig(
                     heat_pump_type=heat_pump_type_literal,
@@ -1858,11 +1854,13 @@ def generate_homes_from_distribution(
         # Sample EV parameters (may be None)
         ev_config: Optional[EVConfig] = None
         if config.ev is not None:
-            charger_type = sampler.sample(config.ev.charger_type)
+            charger_type = sampler.sample(config.ev.charger_type, "ev.charger_type")
             if charger_type is not None:
-                arrival_hour_val = sampler.sample(config.ev.arrival_hour)
-                departure_hour_val = sampler.sample(config.ev.departure_hour)
-                required_charge_val = sampler.sample(config.ev.required_charge_kwh)
+                arrival_hour_val = sampler.sample(config.ev.arrival_hour, "ev.arrival_hour")
+                departure_hour_val = sampler.sample(config.ev.departure_hour, "ev.departure_hour")
+                required_charge_val = sampler.sample(
+                    config.ev.required_charge_kwh, "ev.required_charge_kwh"
+                )
 
                 ev_config = EVConfig(
                     charger_type=str(charger_type),

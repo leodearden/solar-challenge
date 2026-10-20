@@ -1,0 +1,12 @@
+name: Probe - pooled heat-pump type in default order
+fleet_distribution:
+  n_homes: 20
+  seed: 17
+  pv:
+    capacity_kw: {type: shuffled_pool, values: [3.0, 4.0, 5.0], counts: [6, 8, 6]}
+  load:
+    annual_consumption_kwh: {type: normal, mean: 3400, std: 800, min: 2000, max: 6000}
+  heat_pump:
+    heat_pump_type: {type: shuffled_pool, values: [null, ASHP, GSHP], counts: [8, 8, 4]}
+  ev:
+    charger_type: {type: shuffled_pool, values: [null, 7kW], counts: [12, 8]}
