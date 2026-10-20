@@ -39,6 +39,7 @@ from solar_challenge.web.jobs import JobEvent, JobEventType
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number_within
 from solar_challenge.web.presets import (
     PresetNameTaken,
+    SavedPresetUnreadable,
     home_preset_named,
     home_presets,
     save_config_preset,
@@ -963,8 +964,8 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
 
     Returns:
         JSON preset object, HTTP 200; or the ``error``: HTTP 404 when neither is named *name*,
-        so a saved home preset's name is not found, and HTTP 500 for a built-in file that does
-        not parse.
+        so a saved home preset's name is not found; HTTP 500 for a built-in file that does not
+        parse; HTTP 500, with the fault logged, for a saved preset that cannot be read.
     """
     # Try built-in scenarios directory
     path = builtin_scenario_files().get(name)
@@ -978,7 +979,11 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
             }), 200
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
-    preset = saved_fleet_preset_named(get_database(), name)
+    try:
+        preset = saved_fleet_preset_named(get_database(), name)
+    except SavedPresetUnreadable as unreadable:
+        logger.exception("%s", unreadable)
+        return jsonify({"error": str(unreadable)}), 500
     if preset is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return jsonify(preset), 200

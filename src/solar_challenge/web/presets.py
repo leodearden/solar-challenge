@@ -40,6 +40,16 @@ class PresetNameTaken(ValueError):
         )
 
 
+class SavedPresetUnreadable(Exception):
+    """A saved preset that cannot be read; the message names the preset and the fault.
+
+    It is not a ValueError: no request causes it, so it is a server fault, never a refused request.
+    """
+
+    def __init__(self, name: str, fault: str) -> None:
+        super().__init__(f"Saved preset {name!r} could not be read: {fault}")
+
+
 def save_config_preset(
     database: Database, name: str, preset_type: PresetType, config: Mapping[str, Any]
 ) -> str:
@@ -136,15 +146,25 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
 
     None when no saved fleet preset is named *name*. A config stored as NULL or empty text
     reads as {}.
+
+    Raises:
+        SavedPresetUnreadable: When the database cannot be read, or the preset's config is not JSON.
     """
-    with database.transaction() as conn:
-        row = conn.execute(
-            "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = 'fleet'",
-            (name,),
-        ).fetchone()
+    try:
+        with database.transaction() as conn:
+            row = conn.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = 'fleet'",
+                (name,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise SavedPresetUnreadable(name, str(exc)) from exc
     if row is None:
         return None
-    return {**_listed_saved_fleet_preset(row), "config": json.loads(row["config_json"]) if row["config_json"] else {}}
+    try:
+        config = json.loads(row["config_json"]) if row["config_json"] else {}
+    except ValueError as exc:
+        raise SavedPresetUnreadable(name, "its config is not JSON") from exc
+    return {**_listed_saved_fleet_preset(row), "config": config}
 
 
 def _listed_saved_fleet_preset(row: sqlite3.Row) -> dict[str, Any]:
