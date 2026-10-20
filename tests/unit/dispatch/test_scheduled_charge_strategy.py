@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.config import GridChargeConfig
 from solar_challenge.dispatch import (
     ChargeWindow,
     DispatchDecision,
@@ -21,13 +23,19 @@ from solar_challenge.dispatch import (
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
+    compute_grid_charge_power_kw,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep
+from solar_challenge.tariff import TariffConfig
 
 _NIGHTLY = ChargeWindow("daily", time(0, 30), timedelta(hours=7), 0.9, allow_discharge=False)
 """Every night from 00:30 for 7 hours, to 0.9 of the battery's capacity, holding at the target."""
 
 _LONDON = ZoneInfo("Europe/London")
+
+_TWO_AM_BST = datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON)
+"""A moment inside the nightly window."""
 
 _FLAT_RATE_CTX = GridChargeContext(
     current_rate=0.25,
@@ -104,18 +112,24 @@ def _decide(
     generation_kw: float = 0.0,
     demand_kw: float = 0.0,
     battery_soc_kwh: float = 2.0,
+    battery_capacity_kwh: float = 5.0,
     grid_charge_ctx: Optional[GridChargeContext] = None,
 ) -> DispatchDecision:
-    """strategy's decision for a one-minute step on a 5.0 kWh battery."""
+    """strategy's decision for a one-minute step, on a 5.0 kWh battery unless battery_capacity_kwh says otherwise."""
     return strategy.decide_action(
         timestamp=timestamp,
         generation_kw=generation_kw,
         demand_kw=demand_kw,
         battery_soc_kwh=battery_soc_kwh,
-        battery_capacity_kwh=5.0,
+        battery_capacity_kwh=battery_capacity_kwh,
         timestep_minutes=1.0,
         grid_charge_ctx=grid_charge_ctx,
     )
+
+
+def _over_self_consumption(*windows: ChargeWindow) -> ScheduledChargeStrategy:
+    """windows on London's wall clock, over SelfConsumptionStrategy."""
+    return ScheduledChargeStrategy(SelfConsumptionStrategy(), windows, _LONDON)
 
 
 class TestChargeWindow:
@@ -227,23 +241,19 @@ class TestScheduledChargeStrategyWindows:
     def test_inside_a_window_the_base_is_not_consulted(self) -> None:
         base = _base()
 
-        _decide(ScheduledChargeStrategy(base, (_NIGHTLY,), _LONDON), datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON))
+        _decide(ScheduledChargeStrategy(base, (_NIGHTLY,), _LONDON), _TWO_AM_BST)
 
         assert base.calls == []
 
     def test_a_window_with_no_grid_charge_context_holds_through_a_shortfall(self) -> None:
         """SelfConsumptionStrategy would discharge 1.0 kW; the window keeps the charge."""
-        two_am = datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON)
-        strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), (_NIGHTLY,), _LONDON)
+        strategy = _over_self_consumption(_NIGHTLY)
 
-        assert _decide(SelfConsumptionStrategy(), two_am, demand_kw=1.0) == DispatchDecision(0.0, 1.0)
-        assert _decide(strategy, two_am, demand_kw=1.0) == DispatchDecision(0.0, 0.0, 0.0)
+        assert _decide(SelfConsumptionStrategy(), _TWO_AM_BST, demand_kw=1.0) == DispatchDecision(0.0, 1.0)
+        assert _decide(strategy, _TWO_AM_BST, demand_kw=1.0) == DispatchDecision(0.0, 0.0, 0.0)
 
     def test_a_window_charges_the_pv_excess(self) -> None:
-        two_am = datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON)
-        strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), (_NIGHTLY,), _LONDON)
-
-        decision = _decide(strategy, two_am, generation_kw=2.0, demand_kw=0.5)
+        decision = _decide(_over_self_consumption(_NIGHTLY), _TWO_AM_BST, generation_kw=2.0, demand_kw=0.5)
 
         assert (decision.charge_kw, decision.discharge_kw) == (1.5, 0.0)
 
@@ -307,7 +317,7 @@ class TestScheduledChargeStrategyWindows:
         "timestamp",
         [
             pytest.param(datetime(2024, 7, 1, 0, 30, tzinfo=_LONDON), id="00:30"),
-            pytest.param(datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON), id="02:00"),
+            pytest.param(_TWO_AM_BST, id="02:00"),
             pytest.param(datetime(2024, 7, 1, 12, 0, tzinfo=_LONDON), id="12:00"),
         ],
     )
@@ -345,6 +355,182 @@ class TestScheduledChargeStrategyInputs:
 
         with pytest.raises(ValueError, match=message):
             ScheduledChargeStrategy(base, (_NIGHTLY,), _LONDON).decide_action(
-                timestamp=datetime(2024, 7, 1, 2, 0, tzinfo=_LONDON), **(arguments | {argument: value})
+                timestamp=_TWO_AM_BST, **(arguments | {argument: value})
             )
         assert base.calls == []
+
+
+class TestScheduledChargeStrategyGridCharge:
+    """Offered a grid-charge context, a window grid-charges whatever the rates: to its target after the step's PV charge, within the max_charge_kw headroom that PV charge leaves."""
+
+    def test_it_grid_charges_where_both_rate_gates_refuse(self) -> None:
+        """2.0 kWh of 5.0 is 2.5 kWh short of the 0.9 target, more than the 2.5 kW cap can fill in a minute."""
+        decision = _decide(
+            _over_self_consumption(_NIGHTLY),
+            _TWO_AM_BST,
+            demand_kw=0.5,
+            battery_soc_kwh=2.0,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert compute_grid_charge_power_kw(
+            _FLAT_RATE_CTX, battery_soc_kwh=2.0, capacity_kwh=5.0, pv_charge_power_kw=0.0, timestep_minutes=1.0
+        ) == 0.0
+        assert decision == DispatchDecision(charge_kw=0.0, discharge_kw=0.0, grid_charge_kw=2.5)
+
+    def test_it_fills_the_gap_the_steps_pv_charge_leaves_to_the_target(self) -> None:
+        """At 4.47 kWh a 0.6 kW excess stores 0.6/60 × 0.975 kWh; the grid stores the rest of the way to 4.5 kWh, at about 1.246 kW, under the 1.9 kW headroom."""
+        decision = _decide(
+            _over_self_consumption(_NIGHTLY),
+            _TWO_AM_BST,
+            generation_kw=0.6,
+            battery_soc_kwh=4.47,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision.charge_kw == 0.6
+        assert decision.grid_charge_kw == pytest.approx((4.5 - (4.47 + 0.6 / 60 * 0.975)) / 0.975 * 60, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("excess_kw", "grid_charge_kw"),
+        [
+            pytest.param(1.0, 1.5, id="1.0-kW-excess-leaves-1.5-kW"),
+            pytest.param(3.0, 0.0, id="3.0-kW-excess-leaves-none"),
+        ],
+    )
+    def test_the_grid_charges_within_the_headroom_the_pv_charge_leaves(
+        self, excess_kw: float, grid_charge_kw: float
+    ) -> None:
+        decision = _decide(
+            _over_self_consumption(_NIGHTLY),
+            _TWO_AM_BST,
+            generation_kw=excess_kw,
+            battery_soc_kwh=2.0,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision.grid_charge_kw == pytest.approx(grid_charge_kw)
+
+    @pytest.mark.parametrize(
+        "battery_soc_kwh",
+        [
+            pytest.param(4.5, id="at-the-target"),
+            pytest.param(4.6, id="above-the-target"),
+        ],
+    )
+    def test_at_or_above_its_target_a_window_holds(self, battery_soc_kwh: float) -> None:
+        decision = _decide(
+            _over_self_consumption(_NIGHTLY),
+            _TWO_AM_BST,
+            demand_kw=0.5,
+            battery_soc_kwh=battery_soc_kwh,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision == DispatchDecision(charge_kw=0.0, discharge_kw=0.0, grid_charge_kw=0.0)
+
+    def test_offered_no_grid_charge_context_a_window_never_grid_charges(self) -> None:
+        decision = _decide(_over_self_consumption(_NIGHTLY), _TWO_AM_BST, demand_kw=0.5, battery_soc_kwh=2.0)
+
+        assert decision.grid_charge_kw == 0.0
+
+    @pytest.mark.parametrize(
+        ("battery_soc_kwh", "grid_charge_kw"),
+        [
+            pytest.param(3.48, 0.02 / 0.975 * 60, id="0.02-kWh-short"),
+            pytest.param(3.5, 0.0, id="at-the-target"),
+        ],
+    )
+    def test_the_target_is_a_fraction_of_the_capacity_decide_action_is_given(
+        self, battery_soc_kwh: float, grid_charge_kw: float
+    ) -> None:
+        """7.0 kWh is a 10 kWh battery's capacity at SoH 0.7, so its 0.5 target is 3.5 kWh; the nominal 10 kWh's would be 5.0 kWh, which the 2.5 kW cap could not fill in a minute."""
+        half = dataclasses.replace(_NIGHTLY, target_soc_fraction=0.5)
+
+        decision = _decide(
+            _over_self_consumption(half),
+            _TWO_AM_BST,
+            battery_soc_kwh=battery_soc_kwh,
+            battery_capacity_kwh=7.0,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision.grid_charge_kw == pytest.approx(grid_charge_kw, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("targets", "grid_charges"),
+        [
+            pytest.param((0.5, 0.9), False, id="0.5-listed-first-holds"),
+            pytest.param((0.9, 0.5), True, id="0.9-listed-first-charges"),
+        ],
+    )
+    def test_the_first_listed_open_window_governs_an_overlap(
+        self, targets: tuple[float, float], grid_charges: bool
+    ) -> None:
+        """At 3.0 kWh of 5.0 the battery is above a 0.5 target and below a 0.9 one."""
+        windows = [dataclasses.replace(_NIGHTLY, target_soc_fraction=target) for target in targets]
+
+        decision = _decide(
+            _over_self_consumption(*windows), _TWO_AM_BST, battery_soc_kwh=3.0, grid_charge_ctx=_FLAT_RATE_CTX
+        )
+
+        assert (decision.grid_charge_kw > 0.0) is grid_charges
+
+
+_GRID_CHARGING_BATTERY = BatteryConfig(5.0, max_charge_kw=2.5, grid_charging=GridChargeConfig(0.9))
+"""A 5.0 kWh battery that grid-charges, so the engine offers its strategy a grid-charge context on a tariff."""
+
+
+def _window_minutes(
+    battery: Battery,
+    strategy: DispatchStrategy,
+    *,
+    minutes: int,
+    generation_kw: float = 0.0,
+    demand_kw: float = 0.0,
+) -> list[EnergyFlowResult]:
+    """Each flow of minutes one-minute steps from 00:30 on 2024-01-15 in London, as the nightly window opens, through simulate_timestep on Economy 7."""
+    opens = datetime(2024, 1, 15, 0, 30, tzinfo=_LONDON)
+    return [
+        simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=battery,
+            timestep_minutes=1.0,
+            timestamp=opens + timedelta(minutes=minute),
+            strategy=strategy,
+            tariff=TariffConfig.economy_7(),
+        )
+        for minute in range(minutes)
+    ]
+
+
+class TestScheduledChargeStrategyThroughTheEngine:
+    """Through flow.simulate_timestep, a window's grid charge reaches its target and no further than max_charge_kw and max_soc_fraction allow."""
+
+    def test_a_window_minute_fills_the_battery_to_its_target(self) -> None:
+        """From 4.47 kWh, with no PV and 0.3 kW demand, the 0.03 kWh gap to 4.5 kWh needs 1.846 kW, under the 2.5 kW cap."""
+        battery = Battery(_GRID_CHARGING_BATTERY, initial_soc_kwh=4.47)
+
+        _window_minutes(battery, _over_self_consumption(_NIGHTLY), minutes=1, demand_kw=0.3)
+
+        assert battery.soc_kwh == pytest.approx(4.5, abs=1e-12)
+
+    def test_the_pv_and_grid_charge_share_max_charge_kw(self) -> None:
+        battery = Battery(_GRID_CHARGING_BATTERY, initial_soc_kwh=2.0)
+
+        (flow,) = _window_minutes(battery, _over_self_consumption(_NIGHTLY), minutes=1, generation_kw=1.0)
+
+        assert flow.grid_charge > 0.0
+        assert flow.battery_charge <= 2.5 / 60 * 0.975 + 1e-12
+
+    def test_a_target_above_max_soc_fraction_stores_nothing_past_max_soc_kwh(self) -> None:
+        """A window to 0.95 asks for grid power into a battery its 0.9 max_soc_fraction has filled; the battery stores none, so the step imports its shortfall alone."""
+        battery = Battery(_GRID_CHARGING_BATTERY)
+        to_095 = dataclasses.replace(_NIGHTLY, target_soc_fraction=0.95)
+
+        flows = _window_minutes(battery, _over_self_consumption(to_095), minutes=240, demand_kw=0.3)
+
+        assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
+        assert flows[-1].grid_charge == 0.0
+        assert flows[-1].grid_import == pytest.approx(0.3 / 60)
