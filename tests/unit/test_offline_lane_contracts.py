@@ -17,7 +17,7 @@ import pytest
 
 from tests._collect_only import requires_uv
 from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
-from tests._orchestrator_config import git_config, lane_job_enabled, offline_lane_jobs, sole_offline_lane_job
+from tests._orchestrator_config import git_config, lane_command, offline_lane_jobs
 
 
 class LaneContract(Enum):
@@ -114,10 +114,8 @@ def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: Path) -> None:
-    """The offline lane runs exactly one job of the row's name, and it is enabled."""
-    lane_job = sole_offline_lane_job(project_root, job.name)
-
-    assert lane_job_enabled(lane_job), f"the {job.name!r} lane job is disabled, so {job.if_unrun}"
+    """The offline lane runs exactly one job of the row's name, and it is enabled: lane_command's asserts are the check."""
+    lane_command(project_root, job.name)
 
 
 def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> None:
