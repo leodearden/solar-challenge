@@ -300,18 +300,22 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
             _modelled_settings(pools, consumptions, index) for index in range(12)
         ]
 
-    def test_a_random_order_outside_the_two_is_refused(self) -> None:
-        """A fleet's random order is one of the two, and the refusal names both."""
+    @pytest.mark.parametrize(
+        "random_order",
+        [pytest.param("shuffled", id="another-name"), pytest.param(["default"], id="a-yaml-list")],
+    )
+    def test_a_random_order_outside_the_two_is_refused(self, random_order: object) -> None:
+        """A fleet's random order is one of the two by name, and the refusal names both."""
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(
                 n_homes=1,
                 pv=PVDistributionConfig(capacity_kw=4.0),
                 load=LoadDistributionConfig(),
-                random_order="shuffled",
+                random_order=random_order,
             )
 
         assert str(refusal.value) == (
-            "FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', got 'shuffled'"
+            f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', got '{random_order}'"
         )
 
 
