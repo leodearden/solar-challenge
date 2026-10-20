@@ -155,12 +155,26 @@ saving_pct               = 100 × saving_vs_baseline_gbp / baseline_bill_gbp
 
 self_consumption_saving_gbp = own_use_kwh × (retail_rate − own_use_rate)
                               × (1 + vat_rate) / 100
+
+self_consumption_fraction   = own_use_kwh / generation_kwh
+                              (0.0 when generation_kwh is 0)
 ```
 
 The CBS invoices `cbs_amount_due_gbp` — the own-use payment plus VAT on it, and
 nothing else — while `total_outlay_gbp` remains the household's whole-picture
 annual outlay: import cost and standing charge are paid to the retailer and
 appear on the CBS statement as context only (Leo's ruling, 2026-09-21).
+
+`self_consumption_fraction` is the bill's own identity, not the results pages'
+Self-Consumption Ratio (`SummaryStatistics.self_consumption_ratio`, `home.py`), though
+both divide by generation and give 0.0 when it is 0.  Its numerator is the own-use the
+bill charges: basis C (§2), or the override's capped own-use (below).  The ratio's
+numerator is the physics `self_consumption` series, which counts grid-charged battery
+discharge (§2), so the two agree only on a physics-path home that never grid-charges.
+A change to the fraction's rule is made in `bill()` and in this section, and listed in
+this document's header; a change to how the results pages show a home without
+generation leaves the bill unchanged.  The zero-generation case is pinned by
+`tests/integration/test_finance_bill.py::TestBillCore::test_generation_zero_gives_a_zero_self_consumption_fraction`.
 
 **H3 board identity** (holds when import is priced at retail, import_kwh = demand − own_use_kwh):
 
