@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 import yaml
 pytest.importorskip("flask")
+from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.config import (
@@ -28,6 +29,7 @@ from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import traces
+from tests._web_app import point_store_config_at_a_missing_directory
 
 
 class TestScenarioBuilderRoute:
@@ -492,6 +494,18 @@ class TestScenarioAPI:
             "builtin",
             "Bristol Phase 1",
         )
+
+    def test_saved_scenario_presets_are_listed_and_found_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """The scenario preset list and lookup read the Database create_app built, whatever the app's store config names afterwards."""
+        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        listed = client.get("/api/scenarios/presets").get_json()["presets"]
+        assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["Fleet"]
+        found = client.get("/api/scenarios/presets/Fleet")
+        assert (found.status_code, found.get_json()["config"]) == (200, {"n_homes": 9})
 
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:

@@ -126,11 +126,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         app.secret_key = _get_secret_key(default_data_dir)
 
     # Initialize database with configured path
-    db_path = app.config["DATABASE"]
-    init_db(db_path)
+    database = init_db(Path(app.config["DATABASE"]))
+    app.extensions["database"] = database
 
     # Initialize RunStorage singleton
-    storage = RunStorage(db_path=db_path, data_dir=app.config["DATA_DIR"])
+    storage = RunStorage(database, app.config["DATA_DIR"])
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution
@@ -138,7 +138,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.extensions["job_manager"] = job_manager
 
     # Recover jobs stuck from previous server shutdown
-    recovered = recover_stale_jobs(db_path)
+    recovered = recover_stale_jobs(database)
     if recovered:
         logger.info("Recovered %d stale jobs on startup", recovered)
 

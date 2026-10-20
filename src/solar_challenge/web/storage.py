@@ -31,7 +31,7 @@ import pandas as pd
 import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType, get_db
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, Database, RunStatus, RunType
 
 T = TypeVar("T")
 
@@ -290,18 +290,18 @@ class RunStorage:
     Manages persistence of simulation results to filesystem and SQLite database.
 
     Attributes:
-        db_path: Path to SQLite database file
+        database: The Database holding the runs table
         data_dir: Root directory for run data files
     """
 
-    def __init__(self, db_path: str | Path, data_dir: str | Path):
+    def __init__(self, database: Database, data_dir: str | Path):
         """Initialize storage service.
 
         Args:
-            db_path: Path to SQLite database file
+            database: The Database holding the runs table
             data_dir: Root directory for storing run data
         """
-        self.db_path = Path(db_path)
+        self.database = database
         self.data_dir = Path(data_dir)
 
     def _validate_run_id(self, run_id: str) -> None:
@@ -364,7 +364,7 @@ class RunStorage:
         them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
         runs keeps the new name when the job's save rewrites its row.
         """
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
 
     def save_home_run(
@@ -706,7 +706,7 @@ class RunStorage:
 
     def run_record(self, run_id: str) -> RunRecord | None:
         """The record of run *run_id*: its row in the runs table. None when no run has that id."""
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return _record_of_row(row)
 
@@ -720,7 +720,7 @@ class RunStorage:
 
     def latest_run_named(self, name: str) -> RunRecord | None:
         """The run named *name* that was created last. None when no run has that name."""
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1", (name,)
             ).fetchone()
@@ -740,7 +740,7 @@ class RunStorage:
         unknown = sorted(set(labels) - set(RUN_LABELS))
         if unknown:
             raise ValueError(f"Not run labels: {unknown}; the run labels are {list(RUN_LABELS)}")
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             for label, value in labels.items():
                 conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
         return self.run_record(run_id)
@@ -765,7 +765,7 @@ class RunStorage:
         Returns:
             List of run metadata dictionaries with keys matching the database schema
         """
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             cursor = conn.cursor()
 
             # Build query with optional filters
@@ -816,7 +816,7 @@ class RunStorage:
         run_dir = self._get_run_dir(run_id)
 
         # Delete from database first
-        with get_db(self.db_path) as conn:
+        with self.database.transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         # Delete run directory and all files

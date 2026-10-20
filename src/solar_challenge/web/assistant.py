@@ -26,15 +26,15 @@ from types import MappingProxyType
 from typing import Any, Generator, assert_never
 from uuid import uuid4
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, session
+from flask import Blueprint, Response, jsonify, render_template, session
 from flask.typing import ResponseReturnValue
 
-from solar_challenge.web import database
+from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
-from solar_challenge.web.shared import get_job_manager, get_storage
+from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_DAYS_SENTINEL,
@@ -369,7 +369,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
 
 
-def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
+def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
     """Return a list of recent simulation runs, newest first.
 
     Read-only SELECT on the runs table; limit is clamped to [1, 50] so callers
@@ -377,9 +377,9 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
     summary metrics for each run.
 
     Args:
-        limit:   Maximum number of runs to return (clamped to 1–50; defaults to
-                 10 when <= 0).
-        db_path: Path to the SQLite database file.
+        limit:    Maximum number of runs to return (clamped to 1–50; defaults to
+                  10 when <= 0).
+        database: The Database whose runs table is read.
 
     Returns:
         ``{"runs": [...]}`` where each entry has ``run_id``, ``name``, ``type``,
@@ -394,7 +394,7 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
     effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
 
     try:
-        with database.get_db(db_path) as conn:
+        with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, type, status, created_at, n_homes, summary_json "
@@ -541,13 +541,13 @@ def run_fleet_simulation(
 class ToolContext:
     """The collaborators a tool call runs with.
 
-    *db_path* is the database the lookup tools read and submitted jobs record
-    their runs in, *data_dir* the root of submitted runs' artefacts, and
-    *job_manager* the app's JobManager, which the trigger tools submit jobs to.
+    *storage* is the app's RunStorage: the lookup tools read its runs, and the
+    jobs the trigger tools submit record their runs in its database and their
+    artefacts under its data_dir. *job_manager* is the app's JobManager, which
+    the trigger tools submit jobs to.
     """
 
-    db_path: "str | Path"
-    data_dir: "str | Path"
+    storage: RunStorage
     job_manager: JobManager
 
 
@@ -608,18 +608,20 @@ def _call_get_run_results(tool_input: Mapping[str, Any], context: ToolContext) -
     """Answer a get_run_results call: look up the run *tool_input* names among *context*'s runs."""
     return get_run_results(
         _as_text(tool_input["run_id_or_name"], "run_id_or_name"),
-        RunStorage(db_path=context.db_path, data_dir=context.data_dir),
+        context.storage,
     )
 
 
 def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a list_recent_runs call: list *context*'s latest runs, up to the limit *tool_input* sends."""
-    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.db_path)
+    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.storage.database)
 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a run_home_simulation call: submit the home *tool_input* describes to *context*'s JobManager."""
-    return run_home_simulation(tool_input, context.job_manager, context.db_path, context.data_dir)
+    return run_home_simulation(
+        tool_input, context.job_manager, context.storage.database.path, context.storage.data_dir
+    )
 
 
 def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -629,8 +631,8 @@ def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolConte
         as_whole_number(tool_input["n_homes"], "n_homes"),
         per_home,
         context.job_manager,
-        context.db_path,
-        context.data_dir,
+        context.storage.database.path,
+        context.storage.data_dir,
     )
 
 
@@ -894,8 +896,7 @@ def chat_history() -> ResponseReturnValue:
         ``role``, ``content``, ``created_at``, and ``metadata`` keys.
     """
     sid = _session_id()
-    db_path = current_app.config["DATABASE"]
-    messages = database.get_chat_history(db_path, sid)
+    messages = get_chat_history(get_database(), sid)
     return jsonify({"messages": messages})
 
 
@@ -1141,13 +1142,13 @@ def _failed(error: Exception) -> _TurnEnding:
 class _TurnRecorder:
     """Stores one chat turn in the session's chat_messages rows: the user's message, then the reply."""
 
-    db_path: "str | Path"
+    database: Database
     session_id: str
     model: str
 
     def store_user_message(self, text: str) -> None:
         """Store *text* as the turn's user row."""
-        database.save_chat_message(self.db_path, self.session_id, "user", text)
+        save_chat_message(self.database, self.session_id, "user", text)
 
     def store_reply(self, record: _ReplyRecord, ending: _TurnEnding) -> None:
         """Store the turn's one reply row: *record*'s text, or *ending*'s stand-in when it has none.
@@ -1158,8 +1159,8 @@ class _TurnRecorder:
         metadata: dict[str, Any] = {**record.cache_usage, "model": self.model} if record.cache_usage else {}
         if record.tools_run:
             metadata["invoked_tools"] = list(record.tools_run)
-        database.save_chat_message(
-            self.db_path,
+        save_chat_message(
+            self.database,
             self.session_id,
             "assistant",
             record.reply if _has_text(record.reply) else ending.stand_in,
@@ -1219,24 +1220,23 @@ def _refused_turn(reason: str) -> Response:
 def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
     """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
 
-    The run *run_id* names, if any, is the turn's context. This reads the app's
-    config, the session and the app's extensions, in the request; the frames it
-    returns read none of them, so the stream needs no request context.
+    The run *run_id* names, if any, is the turn's context. This reads the
+    session and the app's extensions, in the request; the frames it returns
+    read neither, so the stream needs no request context.
     """
-    db_path = current_app.config["DATABASE"]
+    database = get_database()
+    storage = get_storage()
     session_id = _session_id()
     model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
     messages = request_messages(
-        database.get_chat_history(db_path, session_id), user_message, _run_context(run_id, get_storage())
+        get_chat_history(database, session_id), user_message, _run_context(run_id, storage)
     )
-    context = ToolContext(
-        db_path=db_path, data_dir=current_app.config["DATA_DIR"], job_manager=get_job_manager()
-    )
+    context = ToolContext(storage=storage, job_manager=get_job_manager())
     run_tool = partial(dispatch_tool, context=context)
     return _turn_frames(
         user_message,
         _reply_events(client, _model_request(model, messages), run_tool),
-        _TurnRecorder(db_path, session_id, model),
+        _TurnRecorder(database, session_id, model),
     )
 
 

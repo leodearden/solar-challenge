@@ -34,12 +34,14 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
+from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
 from tests._sse import SseFrame, parse_sse_events
+from tests._web_app import point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -63,8 +65,7 @@ def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
     *overrides* replace individual fields for those that do.
     """
     defaults = ToolContext(
-        db_path=tmp_path / "assistant.db",
-        data_dir=tmp_path,
+        storage=RunStorage(Database(tmp_path / "assistant.db"), tmp_path),
         job_manager=autospecced_job_manager(),
     )
     return replace(defaults, **overrides)
@@ -502,8 +503,8 @@ class TestRunLookupToolSurface:
             f"list_recent_runs must require 'limit'; got {lrr_required}"
         )
 
-    def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
-        """dispatch_tool('get_run_results', {...}) with the seeded db_path in its context returns same dict as handler."""
+    def test_dispatch_get_run_results_with_storage(self, tmp_path: Path) -> None:
+        """dispatch_tool('get_run_results', {...}) with the seeded storage in its context returns the handler's dict."""
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
             db_path,
@@ -513,18 +514,19 @@ class TestRunLookupToolSurface:
             created_at="2026-04-01T10:00:00+00:00",
             summary={"total_generation_kwh": 500.0},
         )
+        storage = RunStorage(Database(db_path), tmp_path)
 
         result = dispatch_tool(
             "get_run_results",
             {"run_id_or_name": "disp-run-001"},
-            tool_context(tmp_path, db_path=str(db_path)),
+            tool_context(tmp_path, storage=storage),
         )
-        expected = get_run_results("disp-run-001", RunStorage(db_path=db_path, data_dir=tmp_path))
+        expected = get_run_results("disp-run-001", storage)
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
-    def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
-        """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded db_path in its context returns same dict as handler."""
+    def test_dispatch_list_recent_runs_with_storage(self, tmp_path: Path) -> None:
+        """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded storage in its context returns the handler's dict."""
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
             db_path,
@@ -538,9 +540,9 @@ class TestRunLookupToolSurface:
         result = dispatch_tool(
             "list_recent_runs",
             {"limit": 5},
-            tool_context(tmp_path, db_path=str(db_path)),
+            tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)),
         )
-        expected = list_recent_runs(5, db_path)
+        expected = list_recent_runs(5, Database(db_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
@@ -559,10 +561,10 @@ class TestRunLookupToolSurface:
             summary={"self_consumption_ratio": 0.5},
         )
 
-        result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, db_path=db_path))
+        result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)))
 
         assert "error" not in result, f"Expected runs, not an error; got {result!r}"
-        assert result == list_recent_runs(0, db_path)
+        assert result == list_recent_runs(0, Database(db_path))
 
     def test_end_to_end_get_run_results_tool_use_signal(
         self,
@@ -883,6 +885,31 @@ class TestSimulationToolUseSignal:
             f"Expected '{expected_url}' in tool_result content.\n"
             f"Content: {result_content!r}"
         )
+
+    def test_a_trigger_tool_submits_its_job_to_the_apps_store_after_its_store_config_names_a_missing_directory(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        tmp_path: Path,
+    ) -> None:
+        """A trigger tool submits its job against the database and run directory create_app built,
+        whatever the app's store config names afterwards."""
+        apps_store = (app.config["DATABASE"], app.config["DATA_DIR"])
+        jm = autospecced_job_manager()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+        app.extensions["job_manager"] = jm
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_rhs_moved_store_001", "run_home_simulation", {"pv_kw": 4, "days": 7}),
+            make_end_turn_stream(["Started your run."]),
+        ])
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        client.post("/assistant/chat", json={"message": "run a 4 kW home for 7 days"}).get_data(as_text=True)
+
+        jm.submit_home_job.assert_called_once()
+        submitted = jm.submit_home_job.call_args.kwargs
+        assert (submitted["db_path"], submitted["data_dir"]) == apps_store
 
     @pytest.mark.parametrize(
         ("tool_name", "tool_input"),

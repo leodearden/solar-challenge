@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
@@ -18,7 +19,7 @@ from solar_challenge.web.charts import (
     fleet_heatmap,
     power_flow_timeline,
 )
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
@@ -31,7 +32,7 @@ def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) ->
     """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
     run_id = str(uuid.uuid4())
     store_fleet_run(
-        RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]),
+        RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"]),
         run_id,
         fleet,
         name=name,
@@ -301,7 +302,7 @@ class TestFleetResultsRoute:
         run_id = _save_fleet_run(
             app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         response = client.get(f"/results/fleet/{run_id}")

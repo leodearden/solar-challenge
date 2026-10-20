@@ -21,9 +21,7 @@ from tests._web_runs import store_fleet_run, store_home_run
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
     """An empty RunStorage under tmp_path, with the schema init_db creates."""
-    storage = RunStorage(db_path=tmp_path / "runs.db", data_dir=tmp_path)
-    init_db(storage.db_path)
-    return storage
+    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path)
 
 
 def _two_unlike_homes() -> FleetResults:
@@ -66,7 +64,7 @@ def _summaries_a_finished_fleet_job_saves(
         configs=fleet.home_configs,
         start_date=_JUNE_1,
         end_date=_JUNE_2,
-        db_path=str(storage.db_path),
+        db_path=str(storage.database.path),
         data_dir=str(storage.data_dir),
     )
     _wait_until_completed(manager, job_id)
@@ -83,7 +81,7 @@ def _summary_a_finished_home_job_saves(
         config=config,
         start_date=_JUNE_1,
         end_date=_JUNE_2,
-        db_path=str(storage.db_path),
+        db_path=str(storage.database.path),
         data_dir=str(storage.data_dir),
     )
     _wait_until_completed(manager, job_id)

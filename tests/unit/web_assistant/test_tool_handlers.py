@@ -21,7 +21,7 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.storage import RunStorage
 
@@ -198,7 +198,7 @@ class TestSuggestConfig:
 
 def _storage(db_path: Path) -> RunStorage:
     """The RunStorage over the database at *db_path*, its run files beside it."""
-    return RunStorage(db_path=db_path, data_dir=db_path.parent)
+    return RunStorage(Database(db_path), db_path.parent)
 
 
 class TestGetRunResults:
@@ -318,7 +318,7 @@ class TestGetRunResults:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
         db_path = tmp_path / "grr_null_summary.db"
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -342,7 +342,7 @@ class TestGetRunResults:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", RunStorage(db_path=bad_path, data_dir=tmp_path))
+            result = get_run_results("any-run-id", RunStorage(Database(bad_path), tmp_path))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -355,7 +355,7 @@ class TestGetRunResults:
 
 
 class TestListRecentRuns:
-    """Tests for list_recent_runs(limit, db_path) -> dict."""
+    """Tests for list_recent_runs(limit, database) -> dict."""
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
@@ -371,7 +371,7 @@ class TestListRecentRuns:
                 summary={"total_generation_kwh": float(i * 100)},
             )
 
-        result = list_recent_runs(3, db_path)
+        result = list_recent_runs(3, Database(db_path))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -400,7 +400,7 @@ class TestListRecentRuns:
             summary={"self_consumption_ratio": 0.70},
         )
 
-        result = list_recent_runs(10, db_path)
+        result = list_recent_runs(10, Database(db_path))
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -419,7 +419,7 @@ class TestListRecentRuns:
         init_db(db_path)
 
         try:
-            result = list_recent_runs(10, db_path)
+            result = list_recent_runs(10, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -445,7 +445,7 @@ class TestListRecentRuns:
                 summary={},
             )
 
-        result = list_recent_runs(9999, db_path)
+        result = list_recent_runs(9999, Database(db_path))
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -465,7 +465,7 @@ class TestListRecentRuns:
         )
 
         try:
-            result = list_recent_runs(0, db_path)
+            result = list_recent_runs(0, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -482,7 +482,7 @@ class TestListRecentRuns:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
         db_path = tmp_path / "lrr_null_summary.db"
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -491,7 +491,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, db_path)
+            result = list_recent_runs(5, Database(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -510,7 +510,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, bad_path)
+            result = list_recent_runs(5, Database(bad_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
@@ -948,7 +948,7 @@ class TestRunHomeSimulationWithRealJobManager:
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
         job_manager = app.extensions["job_manager"]
-        storage = RunStorage(db_path=db_path, data_dir=data_dir)
+        storage = RunStorage(Database(Path(db_path)), data_dir)
 
         result = run_home_simulation(
             {

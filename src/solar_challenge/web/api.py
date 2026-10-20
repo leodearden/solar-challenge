@@ -25,7 +25,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import JobStatus, PresetType, get_db
+from solar_challenge.web.database import JobStatus, PresetType
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -44,7 +44,7 @@ from solar_challenge.web.presets import (
     save_config_preset,
 )
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
-from solar_challenge.web.shared import get_job_manager, get_storage
+from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
@@ -282,7 +282,7 @@ def list_presets() -> tuple[Response, int]:
     Returns:
         JSON array of preset objects, HTTP 200.
     """
-    return jsonify(home_presets(current_app.config["DATABASE"])), 200
+    return jsonify(home_presets(get_database())), 200
 
 def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
     """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
@@ -292,7 +292,7 @@ def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str,
         name another preset holds, HTTP 500 for a database fault.
     """
     try:
-        preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
+        preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
         return jsonify({"error": str(taken)}), 409
     except Exception as exc:  # noqa: BLE001
@@ -338,7 +338,7 @@ def get_preset(name: str) -> tuple[Response, int]:
     Returns:
         JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
     """
-    preset = home_preset_named(current_app.config["DATABASE"], name)
+    preset = home_preset_named(get_database(), name)
     if preset is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return jsonify(preset), 200
@@ -640,9 +640,7 @@ def history_list_runs() -> Response:
 
     order_dir = "ASC" if order.lower() == "asc" else "DESC"
 
-    db_path = current_app.config["DATABASE"]
-
-    with get_db(db_path) as conn:
+    with get_storage().database.transaction() as conn:
         cursor = conn.cursor()
 
         # Build WHERE clause
@@ -949,9 +947,8 @@ def scenarios_list_presets() -> tuple[Response, int]:
         presets.append({"name": name, "source": "builtin", "filename": path.name})
 
     # Saved presets from database
-    db_path = current_app.config["DATABASE"]
     try:
-        with get_db(db_path) as conn:
+        with get_database().transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
@@ -994,9 +991,8 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
     # Try database
-    db_path = current_app.config["DATABASE"]
     try:
-        with get_db(db_path) as conn:
+        with get_database().transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",

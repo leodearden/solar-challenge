@@ -27,7 +27,6 @@ from solar_challenge.web.charts import (
     sankey_diagram,
     seasonal_comparison,
 )
-from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
@@ -47,7 +46,7 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     Returns:
         Dict with total_runs, total_homes, and total_energy_mwh.
     """
-    with get_db(storage.db_path) as conn:
+    with storage.database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT

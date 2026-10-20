@@ -18,7 +18,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, get_db, init_db
+from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
@@ -43,7 +43,7 @@ def storage(db_path, temp_dir):
     init_db(db_path)
     data_dir = temp_dir / "data"
     data_dir.mkdir()
-    return RunStorage(db_path=db_path, data_dir=data_dir)
+    return RunStorage(Database(db_path), data_dir)
 
 
 @pytest.fixture
@@ -144,10 +144,15 @@ class TestDatabaseInitialization:
         init_db(db_path)
         assert db_path.exists()
 
+    @pytest.mark.parametrize("as_given", [Path, str], ids=["path", "str"])
+    def test_init_db_returns_the_database_whose_schema_it_created(self, db_path, as_given):
+        """init_db returns the Database for the file it initialised, whether that file's path comes as a Path or a str."""
+        assert init_db(as_given(db_path)) == Database(db_path)
+
     def test_init_db_creates_runs_table(self, db_path):
         """Test init_db creates runs table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
@@ -157,7 +162,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_jobs_table(self, db_path):
         """Test init_db creates jobs table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
@@ -167,7 +172,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_chat_messages_table(self, db_path):
         """Test init_db creates chat_messages table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'"
@@ -177,7 +182,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_config_presets_table(self, db_path):
         """Test init_db creates config_presets table."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='config_presets'"
@@ -187,7 +192,7 @@ class TestDatabaseInitialization:
     def test_init_db_creates_indexes(self, db_path):
         """Test init_db creates indexes."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
@@ -202,7 +207,7 @@ class TestDatabaseInitialization:
         """Test init_db can be called multiple times safely."""
         init_db(db_path)
         init_db(db_path)  # Should not raise
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
@@ -223,7 +228,7 @@ class TestDatabaseInitialization:
     def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
         """The runs table stores each run type or NULL as a run's type, and each run status or NULL as its status."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
             stored = conn.execute(f"SELECT {column} FROM runs WHERE id = 'probe'").fetchone()[0]
 
@@ -233,14 +238,14 @@ class TestDatabaseInitialization:
     def test_init_db_runs_table_refuses_a_type_or_status_outside_its_definition(self, db_path, column, value):
         """The runs table refuses a type that is not a run type, and a status that is not a run status."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
 
     def test_init_db_gives_a_run_inserted_without_a_status_the_status_running(self, db_path):
         """A run inserted without a status has the status 'running'."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute("INSERT INTO runs (id) VALUES ('no-status')")
             status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
 
@@ -254,7 +259,7 @@ class TestDatabaseInitialization:
     def test_init_db_jobs_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
         """The jobs table stores each job status or NULL as a job's status, chat_messages each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             rowid = conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,)).lastrowid
             stored = conn.execute(f"SELECT {column} FROM {table} WHERE rowid = ?", (rowid,)).fetchone()[0]
 
@@ -264,14 +269,14 @@ class TestDatabaseInitialization:
     def test_init_db_jobs_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
         """The jobs table refuses a status that is not a job status, chat_messages a role that is not a chat role, and config_presets a type that is not a preset type."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,))
 
     def test_init_db_gives_a_job_inserted_without_a_status_the_status_queued(self, db_path):
         """A job inserted without a status has the status 'queued'."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             conn.execute("INSERT INTO jobs (id) VALUES ('no-status')")
             status = conn.execute("SELECT status FROM jobs WHERE id = 'no-status'").fetchone()[0]
 
@@ -281,50 +286,6 @@ class TestDatabaseInitialization:
         """init_db creates each table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
         assert (JOB_STATUSES, CHAT_ROLES, PRESET_TYPES) == (("queued", "running", "completed", "failed"), ("user", "assistant"), ("home", "fleet"))
 
-
-class TestDatabaseConnectionManagement:
-    """Tests for database connection management."""
-
-    def test_get_db_returns_connection(self, db_path):
-        """Test get_db returns a connection."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            assert conn is not None
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            assert cursor.fetchone()[0] == 1
-
-    def test_get_db_commits_on_success(self, db_path):
-        """Test get_db commits changes on success."""
-        init_db(db_path)
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
-                ("test-id", "Test", "home", "completed"),
-            )
-        # Verify commit by reading in a new connection
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM runs WHERE id = ?", ("test-id",))
-            assert cursor.fetchone()["id"] == "test-id"
-
-    def test_get_db_rolls_back_on_error(self, db_path):
-        """Test get_db rolls back changes on error."""
-        init_db(db_path)
-        with pytest.raises(Exception):
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO runs (id, name, type, status) VALUES (?, ?, ?, ?)",
-                    ("test-id", "Test", "home", "completed"),
-                )
-                raise Exception("Test error")
-        # Verify rollback
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM runs WHERE id = ?", ("test-id",))
-            assert cursor.fetchone() is None
 
 class TestHomeRunRoundTrip:
     """Tests for home run save/load round-trip."""
@@ -961,7 +922,7 @@ class TestRunRecord:
         No save writes notes, and a save stamps completed_at with the clock, so the test
         inserts the row to give every column a fixed, distinct value.
         """
-        with get_db(storage.db_path) as conn:
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status, error_message,"
                 " created_at, completed_at, duration_seconds, n_homes, notes)"
@@ -1122,7 +1083,7 @@ class TestRunName:
             summary=sample_summary,
             name="North Roof",
         )
-        with get_db(storage.db_path) as conn:
+        with storage.database.transaction() as conn:
             conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
 
         assert storage.run_name(run_id) is None
@@ -1250,7 +1211,7 @@ class TestDatabasePragmas:
     def test_wal_mode_enabled_after_init(self, db_path):
         """Test that WAL journal mode is active after init_db."""
         init_db(db_path)
-        with get_db(db_path) as conn:
+        with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA journal_mode")
             mode = cursor.fetchone()[0]

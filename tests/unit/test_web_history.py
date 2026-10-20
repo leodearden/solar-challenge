@@ -26,12 +26,13 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
+from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -41,10 +42,7 @@ _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig
 @pytest.fixture
 def storage(app: Flask) -> RunStorage:
     """Create a RunStorage instance using the test app config."""
-    return RunStorage(
-        db_path=app.config["DATABASE"],
-        data_dir=app.config["DATA_DIR"],
-    )
+    return RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"])
 
 
 def _insert_test_run(
@@ -75,7 +73,7 @@ def _insert_test_run(
     }
     config = config or {"pv_config": {"capacity_kw": 4.0}}
 
-    with get_db(db_path) as conn:
+    with Database(Path(db_path)).transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -244,6 +242,18 @@ class TestRunsAPI:
         assert run["total_generation_kwh"] == 100.0
         assert run["self_consumption_ratio"] == 0.60
 
+    def test_the_run_list_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """GET /api/history/runs reads the Database create_app built, whatever the app's store config names afterwards."""
+        _insert_test_run(app, run_id="listed-run")
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        response = client.get("/api/history/runs")
+
+        assert response.status_code == 200
+        assert [run["id"] for run in response.get_json()["runs"]] == ["listed-run"]
+
 
 class TestRunDetailAPI:
     """Tests for the single run detail API endpoint."""
@@ -296,7 +306,7 @@ class TestRunDetailAPI:
 
         The row is the placeholder JobManager.submit_fleet_job writes when it queues a fleet run.
         """
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, n_homes)"
                 " VALUES ('running-run', 'Still Running', 'fleet', 'running', '2025-06-02T09:00:00', 3)"
@@ -323,7 +333,7 @@ class TestRunDetailAPI:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
-        with get_db(app.config["DATABASE"]) as conn:
+        with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
                 " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"

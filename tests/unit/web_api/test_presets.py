@@ -16,6 +16,7 @@ from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
+from tests._web_app import point_store_config_at_a_missing_directory
 
 _BUILTIN_PRESET_NAMES = ("Small Urban", "Medium Suburban", "Large with Battery")
 
@@ -328,3 +329,30 @@ class TestGetPreset:
         resp = client.get(f"/api/presets/{name}")
 
         assert (resp.status_code, resp.get_json()["source"]) == (200, "builtin")
+
+
+class TestPresetsAnswerFromTheAppsDatabase:
+    """The preset endpoints use the Database create_app built, whatever the app's store config names afterwards."""
+
+    def test_home_presets_are_saved_listed_and_found_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        assert client.post("/api/presets", json={"name": "Before", "pv_kw": 2.5}).status_code == 201
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        assert client.post("/api/presets", json={"name": "After", "pv_kw": 3.5}).status_code == 201
+
+        listed = client.get("/api/presets").get_json()
+        assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["After", "Before"]
+        found = client.get("/api/presets/Before")
+        assert (found.status_code, found.get_json()["pv_kw"]) == (200, 2.5)
+
+    def test_a_fleet_preset_is_saved_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        database_path = app.config["DATABASE"]
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
+
+        assert saved_preset_names(database_path) == ["Fleet"]

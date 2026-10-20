@@ -18,9 +18,7 @@ from tests._finance_builders import make_fleet_results_of, make_home_config, mak
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
     """An empty RunStorage under tmp_path, with the schema init_db creates."""
-    storage = RunStorage(db_path=tmp_path / "runs.db", data_dir=tmp_path)
-    init_db(storage.db_path)
-    return storage
+    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path)
 
 
 def _a_home() -> tuple[HomeConfig, SimulationResults]:

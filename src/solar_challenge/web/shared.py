@@ -1,12 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The accessors of the services the web application holds: its run storage and its job manager."""
+"""The accessors of the services the web application holds: its database, run storage and job manager."""
 
 from __future__ import annotations
 
 from flask import current_app
 
+from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
+
+
+def get_database() -> Database:
+    """Return the app's Database, the one create_app registers in the current Flask app's extensions.
+
+    Raises:
+        TypeError: If the app's database extension is not a Database, naming the type it holds.
+    """
+    database = current_app.extensions["database"]
+    if not isinstance(database, Database):
+        raise TypeError(f"the app's database extension must be a Database, got {type(database).__name__}")
+    return database
 
 
 def get_storage() -> RunStorage:

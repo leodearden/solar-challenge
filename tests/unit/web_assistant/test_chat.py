@@ -13,8 +13,9 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+from solar_challenge.web.database import Database, get_chat_history, init_db, save_chat_message
 from tests._sse import SseFrame, parse_sse_events
+from tests._web_app import point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -44,13 +45,12 @@ class TestChatMessagePersistence:
 
     def test_write_and_read_two_turns(self, tmp_path: Path) -> None:
         """Writing user+assistant rows for one session_id returns both in order."""
-        db_path = tmp_path / "chat_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "chat_test.db")
 
-        save_chat_message(db_path, "session-1", "user", "Hello")
-        save_chat_message(db_path, "session-1", "assistant", "Hi there!")
+        save_chat_message(database, "session-1", "user", "Hello")
+        save_chat_message(database, "session-1", "assistant", "Hi there!")
 
-        history = get_chat_history(db_path, "session-1")
+        history = get_chat_history(database, "session-1")
         assert len(history) == 2
         assert history[0]["role"] == "user"
         assert history[0]["content"] == "Hello"
@@ -62,14 +62,13 @@ class TestChatMessagePersistence:
 
     def test_session_scoping(self, tmp_path: Path) -> None:
         """Rows for a different session_id are NOT returned."""
-        db_path = tmp_path / "scope_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "scope_test.db")
 
-        save_chat_message(db_path, "session-A", "user", "For A")
-        save_chat_message(db_path, "session-B", "user", "For B")
+        save_chat_message(database, "session-A", "user", "For A")
+        save_chat_message(database, "session-B", "user", "For B")
 
-        history_a = get_chat_history(db_path, "session-A")
-        history_b = get_chat_history(db_path, "session-B")
+        history_a = get_chat_history(database, "session-A")
+        history_b = get_chat_history(database, "session-B")
 
         assert len(history_a) == 1
         assert history_a[0]["content"] == "For A"
@@ -78,43 +77,39 @@ class TestChatMessagePersistence:
 
     def test_metadata_roundtrip(self, tmp_path: Path) -> None:
         """A metadata dict round-trips through metadata_json (dict in → dict out)."""
-        db_path = tmp_path / "meta_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "meta_test.db")
 
         meta = {"cache_read_input_tokens": 42, "model": "claude-opus-4-8"}
-        save_chat_message(db_path, "session-meta", "assistant", "reply", metadata=meta)
+        save_chat_message(database, "session-meta", "assistant", "reply", metadata=meta)
 
-        history = get_chat_history(db_path, "session-meta")
+        history = get_chat_history(database, "session-meta")
         assert len(history) == 1
         assert history[0]["metadata"] == meta
 
     def test_no_metadata_returns_none(self, tmp_path: Path) -> None:
         """A row written without metadata returns metadata=None."""
-        db_path = tmp_path / "nometa_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "nometa_test.db")
 
-        save_chat_message(db_path, "session-nm", "user", "no meta")
+        save_chat_message(database, "session-nm", "user", "no meta")
 
-        history = get_chat_history(db_path, "session-nm")
+        history = get_chat_history(database, "session-nm")
         assert history[0]["metadata"] is None
 
     def test_empty_session_returns_empty_list(self, tmp_path: Path) -> None:
         """get_chat_history returns [] for a session with no messages."""
-        db_path = tmp_path / "empty_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "empty_test.db")
 
-        history = get_chat_history(db_path, "nonexistent-session")
+        history = get_chat_history(database, "nonexistent-session")
         assert history == []
 
     def test_insertion_order_preserved(self, tmp_path: Path) -> None:
         """Multiple messages are returned in insertion order (ORDER BY id ASC)."""
-        db_path = tmp_path / "order_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "order_test.db")
 
         for i in range(5):
-            save_chat_message(db_path, "session-ord", "user", f"msg-{i}")
+            save_chat_message(database, "session-ord", "user", f"msg-{i}")
 
-        history = get_chat_history(db_path, "session-ord")
+        history = get_chat_history(database, "session-ord")
         contents = [h["content"] for h in history]
         assert contents == [f"msg-{i}" for i in range(5)]
 
@@ -124,14 +119,14 @@ class TestAssistantHistory:
 
     def test_history_returns_seeded_messages(self, client: FlaskClient, app: Flask) -> None:
         """Seeding rows under a pinned session_id → GET /history returns them in order."""
-        db_path = app.config["DATABASE"]
+        database = Database(Path(app.config["DATABASE"]))
 
         # Pin a session_id in the signed cookie
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "test-history-sid"
 
-        save_chat_message(db_path, "test-history-sid", "user", "What is SOC?")
-        save_chat_message(db_path, "test-history-sid", "assistant", "SOC is state of charge.")
+        save_chat_message(database, "test-history-sid", "user", "What is SOC?")
+        save_chat_message(database, "test-history-sid", "assistant", "SOC is state of charge.")
 
         resp = client.get("/assistant/history")
         assert resp.status_code == 200
@@ -155,7 +150,7 @@ class TestAssistantHistory:
 
     def test_history_session_isolation(self, app: Flask) -> None:
         """Two clients with different session_ids see only their own messages."""
-        db_path = app.config["DATABASE"]
+        database = Database(Path(app.config["DATABASE"]))
 
         client_a = app.test_client()
         client_b = app.test_client()
@@ -165,8 +160,8 @@ class TestAssistantHistory:
         with client_b.session_transaction() as sess:
             sess["assistant_session_id"] = "sid-b"
 
-        save_chat_message(db_path, "sid-a", "user", "message A")
-        save_chat_message(db_path, "sid-b", "user", "message B")
+        save_chat_message(database, "sid-a", "user", "message A")
+        save_chat_message(database, "sid-b", "user", "message B")
 
         resp_a = client_a.get("/assistant/history")
         resp_b = client_b.get("/assistant/history")
@@ -178,6 +173,20 @@ class TestAssistantHistory:
         assert msgs_a[0]["content"] == "message A"
         assert len(msgs_b) == 1
         assert msgs_b[0]["content"] == "message B"
+
+    def test_history_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, client: FlaskClient, app: Flask, tmp_path: Path
+    ) -> None:
+        """GET /history reads the Database create_app built, whatever the app's store config names afterwards."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "moved-store-config-sid"
+        save_chat_message(Database(Path(app.config["DATABASE"])), "moved-store-config-sid", "user", "What is SOC?")
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        resp = client.get("/assistant/history")
+
+        assert resp.status_code == 200
+        assert [(m["role"], m["content"]) for m in resp.get_json()["messages"]] == [("user", "What is SOC?")]
 
 
 class TestChatEndpointHappyPath:
@@ -273,6 +282,26 @@ class TestChatEndpointHappyPath:
         assert messages[0]["content"] == "hi there"
         assert messages[1]["role"] == "assistant"
         assert "mock reply" in messages[1]["content"]
+
+    def test_a_chat_turn_is_stored_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        tmp_path: Path,
+    ) -> None:
+        """POST /chat stores its turn in the Database create_app built, whatever the app's store config names afterwards."""
+        database = Database(Path(app.config["DATABASE"]))
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "moved-store-config-chat-sid"
+        anthropic_api.set_chunks(["Hi", " there"])
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        body = client.post("/assistant/chat", json={"message": "Hello"}).get_data(as_text=True)
+
+        assert reply_text(parse_sse_events(body)) == "Hi there"
+        stored = get_chat_history(database, "moved-store-config-chat-sid")
+        assert [(m["role"], m["content"]) for m in stored] == [("user", "Hello"), ("assistant", "Hi there")]
 
     def test_chat_completes_when_sdk_reports_cache_tokens_as_none(
         self,
@@ -622,12 +651,12 @@ class TestEveryTurnStoresAReplyWithText:
         stored_reply: str,
     ) -> None:
         """A reply stored without text, as the old error path stored one, is not replayed."""
-        db_path = app.config["DATABASE"]
+        database = Database(Path(app.config["DATABASE"]))
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "replay-skip-sid"
-        save_chat_message(db_path, "replay-skip-sid", "user", "hello")
+        save_chat_message(database, "replay-skip-sid", "user", "hello")
         save_chat_message(
-            db_path,
+            database,
             "replay-skip-sid",
             "assistant",
             stored_reply,

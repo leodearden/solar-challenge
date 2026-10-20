@@ -3,6 +3,7 @@
 
 import json
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
 import pytest
@@ -11,7 +12,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobEvent, JobState
 from tests._sse import SseFrame, parse_sse_events
 
@@ -172,7 +173,7 @@ class TestGetJobResults:
         # can retrieve it.
         db_path = app.config["DATABASE"]
         summary = {"total_generation_kwh": 1234.5, "self_consumption_pct": 45.0}
-        with get_db(db_path) as conn:
+        with Database(Path(db_path)).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, summary_json, status, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",

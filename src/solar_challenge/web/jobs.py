@@ -28,7 +28,7 @@ import pandas as pd
 
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, connect, get_db
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, Database, JobStatus, RunStatus, RunType
 from solar_challenge.web.storage import RunStorage
 
 logger = logging.getLogger(__name__)
@@ -424,7 +424,7 @@ class JobManager:
             created_at=created_at,
         )
 
-        with get_db(db_path) as conn:
+        with Database(Path(db_path)).transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO runs (
@@ -505,7 +505,7 @@ class JobManager:
         """Erase every record of a job that the executor refused to schedule."""
         with self._lock:
             self._jobs.pop(job_id, None)
-        with get_db(db_path) as conn:
+        with Database(Path(db_path)).transaction() as conn:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
@@ -595,7 +595,7 @@ class JobManager:
         success_message: str = "Simulation completed successfully",
     ) -> None:
         """Common job lifecycle wrapper for DB, status, progress, SSE, and errors."""
-        conn = connect(db_path)
+        conn = Database(Path(db_path)).connect()
         try:
             self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
             conn.execute(
@@ -650,7 +650,7 @@ class JobManager:
             results = self._simulate_home(config, start_date, end_date)
 
             progress(90.0, "Saving", "Persisting results to storage...")
-            storage = RunStorage(db_path=db_path, data_dir=data_dir)
+            storage = RunStorage(Database(Path(db_path)), data_dir)
             duration = time.monotonic() - start_ref
             storage.save_home_run_from_results(
                 run_id=run_id,
@@ -705,7 +705,7 @@ class JobManager:
                 per_home_results.append(self._simulate_home(home_config, start_date, end_date))
 
             progress(97.0, "Saving", "Persisting fleet results...")
-            storage = RunStorage(db_path=db_path, data_dir=data_dir)
+            storage = RunStorage(Database(Path(db_path)), data_dir)
             duration = time.monotonic() - start_ref
             storage.save_fleet_run_from_results(
                 run_id=run_id,
@@ -719,18 +719,18 @@ class JobManager:
         self._run_job(job_id, db_path, work, "Fleet simulation completed successfully")
 
 
-def recover_stale_jobs(db_path: str | Path) -> int:
+def recover_stale_jobs(database: Database) -> int:
     """Mark any jobs stuck in 'running' or 'queued' status as failed.
 
     Called on startup to clean up jobs interrupted by a server restart.
 
     Args:
-        db_path: Path to the SQLite database file.
+        database: The Database holding the jobs and runs tables.
 
     Returns:
         Number of jobs recovered.
     """
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
