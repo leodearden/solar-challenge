@@ -735,9 +735,19 @@ def _window_decision(
     timestep_minutes: float,
     grid_charge_ctx: Optional[GridChargeContext],
 ) -> DispatchDecision:
-    """The decision of a step inside window: its PV excess charged, no discharge, and, offered a grid-charge context, the grid power that charges the battery to the window's target whatever the rates."""
+    """The decision of a step inside window.
+
+    Above the window's target, a window that allows discharge covers a shortfall from the
+    battery, down to the target and no further. Otherwise the step charges its PV excess and,
+    offered a grid-charge context, the grid power that charges the battery to the target,
+    whatever the rates.
+    """
     excess_kw = max(0.0, generation_kw - demand_kw)
+    shortfall_kw = max(0.0, demand_kw - generation_kw)
     target_kwh = window.target_soc_fraction * battery_capacity_kwh
+    if window.allow_discharge and shortfall_kw > 0.0 and battery_soc_kwh > target_kwh:
+        down_to_target_kw = (battery_soc_kwh - target_kwh) / (timestep_minutes * HOURS_PER_MINUTE)
+        return DispatchDecision(charge_kw=0.0, discharge_kw=min(shortfall_kw, down_to_target_kw))
     grid_charge_kw = (
         0.0
         if grid_charge_ctx is None
