@@ -171,9 +171,7 @@ both divide by generation and give 0.0 when it is 0.  Its numerator is the own-u
 bill charges: basis C (§2), or the override's capped own-use (below).  The ratio's
 numerator is the physics `self_consumption` series, which counts grid-charged battery
 discharge (§2), so the two agree only on a physics-path home that never grid-charges.
-A change to the fraction's rule is made in `bill()` and in this section, and listed in
-this document's header; a change to how the results pages show a home without
-generation leaves the bill unchanged.  The zero-generation case is pinned by
+The zero-generation case is pinned by
 `tests/integration/test_finance_bill.py::TestBillCore::test_generation_zero_gives_a_zero_self_consumption_fraction`.
 
 **H3 board identity** (holds when import is priced at retail, import_kwh = demand − own_use_kwh):
