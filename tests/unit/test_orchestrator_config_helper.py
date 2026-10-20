@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_orchestrator_config.py, the orchestrator contract tests' reader of dark-factory-orchestrator.yaml."""
+"""Unit tests for tests/_orchestrator_config.py, the orchestrator contract tests' reader of dark-factory-orchestrator.yaml.
+
+Each test reads a throwaway project's yaml: its git mapping, its lane jobs, and
+the OrchestratorCommand values built from its verify slots and lane jobs.
+"""
 
 import textwrap
 from collections.abc import Mapping
@@ -9,16 +13,43 @@ import pytest
 import yaml
 
 from tests._orchestrator_config import (
+    OrchestratorCommand,
     git_config,
-    lane_job_directory,
-    lane_job_enabled,
+    lane_command,
+    lane_commands,
     offline_lane_jobs,
-    sole_offline_lane_job,
+    verify_command,
+)
+
+_COMMAND = "uv run --locked --extra dev pytest -m 'not slow' -p no:cacheprovider"
+
+_SLOT_COMMANDS = {
+    "lint_command": "true",
+    "type_check_command": "uv run --locked --extra dev mypy src/solar_challenge",
+    "test_command": _COMMAND,
+}
+
+_VERIFY_SLOTS = (
+    pytest.param("lint_command"),
+    pytest.param("type_check_command"),
+    pytest.param("test_command"),
+)
+
+_GIT_MAPPINGS_WITHOUT_LANE_JOBS = (
+    pytest.param({"main_branch": "main"}, id="no-offline-lane-commands-key"),
+    pytest.param({"offline_lane_commands": None}, id="bare-offline-lane-commands-key"),
+    pytest.param({"offline_lane_commands": []}, id="empty-offline-lane-commands-list"),
 )
 
 
-def _write_orchestrator_config(project_root: Path, git: Mapping[str, object]) -> None:
-    (project_root / "dark-factory-orchestrator.yaml").write_text(yaml.safe_dump({"git": git}), encoding="utf-8")
+def _write_orchestrator_config(project_root: Path, config: Mapping[str, object]) -> None:
+    """Make *config* the whole of *project_root*'s dark-factory-orchestrator.yaml: its top-level slots and its git mapping."""
+    (project_root / "dark-factory-orchestrator.yaml").write_text(yaml.safe_dump(dict(config)), encoding="utf-8")
+
+
+def _with_lane_jobs(*jobs: Mapping[str, object]) -> dict[str, object]:
+    """Return an orchestrator config whose git.offline_lane_commands lists *jobs*, in order, and that holds nothing else."""
+    return {"git": {"offline_lane_commands": list(jobs)}}
 
 
 def test_the_git_mapping_is_read_whole_from_the_project_roots_orchestrator_config(tmp_path: Path) -> None:
@@ -49,32 +80,86 @@ def test_every_lane_job_is_listed_whole_in_config_order(tmp_path: Path) -> None:
         {"name": "probe", "command": "pytest", "fix_task_priority": "medium"},
         {"name": "e2e", "command": "pytest tests/e2e"},
     ]
-    _write_orchestrator_config(tmp_path, {"offline_lane_commands": lane_jobs})
+    _write_orchestrator_config(tmp_path, _with_lane_jobs(*lane_jobs))
 
     assert offline_lane_jobs(tmp_path) == lane_jobs
 
 
-@pytest.mark.parametrize(
-    "git",
-    [
-        pytest.param({"main_branch": "main"}, id="no-offline-lane-commands-key"),
-        pytest.param({"offline_lane_commands": None}, id="bare-offline-lane-commands-key"),
-        pytest.param({"offline_lane_commands": []}, id="empty-offline-lane-commands-list"),
-    ],
-)
+@pytest.mark.parametrize("git", _GIT_MAPPINGS_WITHOUT_LANE_JOBS)
 def test_a_git_mapping_without_lane_jobs_lists_none(tmp_path: Path, git: Mapping[str, object]) -> None:
-    _write_orchestrator_config(tmp_path, git)
+    _write_orchestrator_config(tmp_path, {"git": git})
 
     assert offline_lane_jobs(tmp_path) == []
 
 
-def test_a_lane_job_named_once_is_returned_whole(tmp_path: Path) -> None:
-    probe_job = {"name": "probe", "command": "pytest", "fix_task_priority": "medium"}
-    _write_orchestrator_config(
-        tmp_path, {"offline_lane_commands": [{"name": "e2e", "command": "pytest tests/e2e"}, probe_job]}
+@pytest.mark.parametrize("slot", _VERIFY_SLOTS)
+def test_a_verify_slot_is_its_yaml_string_verbatim_run_in_the_project_root_as_a_task_verify(
+    tmp_path: Path, slot: str
+) -> None:
+    _write_orchestrator_config(tmp_path, _SLOT_COMMANDS)
+
+    assert verify_command(tmp_path, slot) == OrchestratorCommand(
+        label=slot, command=_SLOT_COMMANDS[slot], directory=tmp_path, role="task"
     )
 
-    assert sole_offline_lane_job(tmp_path, "probe") == probe_job
+
+@pytest.mark.parametrize("slot", _VERIFY_SLOTS)
+def test_a_verify_slot_the_yaml_lacks_fails_naming_the_slot(tmp_path: Path, slot: str) -> None:
+    _write_orchestrator_config(tmp_path, {})
+
+    with pytest.raises(AssertionError) as failure:
+        verify_command(tmp_path, slot)
+
+    assert repr(slot) in str(failure.value)
+
+
+@pytest.mark.parametrize("slot", _VERIFY_SLOTS)
+def test_a_verify_slot_whose_value_is_not_a_string_fails_naming_the_slot(tmp_path: Path, slot: str) -> None:
+    _write_orchestrator_config(tmp_path, {slot: None})
+
+    with pytest.raises(AssertionError) as failure:
+        verify_command(tmp_path, slot)
+
+    assert repr(slot) in str(failure.value)
+
+
+def test_a_slot_that_is_not_a_verify_slot_fails_naming_it_though_the_yaml_holds_it(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, {"check_command": _COMMAND})
+
+    with pytest.raises(AssertionError) as failure:
+        verify_command(tmp_path, "check_command")
+
+    assert "'check_command'" in str(failure.value)
+
+
+def test_a_lane_job_with_neither_cwd_nor_enabled_is_its_command_verbatim_run_in_the_project_root_offline(
+    tmp_path: Path,
+) -> None:
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs({"name": "e2e", "command": "pytest tests/e2e"}, {"name": "probe", "command": _COMMAND}),
+    )
+
+    assert lane_command(tmp_path, "probe") == OrchestratorCommand(
+        label="lane job 'probe'", command=_COMMAND, directory=tmp_path, role="offline"
+    )
+
+
+def test_a_lane_job_with_a_cwd_runs_in_that_directory_under_the_project_root(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "e2e").mkdir(parents=True)
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "cwd": "tests/e2e"}))
+
+    assert lane_command(tmp_path, "probe") == OrchestratorCommand(
+        label="lane job 'probe'", command=_COMMAND, directory=tmp_path / "tests" / "e2e", role="offline"
+    )
+
+
+def test_a_lane_job_whose_enabled_flag_is_true_is_the_command_it_is_without_the_flag(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "enabled": True}))
+
+    assert lane_command(tmp_path, "probe") == OrchestratorCommand(
+        label="lane job 'probe'", command=_COMMAND, directory=tmp_path, role="offline"
+    )
 
 
 @pytest.mark.parametrize(
@@ -100,72 +185,92 @@ def test_a_lane_job_named_once_is_returned_whole(tmp_path: Path) -> None:
 def test_a_lane_job_named_other_than_once_fails_naming_the_job_and_its_count(
     tmp_path: Path, git: Mapping[str, object], count: int
 ) -> None:
-    _write_orchestrator_config(tmp_path, git)
+    _write_orchestrator_config(tmp_path, {"git": git})
 
     with pytest.raises(AssertionError) as failure:
-        sole_offline_lane_job(tmp_path, "probe")
+        lane_command(tmp_path, "probe")
 
     assert "'probe'" in str(failure.value)
     assert f"{count} entries" in str(failure.value)
-
-
-def test_a_lane_job_without_a_cwd_runs_in_the_project_root(tmp_path: Path) -> None:
-    job = {"name": "probe", "command": "pytest"}
-
-    assert lane_job_directory(tmp_path, job) == tmp_path
-
-
-def test_a_lane_job_with_a_cwd_runs_in_that_directory_under_the_project_root(tmp_path: Path) -> None:
-    (tmp_path / "tests" / "e2e").mkdir(parents=True)
-    job = {"name": "probe", "command": "pytest", "cwd": "tests/e2e"}
-
-    assert lane_job_directory(tmp_path, job) == tmp_path / "tests" / "e2e"
 
 
 @pytest.mark.parametrize("cwd", [None, ["tests", "e2e"]], ids=["bare-cwd-key", "list"])
 def test_a_lane_job_whose_cwd_is_not_a_path_string_fails_naming_the_job_and_its_cwd(
     tmp_path: Path, cwd: object
 ) -> None:
-    job = {"name": "probe", "command": "pytest", "cwd": cwd}
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "cwd": cwd}))
 
     with pytest.raises(AssertionError) as failure:
-        lane_job_directory(tmp_path, job)
+        lane_command(tmp_path, "probe")
 
     assert "'probe'" in str(failure.value)
     assert repr(cwd) in str(failure.value)
 
 
-def test_a_lane_job_whose_cwd_names_no_directory_fails_naming_the_job_and_its_cwd(tmp_path: Path) -> None:
-    job = {"name": "probe", "command": "pytest", "cwd": "tests/e2e"}
+def test_a_lane_job_whose_cwd_names_no_directory_fails_naming_the_job_and_the_directory_it_resolves_to(
+    tmp_path: Path,
+) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "cwd": "tests/e2e"}))
 
     with pytest.raises(AssertionError) as failure:
-        lane_job_directory(tmp_path, job)
+        lane_command(tmp_path, "probe")
 
     assert "'probe'" in str(failure.value)
-    assert "'tests/e2e'" in str(failure.value)
+    assert str(tmp_path / "tests" / "e2e") in str(failure.value)
 
 
-def test_a_lane_job_without_an_enabled_flag_is_enabled() -> None:
-    job = {"name": "probe", "command": "pytest"}
+def test_a_disabled_lane_job_fails_naming_the_job_since_the_lane_never_runs_it(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "enabled": False}))
 
-    assert lane_job_enabled(job) is True
+    with pytest.raises(AssertionError) as failure:
+        lane_command(tmp_path, "probe")
 
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_a_lane_job_with_an_enabled_flag_is_enabled_as_the_flag_says(enabled: bool) -> None:
-    job = {"name": "probe", "command": "pytest", "enabled": enabled}
-
-    assert lane_job_enabled(job) is enabled
+    assert "'probe'" in str(failure.value)
 
 
 @pytest.mark.parametrize("enabled", [None, "false"], ids=["bare-enabled-key", "quoted-false"])
 def test_a_lane_job_whose_enabled_flag_is_not_a_boolean_fails_naming_the_job_and_its_flag(
-    enabled: object
+    tmp_path: Path, enabled: object
 ) -> None:
-    job = {"name": "probe", "command": "pytest", "enabled": enabled}
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "enabled": enabled}))
 
     with pytest.raises(AssertionError) as failure:
-        lane_job_enabled(job)
+        lane_command(tmp_path, "probe")
 
     assert "'probe'" in str(failure.value)
     assert repr(enabled) in str(failure.value)
+
+
+def test_every_lane_job_is_a_lane_command_as_lane_command_builds_it_in_config_order(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "e2e").mkdir(parents=True)
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs(
+            {"name": "probe", "command": _COMMAND},
+            {"name": "e2e", "command": "pytest tests/e2e", "cwd": "tests/e2e", "enabled": True},
+        ),
+    )
+
+    assert lane_commands(tmp_path) == (lane_command(tmp_path, "probe"), lane_command(tmp_path, "e2e"))
+
+
+@pytest.mark.parametrize("git", _GIT_MAPPINGS_WITHOUT_LANE_JOBS)
+def test_a_git_mapping_without_lane_jobs_gives_no_lane_commands(tmp_path: Path, git: Mapping[str, object]) -> None:
+    _write_orchestrator_config(tmp_path, {"git": git})
+
+    assert lane_commands(tmp_path) == ()
+
+
+def test_the_lane_commands_of_a_lane_with_a_disabled_job_fail_naming_that_job(tmp_path: Path) -> None:
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs(
+            {"name": "probe", "command": _COMMAND},
+            {"name": "dormant", "command": _COMMAND, "enabled": False},
+        ),
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        lane_commands(tmp_path)
+
+    assert "'dormant'" in str(failure.value)

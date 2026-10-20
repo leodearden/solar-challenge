@@ -8,10 +8,11 @@ orchestrator runs from dark-factory-orchestrator.yaml must instead refuse a
 stale lock, failing with uv's error, which names the fix: run `uv lock`.
 
 Each command runs verbatim, through run_collect_only, on a probe holding only
-the project's uv metadata and no source. A command that gets past the lock
-check, by re-locking or, like `uv run --frozen`, by running on the stale pins,
-fails later, building the package, without naming `uv lock`. So the tests look
-for that phrase, not merely a non-zero exit.
+the project's uv metadata and orchestrator config, and no source. Each command
+is read from the probe's copy of the config, so it runs in the probe. A command
+that gets past the lock check, by re-locking or, like `uv run --frozen`, by
+running on the stale pins, fails later, building the package, without naming
+`uv lock`. So the tests look for that phrase, not merely a non-zero exit.
 
 The tests run every uv command offline, reading the package index from uv's
 cache (offline_uv_probe_environment says why).
@@ -24,24 +25,14 @@ from pathlib import Path
 
 import pytest
 
-from tests._collect_only import describe_outcome, requires_uv, run_collect_only
-from tests._orchestrator_config import (
-    lane_job_directory,
-    load_orchestrator_config,
-    offline_lane_jobs,
-    sole_offline_lane_job,
-)
+from tests._collect_only import requires_uv, run_collect_only
+from tests._command_runner import describe_outcome
+from tests._orchestrator_config import VERIFY_SLOTS, OrchestratorCommand, lane_commands, verify_command
 from tests._pyproject import load_project_table
 
 pytestmark = requires_uv
 
-# Parametrization happens at collection time, before any fixture exists.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-# dark-factory's three verify slots, in the order it starts them.
-_VERIFY_COMMAND_KEYS = ("lint_command", "type_check_command", "test_command")
-
-_PROJECT_FILES = ("pyproject.toml", "uv.lock", ".python-version")
+_PROJECT_FILES = ("pyproject.toml", "uv.lock", ".python-version", "dark-factory-orchestrator.yaml")
 
 _PROBE_EXTRA = "stale-lock-probe"
 
@@ -65,6 +56,12 @@ def _lock_digest(project: Path) -> str:
     return hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest()
 
 
+def _reset_to_copy_of(pristine: Path, project: Path) -> None:
+    """Make *project* a fresh copy of *pristine*, so nothing a command wrote there earlier is left."""
+    shutil.rmtree(project)
+    shutil.copytree(pristine, project)
+
+
 @pytest.fixture
 def offline_uv_probe_environment(uv_probe_environment: dict[str, str]) -> dict[str, str]:
     """Return uv_probe_environment with uv's network access off, so every uv command here reads the package index from uv's cache alone.
@@ -83,7 +80,7 @@ def offline_uv_probe_environment(uv_probe_environment: dict[str, str]) -> dict[s
 
 @pytest.fixture
 def stale_lock_project(project_root: Path, tmp_path: Path, offline_uv_probe_environment: dict[str, str]) -> Path:
-    """Return a copy of the project's uv metadata whose pyproject.toml has outgrown its uv.lock.
+    """Return a copy of the project's uv metadata and orchestrator config, and no source, whose pyproject.toml has outgrown its uv.lock.
 
     `uv add --frozen` writes a requirement without re-locking, as a commit that
     forgets `uv lock` does. The requirement is a core dependency put into a new
@@ -113,55 +110,67 @@ def stale_lock_project(project_root: Path, tmp_path: Path, offline_uv_probe_envi
 
 
 def test_the_verify_refuses_a_stale_lock_naming_uv_lock(
-    project_root: Path, stale_lock_project: Path, offline_uv_probe_environment: dict[str, str]
+    stale_lock_project: Path, offline_uv_probe_environment: dict[str, str]
 ) -> None:
     """Run as the orchestrator runs it on a stale uv.lock, the verify fails naming `uv lock`, and no verify command rewrites the lock.
 
     One that re-locked it would let every verify command after it pass.
     """
-    config = load_orchestrator_config(project_root)
     stale_lock = _lock_digest(stale_lock_project)
-    outcomes: dict[str, subprocess.CompletedProcess[str]] = {}
+    outcomes: list[tuple[OrchestratorCommand, subprocess.CompletedProcess[str]]] = []
 
-    for key in _VERIFY_COMMAND_KEYS:
-        result = run_collect_only(config[key], stale_lock_project, env=offline_uv_probe_environment)
+    for slot in VERIFY_SLOTS:
+        command = verify_command(stale_lock_project, slot)
+        result = run_collect_only(command, env=offline_uv_probe_environment)
         assert _lock_digest(stale_lock_project) == stale_lock, (
-            f"{key} {config[key]!r} rewrote a stale uv.lock instead of refusing it, so a commit that forgot "
-            f"`uv lock` passes the verify and its stale lock merges; the fix is `uv run --locked`\n"
+            f"{command.label} {command.command!r} rewrote a stale uv.lock instead of refusing it, so a commit that "
+            f"forgot `uv lock` passes the verify and its stale lock merges; the fix is `uv run --locked`\n"
             f"{describe_outcome(result)}"
         )
-        outcomes[key] = result
+        outcomes.append((command, result))
 
-    report = "\n".join(f"{key} {config[key]!r}: {describe_outcome(result)}" for key, result in outcomes.items())
-    assert any(_fails_naming_the_fix(result) for result in outcomes.values()), (
+    report = "\n".join(
+        f"{command.label} {command.command!r}: {describe_outcome(result)}" for command, result in outcomes
+    )
+    assert any(_fails_naming_the_fix(result) for _, result in outcomes), (
         f"no verify command failed naming `{_THE_FIX}` on a stale uv.lock, so a commit that forgot it passes "
         f"the verify\n{report}"
     )
 
 
-@pytest.mark.parametrize("job_name", [job["name"] for job in offline_lane_jobs(PROJECT_ROOT)])
 def test_each_lane_job_refuses_a_stale_lock_naming_uv_lock(
-    job_name: str, project_root: Path, stale_lock_project: Path, offline_uv_probe_environment: dict[str, str]
+    stale_lock_project: Path, tmp_path: Path, offline_uv_probe_environment: dict[str, str]
 ) -> None:
     """Run as the lane runs it on a stale uv.lock, each offline-lane job fails naming `uv lock` without rewriting the lock.
 
     The lane runs on main's committed tree, so a stale lock on main turns it red
-    instead of being re-locked and tested.
+    instead of being re-locked and tested. Each job runs on a fresh copy of the
+    stale probe, and every job's failure is reported, so a job that rewrites the
+    lock neither stops the probe of the jobs after it nor hands them a lock that is
+    no longer stale.
     """
-    job = sole_offline_lane_job(project_root, job_name)
-    command = job["command"]
-    stale_lock = _lock_digest(stale_lock_project)
+    lane_jobs = lane_commands(stale_lock_project)
+    assert lane_jobs, "git.offline_lane_commands holds no job, so this probe checks nothing"
+    pristine = shutil.copytree(stale_lock_project, tmp_path / "pristine-project")
+    stale_lock = _lock_digest(pristine)
+    failures: list[str] = []
 
-    result = run_collect_only(command, lane_job_directory(stale_lock_project, job), env=offline_uv_probe_environment)
+    for lane_job in lane_jobs:
+        _reset_to_copy_of(pristine, stale_lock_project)
+        result = run_collect_only(lane_job, env=offline_uv_probe_environment)
+        if _lock_digest(stale_lock_project) != stale_lock:
+            failures.append(
+                f"the {lane_job.label} {lane_job.command!r} rewrote a stale uv.lock instead of refusing it, so the "
+                f"lane tests main against a lock nobody committed; the fix is `uv run --locked`\n"
+                f"{describe_outcome(result)}"
+            )
+        elif not _fails_naming_the_fix(result):
+            failures.append(
+                f"the {lane_job.label} {lane_job.command!r} did not fail naming `{_THE_FIX}` on a stale uv.lock, so a "
+                f"stale lock on main does not turn the lane red with the fix named\n{describe_outcome(result)}"
+            )
 
-    assert _lock_digest(stale_lock_project) == stale_lock, (
-        f"the {job_name!r} lane job {command!r} rewrote a stale uv.lock instead of refusing it, so the lane "
-        f"tests main against a lock nobody committed; the fix is `uv run --locked`\n{describe_outcome(result)}"
-    )
-    assert _fails_naming_the_fix(result), (
-        f"the {job_name!r} lane job {command!r} did not fail naming `{_THE_FIX}` on a stale uv.lock, so a "
-        f"stale lock on main does not turn the lane red with the fix named\n{describe_outcome(result)}"
-    )
+    assert not failures, "\n\n".join(failures)
 
 
 def test_uv_in_the_probe_environment_reads_the_package_index_only_from_its_cache(

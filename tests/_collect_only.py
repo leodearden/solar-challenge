@@ -1,36 +1,48 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run a pytest command verbatim in collect-only mode, for the orchestrator contract tests.
 
-collect() reads what the command collected from the collection-report plugin,
-never from the command's output. It loads the plugin by its name,
-COLLECTION_REPORT_PLUGIN, given to -p, from COLLECTION_REPORT_PLUGIN_DIRECTORY
-(tests/_pytest_plugins) on PYTHONPATH. The plugin's module docstring defines
-the report. run_collect_only, which collect() runs through, returns only the
-finished process, for a probe that reads just a command's exit code and
-output; describe_outcome describes that process.
+The command is an OrchestratorCommand, or a ShellCommand for one no
+dark-factory-orchestrator.yaml names, and it starts through
+tests/_command_runner.run_command. collect() reads what the command collected
+from the collection-report plugin, never from the command's output. It loads
+the plugin by its name, COLLECTION_REPORT_PLUGIN, given to -p, from
+COLLECTION_REPORT_PLUGIN_DIRECTORY (tests/_pytest_plugins) on PYTHONPATH. The
+plugin's module docstring defines the report. run_collect_only, which collect()
+runs through, returns only the finished process, for a probe that reads just a
+command's exit code and output.
 
 Usage::
 
-    from tests._collect_only import collect, requires_uv
+    from tests._collect_only import collect, requires_uv, run_collect_only
+    from tests._command_runner import ShellCommand, describe_outcome
+    from tests._orchestrator_config import lane_command, verify_command
 
-    collection = collect(command, project_root, env=environment)
+    collection = collect(lane_command(project_root, "e2e"), env=environment)
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     node_ids = collection.node_ids()
     outside = collection.node_ids_outside("tests/e2e")
     skipped = collection.written_report().skipped_collectors
+
+    collection = collect(ShellCommand("python -m pytest tests/unit", project_root), "-k", "battery")
+
+    result = run_collect_only(verify_command(project_root, "test_command"), env=environment)
+    assert result.returncode == 0, describe_outcome(result)
 """
 
 import json
 import os
 import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from subprocess import CompletedProcess
 
 import pytest
+
+from tests._command_runner import ShellCommand, describe_outcome, run_command
+from tests._orchestrator_config import OrchestratorCommand
 
 requires_uv = pytest.mark.skipif(
     shutil.which("uv") is None, reason="uv is not installed; the orchestrator command under test runs through it"
@@ -40,7 +52,8 @@ COLLECTION_REPORT_PLUGIN = "solar_challenge_collection_report"
 
 COLLECTION_REPORT_PLUGIN_DIRECTORY = Path(__file__).resolve().parent / "_pytest_plugins"
 
-_STREAM_TAIL_CHARS = 5000
+# So that a hung probe fails its test instead of stalling the verify.
+_COLLECT_TIMEOUT_SECS = 300
 
 
 @dataclass(frozen=True)
@@ -93,10 +106,15 @@ class Collection:
 
     def describe(self) -> str:
         """Describe how the run ended, for an assertion message."""
-        return _described(self.returncode, self.stdout, self.stderr)
+        return describe_outcome(self)
 
 
-def collect(command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] | None = None) -> Collection:
+def collect(
+    command: OrchestratorCommand | ShellCommand,
+    *pytest_args: str,
+    env: Mapping[str, str] | None = None,
+    timeout_secs: float = _COLLECT_TIMEOUT_SECS,
+) -> Collection:
     """Run *command* as run_collect_only does, reading what its pytest collected from the collection-report plugin.
 
     The plugin's directory goes in front of the environment's PYTHONPATH, and
@@ -110,16 +128,20 @@ def collect(command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] |
         report_path = Path(report_directory) / "report.json"
         result = run_collect_only(
             command,
-            cwd,
             "-p",
             COLLECTION_REPORT_PLUGIN,
             f"--collection-report={report_path}",
             *pytest_args,
             env=collect_env,
+            timeout_secs=timeout_secs,
         )
         report = _read_report(report_path) if report_path.exists() else None
     return Collection(
-        command=command, returncode=result.returncode, stdout=result.stdout, stderr=result.stderr, report=report
+        command=command.command,
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        report=report,
     )
 
 
@@ -138,40 +160,18 @@ def _read_report(path: Path) -> CollectionReport:
 
 
 def run_collect_only(
-    command: str, cwd: Path, *pytest_args: str, env: Mapping[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    """Run *command* verbatim in *cwd*, in *env* (default: this process's environment).
+    command: OrchestratorCommand | ShellCommand,
+    *pytest_args: str,
+    env: Mapping[str, str] | None = None,
+    timeout_secs: float = _COLLECT_TIMEOUT_SECS,
+) -> CompletedProcess[str]:
+    """Run *command* verbatim through run_command, in *env* (default: this process's environment).
 
     The pytest the command invokes only collects, with *pytest_args* added to its
     arguments. The mode travels in PYTEST_ADDOPTS, so the command's own args and
-    the project's ini addopts stay in force.
+    the project's ini addopts stay in force. A command still running after
+    *timeout_secs* raises run_command's CommandTimedOut.
     """
     collect_env = dict(os.environ if env is None else env)
     collect_env["PYTEST_ADDOPTS"] = shlex.join(["--collect-only", *pytest_args])
-    return subprocess.run(
-        command,
-        shell=True,
-        cwd=cwd,
-        env=collect_env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-
-
-def _described(returncode: int, stdout: str, stderr: str) -> str:
-    """Describe a run that ended with *returncode* after printing *stdout* and *stderr*, for an assertion message.
-
-    Each stream is cut to its own tail, so a long stderr, such as uv's log, cannot
-    crowd out the collection errors and summary pytest prints at the end of stdout.
-    """
-    return (
-        f"exit {returncode}\n"
-        f"stdout tail:\n{stdout[-_STREAM_TAIL_CHARS:]}\n"
-        f"stderr tail:\n{stderr[-_STREAM_TAIL_CHARS:]}"
-    )
-
-
-def describe_outcome(result: subprocess.CompletedProcess[str]) -> str:
-    """Describe how a run_collect_only *result* ended, for an assertion message."""
-    return _described(result.returncode, result.stdout, result.stderr)
+    return run_command(command, collect_env, timeout_secs=timeout_secs)

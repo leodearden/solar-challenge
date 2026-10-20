@@ -12,10 +12,8 @@ Usage::
         suite_node_ids_matching,
         suite_tests_matching,
     )
-    from tests._orchestrator_config import sole_offline_lane_job
 
-    command = sole_offline_lane_job(project_root, "e2e")["command"]
-    collection = collect_lane_job(project_root, "e2e", env=shared_uv_probe_environments.for_command(command))
+    collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
     assert collection.node_ids(), f"{collection.command!r} collected no tests\n{collection.describe()}"
     assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 
@@ -37,20 +35,20 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._collect_only import CollectedTest, Collection, collect
-from tests._orchestrator_config import lane_job_directory, sole_offline_lane_job
+from tests._command_runner import ShellCommand
+from tests._orchestrator_config import lane_command
 
 
 def collect_lane_job(project_root: Path, name: str, *, env: Mapping[str, str]) -> Collection:
-    """Run the offline-lane job *name*'s command verbatim in the job's directory under *project_root*, in *env*, collecting only.
+    """Run the offline-lane job *name* of *project_root* as the lane runs it, in *env*, collecting only.
 
     It asserts the command collected, naming the job, its command and how the run
     ended. Whether what it collected is right is the calling lane test's own assertion.
     """
-    job = sole_offline_lane_job(project_root, name)
-    command = job["command"]
-    collection = collect(command, lane_job_directory(project_root, job), env=env)
+    lane_job = lane_command(project_root, name)
+    collection = collect(lane_job, env=env)
     assert collection.returncode == pytest.ExitCode.OK, (
-        f"the {name!r} lane job {command!r} failed to collect\n{collection.describe()}"
+        f"the {lane_job.label} {lane_job.command!r} failed to collect\n{collection.describe()}"
     )
     return collection
 
@@ -73,7 +71,7 @@ def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[s
     command = shlex.join(
         [sys.executable, "-m", "pytest", "-o", "addopts=", "tests", *(f"--ignore={sibling}" for sibling in siblings)]
     )
-    collection = collect(command, project_root)
+    collection = collect(ShellCommand(command, project_root))
     assert collection.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
         f"collecting tests/ failed\n{collection.describe()}"
     )
@@ -89,7 +87,7 @@ def suite_tests_matching(project_root: Path, suite: str, mark_expression: str) -
     none of the suite's tests is no failure.
     """
     command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", suite])
-    collection = collect(command, project_root, "-m", mark_expression)
+    collection = collect(ShellCommand(command, project_root), "-m", mark_expression)
     assert collection.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
         f"collecting {suite} under `-m {mark_expression!r}` failed\n{collection.describe()}"
     )

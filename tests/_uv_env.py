@@ -5,7 +5,7 @@ Usage::
 
     from tests._uv_env import isolated_uv_env
 
-    result = run_collect_only(command, project_root, env=isolated_uv_env(tmp_path / "venv"))
+    result = run_collect_only(lane_command(project_root, "e2e"), env=isolated_uv_env(tmp_path / "venv"))
 """
 
 import os
