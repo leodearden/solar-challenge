@@ -364,11 +364,10 @@ def monthly_summary(results: SimulationResults) -> str | None:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``None`` if the simulation spans
-        fewer than 90 days.
+        Plotly figure JSON string, or ``None`` if the run's window covers
+        fewer than 90 calendar days.
     """
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
-    if sim_days < 90:
+    if results.window.days < 90:
         return None
 
     monthly = aggregate_monthly(results)
@@ -527,11 +526,10 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``None`` if the simulation spans
-        fewer than 180 days.
+        Plotly figure JSON string, or ``None`` if the run's window covers
+        fewer than 180 calendar days.
     """
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
-    if sim_days < 180:
+    if results.window.days < 180:
         return None
 
     seasons = calculate_seasonal_metrics(results)
