@@ -24,11 +24,9 @@ from __future__ import annotations
 
 import dataclasses
 
-import pandas as pd
 import pytest
 
-from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -42,9 +40,15 @@ from solar_challenge.finance import (
     spreadsheet_revenue_curve,
 )
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
+from solar_challenge.home import SimulationResults, calculate_summary
+from tests._fin_calibration import make_physics_column_scenario
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_of,
+    make_sim_results,
+    make_sized_home,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,53 +71,12 @@ _FIN_GOLDEN = {
 
 _FIN_SCF = 0.70  # spreadsheet with-battery self-consumption fraction assumption
 
+_FIN_HOME = make_sized_home(pv_kwp=5.5, battery_kwh=5.0)
+
 
 # ---------------------------------------------------------------------------
-# Stub helpers — replace NotImplementedError bodies with real implementations
-# in step-2 (GREEN).
+# [FIN] fixture builders over tests/_finance_builders.py
 # ---------------------------------------------------------------------------
-
-
-def _make_sim_results_cr6(
-    self_kwh: float,
-    export_kwh: float,
-    import_kwh: float,
-    n_steps: int = 8760,  # hourly rows; each kW row counts for the hour it lasts
-) -> SimulationResults:
-    """Build a synthetic SimulationResults.
-
-    Hourly resolution (n_steps=8760 ≈ 1 yr) keeps memory ~60× lower than the
-    former 1-minute default while preserving energy totals exactly:
-      home.py totals each kW series as (series * window.step_hours).sum(),
-      and step_hours is 1 on this hourly index:
-      sc_kw = self_kwh / n_steps  →  sum = self_kwh  ✓
-
-    No battery grid-charging: grid_import is all load import.
-    Untariffed: import_cost is zero and grid_charge_cost is None.
-    export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
-    """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / n_steps   # kW s.t. its hourly rows total self_kwh
-    exp_kw = export_kwh / n_steps
-    imp_kw = import_kwh / n_steps
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),  # SEG=0 → no-flex CBS-revenue identity holds
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
 
 
 def _make_fleet_results_fin_cr6(
@@ -140,35 +103,14 @@ def _make_fleet_results_fin_cr6(
 
     No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
-def _make_home_config_fin_cr6(
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> HomeConfig:
-    """Build a [FIN]-aligned HomeConfig for CR6 tests (Bristol defaults)."""
-    pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
-    load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
-    batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
-    return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
-
-
-def _make_scenario_fin_cr6(
-    n_homes: int = 100,
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> ScenarioConfig:
-    """Build a homogeneous [FIN]-aligned ScenarioConfig (100 homes, 2024 full year)."""
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-    homes = [_make_home_config_fin_cr6(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
-             for _ in range(n_homes)]
-    return ScenarioConfig(name="CR6-Calibration", period=period, homes=homes)
+def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
+    """The [FIN] fleet: make_scenario_of's scenario of *n_homes* _FIN_HOME homes."""
+    return make_scenario_of([_FIN_HOME] * n_homes)
 
 
 def _make_finance_cr6(
@@ -345,7 +287,7 @@ class TestNoFlexAnchorReconciliation:
         year0 = curve.points[0]
 
         # No-flex CBS-revenue identity (by construction of the synthetic fleet)
-        # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0
+        # SEG=0 (export_revenue=0 in make_sim_results), grid_services=0
         expected_revenue = (
             finance.own_use_rate_pence_per_kwh
             * year0.fleet_billed_own_use_kwh
@@ -547,12 +489,9 @@ def _make_arbitrage_fleet_cr6(
     a lower r*.  Grid-charge energy is paid by the householder inside grid import
     (docs/cost-recovery-finance-model.md §4 and §8.2); it is not a CBS term.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -585,12 +524,9 @@ def _make_interior_fleet_cr6(
 
     No-flex: no grid charging, export_revenue=0.
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results(
+        homes=[_FIN_HOME] * n_homes, self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh
+    )
 
 
 def _make_finance_interior_cr6(
@@ -636,9 +572,7 @@ class TestStructuralInvariants:
         retail_rate: float = 30.0,
     ) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, simulate) for an interior 'floor' regime."""
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Interior", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=retained_cash_floor,
             pv_cost_per_kwp=pv_cost_per_kwp,
@@ -748,9 +682,7 @@ class TestFlexLowersSolvedRate:
     def _build_base_interior(self) -> tuple:  # type: ignore[type-arg]
         """Base interior fleet (no flex, same fleet used for both directional tests)."""
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Flex-Base", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         return scenario, n_homes
 
     def test_grid_services_lowers_solved_rate(self) -> None:
@@ -867,7 +799,7 @@ class TestThetaStaysGreen:
 
     def _build_theta_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
         """Build [FIN]-assumption ProjectEconomics via spreadsheet_revenue_curve."""
-        scenario = _make_scenario_fin_cr6(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin_cr6(n_homes=100)
         return _spreadsheet_economics_cr6(scenario, _make_finance_fin_cr6())
 
     def test_spreadsheet_path_capex_and_dscr_unchanged(self) -> None:
@@ -900,9 +832,8 @@ def _make_grid_charge_sim_results_cr6(
     export_kwh: float,
     import_to_load_kwh: float,
     grid_charge_kwh: float,
-    n_steps: int = 8760,
 ) -> SimulationResults:
-    """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
+    """make_sim_results' results for a grid-charging (arbitrage) home, whose grid import also carries *grid_charge_kwh*.
 
     Energy accounting:
         total_grid_import = import_to_load + grid_charge  (both cross grid boundary)
@@ -912,33 +843,12 @@ def _make_grid_charge_sim_results_cr6(
     This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
     is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
 
-    Untariffed, like _make_sim_results_cr6: import_cost is zero and grid_charge_cost
-    is None.
+    Untariffed, as make_sim_results' results are: import_cost is zero and
+    grid_charge_cost is None.
     """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / n_steps
-    exp_kw = export_kwh / n_steps
-    imp_to_load_kw = import_to_load_kwh / n_steps
-    grid_charge_kw = grid_charge_kwh / n_steps
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_to_load_kw          # demand = sc + import_to_load
-    total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
-    zeros = pd.Series(0.0, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(total_imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
+    to_load = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_to_load_kwh)
+    into_battery = make_sim_results(self_kwh=0.0, export_kwh=0.0, import_kwh=grid_charge_kwh).grid_import
+    return dataclasses.replace(to_load, grid_import=to_load.grid_import + into_battery)
 
 
 def _make_grid_charge_fleet_cr6(
@@ -957,17 +867,18 @@ def _make_grid_charge_fleet_cr6(
         _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
-    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-    per_home = [
-        _make_grid_charge_sim_results_cr6(
-            self_kwh=self_kwh,
-            export_kwh=export_kwh,
-            import_to_load_kwh=import_to_load_kwh,
-            grid_charge_kwh=grid_charge_kwh,
-        )
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    return make_fleet_results_of(
+        [
+            _make_grid_charge_sim_results_cr6(
+                self_kwh=self_kwh,
+                export_kwh=export_kwh,
+                import_to_load_kwh=import_to_load_kwh,
+                grid_charge_kwh=grid_charge_kwh,
+            )
+            for _ in range(n_homes)
+        ],
+        homes=[_FIN_HOME] * n_homes,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -994,9 +905,7 @@ class TestArbitrageBasisCReconciliation:
 
     def _build_grid_charge(self) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, fr, summaries) for the grid-charging fleet."""
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(self._N_HOMES)]
-        scenario = ScenarioConfig(name="CR6-Arb-BasisC", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=self._N_HOMES)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1051,7 +960,7 @@ class TestArbitrageBasisCReconciliation:
     def test_flat_control_no_gap(self) -> None:
         """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
         # Use the existing flat-rate builder
-        flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+        flat_sr = make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
         assert _cbs_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
@@ -1068,9 +977,7 @@ class TestArbitrageBasisCReconciliation:
         → binding='floor', feasible=True.
         """
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Arb-Interior", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1149,9 +1056,7 @@ class TestArbitrageBasisCReconciliation:
         """Flat-rate fleet control: solve still binding='floor' with same finance."""
         # Use the no-grid-charge interior fleet with the same finance config
         n_homes = 5
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
-        scenario = ScenarioConfig(name="CR6-Flat-Control", period=period, homes=homes)
+        scenario = _make_scenario_fin_cr6(n_homes=n_homes)
         finance = _make_finance_interior_cr6(
             retained_cash_floor=27.0,
             pv_cost_per_kwp=2000.0,
@@ -1210,7 +1115,7 @@ class TestCbsOwnUseKwhHelper:
 
     def test_normal_case(self) -> None:
         """demand=3400, import=1600 → basis C = 1800 kWh."""
-        s = _make_sim_results_cr6(
+        s = make_sim_results(
             self_kwh=1800.0,
             export_kwh=400.0,
             import_kwh=1600.0,
@@ -1223,49 +1128,19 @@ class TestCbsOwnUseKwhHelper:
 
     def test_clamp_to_zero(self) -> None:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
-        # Build a summary with demand=500, import=900 by construction.
-        # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
-        # Instead, build manually via _make_sim_results_cr6 with sc=0, import>demand:
-        # Use sc=500, import=900 → demand=1400 (still basis C > 0).
-        # We need a summary where demand < import to test the clamp.
-        # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
-        n_steps = 8760
-        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-        zeros = pd.Series(0.0, index=idx)
-        # demand_kw such that its hourly rows total 500 kWh
-        demand_kw = 500.0 / n_steps
-        # import_kw such that its hourly rows total 900 kWh
-        import_kw = 900.0 / n_steps
-        # gen_kw = 0 (no generation)
-        sr = SimulationResults(
-            generation=zeros.copy(),
-            demand=pd.Series(demand_kw, index=idx),
-            self_consumption=zeros.copy(),
-            battery_charge=zeros.copy(),
-            battery_discharge=zeros.copy(),
-            battery_soc=zeros.copy(),
-            grid_import=pd.Series(import_kw, index=idx),
-            grid_export=zeros.copy(),
-            import_cost=zeros.copy(),
-            export_revenue=zeros.copy(),
-            tariff_rate=zeros.copy(),
-            grid_charge_cost=None,
+        # No self-consumption, so the 400 kWh charged from the grid never reaches the load:
+        # demand = 0 + 500 = 500 kWh, grid import = 500 + 400 = 900 kWh → demand - import = -400
+        summary = calculate_summary(
+            _make_grid_charge_sim_results_cr6(
+                self_kwh=0.0, export_kwh=0.0, import_to_load_kwh=500.0, grid_charge_kwh=400.0
+            )
         )
-        summary = calculate_summary(sr)
-        # total_demand = 500, total_grid_import = 900 → demand - import = -400 → clamp to 0.0
         assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
         # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
         with pytest.warns(UserWarning, match="Basis-C own-use is negative"):
             result = _cbs_own_use_kwh(summary)
         assert result == pytest.approx(0.0, abs=1e-9)
-
-
-def _make_physics_column_scenario_cr6() -> ScenarioConfig:
-    """The scenario TestPhysicsReconciliationColumn simulates: 2 homes × 5.5 kWp + 5 kWh, 3 days."""
-    homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-    return ScenarioConfig(name="CR6-Physics-Test", period=period, homes=homes)
 
 
 class TestPhysicsColumnPremises:
@@ -1277,7 +1152,7 @@ class TestPhysicsColumnPremises:
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
-        scenario = _make_physics_column_scenario_cr6()
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
 
         econ = _spreadsheet_economics_cr6(scenario, finance)
@@ -1311,7 +1186,7 @@ class TestPhysicsReconciliationColumn:
 
         REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
         """
-        scenario = _make_physics_column_scenario_cr6()
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
 
         # Real physics simulation (simulate=None → real simulate_fleet)
