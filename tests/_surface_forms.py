@@ -549,8 +549,10 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _defining_module(obj: object) -> types.ModuleType:
-    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; anything else records only its module's name, so that module is looked up unchecked."""
-    if inspect.isroutine(obj):
+    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; a functools.partial's is that of the callable it wraps, and anything else records only its module's name, so that module is looked up unchecked."""
+    if isinstance(obj, functools.partial):
+        return _defining_module(obj.func)
+    if _is_routine(obj):
         return _routine_module(obj)
     if inspect.isclass(obj):
         return _class_module(obj)
