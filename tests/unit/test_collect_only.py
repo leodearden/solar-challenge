@@ -8,6 +8,8 @@ its output, with each test's file and parametrize id and each module or director
 collection with its skip reason, and a run that wrote no report never reads as an empty collection,
 nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
 command's stderr, and the output of a command that failed before pytest started.
+That no process a hung collect started outlives it is pinned with every other probe's,
+in test_command_runner_helper.py's test_no_process_a_hung_probe_started_outlives_it.
 """
 
 import os

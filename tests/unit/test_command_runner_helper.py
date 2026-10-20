@@ -2,6 +2,10 @@
 """Unit tests for tests/_command_runner.py, the one runner through which the orchestrator contract tests start a command.
 
 Each test runs a throwaway command, plain sh, with no uv and no mocks.
+test_no_process_a_hung_probe_started_outlives_it covers every probe built on
+run_command, not only run_command itself: collect, from tests/_collect_only.py,
+and run_verify_suite, from tests/_verify_suite.py, are its cases, so this module
+imports them, and their own test modules point here.
 """
 
 import contextlib
