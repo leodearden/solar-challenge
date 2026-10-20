@@ -32,6 +32,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
@@ -297,6 +298,9 @@ def suggest_config(
 # The days a trigger tool's simulation spans when the model sends no window.
 _TRIGGER_TOOL_DEFAULT_DAYS = 7
 
+# The most homes run_fleet_simulation submits: a larger n_homes is clamped to it, to protect the single-worker JobManager.
+_FLEET_TOOL_MAX_HOMES = 100
+
 # The window both trigger tools take, days or a start and end, as parse_date_range reads it.
 _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
@@ -472,23 +476,24 @@ def run_home_simulation(
 
 
 def run_fleet_simulation(
-    params: dict[str, Any],
+    n_homes: int,
+    params: Mapping[str, Any],
     job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
-    Builds a homogeneous N-home fleet by parsing the per-home param dict
-    (minus ``n_homes``) once with ``parse_home_config`` and repeating the
-    resulting frozen ``HomeConfig`` ``n_homes`` times.  ``n_homes``
-    is clamped to [1, 100] to protect the single-worker JobManager.
+    Builds a homogeneous fleet by parsing the per-home *params* once with
+    ``parse_home_config`` and repeating the resulting frozen ``HomeConfig``
+    for each home.  *n_homes* is clamped to [1, _FLEET_TOOL_MAX_HOMES] to
+    protect the single-worker JobManager.
 
     Args:
-        params:      Flat parameter dict including ``n_homes`` plus the per-home
-                     fields accepted by ``parse_home_config``
-                     (pv_kw, battery_kwh, location, days or start/end, …).
-                     Params that send no window run
+        n_homes:     The number of homes in the fleet, before the clamp.
+        params:      The per-home fields accepted by ``parse_home_config``
+                     (pv_kw, battery_kwh, location, days or start/end, …),
+                     without ``n_homes``.  Params that send no window run
                      _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
@@ -498,19 +503,12 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    # Clamp n_homes to [1, 100]
-    try:
-        n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
-    except (ValueError, TypeError):
-        n_homes = 1
-
-    # Build per-home dict by excluding the fleet-level n_homes key
-    per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
+    fleet_size = max(1, min(n_homes, _FLEET_TOOL_MAX_HOMES))
 
     # Validate once; if it fails, return early without submitting
     try:
         home_config_0, start_date, end_date, name = parse_home_config(
-            with_default_days(per_home, _TRIGGER_TOOL_DEFAULT_DAYS)
+            with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
         )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
@@ -521,7 +519,7 @@ def run_fleet_simulation(
     # take.  HomeConfig is a frozen dataclass, so all N entries can share one
     # immutable object — re-parsing N times would add no diversity and only
     # waste CPU.
-    configs: list[Any] = [home_config_0] * n_homes
+    configs: list[Any] = [home_config_0] * fleet_size
 
     try:
         _job_id, run_id = job_manager.submit_fleet_job(
@@ -550,6 +548,17 @@ class ToolContext:
     db_path: "str | Path"
     data_dir: "str | Path"
     job_manager: JobManager
+
+
+def _as_text(value: Any, field: str) -> str:
+    """Return *value*, a text field as the model sent it, refusing one that is not a string.
+
+    Raises:
+        ValueError: If *value* is not a str; the error names *field* and the value sent.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string, got {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -581,35 +590,30 @@ class _Tool:
 
 def _call_explain_metric(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer an explain_metric call: explain the metric *tool_input* names."""
-    metric: str = str(tool_input["metric"])
-    return explain_metric(metric)
+    return explain_metric(_as_text(tool_input["metric"], "metric"))
 
 
 def _call_suggest_config(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a suggest_config call: size a system for the consumption and goal *tool_input* sends."""
-    try:
-        annual_kwh: float = float(tool_input["annual_consumption_kwh"])
-    except (ValueError, TypeError):
-        return {"error": "annual_consumption_kwh must be numeric"}
-    goal: str = str(tool_input["goal"])
-    return suggest_config(annual_kwh, goal)
+    annual_kwh = as_finite_float_within(
+        tool_input["annual_consumption_kwh"],
+        "annual_consumption_kwh",
+        *FLEET_COMPONENTS["load"].fixed_range,
+    )
+    return suggest_config(annual_kwh, _as_text(tool_input["goal"], "goal"))
 
 
 def _call_get_run_results(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a get_run_results call: look up the run *tool_input* names among *context*'s runs."""
-    run_id_or_name: str = str(tool_input["run_id_or_name"])
     return get_run_results(
-        run_id_or_name, RunStorage(db_path=context.db_path, data_dir=context.data_dir)
+        _as_text(tool_input["run_id_or_name"], "run_id_or_name"),
+        RunStorage(db_path=context.db_path, data_dir=context.data_dir),
     )
 
 
 def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a list_recent_runs call: list *context*'s latest runs, up to the limit *tool_input* sends."""
-    try:
-        limit: int = int(tool_input["limit"])
-    except (ValueError, TypeError):
-        limit = 10
-    return list_recent_runs(limit, context.db_path)
+    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.db_path)
 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -621,8 +625,13 @@ def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContex
 
 def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a run_fleet_simulation call: submit the fleet *tool_input* describes to *context*'s JobManager."""
+    per_home = {key: value for key, value in tool_input.items() if key != "n_homes"}
     return run_fleet_simulation(
-        dict(tool_input), context.job_manager, context.db_path, context.data_dir
+        as_whole_number(tool_input["n_homes"], "n_homes"),
+        per_home,
+        context.job_manager,
+        context.db_path,
+        context.data_dir,
     )
 
 
@@ -794,7 +803,7 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                 "properties": {
                     "n_homes": {
                         "type": "integer",
-                        "description": "Number of homes in the fleet (1–100).",
+                        "description": f"Number of homes in the fleet (1–{_FLEET_TOOL_MAX_HOMES}).",
                     },
                     "pv_kw": {
                         "type": "number",
