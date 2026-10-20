@@ -150,6 +150,23 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
+    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header.
+
+    A section ends at the next heading of any level, so a sub-section's table is never read as *heading*'s.
+    """
+    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
+    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+    header, _delimiter_row, *rows = (
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|")
+    )
+    matches = [row for row in rows if row[0].startswith(config_label)]
+    assert len(matches) == 1, f"Expected one {config_label!r} row under {heading!r}:\n{section}"
+    return dict(zip(header, matches[0], strict=True))
+
+
 class TestGenerateConfigRankingReportTable1:
     """generate_config_ranking_report renders the COST-RECOVERY RANK table."""
 
@@ -280,8 +297,7 @@ class TestGenerateConfigRankingReportTable1:
         )
 
     def test_payback_none_shown_as_dash(self) -> None:
-        """payback_years=None must render as '—'."""
-        # Build a config with payback=None
+        """payback_years=None must render as '—' in the config's Cost-Recovery Rank Payback cell."""
         r_no_payback = make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
             payback_years=None,
@@ -290,7 +306,8 @@ class TestGenerateConfigRankingReportTable1:
         sweep = _make_ranked_sweep(results=(r_no_payback,))
         report = generate_config_ranking_report(sweep)
 
-        assert "—" in report, f"'—' for None payback not found:\n{report}"
+        row = _config_row(report, "## Cost-Recovery Rank", "3.0 kWp / 0.0 kWh / 5.0 kW")
+        assert row["Payback"] == "—", f"'—' for None payback not found in the Payback cell:\n{report}"
 
     def test_nan_irr_shown_as_na(self) -> None:
         """equity_irr=NaN must render as 'n/a'."""
@@ -401,22 +418,36 @@ class TestGenerateConfigRankingReportTable2:
         )
 
     def test_baseline_outlay_values_present(self) -> None:
-        """Report must show baseline_outlay_gbp for each feasible config."""
+        """Report must show each feasible config's baseline_outlay_gbp in its Fixed-15p Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        assert "360" in report, f"baseline outlay 360 not found:\n{report}"
-        assert "420" in report, f"baseline outlay 420 not found:\n{report}"
-        assert "450" in report, f"baseline outlay 450 not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£360.00",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£420.00",
+            "6.0 kWp / 5.0 kWh / 5.0 kW": "£450.00",
+        }
+        shown = {
+            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline Outlay (£/yr)"]
+            for label in expected
+        }
+        assert shown == expected, f"baseline outlays not shown in their configs' rows:\n{report}"
 
     def test_baseline_surplus_values_present(self) -> None:
-        """Report must show baseline_surplus_per_home_gbp for each feasible config."""
+        """Report must show each feasible config's baseline_surplus_per_home_gbp in its Fixed-15p Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        assert "30" in report, f"baseline surplus 30 not found:\n{report}"
-        assert "80" in report, f"baseline surplus 80 not found:\n{report}"
-        assert "60" in report, f"baseline surplus 60 not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£30.00",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£80.00",
+            "6.0 kWp / 5.0 kWh / 5.0 kW": "£60.00",
+        }
+        shown = {
+            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline CBS Surplus (£/home/yr)"]
+            for label in expected
+        }
+        assert shown == expected, f"baseline surpluses not shown in their configs' rows:\n{report}"
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
         """Table 2 must have exactly 2 '✔ Pareto' tokens (A+B) and exactly 1 '—' marker (C)."""
