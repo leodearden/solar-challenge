@@ -154,7 +154,7 @@ def test_a_lane_job_with_a_cwd_runs_in_that_directory_under_the_project_root(tmp
     )
 
 
-def test_a_lane_job_enabled_true_is_the_command_it_is_without_the_flag(tmp_path: Path) -> None:
+def test_a_lane_job_whose_enabled_flag_is_true_is_the_command_it_is_without_the_flag(tmp_path: Path) -> None:
     _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, "enabled": True}))
 
     assert lane_command(tmp_path, "probe") == OrchestratorCommand(
