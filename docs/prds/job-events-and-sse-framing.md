@@ -302,7 +302,9 @@ class RunStorage:
     def mark_run_failed(self, run_id: str, message: str) -> None: ...   # running → failed; absent row: no-op
 ```
 
-`SseEvent` forbids all whitespace in an event name, while the test reader `tests/_sse.py` refuses only leading or trailing whitespace, which native `EventSource` dispatches verbatim and the chat client trims, and keeps an inner space as written, which both clients read alike; the difference is deliberate, so do not align the two.
+`SseEvent` forbids all whitespace in an event name. The test reader `tests/_sse.parse_sse_events`
+refuses only leading or trailing whitespace and keeps an inner space as written; its docstring
+gives the reason. The difference is deliberate, so do not align the two.
 
 **Invariants (each enforced at the place named):**
 
