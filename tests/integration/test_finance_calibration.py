@@ -211,8 +211,10 @@ class TestFinCalibrationScenarioParses:
 
     The scenario uses fleet_distribution format (100 identical homes), which is
     parsed via load_fleet_config (matching how the finance CLI loads scenarios).
-    Finance block is parsed separately via parse_finance_config + load_config,
-    exactly as the finance CLI does internally.
+    The finance block is parsed with load_config and parse_finance_config, as the
+    finance CLI parses it (src/solar_challenge/cli/finance.py,
+    _required_finance_block), and checked as one equality with θ's [FIN] finance,
+    _make_finance_fin().
     """
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
@@ -252,59 +254,6 @@ class TestFinCalibrationScenarioParses:
         assert self._load_finance() == _make_finance_fin(), (
             f"{self._SCENARIO_PATH}'s finance block is not the [FIN] finance at FIN_SCF"
         )
-
-    def test_finance_parses_without_error(self) -> None:
-        """The scenario YAML must parse finance block without raising exceptions."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_scenario_has_finance_block(self) -> None:
-        """Parsed scenario must have a finance block (not None)."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_finance_self_consumption_override(self) -> None:
-        """finance.self_consumption_override must be 0.70 ([FIN] with-battery assumption)."""
-        finance = self._load_finance()
-        assert finance.self_consumption_override == pytest.approx(FIN_SCF), (
-            f"Expected self_consumption_override=0.70, "
-            f"got {finance.self_consumption_override}"
-        )
-
-    def test_finance_grant_gbp(self) -> None:
-        """finance.grant_gbp must be £250,000 ([FIN] grant)."""
-        finance = self._load_finance()
-        assert finance.grant_gbp == pytest.approx(FIN_GOLDEN["grant_gbp"])
-
-    def test_finance_equity_fraction(self) -> None:
-        """finance.equity_fraction must be 0.75 ([FIN] equity split)."""
-        finance = self._load_finance()
-        assert finance.equity_fraction == pytest.approx(FIN_GOLDEN["equity_fraction"])
-
-    def test_finance_loan_term_years(self) -> None:
-        """finance.loan_term_years must be 15 ([FIN] loan term)."""
-        finance = self._load_finance()
-        assert finance.loan_term_years == FIN_GOLDEN["loan_term_years"]
-
-    def test_finance_loan_rate(self) -> None:
-        """finance.loan_rate must be 0.07 ([FIN] loan interest rate)."""
-        finance = self._load_finance()
-        assert finance.loan_rate == pytest.approx(FIN_GOLDEN["loan_rate"])
-
-    def test_finance_pv_cost_per_kwp(self) -> None:
-        """finance.pv_cost_per_kwp_gbp must be £1000 ([FIN] PV cost)."""
-        finance = self._load_finance()
-        assert finance.pv_cost_per_kwp_gbp == pytest.approx(1000.0)
-
-    def test_finance_battery_cost_per_kwh(self) -> None:
-        """finance.battery_cost_per_kwh_gbp must be £250 ([FIN] battery cost)."""
-        finance = self._load_finance()
-        assert finance.battery_cost_per_kwh_gbp == pytest.approx(250.0)
-
-    def test_finance_asset_life_years(self) -> None:
-        """finance.asset_life_years must be 25."""
-        finance = self._load_finance()
-        assert finance.asset_life_years == 25
 
     def test_fleet_is_100_homes(self) -> None:
         """Fleet must have exactly 100 homes ([FIN] n_homes=100)."""
