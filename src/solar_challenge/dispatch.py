@@ -237,6 +237,38 @@ class DispatchStrategy(ABC):
         pass
 
 
+def _require_valid_strategy_inputs(
+    generation_kw: float,
+    demand_kw: float,
+    battery_soc_kwh: float,
+    battery_capacity_kwh: float,
+    timestep_minutes: float,
+) -> None:
+    """Refuse a decide_action input out of its range: a negative power or SOC, or a capacity or timestep that is not positive.
+
+    Raises:
+        ValueError: Naming the input and its value.
+    """
+    if generation_kw < 0:
+        raise ValueError(
+            f"Generation must be non-negative, got {generation_kw} kW"
+        )
+    if demand_kw < 0:
+        raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
+    if battery_soc_kwh < 0:
+        raise ValueError(
+            f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
+        )
+    if battery_capacity_kwh <= 0:
+        raise ValueError(
+            f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
+        )
+    if timestep_minutes <= 0:
+        raise ValueError(
+            f"Timestep must be positive, got {timestep_minutes} minutes"
+        )
+
+
 class SelfConsumptionStrategy(DispatchStrategy):
     """Self-consumption dispatch strategy.
 
@@ -284,25 +316,9 @@ class SelfConsumptionStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Calculate excess and shortfall
         excess_kw = max(0.0, generation_kw - demand_kw)
@@ -430,25 +446,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Determine current tariff period
         tariff_period = self._get_tariff_period(timestamp)
@@ -573,25 +573,9 @@ class PeakShavingStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Calculate excess and shortfall
         excess_kw = max(0.0, generation_kw - demand_kw)
@@ -760,8 +744,12 @@ class ScheduledChargeStrategy(DispatchStrategy):
         """Decide the step: the first listed window open at timestamp decides it, else the base does, given every argument unchanged.
 
         Raises:
-            ValueError: If timestamp is naive, so it has no wall-clock time on tz.
+            ValueError: If an input is out of the range the sibling strategies refuse, or
+                timestamp is naive, so it has no wall-clock time on tz.
         """
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
         window = self._window_at(timestamp)
         if window is None:
             return self._base.decide_action(
