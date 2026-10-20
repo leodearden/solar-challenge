@@ -302,9 +302,10 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A model that calls a tool on every reply is called MAX_TOOL_ITERATIONS times.
-        The turn then streams TOOL_CALL_LIMIT_NOTICE as its whole reply, stores it as
-        the reply and ends with a done frame."""
+        """A model that calls a tool on every reply has those calls run in MAX_TOOL_ITERATIONS
+        rounds. Each round is answered by a further call, so the model is called
+        MAX_TOOL_ITERATIONS + 1 times. The turn then streams TOOL_CALL_LIMIT_NOTICE as its
+        whole reply, stores it as the reply and ends with a done frame."""
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "tool-cap-sid"
         TOOL_ID_PREFIX = "toolu_inf_"
@@ -323,8 +324,9 @@ class TestToolUseLoop:
         body = resp.get_data(as_text=True)
 
         call_count = len(anthropic_api.calls)
-        assert call_count == MAX_TOOL_ITERATIONS, (
-            f"Expected exactly {MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
+        assert call_count == MAX_TOOL_ITERATIONS + 1, (
+            f"Expected exactly {MAX_TOOL_ITERATIONS + 1} stream() calls "
+            f"(the first, then one answering each of the {MAX_TOOL_ITERATIONS} tool rounds), "
             f"got {call_count}"
         )
 
@@ -338,6 +340,43 @@ class TestToolUseLoop:
             ("user", "explain forever"),
             ("assistant", TOOL_CALL_LIMIT_NOTICE),
         ]
+
+    def test_every_tool_call_a_capped_turn_runs_has_its_result_sent_to_the_model(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A model that calls a trigger tool on every reply has MAX_TOOL_ITERATIONS of the calls
+        run, and each job's results URL is sent to the model. The call made after the last round
+        runs nothing: no job, no tool frame, no invoked_tools entry."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-jobs-sid"
+        scripted = MAX_TOOL_ITERATIONS + 10  # more than the cap
+        jm = autospecced_job_manager()
+        jm.submit_home_job.side_effect = [(f"job-{i}", f"run-{i}") for i in range(scripted)]
+        app.extensions["job_manager"] = jm
+        anthropic_api.set_streams([
+            make_tool_use_stream(f"toolu_cap_job_{i}", "run_home_simulation", {"pv_kw": 4, "days": 7})
+            for i in range(scripted)
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "simulate forever"})
+        assert resp.status_code == 200
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        assert jm.submit_home_job.call_count == MAX_TOOL_ITERATIONS
+        urls_sent_to_the_model = [
+            json.loads(block["content"])["results_url"]
+            for message in anthropic_api.last_kwargs["messages"]
+            if message["role"] == "user" and isinstance(message["content"], list)
+            for block in message["content"]
+        ]
+        assert urls_sent_to_the_model == [f"/results/home/run-{i}" for i in range(MAX_TOOL_ITERATIONS)]
+        tools_run = ["run_home_simulation"] * MAX_TOOL_ITERATIONS
+        assert [e.data["name"] for e in events if e.event == "tool"] == tools_run
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert messages[-1]["metadata"]["invoked_tools"] == tools_run
 
     @pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens", "stop_sequence", "refusal", None])
     def test_a_reply_that_stops_for_any_reason_but_tool_use_ends_the_turn(
