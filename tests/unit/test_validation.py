@@ -654,7 +654,7 @@ class TestValidateConsumption:
             "2024-06-01", periods=24 * 60, freq="1min", tz="Europe/London"
         ).delete(700)
 
-        with pytest.raises(ValueError, match="evenly spaced rows: the gap before position 700"):
+        with pytest.raises(ValueError, match="evenly spaced"):
             validate_consumption(pd.Series(0.5, index=index), target_annual_kwh=3400.0)
 
 

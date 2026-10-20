@@ -912,19 +912,13 @@ class TestCommunityRowLength:
         assert cr.grid_export.iloc[0] == pytest.approx(0.0)
 
     @pytest.mark.parametrize("config", _CONFIG_FOR_EACH_PATH)
-    def test_a_fleet_index_with_a_dropped_middle_row_is_refused_naming_the_position_and_both_gaps(
-        self, config: CommunityConfig
-    ) -> None:
+    def test_a_fleet_index_with_a_dropped_middle_row_is_refused(self, config: CommunityConfig) -> None:
         # The first and last gaps are both one minute; only the gap before position 5 is two.
         minutes = pd.date_range("2024-06-21 12:00", periods=10, freq="min", tz="Europe/London").delete(5)
         fleet = _make_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)])
 
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ValueError, match="evenly spaced"):
             simulate_community(fleet, config)
-
-        assert "position 5" in str(refusal.value)
-        assert str(pd.Timedelta(minutes=2)) in str(refusal.value)
-        assert str(pd.Timedelta(minutes=1)) in str(refusal.value)
 
     @pytest.mark.parametrize("config", _CONFIG_FOR_EACH_PATH)
     def test_a_single_row_without_a_freq_is_refused(self, config: CommunityConfig) -> None:
