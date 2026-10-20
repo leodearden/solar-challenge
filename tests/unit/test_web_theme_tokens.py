@@ -4,6 +4,7 @@ colours (docs/prds/chart-panels-and-theme-tokens.md §Contract). Its chart secti
 chart hues, each written #rrggbb, and the chart roles, each naming a hue; charts.py loads
 them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_palette.
 
+* No web source but the token file writes a hex colour.
 * The committed file loads to the colours the charts draw, each role in its hue's colour.
 * A token file whose role names a hue it does not define, or whose hue is not written
   #rrggbb, is refused, naming them.
@@ -12,6 +13,7 @@ them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_
 
 import dataclasses
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,9 +25,21 @@ pytest.importorskip("plotly")
 from solar_challenge.home import calculate_summary
 from solar_challenge.web import charts
 from solar_challenge.web.theme_tokens import chart_colour_palette
-from tests._dashboard_sources import theme_tokens
+from tests._dashboard_sources import (
+    HAND_WRITTEN_STYLESHEET_KEY,
+    TAILWIND_CONFIG_KEY,
+    THEME_TOKENS_KEY,
+    dashboard_python_sources,
+    dashboard_template_sources,
+    hand_written_stylesheet_source,
+    tailwind_config_source,
+    theme_tokens,
+    theme_tokens_source,
+)
 from tests._finance_builders import make_sim_results
 from tests._plotly_figure import drawn_colours, opaque, traces_by_name
+
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 _CHART_ROLE_COLOURS = {
     "pv_generation": "#f5a623",
@@ -53,6 +67,44 @@ _SHIPPED_AMBER = "#f5a623"
 _RECOLOURED_AMBER = "#0000aa"
 
 _TokenCopy = Callable[[dict[str, Any]], Path]
+
+
+def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
+    """A hex colour is six hex digits after a hash, in any case, anywhere in a source, comments
+    included; an eight-digit colour counts through its first six digits.
+
+    Scripts (static/js) are not read yet: chart-renderer.js and parameter-sweep.js still write
+    chart chrome colours until γ (task 831, docs/prds/chart-panels-and-theme-tokens.md) moves
+    them out, and γ adds dashboard_script_sources() here. The compiled dist/style.css,
+    static/vendor and favicon.svg are not sources.
+    """
+    sources = {
+        THEME_TOKENS_KEY: theme_tokens_source(),
+        TAILWIND_CONFIG_KEY: tailwind_config_source(),
+        HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
+        **dashboard_template_sources(),
+        **dashboard_python_sources(),
+    }
+
+    written = {
+        path: hexes for path, source in sources.items() if (hexes := sorted(set(_HEX_COLOUR.findall(source))))
+    }
+
+    assert THEME_TOKENS_KEY in written, (
+        f"read no hex colour from {THEME_TOKENS_KEY}, the home of the dashboard's colours, so this "
+        "scan would pass vacuously"
+    )
+    elsewhere = {path: hexes for path, hexes in written.items() if path != THEME_TOKENS_KEY}
+    listing = "".join(f"\n  {path}: {' '.join(hexes)}" for path, hexes in elsewhere.items())
+    assert elsewhere == {}, (
+        f"These web sources write hex colours, whose one home is {THEME_TOKENS_KEY}:{listing}\n"
+        "A UI colour is reached through a Tailwind utility naming a palette of the token file's "
+        "tailwind section, such as bg-primary-500, or on a pseudo-element an arbitrary variant "
+        "such as [&::-webkit-slider-thumb]:bg-primary-500; then rebuild with "
+        "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
+        "static/dist/style.css. A chart colour is reached through a role of the token file's "
+        "chart section, read through charts.py's COLOUR_PALETTE."
+    )
 
 
 @pytest.fixture

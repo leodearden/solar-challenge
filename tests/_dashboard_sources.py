@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Read access to the source files of the solar_challenge.web dashboard: its Jinja
-templates, its standalone scripts, the stylesheets base.html links, tailwind.config.js,
-which builds its Tailwind theme and names the files Tailwind scans, and the theme token
-file static/src/theme-tokens.json, the one home of the dashboard's colours:
-tailwind.config.js reads its tailwind section and charts.py its chart section.
+templates, its standalone scripts, the stylesheets base.html links, its Python modules,
+tailwind.config.js, which builds its Tailwind theme and names the files Tailwind scans,
+and the theme token file static/src/theme-tokens.json, the one home of the dashboard's
+colours: tailwind.config.js reads its tailwind section and charts.py its chart section.
 
-Each template, script and stylesheet is keyed by its POSIX path relative to the
-package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``
-or ``static/style.css``. tailwind.config.js and the token file are keyed the same way,
-as ``tailwind.config.js`` and ``static/src/theme-tokens.json``. The templates and
-scripts are the ``.html`` and ``.js`` files the ``content`` globs of tailwind.config.js
-select, the files Tailwind scans for the classes the dashboard applies.
+Each template, script, stylesheet and Python module is keyed by its POSIX path relative
+to the package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``,
+``static/style.css`` or ``charts.py``. tailwind.config.js and the token file are keyed
+the same way, as ``tailwind.config.js`` and ``static/src/theme-tokens.json``. The
+templates and scripts are the ``.html`` and ``.js`` files the ``content`` globs of
+tailwind.config.js select, the files Tailwind scans for the classes the dashboard applies.
 dashboard_applied_classes_by_source reads those classes from the same files, under the
 same keys. pathlib expands each glob relative to the package directory, and it has no
 ``{a,b}`` braces or ``!`` negation.
@@ -47,6 +47,7 @@ _BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
 HAND_WRITTEN_STYLESHEET_KEY = "static/style.css"
 TAILWIND_CONFIG_KEY = "tailwind.config.js"
 THEME_TOKENS_KEY = "static/src/theme-tokens.json"
+_NPM_PACKAGES_DIR = "node_modules"
 _QUOTED_STRING = r"""(?:'[^']*'|"[^"]*")"""
 _CONTENT_ARRAY = re.compile(
     rf"\bcontent\s*:\s*\[\s*((?:{_QUOTED_STRING}\s*(?:,\s*{_QUOTED_STRING}\s*)*(?:,\s*)?)?)\]"
@@ -65,6 +66,17 @@ def dashboard_script_sources() -> dict[str, str]:
 
     A script is a .js file a content glob of tailwind.config.js selects."""
     return _scanned_sources_with_suffix(".js")
+
+
+def dashboard_python_sources() -> dict[str, str]:
+    """Source of every Python module of the package, such as ``charts.py``, in path order.
+
+    A module is a .py file anywhere under the package directory but in npm's node_modules."""
+    return _sources(
+        path
+        for path in sorted(_WEB_DIR.rglob("*.py"))
+        if _NPM_PACKAGES_DIR not in path.relative_to(_WEB_DIR).parts
+    )
 
 
 def dashboard_applied_classes_by_source() -> dict[str, set[str]]:

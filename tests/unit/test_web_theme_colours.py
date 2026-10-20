@@ -1,18 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards two invariants of the dashboard's theme colours: no template and no hand-written
-stylesheet writes out a hex colour that tailwind.config.js defines, and no template or
-script applies Tailwind's built-in amber, whose shades the theme's primary copies, except
-as one of the status and category roles _AMBER_ROLES lists.
+"""Guards one invariant of the dashboard's theme colours: no template or script applies
+Tailwind's built-in amber, the palette the theme token file names as primary, except as
+one of the status and category roles _AMBER_ROLES lists.
 
-An element reaches a theme colour through a Tailwind utility: bg-primary-500, or on a
-pseudo-element an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500.
-A written-out value is a second home that a theme edit does not reach, and so is a
-utility naming a built-in palette whose shades the theme copies, such as
-bg-amber-500 written for bg-primary-500.
-
-A colour is a six-digit hex literal, matched case-insensitively anywhere in a source,
-comments included. The compiled dist/style.css derives from the theme and is not
-checked. The hex checks skip scripts, which hand colour strings to chart libraries.
+An element reaches the accent through a Tailwind utility naming primary: bg-primary-500,
+or on a pseudo-element an arbitrary variant such as
+[&::-webkit-slider-thumb]:bg-primary-500. A utility naming the built-in palette primary
+names, such as bg-amber-500 written for bg-primary-500, is a second home of the accent,
+which an edit of the token file's primary does not reach.
 
 Amber also draws a few status and category roles that are independent of the accent, such
 as the 'running' run-status badge and the PV distribution card, and no rule over class
@@ -21,11 +16,10 @@ the templates that apply them, and an amber class passes only in a template whos
 lists it. An accent use written in such a class, in that template, is not caught. Every
 listed class must still be applied where it is listed, so no allowance outlives its role.
 
-The amber check holds only while primary copies amber, so it first checks that premise
-through one shade: tailwind.config.js's primary-500 must be amber-500's value.
+The amber check holds only while primary names amber, so it first checks that premise:
+the tailwind section of static/src/theme-tokens.json must name amber as primary.
 """
 
-import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -34,53 +28,16 @@ import pytest
 pytest.importorskip("jinja2")
 from tests._css_classes import names_palette
 from tests._dashboard_sources import (
-    HAND_WRITTEN_STYLESHEET_KEY,
-    TAILWIND_CONFIG_KEY,
+    THEME_TOKENS_KEY,
     dashboard_applied_classes_by_source,
-    dashboard_template_sources,
-    hand_written_stylesheet_source,
-    tailwind_config_source,
+    theme_tokens,
 )
 
-_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
-_BUILT_IN_PALETTE_PRIMARY_COPIES = "amber"
-_BUILT_IN_500_SHADE_PRIMARY_COPIES = "#f59e0b"
-_PRIMARY_500_ENTRY = re.compile(
-    r"""\bprimary\s*:\s*\{[^{}]*?\b500\s*:\s*['"](#[0-9a-fA-F]{6})['"]"""
-)
-
-
-def _hex_colours(source: str) -> set[str]:
-    """The six-digit hex colours *source* writes, lower-cased. An eight-digit colour
-    such as #f59e0bcc counts through its first six digits."""
-    return {colour.lower() for colour in _HEX_COLOUR.findall(source)}
-
-
-def _written_theme_colours(sources: Mapping[str, str]) -> dict[str, list[str]]:
-    """The theme colours each of *sources* writes, keyed by its path, for each source
-    that writes any."""
-    theme = _hex_colours(tailwind_config_source())
-    assert theme, "read no hex colour from tailwind.config.js, so this guard would pass vacuously"
-    return {
-        path: sorted(written)
-        for path, source in sources.items()
-        if (written := _hex_colours(source) & theme)
-    }
-
-
-def _primary_500() -> str:
-    """The hex colour tailwind.config.js gives primary's 500 shade, lower-cased."""
-    entry = _PRIMARY_500_ENTRY.search(tailwind_config_source())
-    assert entry, (
-        f"read no hex primary-500 from {TAILWIND_CONFIG_KEY}, so this guard cannot check that "
-        f"primary still copies Tailwind's built-in {_BUILT_IN_PALETTE_PRIMARY_COPIES}: extend "
-        "_PRIMARY_500_ENTRY to read the form primary-500 is now written in"
-    )
-    return entry[1].lower()
+_BUILT_IN_PALETTE_PRIMARY_NAMES = "amber"
 
 
 def _amber_classes(classes: Iterable[str]) -> set[str]:
-    return {c for c in classes if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_COPIES)}
+    return {c for c in classes if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_NAMES)}
 
 
 @dataclass(frozen=True)
@@ -103,7 +60,7 @@ class _AmberRole:
         not_amber = self.classes - _amber_classes(self.classes)
         if not_amber:
             raise ValueError(
-                f"{self.name} lists classes that name no {_BUILT_IN_PALETTE_PRIMARY_COPIES} "
+                f"{self.name} lists classes that name no {_BUILT_IN_PALETTE_PRIMARY_NAMES} "
                 f"shade, so they allow nothing: {' '.join(sorted(not_amber))}"
             )
 
@@ -179,35 +136,6 @@ def _listing(written: Mapping[str, list[str]]) -> str:
     return "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
 
 
-def test_no_template_writes_a_theme_colour() -> None:
-    written = _written_theme_colours(dashboard_template_sources())
-
-    assert written == {}, (
-        "These templates write out colours that tailwind.config.js defines, so a theme "
-        f"edit does not reach them:{_listing(written)}\n"
-        "Name the colour through a Tailwind utility instead, such as bg-primary-500, then "
-        "rebuild with `cd src/solar_challenge/web && npm ci && npm run build:css` and "
-        "commit static/dist/style.css. Delete a commented-out copy."
-    )
-
-
-def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
-    written = _written_theme_colours(
-        {HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source()}
-    )
-
-    assert written == {}, (
-        "The hand-written stylesheet writes out colours that tailwind.config.js defines, so "
-        f"a theme edit does not reach them:{_listing(written)}\n"
-        f"{HAND_WRITTEN_STYLESHEET_KEY} is served as-is, never compiled, so it cannot name a "
-        "theme colour. Colour the element with a Tailwind utility instead (on a pseudo-element, "
-        "an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500), then rebuild "
-        "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
-        "static/dist/style.css. Delete the declaration, including both the :root and the "
-        "html.dark copy of a variable."
-    )
-
-
 def test_an_amber_class_passes_only_in_a_source_its_role_lists() -> None:
     badge = _amber_role("badge", "bg-amber-100", "templates/listed.html")
     applied = {
@@ -269,15 +197,13 @@ def test_an_amber_role_listing_a_class_naming_no_amber_shade_is_rejected_naming_
 
 
 def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category_role() -> None:
-    assert _primary_500() == _BUILT_IN_500_SHADE_PRIMARY_COPIES, (
-        f"{TAILWIND_CONFIG_KEY}'s primary-500 is not Tailwind's built-in "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500, so primary no longer copies "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} and a class naming "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} would be a colour of its own, not a second home "
-        "of a theme colour. Point _BUILT_IN_PALETTE_PRIMARY_COPIES and "
-        "_BUILT_IN_500_SHADE_PRIMARY_COPIES at the built-in palette primary now copies, and "
-        "list the status and category roles drawn in it in _AMBER_ROLES, or delete this test "
-        "and _AMBER_ROLES if it copies none."
+    primary = theme_tokens()["tailwind"]["primary"]
+    assert primary == _BUILT_IN_PALETTE_PRIMARY_NAMES, (
+        f"{THEME_TOKENS_KEY}'s tailwind section names {primary!r} as primary, not Tailwind's "
+        f"built-in {_BUILT_IN_PALETTE_PRIMARY_NAMES}, so a class naming "
+        f"{_BUILT_IN_PALETTE_PRIMARY_NAMES} would be a colour of its own, not a second home "
+        "of the accent. Point _BUILT_IN_PALETTE_PRIMARY_NAMES at the built-in palette primary "
+        "now names, and list the status and category roles drawn in it in _AMBER_ROLES."
     )
     applied = dashboard_applied_classes_by_source()
     assert any(applied.values()), (
@@ -289,15 +215,15 @@ def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category
 
     assert unlisted == {}, (
         "These templates and scripts apply classes naming Tailwind's built-in "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}, whose shades tailwind.config.js's primary copies, "
+        f"{_BUILT_IN_PALETTE_PRIMARY_NAMES}, the palette {THEME_TOKENS_KEY} names as primary, "
         f"outside the status and category roles _AMBER_ROLES lists:{_listing(unlisted)}\n"
         "An accent use (a button, tab, link, toggle, spinner or focus ring) names primary "
-        "instead, the same colour, so a theme edit reaches it: bg-primary-500 for "
-        f"bg-{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500. Then rebuild with "
+        "instead, the same colour, so an edit of the token file's primary reaches it: "
+        f"bg-primary-500 for bg-{_BUILT_IN_PALETTE_PRIMARY_NAMES}-500. Then rebuild with "
         "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         "static/dist/style.css. A status or category that is independent of the accent, like "
         "the roles _AMBER_ROLES lists, gets an entry there naming the role, its "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} classes and the templates that apply them."
+        f"{_BUILT_IN_PALETTE_PRIMARY_NAMES} classes and the templates that apply them."
     )
 
 
