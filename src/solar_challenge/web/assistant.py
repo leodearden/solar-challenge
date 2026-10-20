@@ -1045,9 +1045,12 @@ def _reply_events(
     tests/unit/web_assistant/test_tool_use.py::TestToolUseLoop::test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk
     """
     messages = list(request["messages"])
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for tool_rounds_run in range(MAX_TOOL_ITERATIONS + 1):
         message = yield from _model_call(client, {**request, "messages": messages})
         if not _calls_tools(message):
+            return
+        if tool_rounds_run == MAX_TOOL_ITERATIONS:
+            yield _ReplyText(TOOL_CALL_LIMIT_NOTICE)
             return
         results = yield from _tool_results(message.content, run_tool)
         messages = [
@@ -1055,9 +1058,6 @@ def _reply_events(
             {"role": "assistant", "content": list(message.content)},
             {"role": "user", "content": results},
         ]
-    last_message = yield from _model_call(client, {**request, "messages": messages})
-    if _calls_tools(last_message):
-        yield _ReplyText(TOOL_CALL_LIMIT_NOTICE)
 
 
 def _model_call(client: Any, request: Mapping[str, Any]) -> Generator[_ReplyEvent, None, Any]:
