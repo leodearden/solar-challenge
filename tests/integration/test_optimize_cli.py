@@ -270,14 +270,19 @@ class TestGenerateConfigRankingReportTable1:
         assert shown == expected, f"CBS surpluses not shown in their configs' rows:\n{report}"
 
     def test_feasibility_binding_label_present(self) -> None:
-        """Report must show the human-readable binding/feasibility label."""
+        """Report must show each config's human-readable binding/feasibility label in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Both configs are binding='floor'
-        assert "Surplus meets floor" in report or "surplus meets floor" in report.lower(), (
-            f"'Surplus meets floor' label not found:\n{report}"
-        )
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "✔ Surplus meets floor",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "✔ Surplus meets floor",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Feasibility"]
+            for label in expected
+        }
+        assert shown == expected, f"feasibility labels not shown in their configs' rows:\n{report}"
 
     def test_total_capex_rendered(self) -> None:
         """Report must show each feasible config's total_capex_gbp in its Cost-Recovery Rank row."""
@@ -295,11 +300,12 @@ class TestGenerateConfigRankingReportTable1:
         assert shown == expected, f"total capex not shown in their configs' rows:\n{report}"
 
     def test_min_dscr_inf_shown_as_infinity_symbol(self) -> None:
-        """min_dscr=inf must be rendered as '∞'."""
+        """min_dscr=inf must render as '∞' in the config's Cost-Recovery Rank Min DSCR cell."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        assert "∞" in report, f"'∞' symbol for inf DSCR not found:\n{report}"
+        row = _config_row(report, "## Cost-Recovery Rank", "4.0 kWp / 0.0 kWh / 5.0 kW")
+        assert row["Min DSCR"] == "∞", f"'∞' for inf DSCR not found in the Min DSCR cell:\n{report}"
 
     def test_equity_irr_formatted_as_percent(self) -> None:
         """Each config's equity_irr must be rendered as a one-decimal percentage in its Cost-Recovery Rank row."""
@@ -330,7 +336,7 @@ class TestGenerateConfigRankingReportTable1:
         assert row["Payback"] == "—", f"'—' for None payback not found in the Payback cell:\n{report}"
 
     def test_nan_irr_shown_as_na(self) -> None:
-        """equity_irr=NaN must render as 'n/a'."""
+        """equity_irr=NaN must render as 'n/a' in the config's Cost-Recovery Rank Equity IRR cell."""
         r_nan_irr = make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
             equity_irr=float("nan"),
@@ -339,7 +345,8 @@ class TestGenerateConfigRankingReportTable1:
         sweep = _make_ranked_sweep(results=(r_nan_irr,))
         report = generate_config_ranking_report(sweep)
 
-        assert "n/a" in report, f"'n/a' for NaN IRR not found:\n{report}"
+        row = _config_row(report, "## Cost-Recovery Rank", "3.0 kWp / 0.0 kWh / 5.0 kW")
+        assert row["Equity IRR"] == "n/a", f"'n/a' for NaN IRR not found in the Equity IRR cell:\n{report}"
 
     def test_recommendation_marker_on_cheapest(self) -> None:
         """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell."""
