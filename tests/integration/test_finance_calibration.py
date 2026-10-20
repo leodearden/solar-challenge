@@ -247,6 +247,12 @@ class TestFinCalibrationScenarioParses:
             f"{self._SCENARIO_PATH} not found — create it in step-4"
         )
 
+    def test_finance_block_is_the_fin_finance_at_fin_scf(self) -> None:
+        """The finance block is θ's [FIN] finance: make_fin_finance at the spreadsheet's FIN_SCF override."""
+        assert self._load_finance() == _make_finance_fin(), (
+            f"{self._SCENARIO_PATH}'s finance block is not the [FIN] finance at FIN_SCF"
+        )
+
     def test_finance_parses_without_error(self) -> None:
         """The scenario YAML must parse finance block without raising exceptions."""
         finance = self._load_finance()
