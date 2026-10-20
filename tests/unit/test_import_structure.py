@@ -64,9 +64,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "which imports Flask"
     ),
 
-    ("solar_challenge.cli.finance", "solar_challenge.gridservices"): Transitional(
-        "task 802 (S9 β)"
-    ),
     ("solar_challenge.finance", "solar_challenge.battery"): _FINANCE_PARTITION,
     ("solar_challenge.finance", "solar_challenge.fleet"): _FINANCE_PARTITION,
     ("solar_challenge.finance", "solar_challenge.gridservices"): Transitional("task 801 (S9 α)"),
