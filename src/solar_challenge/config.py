@@ -464,9 +464,11 @@ class FleetDistributionConfig:
         _refuse_pools_not_sized_to_the_fleet(self)
 
 
-#: The component order in which every random order shuffles the pools it does not shuffle
-#: first, field order within a component. It is not the order in which a home draws them.
-_DEFAULT_SHUFFLE_ORDER: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
+#: The fleet's components, as FleetDistributionConfig names them. Their order is the default
+#: shuffle order: every random order shuffles the pools it does not shuffle first component
+#: by component in this order, field order within a component. It is not the order in which
+#: a home draws them.
+_FLEET_COMPONENTS: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
 
 
 @dataclass(frozen=True)
@@ -474,7 +476,8 @@ class _RandomOrder:
     """What a fleet's random order draws for every home before the first home is built.
 
     First each pre_sampled setting's values, then the pools of the shuffled_first settings
-    in that order, then every other pool in _DEFAULT_SHUFFLE_ORDER.
+    in that order, then every other pool in the default shuffle order: component by
+    component in _FLEET_COMPONENTS, field order within a component.
 
     Attributes:
         pre_sampled: Paths of the settings whose weighted discrete, normal or uniform
@@ -500,8 +503,8 @@ _RANDOM_ORDERS: Mapping[str, _RandomOrder] = MappingProxyType({
 
 
 def _component_settings(config: FleetDistributionConfig) -> Iterator[tuple[str, object]]:
-    """Each setting of *config*'s components with its path, e.g. ('pv.tilt', spec), component by component in _DEFAULT_SHUFFLE_ORDER."""
-    for name in _DEFAULT_SHUFFLE_ORDER:
+    """Each setting of *config*'s components with its path, e.g. ('pv.tilt', spec), component by component in _FLEET_COMPONENTS."""
+    for name in _FLEET_COMPONENTS:
         component = getattr(config, name)
         if component is None:
             continue
