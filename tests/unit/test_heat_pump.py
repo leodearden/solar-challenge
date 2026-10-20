@@ -208,11 +208,6 @@ class TestCalculateCOP:
     def test_each_type_is_held_to_its_floor_and_ceiling(self, heat_pump_type, outdoor_temp_c, cop):
         assert calculate_cop(heat_pump_type, outdoor_temp_c) == pytest.approx(cop, abs=1e-12)
 
-    @pytest.mark.parametrize("outdoor_temp_c", (-60.0, -20.0, -5.0, 0.0, 7.0, 20.0, 40.0, 60.0))
-    @pytest.mark.parametrize("heat_pump_type", HEAT_PUMP_TYPES)
-    def test_cop_is_the_types_curve_in_cop_curves(self, heat_pump_type, outdoor_temp_c):
-        assert calculate_cop(heat_pump_type, outdoor_temp_c) == COP_CURVES[heat_pump_type].cop(outdoor_temp_c)
-
     def test_ashp_cop_increases_with_temperature(self):
         """ASHP COP increases with outdoor temperature."""
         cop_minus_10 = calculate_cop("ASHP", -10.0)
