@@ -3,7 +3,9 @@
 
 A pin is generated through the fleet loaders the CLI uses. Home by home, it records every
 value the file's fleet_distribution: block gives a component, or None for a component the
-home lacks, so a field the file leaves to a default is never pinned.
+home lacks, so a field the file leaves to a default is never pinned. A battery's grid_charging
+and dispatch_strategy sub-blocks hold no single drawn value and are left out; any other value
+that is not None, a bool, a number or a string is refused, naming the fleet and the setting.
 
 Usage::
 
@@ -49,6 +51,9 @@ REGENERATE_COMMAND = "uv run --locked --extra dev python -m tests._fleet_generat
 
 _COMPONENTS: tuple[str, ...] = ("pv", "battery", "load", "heat_pump", "ev")
 
+#: The (component, key) settings whose value is a sub-block, which holds no single drawn value.
+_SUB_BLOCKS: frozenset[tuple[str, str]] = frozenset({("battery", "grid_charging"), ("battery", "dispatch_strategy")})
+
 _PINNED_VALUE_TYPES: tuple[type, ...] = (type(None), bool, int, float, str)
 
 
@@ -67,7 +72,7 @@ def fleet_pin(project_root: Path, fleet: str) -> dict[str, Any]:
     return {
         "fleet": fleet,
         "points": [
-            {"sweep_value": value, "homes": [_home_record(home, blocks) for home in homes]}
+            {"sweep_value": value, "homes": [_home_record(fleet, home, blocks) for home in homes]}
             for value, homes in _generated_points(document)
         ],
     }
@@ -102,7 +107,9 @@ def _given_component_blocks(distribution: Mapping[str, Any]) -> dict[str, Mappin
     }
 
 
-def _home_record(home: HomeConfig, blocks: Mapping[str, Mapping[str, Any]]) -> dict[str, Optional[dict[str, Any]]]:
+def _home_record(
+    fleet: str, home: HomeConfig, blocks: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Optional[dict[str, Any]]]:
     configs: dict[str, object] = {
         "pv": home.pv_config,
         "battery": home.battery_config,
@@ -110,14 +117,27 @@ def _home_record(home: HomeConfig, blocks: Mapping[str, Mapping[str, Any]]) -> d
         "heat_pump": home.heat_pump_config,
         "ev": home.ev_config,
     }
-    return {component: _component_record(configs[component], block) for component, block in blocks.items()}
+    return {
+        component: _component_record(fleet, component, configs[component], block)
+        for component, block in blocks.items()
+    }
 
 
-def _component_record(config: object, block: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+def _component_record(
+    fleet: str, component: str, config: object, block: Mapping[str, Any]
+) -> Optional[dict[str, Any]]:
     if config is None:
         return None
-    values = {key: getattr(config, key) for key in block}
-    return {key: value for key, value in values.items() if isinstance(value, _PINNED_VALUE_TYPES)}
+    record = {key: getattr(config, key) for key in block if (component, key) not in _SUB_BLOCKS}
+    for key, value in record.items():
+        if not isinstance(value, _PINNED_VALUE_TYPES):
+            raise TypeError(
+                f"{fleet} gives a home {component}.{key} = {value!r}, which no golden can hold: a pin holds "
+                "None, a bool, a number or a string. Record the setting's drawn value as one of those, or, if "
+                f"it is a sub-block holding no single drawn value, add ({component!r}, {key!r}) to _SUB_BLOCKS "
+                "in tests/_fleet_generation_pins.py"
+            )
+    return record
 
 
 def main() -> None:
