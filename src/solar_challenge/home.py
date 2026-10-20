@@ -24,7 +24,7 @@ from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simul
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow
-from solar_challenge.weather import align_tmy_to_index, get_tmy_data
+from solar_challenge.weather import WeatherProvider, align_tmy_to_index, get_tmy_data
 
 
 _YEAR_LENGTHS_IN_HOURS = reference_year_lengths(rows_per_day=24)
@@ -281,21 +281,28 @@ class SummaryStatistics:
             )
 
 
-def _hourly_weather(config: HomeConfig, weather_data: pd.DataFrame | None) -> pd.DataFrame:
-    """The hourly weather a run uses: weather_data, or config.location's TMY year from get_tmy_data when it is None.
+def _hourly_weather(
+    config: HomeConfig, weather: WeatherProvider | None, weather_data: pd.DataFrame | None
+) -> pd.DataFrame:
+    """The hourly weather a run uses: weather's for config.location, asked once, else weather_data, else get_tmy_data's.
 
     Raises:
         ValueError: If the home has a heat pump and the weather is not one year of hourly rows.
     """
-    weather = get_tmy_data(config.location) if weather_data is None else weather_data
-    if config.heat_pump_config is not None and len(weather) not in _YEAR_LENGTHS_IN_HOURS:
+    if weather is not None:
+        frame = weather.get(config.location)
+    elif weather_data is not None:
+        frame = weather_data
+    else:
+        frame = get_tmy_data(config.location)
+    if config.heat_pump_config is not None and len(frame) not in _YEAR_LENGTHS_IN_HOURS:
         raise ValueError(
-            f"weather_data has {len(weather):,} rows, not one year of hourly rows "
+            f"weather_data has {len(frame):,} rows, not one year of hourly rows "
             f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
             "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
             "so pass one TMY year of hourly weather, as get_tmy_data returns."
         )
-    return weather
+    return frame
 
 
 @dataclass(frozen=True)
@@ -550,6 +557,8 @@ def simulate_home(
     end_date: pd.Timestamp,
     validate_balance: bool = True,
     weather_data: pd.DataFrame | None = None,
+    *,
+    weather: WeatherProvider | None = None,
 ) -> SimulationResults:
     """Simulate a single home for a date range.
 
@@ -564,6 +573,9 @@ def simulate_home(
             degree-minutes of the air temperature across this whole year,
             so with a heat pump configured the weather must be one year of
             hourly rows, 8760 to 8784 (365 to 366 days).
+        weather: Supplies the hourly weather at config.location, which
+            simulate_home asks it for once; when given, weather_data is
+            not read.
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
@@ -572,9 +584,11 @@ def simulate_home(
         ValueError: If a heat pump is configured and weather_data is not one
             year of hourly rows.
     """
-    weather = _hourly_weather(config, weather_data)
-    minute_generation = interpolate_to_minute_resolution(simulate_pv_output(config.pv_config, config.location, weather))
-    demand = _demand(config, weather, start_date, end_date)
+    hourly_weather = _hourly_weather(config, weather, weather_data)
+    minute_generation = interpolate_to_minute_resolution(
+        simulate_pv_output(config.pv_config, config.location, hourly_weather)
+    )
+    demand = _demand(config, hourly_weather, start_date, end_date)
     rows = demand.total_kw.index
     window = SimulationWindow.of_index(rows)
     generation_kw = align_tmy_to_index(minute_generation, rows)
