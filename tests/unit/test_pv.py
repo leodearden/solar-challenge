@@ -615,7 +615,8 @@ class TestConfigurablePanelParameters:
             module_power_w=450.0
         )
         assert params["gamma_pdc"] == -0.003
-        assert params["efficiency"] == 0.22
+        assert params["A_c"] == pytest.approx(450.0 / (0.22 * 1000))
+        assert "efficiency" not in params
         assert params["STC"] == 450.0
 
     def test_custom_module_params_used_in_system(self):
