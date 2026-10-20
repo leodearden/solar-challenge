@@ -690,7 +690,7 @@ figures reported for transparency; no test pins them to specific digits.
 
 Source: `TestPhysicsReconciliationColumn::test_physics_path_reported`
 (`@pytest.mark.slow`; real PVGIS weather), on the fleet
-`_make_physics_column_scenario_cr6` builds.
+`tests/_fin_calibration.py::make_physics_column_scenario` builds.
 
 The physics column solves 2 homes of 5.5 kWp + 5 kWh under the §7.2 [FIN] finance,
 simulated over three January days (2024-01-01 to 2024-01-03).  It hard-asserts only that

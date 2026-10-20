@@ -27,7 +27,7 @@ import dataclasses
 import pandas as pd
 import pytest
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -42,7 +42,7 @@ from solar_challenge.finance import (
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
-from solar_challenge.load import LoadConfig
+from tests._fin_calibration import make_physics_column_scenario
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -1189,20 +1189,6 @@ class TestCbsOwnUseKwhHelper:
         assert result == pytest.approx(0.0, abs=1e-9)
 
 
-def _make_physics_column_scenario_cr6() -> ScenarioConfig:
-    """The scenario TestPhysicsReconciliationColumn simulates: 2 homes over 3 days.
-
-    Each home is the [FIN] install, 5.5 kWp + 5 kWh, on a deterministic 3,400 kWh load.
-    """
-    home = dataclasses.replace(
-        _FIN_HOME,
-        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1),
-    )
-    homes = [home] * 2
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-    return ScenarioConfig(name="CR6-Physics-Test", period=period, homes=homes)
-
-
 class TestPhysicsColumnPremises:
     """Fast guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
 
@@ -1212,7 +1198,7 @@ class TestPhysicsColumnPremises:
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
-        scenario = _make_physics_column_scenario_cr6()
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
 
         econ = _spreadsheet_economics_cr6(scenario, finance)
@@ -1246,7 +1232,7 @@ class TestPhysicsReconciliationColumn:
 
         REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
         """
-        scenario = _make_physics_column_scenario_cr6()
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
 
         # Real physics simulation (simulate=None → real simulate_fleet)

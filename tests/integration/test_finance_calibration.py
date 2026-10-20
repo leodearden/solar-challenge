@@ -32,7 +32,6 @@ import pytest
 
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
     parse_finance_config,
@@ -45,7 +44,7 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
-from solar_challenge.load import LoadConfig
+from tests._fin_calibration import make_physics_column_scenario
 from tests._finance_builders import make_scenario_of, make_sized_home
 
 
@@ -689,18 +688,7 @@ class TestCalibrationPhysicsColumn:
         simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
         differ from 0.70, no physics==spreadsheet assertion.
         """
-        # Small fleet, short window for speed
-        home = dataclasses.replace(
-            make_sized_home(pv_kwp=5.5, battery_kwh=5.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1),
-        )
-        homes = [home] * 2
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-        scenario = ScenarioConfig(
-            name="FIN-Cal-Physics-Test",
-            period=period,
-            homes=homes,
-        )
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin()
         physics_finance = dataclasses.replace(finance, self_consumption_override=None)
 
