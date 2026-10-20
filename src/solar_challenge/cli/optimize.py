@@ -164,8 +164,8 @@ def configs(
 
     When --sensitivity is non-empty, a one-at-a-time (OAT) sensitivity panel
     is appended showing which cost assumptions most affect the top-ranked config.
-    The panel is skipped gracefully when the baseline sweep yields no feasible
-    config (sensitivity_panel raises ValueError for an empty feasible baseline).
+    The panel is skipped, with a note on stderr, when the sweep yields no
+    feasible config.
 
     Example::
 
@@ -297,16 +297,12 @@ def configs(
         knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
         axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
         print_info(f"Computing sensitivity panel for axes: {sensitivity_axes}…")
-        try:
-            panel = sensitivity_panel(
-                all_configs,
-                axes_map,
-                retained_cash_floor_gbp=retained_floor,
-                simulate=simulate,
-            )
-        except ValueError as exc:
-            # Gracefully skip panel if no feasible baseline (rather than crashing)
-            print_info(f"Sensitivity panel skipped: {exc}")
+        panel = sensitivity_panel(
+            all_configs,
+            axes_map,
+            retained_cash_floor_gbp=retained_floor,
+            simulate=simulate,
+        )
     elif sensitivity_axes and ranked.cheapest_feasible is None:
         # Explicit user message when axes were requested but there is no feasible
         # baseline — sensitivity_panel would raise immediately, so we skip it.
