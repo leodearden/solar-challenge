@@ -427,7 +427,7 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
 
 
 def run_home_simulation(
-    params: dict[str, Any],
+    params: Mapping[str, Any],
     job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
@@ -440,7 +440,7 @@ def run_home_simulation(
     or the job submission fails.  Never raises.
 
     Args:
-        params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
+        params:      Flat parameters (pv_kw, battery_kwh, occupants,
                      location, days or start/end, name, …) — same shape as
                      the JSON body accepted by POST /api/simulate/home, and
                      its window is read as that endpoint reads it.  Params
@@ -618,9 +618,7 @@ def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a run_home_simulation call: submit the home *tool_input* describes to *context*'s JobManager."""
-    return run_home_simulation(
-        dict(tool_input), context.job_manager, context.db_path, context.data_dir
-    )
+    return run_home_simulation(tool_input, context.job_manager, context.db_path, context.data_dir)
 
 
 def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
