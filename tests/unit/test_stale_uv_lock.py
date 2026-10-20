@@ -56,6 +56,12 @@ def _lock_digest(project: Path) -> str:
     return hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest()
 
 
+def _reset_to_copy_of(pristine: Path, project: Path) -> None:
+    """Make *project* a fresh copy of *pristine*, so nothing a command wrote there earlier is left."""
+    shutil.rmtree(project)
+    shutil.copytree(pristine, project)
+
+
 @pytest.fixture
 def offline_uv_probe_environment(uv_probe_environment: dict[str, str]) -> dict[str, str]:
     """Return uv_probe_environment with uv's network access off, so every uv command here reads the package index from uv's cache alone.
@@ -133,32 +139,38 @@ def test_the_verify_refuses_a_stale_lock_naming_uv_lock(
 
 
 def test_each_lane_job_refuses_a_stale_lock_naming_uv_lock(
-    stale_lock_project: Path, offline_uv_probe_environment: dict[str, str]
+    stale_lock_project: Path, tmp_path: Path, offline_uv_probe_environment: dict[str, str]
 ) -> None:
     """Run as the lane runs it on a stale uv.lock, each offline-lane job fails naming `uv lock` without rewriting the lock.
 
     The lane runs on main's committed tree, so a stale lock on main turns it red
-    instead of being re-locked and tested. The lock is checked after each job: one
-    that rewrote it would void the probe of every job after it.
+    instead of being re-locked and tested. Each job runs on a fresh copy of the
+    stale probe, and every job's failure is reported, so a job that rewrites the
+    lock neither stops the probe of the jobs after it nor hands them a lock that is
+    no longer stale.
     """
     lane_jobs = lane_commands(stale_lock_project)
     assert lane_jobs, "git.offline_lane_commands holds no job, so this probe checks nothing"
-    stale_lock = _lock_digest(stale_lock_project)
-    unrefusing: list[str] = []
+    pristine = shutil.copytree(stale_lock_project, tmp_path / "pristine-project")
+    stale_lock = _lock_digest(pristine)
+    failures: list[str] = []
 
     for lane_job in lane_jobs:
+        _reset_to_copy_of(pristine, stale_lock_project)
         result = run_collect_only(lane_job, env=offline_uv_probe_environment)
-        assert _lock_digest(stale_lock_project) == stale_lock, (
-            f"the {lane_job.label} {lane_job.command!r} rewrote a stale uv.lock instead of refusing it, so the lane "
-            f"tests main against a lock nobody committed; the fix is `uv run --locked`\n{describe_outcome(result)}"
-        )
-        if not _fails_naming_the_fix(result):
-            unrefusing.append(f"the {lane_job.label} {lane_job.command!r}: {describe_outcome(result)}")
+        if _lock_digest(stale_lock_project) != stale_lock:
+            failures.append(
+                f"the {lane_job.label} {lane_job.command!r} rewrote a stale uv.lock instead of refusing it, so the "
+                f"lane tests main against a lock nobody committed; the fix is `uv run --locked`\n"
+                f"{describe_outcome(result)}"
+            )
+        elif not _fails_naming_the_fix(result):
+            failures.append(
+                f"the {lane_job.label} {lane_job.command!r} did not fail naming `{_THE_FIX}` on a stale uv.lock, so a "
+                f"stale lock on main does not turn the lane red with the fix named\n{describe_outcome(result)}"
+            )
 
-    assert not unrefusing, (
-        f"these lane jobs did not fail naming `{_THE_FIX}` on a stale uv.lock, so a stale lock on main does not "
-        "turn the lane red with the fix named:\n" + "\n".join(unrefusing)
-    )
+    assert not failures, "\n\n".join(failures)
 
 
 def test_uv_in_the_probe_environment_reads_the_package_index_only_from_its_cache(
