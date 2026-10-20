@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests._collect_only import collect
 from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
 from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
 
@@ -64,6 +65,11 @@ def _hang_in_run_command(hang: str, directory: Path, timeout_secs: float) -> Non
 def _hang_in_run_command_under_gnu_timeout(hang: str, directory: Path, timeout_secs: float) -> None:
     """GNU timeout puts itself and the hang in a process group of their own, inside the probe's session."""
     _hang_in_run_command(f"timeout 300 {hang}", directory, timeout_secs)
+
+
+def _hang_in_collect(hang: str, directory: Path, timeout_secs: float) -> None:
+    with pytest.raises(CommandTimedOut):
+        collect(ShellCommand(hang, directory), timeout_secs=timeout_secs)
 
 
 def _pid_of_a_background_child_killed_in_a_hang(directory: Path, start: ProbeStart) -> int:
@@ -175,6 +181,7 @@ def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_it
     [
         pytest.param(_hang_in_run_command, id="run_command"),
         pytest.param(_hang_in_run_command_under_gnu_timeout, id="run_command-under-gnu-timeout"),
+        pytest.param(_hang_in_collect, id="collect"),
     ],
 )
 def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: ProbeStart) -> None:

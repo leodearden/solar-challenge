@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._collect_only import COLLECTION_REPORT_PLUGIN, COLLECTION_REPORT_PLUGIN_DIRECTORY, CollectedTest, collect
+from tests._command_runner import ShellCommand
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -100,7 +101,7 @@ def project_with_a_long_listing_and_a_broken_module(tmp_path: Path) -> Path:
 
 def test_collects_the_tests_the_projects_addopts_select_without_running_them(project_with_ini_addopts: Path) -> None:
     """Clearing the ini's addopts would collect test_ignored.py, and each test raises if run."""
-    collection = collect(_PYTEST, project_with_ini_addopts)
+    collection = collect(ShellCommand(_PYTEST, project_with_ini_addopts))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == (
@@ -115,7 +116,7 @@ def test_each_extra_pytest_arg_reaches_pytest_whole(project_with_ini_addopts: Pa
 
     The tests read are those left after the expression deselects test_gamma.
     """
-    collection = collect(_PYTEST, project_with_ini_addopts, "-k", "alpha or beta")
+    collection = collect(ShellCommand(_PYTEST, project_with_ini_addopts), "-k", "alpha or beta")
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
@@ -126,7 +127,7 @@ def test_by_default_the_command_runs_in_this_process_environment(
 ) -> None:
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
 
-    collection = collect(_PYTEST, project_echoing_its_environment)
+    collection = collect(ShellCommand(_PYTEST, project_echoing_its_environment))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_environment.py::test_environment[inherited]",), collection.describe()
@@ -139,7 +140,7 @@ def test_a_given_environment_replaces_this_process_environment(
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
     environment = {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 
-    collection = collect(_PYTEST, project_echoing_its_environment, env=environment)
+    collection = collect(ShellCommand(_PYTEST, project_echoing_its_environment), env=environment)
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
@@ -157,7 +158,7 @@ def test_the_given_environments_pythonpath_stays_importable(tmp_path: Path) -> N
         "import probe_helper\n\n\ndef test_case():\n    pass\n", encoding="utf-8"
     )
 
-    collection = collect(_PYTEST, project, env={**os.environ, "PYTHONPATH": str(helpers)})
+    collection = collect(ShellCommand(_PYTEST, project), env={**os.environ, "PYTHONPATH": str(helpers)})
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_importing.py::test_case",), collection.describe()
@@ -172,7 +173,7 @@ def test_an_output_line_holding_a_double_colon_is_not_a_test(tmp_path: Path) -> 
     )
     (tmp_path / "test_two.py").write_text(_module_of_failing_tests("test_alpha", "test_beta"), encoding="utf-8")
 
-    collection = collect(_PYTEST, tmp_path)
+    collection = collect(ShellCommand(_PYTEST, tmp_path))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert _DOUBLE_COLON_LINE in collection.stdout, collection.describe()
@@ -200,7 +201,7 @@ def test_each_collected_test_carries_its_file_and_its_parametrize_id(tmp_path: P
         encoding="utf-8",
     )
 
-    collection = collect(_PYTEST, tmp_path)
+    collection = collect(ShellCommand(_PYTEST, tmp_path))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     module = PurePosixPath("sub/test_ids.py")
@@ -218,7 +219,7 @@ def test_a_module_skipped_at_collection_is_reported_with_its_skip_reason(tmp_pat
     )
     (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
 
-    collection = collect(_PYTEST, tmp_path)
+    collection = collect(ShellCommand(_PYTEST, tmp_path))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
@@ -235,7 +236,7 @@ def test_a_directory_whose_conftest_skips_is_reported_with_its_skip_reason(tmp_p
     (tmp_path / "sub" / "test_in_sub.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
     (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
 
-    collection = collect(_PYTEST, tmp_path)
+    collection = collect(ShellCommand(_PYTEST, tmp_path))
 
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
@@ -248,7 +249,7 @@ def test_a_command_that_never_runs_pytest_has_no_report_and_reading_its_node_ids
     tmp_path: Path,
 ) -> None:
     """It never reads as an empty collection, as when uv refuses a stale lock before pytest starts."""
-    collection = collect("false", tmp_path)
+    collection = collect(ShellCommand("false", tmp_path))
 
     assert collection.report is None, collection.describe()
     with pytest.raises(AssertionError) as failure:
@@ -260,7 +261,7 @@ def test_a_collection_that_selects_nothing_is_an_empty_report_not_a_missing_one(
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (tmp_path / "test_one.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
 
-    collection = collect(_PYTEST, tmp_path, "-k", "nomatch")
+    collection = collect(ShellCommand(_PYTEST, tmp_path), "-k", "nomatch")
 
     assert collection.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, collection.describe()
     assert collection.report is not None, collection.describe()
@@ -273,7 +274,7 @@ def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_l
     (tmp_path / "test_first.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
     (tmp_path / "test_second.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
 
-    collection = collect(f"{_PYTEST} test_first.py && {_PYTEST} test_second.py", tmp_path)
+    collection = collect(ShellCommand(f"{_PYTEST} test_first.py && {_PYTEST} test_second.py", tmp_path))
 
     assert collection.returncode == pytest.ExitCode.USAGE_ERROR, collection.describe()
     assert "more than one pytest session" in collection.stderr, collection.describe()
@@ -296,7 +297,7 @@ def test_a_failed_collection_is_described_by_its_error_report_however_long_the_l
     project_with_a_long_listing_and_a_broken_module: Path,
 ) -> None:
     """pytest reports collection errors after the listing, so a description bounded to the output's tail keeps them."""
-    collection = collect(_PYTEST, project_with_a_long_listing_and_a_broken_module)
+    collection = collect(ShellCommand(_PYTEST, project_with_a_long_listing_and_a_broken_module))
 
     description = collection.describe()
 
@@ -312,7 +313,9 @@ def test_a_failed_collection_is_described_by_its_error_report_however_long_the_c
     project_with_a_long_listing_and_a_broken_module: Path,
 ) -> None:
     """As when uv logs at length before pytest starts: stdout and stderr are each cut to their own tail."""
-    collection = collect(f"{_LONG_STDERR_COMMAND} && {_PYTEST}", project_with_a_long_listing_and_a_broken_module)
+    collection = collect(
+        ShellCommand(f"{_LONG_STDERR_COMMAND} && {_PYTEST}", project_with_a_long_listing_and_a_broken_module)
+    )
 
     description = collection.describe()
 
@@ -328,6 +331,6 @@ def test_a_command_that_fails_before_pytest_starts_is_described_by_its_output(tm
     """As when uv cannot build the environment: there is no listing, and only what the command printed says what went wrong."""
     command = shlex.join([sys.executable, "-c", f"import sys; sys.exit({_STARTUP_ERROR_MESSAGE!r})"])
 
-    description = collect(command, tmp_path).describe()
+    description = collect(ShellCommand(command, tmp_path)).describe()
 
     assert _STARTUP_ERROR_MESSAGE in description, description

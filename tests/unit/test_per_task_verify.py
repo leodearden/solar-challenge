@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests._collect_only import Collection, collect, requires_uv
-from tests._orchestrator_config import load_orchestrator_config
+from tests._orchestrator_config import verify_command
 
 pytestmark = requires_uv
 
@@ -26,8 +26,7 @@ def _collect_with_test_command(
     environment would prove nothing: `uv run` syncs inexactly, so it keeps any
     extra an earlier `uv run` installed.
     """
-    command = load_orchestrator_config(project_root)["test_command"]
-    return collect(command, project_root, *pytest_args, env=uv_probe_environment)
+    return collect(verify_command(project_root, "test_command"), *pytest_args, env=uv_probe_environment)
 
 
 def test_verify_collects_the_web_tests_instead_of_skipping_them(
