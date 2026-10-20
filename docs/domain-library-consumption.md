@@ -521,11 +521,12 @@ cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 
 Accessing a name from any other public submodule (`battery`, `community`,
 `dispatch`, `finance`, `flow`, `gridservices`, `load`, `location`, `seg`,
-`tariff`) leaves `pvlib` unloaded, as of this writing.  Consumers that want to
-avoid the pvlib cost must not touch the `config`, `fleet`, `home`, `pv` or
-`weather` symbols.  Accessing a name does not run it: a function that imports
-one of those submodules at call time, as a `finance` function may when it runs
-its default simulation, loads `pvlib` when called.
+`tariff`) leaves `pvlib` unloaded; `tests/unit/test_lazy_pvlib_submodules.py`
+pins this split.  Consumers that want to avoid the pvlib cost must not touch the
+`config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
+run it: a function that imports one of those submodules at call time, as a
+`finance` function may when it runs its default simulation, loads `pvlib` when
+called.
 
 ### Network I/O
 
