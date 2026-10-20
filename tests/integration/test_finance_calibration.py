@@ -428,7 +428,7 @@ class TestCalibrationDscrIrrMethodAgreement:
     (vs Debt_Analytics!B16 = 2.10378). The discrepancy is EXPECTED and DOCUMENTED:
     the spreadsheet's lower DSCR results from equity-fundraising fees, formation
     costs, dividend deferral, and grant timing that the pure financial layer
-    abstracts away. Per docs/prds/cost-recovery-householder-billing.md §13 latitude:
+    abstracts away. Per docs/prds/financial-layer-battery-fidelity.md §13 (θ numeric premise) latitude:
       - HARD assert: min_dscr ≥ 1.20 (covenant floor)
       - HARD assert: equity_irr > 0 (structural sanity)
       - REPORTED: actual values vs spreadsheet cells (Debt_Analytics!B16/B17)
