@@ -88,11 +88,14 @@ the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.)
 # prevents unbounded context growth and eventual context-window exhaustion.
 MAX_HISTORY_TURNS = 20
 
-# Maximum number of tool-use iterations per request; prevents a runaway model
-# from looping and streaming forever (hanging the single worker / test suite).
+# The most rounds of tool calls one reply runs. The model's next call is sent
+# each round's results, so a reply calls the model at most MAX_TOOL_ITERATIONS + 1
+# times. The bound prevents a runaway model from looping and streaming forever
+# (hanging the single worker / test suite).
 MAX_TOOL_ITERATIONS = 10
 
-# The text that ends a reply whose model still calls tools after MAX_TOOL_ITERATIONS calls.
+# The text that ends a reply whose model still calls tools after MAX_TOOL_ITERATIONS
+# rounds; those calls do not run.
 TOOL_CALL_LIMIT_NOTICE = "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
 
 # ---------------------------------------------------------------------------
@@ -1032,15 +1035,19 @@ def _reply_events(
 ) -> Generator[_ReplyEvent, None, None]:
     """Yield the events of the model's reply to *request*, running each tool it calls with *run_tool*.
 
-    The model is called at most MAX_TOOL_ITERATIONS times; a reply that still
-    calls tools then ends with TOOL_CALL_LIMIT_NOTICE as its text. The text of
+    The tool calls run in at most MAX_TOOL_ITERATIONS rounds, and the model is
+    called again after each round, so every tool call that runs has its result
+    sent to the model:
+    tests/unit/web_assistant/test_tool_use.py::TestToolUseLoop::test_every_tool_call_a_capped_turn_runs_has_its_result_sent_to_the_model
+    A reply that still calls tools after the last round has its calls left
+    unrun, and ends with TOOL_CALL_LIMIT_NOTICE as its text. The text of
     every call, those after a tool call included, is yielded as it streams:
     tests/unit/web_assistant/test_tool_use.py::TestToolUseLoop::test_a_reply_after_a_tool_call_streams_one_delta_frame_per_chunk
     """
     messages = list(request["messages"])
     for _ in range(MAX_TOOL_ITERATIONS):
         message = yield from _model_call(client, {**request, "messages": messages})
-        if getattr(message, "stop_reason", None) != "tool_use":
+        if not _calls_tools(message):
             return
         results = yield from _tool_results(message.content, run_tool)
         messages = [
@@ -1048,7 +1055,9 @@ def _reply_events(
             {"role": "assistant", "content": list(message.content)},
             {"role": "user", "content": results},
         ]
-    yield _ReplyText(TOOL_CALL_LIMIT_NOTICE)
+    last_message = yield from _model_call(client, {**request, "messages": messages})
+    if _calls_tools(last_message):
+        yield _ReplyText(TOOL_CALL_LIMIT_NOTICE)
 
 
 def _model_call(client: Any, request: Mapping[str, Any]) -> Generator[_ReplyEvent, None, Any]:
@@ -1059,6 +1068,12 @@ def _model_call(client: Any, request: Mapping[str, Any]) -> Generator[_ReplyEven
         message = stream.get_final_message()
     yield _ModelCallEnded(message.usage)
     return message
+
+
+def _calls_tools(message: Any) -> bool:
+    """Whether the model stopped *message* to call tools."""
+    stop_reason: object = getattr(message, "stop_reason", None)
+    return stop_reason == "tool_use"
 
 
 def _tool_results(
