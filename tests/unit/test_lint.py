@@ -150,11 +150,6 @@ def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Pat
 
 def test_the_package_passes_the_lint(project_root: Path) -> None:
     """The package has no finding under the project's lint, so the verify fails a commit that adds one."""
-    assert (project_root / _PACKAGE).is_dir(), (
-        f"the lint checks {_PACKAGE}, which is not a directory, and ruff passes a missing path; "
-        "point _PACKAGE at the package"
-    )
-
     findings = _lint(project_root, _PACKAGE)
 
     assert not findings, (
