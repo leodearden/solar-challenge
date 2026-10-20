@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, calculate_summary
-from solar_challenge.timebase import SimulationWindow, step_hours
+from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -414,20 +414,24 @@ class CommunityMetrics:
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:
     """Derive kWh aggregates from a :class:`~solar_challenge.community.CommunityResults`.
 
-    Each row's kWh is its kW times :func:`~solar_challenge.timebase.step_hours`
-    of the series index, so the figures hold at any cadence (1-minute
-    operational or hourly TMY).
+    Each figure integrates its kW series over the window
+    :meth:`~solar_challenge.timebase.SimulationWindow.of_index` reads from the
+    community's index, so the figures hold at any cadence.
+
+    Raises:
+        ValueError: As :meth:`~solar_challenge.timebase.SimulationWindow.of_index`
+            does, for an index no window describes.
     """
     cr = community_results
     fleet = cr.fleet_results
 
-    dt_h = step_hours(cr.grid_import.index)
+    window = SimulationWindow.of_index(cr.grid_import.index)
 
-    community_import_kwh = float(cr.grid_import.sum()) * dt_h
-    community_export_kwh = float(cr.grid_export.sum()) * dt_h
-    unshared_import_kwh = float(fleet.total_grid_import.sum()) * dt_h
-    unshared_export_kwh = float(fleet.total_grid_export.sum()) * dt_h
-    total_demand_kwh = float(fleet.total_demand.sum()) * dt_h
+    community_import_kwh = window.energy_kwh(cr.grid_import)
+    community_export_kwh = window.energy_kwh(cr.grid_export)
+    unshared_import_kwh = window.energy_kwh(fleet.total_grid_import)
+    unshared_export_kwh = window.energy_kwh(fleet.total_grid_export)
+    total_demand_kwh = window.energy_kwh(fleet.total_demand)
 
     if total_demand_kwh > 0:
         self_sufficiency = max(0.0, 1.0 - community_import_kwh / total_demand_kwh)
@@ -437,7 +441,7 @@ def compute_community_metrics(community_results: "CommunityResults") -> Communit
     sharing_mode = cr.sharing_mode
 
     return CommunityMetrics(
-        dt_h=dt_h,
+        dt_h=window.step_hours,
         community_import_kwh=community_import_kwh,
         community_export_kwh=community_export_kwh,
         unshared_import_kwh=unshared_import_kwh,
@@ -446,8 +450,8 @@ def compute_community_metrics(community_results: "CommunityResults") -> Communit
         self_sufficiency=self_sufficiency,
         import_reduction_kwh=unshared_import_kwh - community_import_kwh,
         export_reduction_kwh=unshared_export_kwh - community_export_kwh,
-        battery_charge_kwh=float(cr.battery_charge.sum()) * dt_h,
-        battery_discharge_kwh=float(cr.battery_discharge.sum()) * dt_h,
+        battery_charge_kwh=window.energy_kwh(cr.battery_charge),
+        battery_discharge_kwh=window.energy_kwh(cr.battery_discharge),
         sharing_mode=sharing_mode,
     )
 
@@ -459,8 +463,9 @@ def generate_community_report(
     """Generate a markdown report for a community energy sharing simulation.
 
     Mirrors :func:`generate_summary_report` in structure.  All kWh figures are
-    derived via :func:`compute_community_metrics` using an index-inferred
-    timestep so the report is correct for any series cadence.
+    derived via :func:`compute_community_metrics` over the window the
+    community's index describes, so the report is correct for any series
+    cadence.
 
     Args:
         community_results: Output of :func:`~solar_challenge.community.simulate_community`.
