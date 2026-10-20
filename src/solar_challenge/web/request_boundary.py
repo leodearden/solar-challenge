@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How the web reads a request body, and how it answers what it refuses.
+"""How the web reads a request body and refuses one it cannot read.
 
 It imports no solar_challenge.web module, so a reader that needs only it loads none of
 the web's Flask services (tests/unit/test_web_readers_below_services.py).
