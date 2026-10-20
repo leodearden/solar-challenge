@@ -6,9 +6,18 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from pvlib.pvsystem import PVSystem
 
+from solar_challenge import pv
 from solar_challenge.home import SimulationResults
-from solar_challenge.pv import PVConfig, create_simple_module_params, wired_dc_capacity_kw
+from solar_challenge.pv import (
+    DEFAULT_CEC_MODULE,
+    PVConfig,
+    cec_module_params,
+    create_pv_system,
+    create_simple_module_params,
+    wired_dc_capacity_kw,
+)
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.validation import (
     ValidationReport,
@@ -496,6 +505,42 @@ class TestPeakWithinWiredCapacity:
         assert "3.90 kWp" in result.message
         assert result.expected_range is not None
         assert result.expected_range[1] == pytest.approx(3.9 * 1.1)
+
+
+class TestOneWiredDcPerValidation:
+    """Both checks judge against one read of the DC the PV model wires for the config, pv.wired_dc_capacity_kw, which builds the config's PV system."""
+
+    def test_a_year_of_generation_builds_the_pv_system_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pv_config = PVConfig(capacity_kw=4.0)
+        generation = _year_of_generation(4000.0)
+        built: list[PVConfig] = []
+
+        def recording_create_pv_system(config: PVConfig) -> PVSystem:
+            built.append(config)
+            return create_pv_system(config)
+
+        monkeypatch.setattr(pv, "create_pv_system", recording_create_pv_system)
+
+        results = validate_pv_generation(generation, pv_config, check_annual=True)
+
+        assert {"peak_within_capacity", "annual_yield_range"} <= {r.check_name for r in results}
+        assert built == [pv_config], f"one validation built the PV system {len(built)} times"
+
+    def test_a_config_create_pv_system_refuses_is_refused_with_its_error(self) -> None:
+        """No CEC inverter's MPPT window admits that module's string voltage."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6},
+        )
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as validating:
+            validate_pv_generation(_year_of_generation(4000.0), config, check_annual=True)
+
+        assert str(validating.value) == str(building.value)
 
 
 class TestValidateConsumption:
