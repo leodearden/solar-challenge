@@ -71,6 +71,10 @@ class WeightedDiscreteDistribution:
                 "WeightedDiscreteDistribution: weights cannot all be zero"
             )
 
+    def draw(self, rng: random.Random) -> Optional[float]:
+        """Draw one of the values from *rng*, each with its weight's share of the chance."""
+        return rng.choices(list(self.values), weights=list(self.weights), k=1)[0]
+
 
 @dataclass(frozen=True)
 class NormalDistribution:
@@ -94,6 +98,15 @@ class NormalDistribution:
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ConfigurationError("NormalDistribution: min cannot be greater than max")
 
+    def draw(self, rng: random.Random) -> float:
+        """Draw a value from *rng*'s normal distribution of mean and std, clamped to whichever of min and max is set."""
+        value = rng.gauss(self.mean, self.std)
+        if self.min is not None:
+            value = max(self.min, value)
+        if self.max is not None:
+            value = min(self.max, value)
+        return value
+
 
 @dataclass(frozen=True)
 class UniformDistribution:
@@ -110,6 +123,10 @@ class UniformDistribution:
     def __post_init__(self) -> None:
         if self.min > self.max:
             raise ConfigurationError("UniformDistribution: min cannot be greater than max")
+
+    def draw(self, rng: random.Random) -> float:
+        """Draw a value from *rng* uniformly between min and max."""
+        return rng.uniform(self.min, self.max)
 
 
 @dataclass(frozen=True)
@@ -1305,39 +1322,6 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     return block_type.build(data, param_name)
 
 
-def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
-    """Sample a single value from a distribution specification.
-
-    Args:
-        spec: Distribution specification
-        rng: Random number generator
-
-    Returns:
-        Sampled value (float or None)
-    """
-    if spec is None:
-        return None
-    if isinstance(spec, (int, float)):
-        return float(spec)
-
-    if isinstance(spec, WeightedDiscreteDistribution):
-        return rng.choices(list(spec.values), weights=list(spec.weights), k=1)[0]
-
-    if isinstance(spec, NormalDistribution):
-        value = rng.gauss(spec.mean, spec.std)
-        if spec.min is not None:
-            value = max(spec.min, value)
-        if spec.max is not None:
-            value = min(spec.max, value)
-        return value
-
-    if isinstance(spec, UniformDistribution):
-        return rng.uniform(spec.min, spec.max)
-
-    # Should not reach here
-    raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
-
-
 _PV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
     "capacity_kw", "azimuth", "tilt", "module_efficiency", "inverter_efficiency",
     "system_age_years", "degradation_rate_per_year",
@@ -1580,7 +1564,7 @@ class _DistributionSampler:
             return  # Shuffled pools are handled separately
         spec_id = id(spec)
         if spec_id not in self._presampled:
-            samples = [_sample_from_distribution(spec, self._rng) for _ in range(n)]
+            samples = [self._draw_afresh(spec) for _ in range(n)]
             self._presampled[spec_id] = samples
             self._presample_indices[spec_id] = 0
 
@@ -1613,7 +1597,17 @@ class _DistributionSampler:
             self._pool_indices[spec_id] = idx + 1
             return value
 
-        return _sample_from_distribution(spec, self._rng)
+        return self._draw_afresh(spec)
+
+    def _draw_afresh(self, spec: DistributionSpec) -> Optional[float]:
+        """Draw a value from *spec* itself: None for None, a fixed number as a float, a stateless spec from the RNG."""
+        if spec is None:
+            return None
+        if isinstance(spec, (int, float)):
+            return float(spec)
+        if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
+            return spec.draw(self._rng)
+        raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
 
     def sample_count(self, spec: DistributionSpec) -> Optional[float]:
         """Sample a count from *spec*.
