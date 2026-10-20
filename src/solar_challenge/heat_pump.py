@@ -2,6 +2,7 @@
 """Heat pump configuration and modelling."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Literal
 
 import pandas as pd
@@ -26,7 +27,32 @@ def reference_year_lengths(rows_per_day: int) -> range:
     return range(365 * rows_per_day, 366 * rows_per_day + 1)
 
 
-_YEAR_LENGTHS_IN_MINUTES = reference_year_lengths(rows_per_day=24 * 60)
+def _reference_year_window(annual_temperature_c: pd.Series) -> SimulationWindow:
+    """The window annual_temperature_c's index describes, returned only once the series is one year of its own rows.
+
+    Raises:
+        ValueError: If SimulationWindow.of_index refuses the index.
+        ValueError: If the window's cadence does not divide one day, naming it.
+        ValueError: If the row count is outside reference_year_lengths at that cadence,
+            naming the count, the cadence and the year's row counts.
+    """
+    window = SimulationWindow.of_index(annual_temperature_c.index)
+    rows_per_day, leftover = divmod(timedelta(days=1), window.cadence)
+    if leftover:
+        raise ValueError(
+            f"annual_temperature_c's rows are {window.cadence} apart, which does not divide one day, "
+            "so no whole number of them makes a year: pass one year of temperature at a spacing "
+            "that divides one day, such as the minute-interpolated TMY."
+        )
+    year_lengths = reference_year_lengths(rows_per_day)
+    if len(annual_temperature_c) not in year_lengths:
+        raise ValueError(
+            f"annual_temperature_c has {len(annual_temperature_c):,} rows, not one year of rows "
+            f"{window.cadence} apart ({year_lengths.start:,} to {year_lengths[-1]:,}): "
+            "annual_heat_demand_kwh is shared out over one year's heating degree-hours, "
+            "so pass one whole year of temperature, such as the minute-interpolated TMY."
+        )
+    return window
 
 
 # COP curve parameters for Air Source Heat Pumps (ASHP)
@@ -46,32 +72,32 @@ GSHP_COP_MIN: float = 3.2  # Minimum COP
 GSHP_COP_MAX: float = 4.8  # Maximum COP
 
 
-def calculate_heating_degree_minutes(
+def heating_degree_deficit_c(
     temperature_c: pd.Series,
     base_temp_c: float = BASE_TEMPERATURE_C
 ) -> pd.Series:
-    """Calculate heating degree minutes from temperature data.
+    """Each row's temperature deficit below the heating base temperature, in °C.
 
-    Heating degree minutes quantify heating demand at each timestep.
-    When outdoor temperature falls below the base temperature, heating is required.
-    The degree minutes value represents the temperature deficit that must be made up.
+    When outdoor temperature falls below the base temperature, heating is required,
+    and the deficit is the temperature gap that must be made up.
 
-    This is the minute-resolution equivalent of heating degree days (HDD),
-    commonly used for UK heating demand calculations.
+    The deficit is per row, whatever the row's length: a caller multiplies it by
+    the window's step_hours to get heating degree-hours, which divided by 24 are
+    heating degree days (HDD), commonly used for UK heating demand calculations.
 
     Args:
         temperature_c: Time series of outdoor temperature in degrees Celsius
         base_temp_c: Base temperature threshold for heating (default 15.5°C for UK)
 
     Returns:
-        Series of heating degree minutes (°C-minutes), same length as input.
+        Series of deficits in °C, same length as input.
         Zero when temperature is at or above base, positive when heating needed.
     """
     # Calculate temperature deficit below base temperature
     # Negative values (temp above base) become zero (no heating needed)
-    degree_minutes = base_temp_c - temperature_c
-    degree_minutes = degree_minutes.clip(lower=0.0)
-    return degree_minutes
+    deficit_c = base_temp_c - temperature_c
+    deficit_c = deficit_c.clip(lower=0.0)
+    return deficit_c
 
 
 def calculate_cop(heat_pump_type: HeatPumpType, outdoor_temp_c: float) -> float:
@@ -192,10 +218,11 @@ def generate_heat_pump_load(
     """Generate a heat pump's electrical load, in kW, over the rows of temperature_c.
 
     config.annual_heat_demand_kwh is shared out over the heating degree-hours
-    of annual_temperature_c, a reference year of minutes such as the
-    minute-interpolated TMY. Each row of temperature_c gets heat in proportion
-    to its own heating degree-hours, so temperature_c may be at any cadence: a
-    row's load in kW does not depend on how long the row lasts.
+    of annual_temperature_c, a reference year of its own rows at any spacing
+    that divides one day, such as the minute-interpolated TMY. Each row of
+    temperature_c gets heat in proportion to its own heating degree-hours, so
+    temperature_c may be at any cadence: a row's load in kW does not depend on
+    how long the row lasts.
     So a window's load does not depend on the window's length, and a run over
     exactly the reference year delivers the whole annual demand wherever the
     capacity cap does not bind. Each row's heat is capped at
@@ -209,8 +236,8 @@ def generate_heat_pump_load(
             over the rows to generate the load for.
             Must have a DatetimeIndex with timezone info.
         annual_temperature_c: One year of outdoor temperature in degrees
-            Celsius, one row a minute: 365 to 366 days of minutes, on an
-            evenly spaced DatetimeIndex.
+            Celsius, on an evenly spaced DatetimeIndex whose spacing divides
+            one day: 365 to 366 days of its rows.
 
     Returns:
         Series of electrical power demand in kW, named heat_pump_load_kw, with
@@ -220,10 +247,10 @@ def generate_heat_pump_load(
     Raises:
         ValueError: If temperature_c doesn't have a DatetimeIndex
         ValueError: If temperature_c index is not timezone-aware
-        ValueError: If annual_temperature_c is not one year of minutes, 365 to
-            366 days of rows
         ValueError: If SimulationWindow.of_index refuses annual_temperature_c's
             index, as it does one that is not a DatetimeIndex or not evenly spaced
+        ValueError: If annual_temperature_c's spacing does not divide one day,
+            or it is not 365 to 366 days of its rows
 
     Example:
         >>> config = HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=8.0)
@@ -243,24 +270,16 @@ def generate_heat_pump_load(
         raise ValueError("Temperature series must have a DatetimeIndex")
     if temperature_c.index.tz is None:
         raise ValueError("Temperature series index must be timezone-aware")
-    if len(annual_temperature_c) not in _YEAR_LENGTHS_IN_MINUTES:
-        raise ValueError(
-            f"annual_temperature_c has {len(annual_temperature_c):,} rows, not one year of minutes "
-            f"({_YEAR_LENGTHS_IN_MINUTES.start:,} to {_YEAR_LENGTHS_IN_MINUTES[-1]:,}): "
-            f"annual_heat_demand_kwh={config.annual_heat_demand_kwh:g} is shared out over one year's "
-            "heating degree-minutes, so pass a whole year of 1-minute temperature, such as the "
-            "minute-interpolated TMY."
-        )
 
-    reference_year = SimulationWindow.of_index(annual_temperature_c.index)
+    reference_year = _reference_year_window(annual_temperature_c)
 
-    annual_degree_rows = calculate_heating_degree_minutes(annual_temperature_c).sum()
+    annual_degree_rows = heating_degree_deficit_c(annual_temperature_c).sum()
     if annual_degree_rows == 0:
         electrical_load_kw = pd.Series(0.0, index=temperature_c.index)
     else:
         heat_kw_per_degree = config.annual_heat_demand_kwh / annual_degree_rows / reference_year.step_hours
         thermal_demand_kw = (
-            calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree
+            heating_degree_deficit_c(temperature_c) * heat_kw_per_degree
         ).clip(upper=config.thermal_capacity_kw)
 
         # Calculate COP for each timestep

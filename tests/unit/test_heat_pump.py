@@ -17,9 +17,9 @@ from solar_challenge.heat_pump import (
     GSHP_COP_BASE,
     GSHP_COP_MIN,
     GSHP_COP_MAX,
-    calculate_heating_degree_minutes,
     calculate_cop,
     generate_heat_pump_load,
+    heating_degree_deficit_c,
 )
 from solar_challenge.timebase import SimulationWindow
 
@@ -216,66 +216,66 @@ class TestCalculateCOP:
         assert gshp_cop > ashp_cop
 
 
-class TestCalculateHeatingDegreeMinutes:
-    """Test heating degree minutes calculation."""
+class TestHeatingDegreeDeficit:
+    """Test the per-row temperature deficit below the heating base temperature."""
 
     def test_temperature_below_base(self):
-        """Temperature below base produces positive degree minutes."""
+        """Temperature below base produces a positive deficit."""
         temps = pd.Series([10.0, 12.0, 5.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Base is 15.5°C by default
         # Deficits: 5.5, 3.5, 10.5
-        assert degree_mins.iloc[0] == pytest.approx(5.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(3.5, rel=0.001)
-        assert degree_mins.iloc[2] == pytest.approx(10.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(5.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(3.5, rel=0.001)
+        assert deficit_c.iloc[2] == pytest.approx(10.5, rel=0.001)
 
     def test_temperature_above_base_gives_zero(self):
-        """Temperature above base gives zero degree minutes."""
+        """Temperature above base gives a zero deficit."""
         temps = pd.Series([20.0, 18.0, 16.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # All temperatures above base (15.5°C)
-        assert (degree_mins >= 0).all()
-        assert degree_mins.iloc[0] == 0.0
-        assert degree_mins.iloc[1] == 0.0
-        assert degree_mins.iloc[2] == 0.0
+        assert (deficit_c >= 0).all()
+        assert deficit_c.iloc[0] == 0.0
+        assert deficit_c.iloc[1] == 0.0
+        assert deficit_c.iloc[2] == 0.0
 
     def test_temperature_at_base_gives_zero(self):
-        """Temperature exactly at base gives zero degree minutes."""
+        """Temperature exactly at base gives a zero deficit."""
         temps = pd.Series([BASE_TEMPERATURE_C])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert degree_mins.iloc[0] == 0.0
+        deficit_c = heating_degree_deficit_c(temps)
+        assert deficit_c.iloc[0] == 0.0
 
     def test_custom_base_temperature(self):
         """Can use custom base temperature."""
         temps = pd.Series([18.0, 15.0])
-        degree_mins = calculate_heating_degree_minutes(temps, base_temp_c=20.0)
+        deficit_c = heating_degree_deficit_c(temps, base_temp_c=20.0)
 
         # Deficits from 20°C: 2.0, 5.0
-        assert degree_mins.iloc[0] == pytest.approx(2.0, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(5.0, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(2.0, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(5.0, rel=0.001)
 
     def test_negative_temperatures(self):
         """Handles negative temperatures correctly."""
         temps = pd.Series([-5.0, -10.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Deficits from 15.5°C: 20.5, 25.5
-        assert degree_mins.iloc[0] == pytest.approx(20.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(25.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(20.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(25.5, rel=0.001)
 
     def test_returns_series_same_length(self):
         """Output series has same length as input."""
         temps = pd.Series([10.0, 12.0, 14.0, 16.0, 18.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert len(degree_mins) == len(temps)
+        deficit_c = heating_degree_deficit_c(temps)
+        assert len(deficit_c) == len(temps)
 
     def test_no_negative_values(self):
         """Output never contains negative values."""
         temps = pd.Series([5.0, 10.0, 15.0, 20.0, 25.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert (degree_mins >= 0).all()
+        deficit_c = heating_degree_deficit_c(temps)
+        assert (deficit_c >= 0).all()
 
 
 def _utc_1990_minute_index() -> pd.DatetimeIndex:
@@ -519,33 +519,76 @@ class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
         pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index, name="heat_pump_load_kw"))
 
 
+_MINUTE_YEAR_DESCRIPTION = "rows 0:01:00 apart (525,600 to 527,040)"
+
+
 class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
-    """annual_temperature_c must be one year of minutes, 365 to 366 days; any other length raises ValueError."""
+    """annual_temperature_c must be one year of its own rows, and any other reference raises ValueError naming what it got.
+
+    One year is 365 to 366 days of rows at the spacing its index's window reads, and that spacing must divide one day.
+    """
 
     @pytest.mark.parametrize(
-        ("rows", "freq"),
+        ("rows", "freq", "one_year"),
         [
-            pytest.param(1440, "1min", id="one-day-of-minutes"),
-            pytest.param(8760, "1h", id="an-hourly-year"),
-            pytest.param(365 * 1440 - 1, "1min", id="one-minute-short-of-a-year"),
-            pytest.param(366 * 1440 + 1, "1min", id="one-minute-past-a-leap-year"),
-            pytest.param(2 * 525_600, "1min", id="two-years-of-minutes"),
+            pytest.param(1440, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-day-of-minutes"),
+            pytest.param(365 * 1440 - 1, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-minute-short-of-a-year"),
+            pytest.param(366 * 1440 + 1, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-minute-past-a-leap-year"),
+            pytest.param(2 * 525_600, "1min", _MINUTE_YEAR_DESCRIPTION, id="two-years-of-minutes"),
+            pytest.param(
+                525_600, "30min", "rows 0:30:00 apart (17,520 to 17,568)", id="a-minute-years-count-of-half-hours"
+            ),
+            pytest.param(24, "1h", "rows 1:00:00 apart (8,760 to 8,784)", id="one-day-of-hours"),
         ],
     )
-    def test_a_reference_that_is_not_a_year_of_minutes_raises_with_its_length(self, rows, freq):
+    def test_a_reference_that_is_not_one_year_of_its_rows_raises_naming_its_length_and_spacing(
+        self, rows, freq, one_year
+    ):
         reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
 
         with pytest.raises(
             ValueError,
-            match=re.escape(f"annual_temperature_c has {rows:,} rows, not one year of minutes (525,600 to 527,040)"),
+            match=re.escape(f"annual_temperature_c has {rows:,} rows, not one year of {one_year}"),
         ):
             generate_heat_pump_load(
                 HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
             )
 
-    @pytest.mark.parametrize("days", [365, 366])
-    def test_a_reference_of_a_whole_year_of_minutes_shares_the_demand_over_its_days(self, days):
-        reference = pd.Series(10.0, index=pd.date_range("1992-01-01", periods=days * 1440, freq="1min", tz="UTC"))
+    @pytest.mark.parametrize(
+        ("rows", "freq", "spacing"),
+        [
+            pytest.param(525_600, "7min", "0:07:00", id="a-minute-years-count-of-7-minute-rows"),
+            pytest.param(183, "48h", "2 days, 0:00:00", id="a-years-span-of-2-day-rows"),
+        ],
+    )
+    def test_a_reference_whose_spacing_does_not_divide_a_day_is_refused_naming_it(self, rows, freq, spacing):
+        reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"annual_temperature_c's rows are {spacing} apart, which does not divide one day"),
+        ):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    @pytest.mark.parametrize(
+        ("days", "freq", "rows_per_day"),
+        [
+            pytest.param(365, "1min", 1440, id="365-days-of-minutes"),
+            pytest.param(366, "1min", 1440, id="366-days-of-minutes"),
+            pytest.param(365, "30min", 48, id="365-days-of-half-hours"),
+            pytest.param(366, "30min", 48, id="366-days-of-half-hours"),
+            pytest.param(365, "1h", 24, id="365-days-of-hours"),
+            pytest.param(366, "1h", 24, id="366-days-of-hours"),
+        ],
+    )
+    def test_a_whole_year_of_rows_at_a_spacing_that_divides_a_day_shares_the_demand_over_its_days(
+        self, days, freq, rows_per_day
+    ):
+        reference = pd.Series(
+            10.0, index=pd.date_range("1992-01-01", periods=days * rows_per_day, freq=freq, tz="UTC")
+        )
 
         load = generate_heat_pump_load(
             HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
@@ -570,6 +613,11 @@ class TestGenerateHeatPumpLoadIntegratesTheReferenceYearOverItsCadence:
                 lambda: pd.Series(20.0, index=pd.RangeIndex(525_600)),
                 "RangeIndex",
                 id="values-only-year-without-heating",
+            ),
+            pytest.param(
+                lambda: pd.Series(10.0, index=pd.RangeIndex(1440)),
+                "RangeIndex",
+                id="values-only-day",
             ),
             pytest.param(
                 lambda: pd.Series(
