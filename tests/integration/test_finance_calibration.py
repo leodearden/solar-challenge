@@ -617,6 +617,10 @@ class TestCalibrationPhysicsColumn:
     capex, debt and equity are all zero). The printed physics values are
     reported for inspection only and are not pinned.
 
+    The fast suite enforces that no-debt premise, under both finances this column
+    prices the fixture with, in
+    tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises.
+
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
 

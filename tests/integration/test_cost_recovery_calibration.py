@@ -12,7 +12,7 @@ Layout:
       TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
       TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
       TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
-      TestPhysicsColumnPremises — fast guard for the physics column's no-debt premise
+      TestPhysicsColumnPremises — fast no-debt guard for the one fixture both slow physics columns (θ's and CR6's) simulate
   - @pytest.mark.slow class:
       TestPhysicsReconciliationColumn — real-PVGIS physics column (reported, not asserted ==)
 
@@ -1083,22 +1083,30 @@ class TestCbsOwnUseKwhHelper:
 class TestPhysicsColumnPremises:
     """Fast guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
 
-    TestPhysicsReconciliationColumn is slow and excluded from -m 'not slow' runs, so the
-    premise (the [FIN] grant covers its fleet's capex, so the fleet carries no debt) is
-    enforced here, on the scenario and finance that class builds.
+    θ's TestCalibrationPhysicsColumn and CR6's TestPhysicsReconciliationColumn both
+    simulate make_physics_column_scenario's fixture, and both are slow, excluded from
+    -m 'not slow' runs.  So the premise (the [FIN] grant covers the fixture's capex, so
+    it carries no debt) is enforced here, under each column's finance: no
+    self-consumption override, under which both physics columns simulate, and FIN_SCF,
+    at which θ's spreadsheet column prices the fixture.
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
         scenario = make_physics_column_scenario()
-        finance = _make_finance_fin_cr6()
 
-        econ = _spreadsheet_economics_cr6(scenario, finance)
+        for override in (None, FIN_SCF):
+            finance = make_fin_finance(self_consumption_override=override)
 
-        assert econ.total_capex_gbp <= finance.grant_gbp, (
-            f"grant £{finance.grant_gbp:,.0f} no longer covers the physics fleet's "
-            f"capex £{econ.total_capex_gbp:,.0f}"
-        )
-        assert econ.debt_gbp == 0.0, f"physics fleet carries £{econ.debt_gbp:,.2f} debt"
+            econ = _spreadsheet_economics_cr6(scenario, finance)
+
+            assert econ.total_capex_gbp <= finance.grant_gbp, (
+                f"under self-consumption override {override}, the grant £{finance.grant_gbp:,.0f} "
+                f"no longer covers the physics fleet's capex £{econ.total_capex_gbp:,.0f}"
+            )
+            assert econ.debt_gbp == 0.0, (
+                f"under self-consumption override {override}, the physics fleet carries "
+                f"£{econ.debt_gbp:,.2f} debt"
+            )
 
 
 @pytest.mark.slow
@@ -1109,7 +1117,7 @@ class TestPhysicsReconciliationColumn:
     real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
     are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation); see
     docs/cost-recovery-finance-model.md §7.6.
-    Mirrors θ's TestCalibrationPhysicsColumn.
+    θ's TestCalibrationPhysicsColumn simulates the same fixture, make_physics_column_scenario's.
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
 
