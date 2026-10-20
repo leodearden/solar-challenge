@@ -1,6 +1,7 @@
-"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing."""
+"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing and the weather it runs on."""
 
 import dataclasses
+import re
 import typing
 import warnings
 from datetime import date, timedelta
@@ -22,7 +23,8 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
-from tests._synthetic_weather import synthetic_june_weather
+from solar_challenge.weather import PrefetchedWeather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
 @pytest.fixture
@@ -640,6 +642,61 @@ class TestSimulateHomeExportValuationWithoutATariff:
             atol=0.0,
         )
         assert not [warning for warning in caught if "seg_tariff" in str(warning.message)]
+
+
+_MIDSUMMER = pd.Timestamp("2024-06-21")
+
+
+def _edinburgh_home() -> HomeConfig:
+    """A PV-only home in Edinburgh, not at the Bristol every other test simulates, with a seeded load."""
+    return HomeConfig(
+        PVConfig(capacity_kw=4.0),
+        LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+        location=Location(latitude=55.95, longitude=-3.19, name="Edinburgh"),
+    )
+
+
+class _RecordingWeather:
+    """Gives *frame* for whatever location it is asked for, and records each location asked for."""
+
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self.frame = frame
+        self.asked: list[Location] = []
+
+    def get(self, location: Location) -> pd.DataFrame:
+        self.asked.append(location)
+        return self.frame
+
+
+class TestSimulateHomeTakesItsWeather:
+    """simulate_home runs on the weather its provider gives for the home's location, and has no other source."""
+
+    @pytest.mark.parametrize(
+        ("frame", "generates"),
+        [
+            pytest.param(synthetic_june_weather(_MIDSUMMER), True, id="clear-day-generates"),
+            pytest.param(sunless_weather(_MIDSUMMER, temp_air=12.0), False, id="sunless-day-generates-nothing"),
+        ],
+    )
+    def test_a_run_asks_its_provider_once_for_the_homes_location_and_its_pv_follows_that_frame(
+        self, frame: pd.DataFrame, generates: bool
+    ) -> None:
+        home = _edinburgh_home()
+        weather = _RecordingWeather(frame)
+
+        results = simulate_home(home, _MIDSUMMER, _MIDSUMMER, weather=weather)
+
+        assert weather.asked == [home.location]
+        generated = results.generation.sum()
+        assert generated > 0 if generates else generated == 0
+
+    def test_a_provider_without_the_homes_location_refuses_the_run_naming_it(self) -> None:
+        """No other weather source stands in: the run ends with the provider's LookupError."""
+        home = _edinburgh_home()
+        bristol_only = PrefetchedWeather({Location.bristol(): synthetic_june_weather(_MIDSUMMER)})
+
+        with pytest.raises(LookupError, match=re.escape(repr(home.location))):
+            simulate_home(home, _MIDSUMMER, _MIDSUMMER, weather=bristol_only)
 
 
 class TestCalculateSummary:
