@@ -522,7 +522,7 @@ class TestScenarioAPI:
     def test_the_builtin_scenario_files_are_listed_alone_and_a_warning_logged_when_the_database_cannot_be_read(
         self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A database that cannot be read leaves the list answering, with the built-in scenario files alone, and the fault logged."""
+        """A database that cannot be read leaves the list answering, with the built-in scenario files alone, and the presets module logs the database's error once, as a warning."""
         builtin_names = [
             p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"] if p["source"] == "builtin"
         ]
@@ -537,7 +537,10 @@ class TestScenarioAPI:
         assert [(p["name"], p["source"]) for p in resp.get_json()["presets"]] == [
             (name, "builtin") for name in builtin_names
         ]
-        assert logging.WARNING in [record.levelno for record in caplog.records]
+        records = [r for r in caplog.records if r.name == "solar_challenge.web.presets"]
+        assert [r.levelno for r in records] == [logging.WARNING]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1], sqlite3.DatabaseError)
 
     def test_a_saved_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
         self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
@@ -584,6 +587,17 @@ class TestScenarioAPI:
             500,
             {"error": "Saved preset 'Not an object' could not be read: its config is not a JSON object"},
         )
+
+    @pytest.mark.parametrize("config_json", ["", None], ids=["empty-text", "sql-null"])
+    def test_a_saved_fleet_preset_whose_config_is_stored_as_empty_text_or_null_is_served_with_an_empty_config(
+        self, app: Flask, client: FlaskClient, config_json: str | None
+    ) -> None:
+        """A saved fleet preset whose config is stored as empty text or as NULL is served, with the config {}."""
+        insert_saved_fleet_preset(app.config["DATABASE"], "Empty", config_json)
+
+        resp = client.get("/api/scenarios/presets/Empty")
+
+        assert (resp.status_code, resp.get_json()["config"]) == (200, {})
 
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
