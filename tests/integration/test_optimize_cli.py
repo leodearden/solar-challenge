@@ -151,9 +151,12 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 
 
 def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
-    """The row of the table under *heading* whose Config cell starts with *config_label*, each cell keyed by its column header."""
+    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header.
+
+    A section ends at the next heading of any level, so a sub-section's table is never read as *heading*'s.
+    """
     assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n## ", 1)[0]
+    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
     header, _delimiter_row, *rows = (
         [cell.strip() for cell in line.strip("|").split("|")]
         for line in section.splitlines()
