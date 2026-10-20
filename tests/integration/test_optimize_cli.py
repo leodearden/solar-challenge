@@ -240,15 +240,19 @@ class TestGenerateConfigRankingReportTable1:
         assert shown == expected, f"solved own-use rates not shown in their configs' rows:\n{report}"
 
     def test_outlay_distribution_values(self) -> None:
-        """Report must show min/mean/median/max outlay for each config."""
+        """Report must show each config's min/mean/median/max outlay in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Config 1 outlay distribution: 300 / 345 / 350 / 400
-        assert "300" in report, f"min outlay 300 not found:\n{report}"
-        assert "345" in report, f"mean outlay 345 not found:\n{report}"
-        assert "350" in report, f"median outlay 350 not found:\n{report}"
-        assert "400" in report, f"max outlay 400 not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£300 / £345 / £350 / £400",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£325 / £368 / £370 / £420",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Min/Mean/Median/Max (£)"]
+            for label in expected
+        }
+        assert shown == expected, f"outlay distributions not shown in their configs' rows:\n{report}"
 
     def test_cbs_surplus_rendered(self) -> None:
         """Report must show each config's CBS surplus at the solved rate in its Cost-Recovery Rank row."""
