@@ -18,6 +18,7 @@ import yaml
 from tests._collect_only import collect
 from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
 from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
+from tests._verify_suite import run_verify_suite
 
 _PROBE_VARIABLE = "COMMAND_RUNNER_PROBE"
 
@@ -70,6 +71,13 @@ def _hang_in_run_command_under_gnu_timeout(hang: str, directory: Path, timeout_s
 def _hang_in_collect(hang: str, directory: Path, timeout_secs: float) -> None:
     with pytest.raises(CommandTimedOut):
         collect(ShellCommand(hang, directory), timeout_secs=timeout_secs)
+
+
+def _hang_in_run_verify_suite(hang: str, directory: Path, timeout_secs: float) -> None:
+    """The hang is the test_command of a throwaway project in *directory*."""
+    project_root = _project_with_a_lane_job_and_a_test_command(directory, hang)
+    with pytest.raises(pytest.fail.Exception):
+        run_verify_suite(project_root, os.environ, variant="in a probe", timeout_secs=timeout_secs)
 
 
 def _pid_of_a_background_child_killed_in_a_hang(directory: Path, start: ProbeStart) -> int:
@@ -182,6 +190,7 @@ def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_it
         pytest.param(_hang_in_run_command, id="run_command"),
         pytest.param(_hang_in_run_command_under_gnu_timeout, id="run_command-under-gnu-timeout"),
         pytest.param(_hang_in_collect, id="collect"),
+        pytest.param(_hang_in_run_verify_suite, id="run_verify_suite"),
     ],
 )
 def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: ProbeStart) -> None:
