@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Structured read access to pyproject.toml for the packaging-metadata contract tests.
+"""Structured read access to pyproject.toml, and to the uv.lock that pins its requirements, for the packaging-metadata contract tests.
 
 Usage::
 
-    from tests._pyproject import declared_floor, load_project_table, load_pyproject
+    from tests._pyproject import declared_floor, load_project_table, load_pyproject, load_uv_lock, locked_versions
 
     requires_python = load_project_table(project_root)["requires-python"]
     mypy_target = load_pyproject(project_root)["tool"]["mypy"]["python_version"]
-    setuptools_floor = declared_floor(load_pyproject(project_root)["build-system"]["requires"], "setuptools")
+    pandas_floor = declared_floor(load_project_table(project_root)["dependencies"], "pandas")
+    pandas_pins = locked_versions(load_uv_lock(project_root), "pandas")
 """
 
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,11 @@ def load_project_table(project_root: Path) -> dict[str, Any]:
     """Return the [project] table of *project_root*'s pyproject.toml, parsed as TOML."""
     project: dict[str, Any] = load_pyproject(project_root)["project"]
     return project
+
+
+def load_uv_lock(project_root: Path) -> dict[str, Any]:
+    """Return *project_root*'s uv.lock, parsed as TOML."""
+    return tomllib.loads((project_root / "uv.lock").read_text(encoding="utf-8"))
 
 
 def declared_floor(requirements: Iterable[str], distribution: str) -> Version | None:
@@ -65,3 +71,20 @@ def _floor_when_any_applies(requirements: Iterable[Requirement]) -> Version | No
     bounded_floors = [floor for floor in own_floors if floor is not None]
     every_requirement_is_bounded = len(bounded_floors) == len(own_floors)
     return min(bounded_floors, default=None) if every_requirement_is_bounded else None
+
+
+def locked_versions(lock: Mapping[str, Any], distribution: str) -> tuple[Version, ...]:
+    """Return every version the parsed uv.lock *lock* pins for *distribution*, lowest first, or () if it pins none.
+
+    Distribution names compare canonically, as in declared_floor. uv.lock holds one [[package]] entry per pinned
+    version, so a distribution forked across environment markers has several. An entry without a version pins no
+    release.
+    """
+    wanted = canonicalize_name(distribution)
+    return tuple(
+        sorted(
+            Version(package["version"])
+            for package in lock.get("package", ())
+            if "version" in package and canonicalize_name(package["name"]) == wanted
+        )
+    )
