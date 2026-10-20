@@ -378,6 +378,41 @@ class TestToolUseLoop:
         messages = client.get("/assistant/history").get_json()["messages"]
         assert messages[-1]["metadata"]["invoked_tools"] == tools_run
 
+    def test_a_model_that_answers_after_the_last_tool_round_has_its_answer_as_the_reply(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A model that calls a tool in each of the MAX_TOOL_ITERATIONS rounds, then answers
+        in words, has that answer as the turn's whole reply. The call after the last round is
+        the model's to answer with, so TOOL_CALL_LIMIT_NOTICE is for a model that still calls
+        tools then, and is not shown."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-answer-sid"
+        anthropic_api.set_streams([
+            *[
+                make_tool_use_stream(f"toolu_round_{i}", "explain_metric", {"metric": "self_consumption_ratio"})
+                for i in range(MAX_TOOL_ITERATIONS)
+            ],
+            make_end_turn_stream(["summary"]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "explain, then sum up"})
+        assert resp.status_code == 200
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        assert len(anthropic_api.calls) == MAX_TOOL_ITERATIONS + 1
+        assert events == [
+            *[SseFrame(event="tool", data={"name": "explain_metric"})] * MAX_TOOL_ITERATIONS,
+            SseFrame(event="delta", data={"text": "summary"}),
+            SseFrame(event="done", data={}),
+        ]
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "explain, then sum up"),
+            ("assistant", "summary"),
+        ]
+
     @pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens", "stop_sequence", "refusal", None])
     def test_a_reply_that_stops_for_any_reason_but_tool_use_ends_the_turn(
         self,
