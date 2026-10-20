@@ -33,9 +33,13 @@ class CopCurve:
                 f"got minimum={self.minimum}, maximum={self.maximum}"
             )
 
+    def cops(self, outdoor_temp_c: pd.Series) -> pd.Series:
+        """The COP at each row's outdoor temperature in °C, on outdoor_temp_c's index."""
+        return (self.intercept + self.slope * outdoor_temp_c).clip(lower=self.minimum, upper=self.maximum)
+
     def cop(self, outdoor_temp_c: float) -> float:
-        """The COP at an outdoor temperature of outdoor_temp_c °C."""
-        return max(self.minimum, min(self.maximum, self.intercept + self.slope * outdoor_temp_c))
+        """The COP at an outdoor temperature of outdoor_temp_c °C: cops at that one temperature."""
+        return float(self.cops(pd.Series([outdoor_temp_c])).iloc[0])
 
 
 HeatPumpType = Literal["ASHP", "GSHP"]  # air source, ground source
@@ -281,10 +285,7 @@ def generate_heat_pump_load(
             heating_degree_deficit_c(temperature_c) * heat_kw_per_degree
         ).clip(upper=config.thermal_capacity_kw)
 
-        # Calculate COP for each timestep
-        cop_series = temperature_c.apply(
-            lambda temp: calculate_cop(config.heat_pump_type, temp)
-        )
+        cop_series = COP_CURVES[config.heat_pump_type].cops(temperature_c)
 
         # Calculate electrical load (thermal output / COP)
         electrical_load_kw = thermal_demand_kw / cop_series

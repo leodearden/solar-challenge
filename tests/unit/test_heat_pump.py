@@ -143,6 +143,18 @@ class TestCopCurve:
 
         assert curve.cop(outdoor_temp_c) == cop
 
+    def test_cops_is_each_rows_line_held_between_minimum_and_maximum(self):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=2.0, maximum=4.0)
+        outdoor_temp_c = pd.Series(
+            [-4.0, 0.0, 1.0, 4.0], index=pd.date_range("2025-01-15", periods=4, freq="1min", tz="UTC")
+        )
+
+        pd.testing.assert_series_equal(
+            curve.cops(outdoor_temp_c),
+            pd.Series([2.0, 3.0, 3.5, 4.0], index=outdoor_temp_c.index),
+            check_exact=True,
+        )
+
     def test_equal_bounds_give_a_constant_cop(self):
         curve = CopCurve(intercept=3.0, slope=0.5, minimum=3.0, maximum=3.0)
 
