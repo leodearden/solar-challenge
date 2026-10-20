@@ -110,8 +110,10 @@ def named_classes(obj: object) -> set[type]:
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names, and a class in the one sys.modules holds under the name
     its __module__ records; one whose module another of the same name has since replaced
-    in sys.modules raises LookupError naming it and the module found there. Met again
-    inside its own evaluation in the same module, as each "JSON" is in
+    in sys.modules raises LookupError naming it and the module found there. A signature
+    that annotates nothing, as that of each routine CPython defines in C such as
+    str.join, names no class, and no module is looked up for it. Met again inside its
+    own evaluation in the same module, as each "JSON" is in
     JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
     there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
@@ -457,24 +459,34 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
 
 
 def _form_classes(obj: object) -> set[type]:
-    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it."""
+    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
     if not (inspect.isclass(obj) or inspect.isroutine(obj)):
         return {type(obj)}
-    signature = inspect.signature(obj)
-    annotations = {
-        name: parameter.annotation for name, parameter in signature.parameters.items()
-    }
-    annotations["return"] = signature.return_annotation
+    annotations = _signature_annotations(inspect.signature(obj))
+    if not annotations:
+        return set()
     modules = _spelling_modules(obj, annotations)
     return set().union(
         *(
             _parsed(annotation, frozenset()).classes(modules[name])
             for name, annotation in annotations.items()
-            if annotation is not inspect.Parameter.empty
         )
     )
+
+
+def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
+    """The annotations *signature* gives, by parameter name or "return"; a parameter or return without one has no entry."""
+    annotations = {
+        name: parameter.annotation for name, parameter in signature.parameters.items()
+    }
+    annotations["return"] = signature.return_annotation
+    return {
+        name: annotation
+        for name, annotation in annotations.items()
+        if annotation is not inspect.Parameter.empty
+    }
 
 
 def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
@@ -535,9 +547,10 @@ def _defining_module(obj: object) -> types.ModuleType:
 def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
     """The module whose globals *routine*, unwrapped as inspect.signature unwraps it, carries, whatever module its __module__ names: the one sys.modules holds under the name that module was imported as, its spec's, or its __name__ if it has no spec.
 
-    A builtin carries no globals, so its module is the one its __module__ names. If
-    sys.modules holds another module under that name, as once another module of the same
-    name has replaced it there, LookupError names *routine* and both modules.
+    If sys.modules holds another module under that name, as once another module of the
+    same name has replaced it there, LookupError names *routine* and both modules. A
+    routine that carries no globals records nothing to check its module by, so the one
+    its __module__ names is looked up unchecked.
     """
     namespace = getattr(inspect.unwrap(routine), "__globals__", None)
     if namespace is None:
