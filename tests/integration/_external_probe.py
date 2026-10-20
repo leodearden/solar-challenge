@@ -25,11 +25,11 @@ import sys
 
 
 # ---------------------------------------------------------------------------
-# 1. Name the interpreter, which the interpreter matrix varies, then import
-#    the installed package
+# 1. Name the interpreter, which the interpreter matrix varies, before
+#    importing the installed package, so a failed import still names it
 # ---------------------------------------------------------------------------
 print(f"consumer interpreter: {platform.python_implementation()} {platform.python_version()}")
-import solar_challenge as s
+import solar_challenge as s  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 2. Site-packages guard: confirm we loaded from the INSTALLED wheel,
