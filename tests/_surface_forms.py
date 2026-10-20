@@ -53,8 +53,10 @@ def surface_form(obj: object) -> str:
     """The surface form of *obj*.
 
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
-    anything neither a class nor a routine, is its type's qualified name. Any other
-    class's or routine's is its signature, a class's being its constructor's without self.
+    anything neither a class nor a routine, is its type's qualified name; a
+    functools.partial is a routine on every admitted minor, as inspect counts one from
+    3.14. Any other class's or routine's is its signature, a class's being its
+    constructor's without self and a partial's the one it leaves of the callable it wraps.
     A dataclass's signature follows its kind: dataclass, then in brackets those of eq,
     order, unsafe_hash and frozen that are on, whether set on the class or on the base it
     inherits them from. An annotation in that signature which it has no rule for, such as
@@ -62,7 +64,7 @@ def surface_form(obj: object) -> str:
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
-    if not (inspect.isclass(obj) or inspect.isroutine(obj)):
+    if not _is_class_or_routine(obj):
         return type(obj).__qualname__
     signature = inspect.signature(obj)
     text = str(
@@ -108,14 +110,14 @@ def named_classes(obj: object) -> set[type]:
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
     NameError. A routine is spelled in the module whose globals it carries, whatever
-    module its __module__ names, and a class in the one sys.modules holds under the name
-    its __module__ records; one whose module another of the same name has since replaced
-    in sys.modules raises LookupError naming it and the module found there. A signature
-    that annotates nothing, as that of each routine CPython defines in C such as
-    str.join, names no class, and no module is looked up for it. Met again inside its
-    own evaluation in the same module, as each "JSON" is in
-    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
-    there: that evaluation names them all.
+    module its __module__ names, a functools.partial where the callable it wraps is, and
+    a class in the one sys.modules holds under the name its __module__ records; one whose
+    module another of the same name has since replaced in sys.modules raises LookupError
+    naming it and the module found there. A signature that annotates nothing, as that of
+    each routine CPython defines in C such as str.join, names no class, and no module is
+    looked up for it. Met again inside its own evaluation in the same module, as each
+    "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
+    no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -462,7 +464,7 @@ def _form_classes(obj: object) -> set[type]:
     """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
-    if not (inspect.isclass(obj) or inspect.isroutine(obj)):
+    if not _is_class_or_routine(obj):
         return {type(obj)}
     annotations = _signature_annotations(inspect.signature(obj))
     if not annotations:
@@ -474,6 +476,16 @@ def _form_classes(obj: object) -> set[type]:
             for name, annotation in annotations.items()
         )
     )
+
+
+def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
+    """Whether *obj* is a class or a routine, the objects surface_form spells, an Enum aside, by their signature rather than by their type."""
+    return inspect.isclass(obj) or _is_routine(obj)
+
+
+def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
+    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
+    return inspect.isroutine(obj) or isinstance(obj, functools.partial)
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
@@ -489,7 +501,9 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
 
 
 def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": a routine's own. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": a routine's own; a functools.partial's, those of the callable it wraps, from whose signature inspect derives the partial's. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
+    if isinstance(obj, functools.partial):
+        return _spelling_modules(obj.func, names)
     if not inspect.isclass(obj):
         return dict.fromkeys(names, _defining_module(obj))
     holder = _constructor_holder(obj)
@@ -535,8 +549,10 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _defining_module(obj: object) -> types.ModuleType:
-    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; anything else records only its module's name, so that module is looked up unchecked."""
-    if inspect.isroutine(obj):
+    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; a functools.partial's is that of the callable it wraps, and anything else records only its module's name, so that module is looked up unchecked."""
+    if isinstance(obj, functools.partial):
+        return _defining_module(obj.func)
+    if _is_routine(obj):
         return _routine_module(obj)
     if inspect.isclass(obj):
         return _class_module(obj)

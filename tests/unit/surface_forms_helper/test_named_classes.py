@@ -464,6 +464,31 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
     assert named_classes(Submeter) == {fractions.Fraction}
 
 
+def test_a_partial_names_the_classes_the_callable_it_wraps_names_each_read_where_that_callable_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    halving = imported_module(
+        tmp_path,
+        monkeypatch,
+        "halving",
+        "from fractions import Fraction\n"
+        "from functools import partial\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, ratio: 'Fraction') -> None: ...\n"
+        "\n"
+        "def settle(share: 'Fraction', rate: int) -> None: ...\n"
+        "\n"
+        "half = partial(settle, rate=1)\n",
+    )
+
+    class Submeter(halving.Meter):
+        pass
+
+    assert named_classes(halving.half) == {fractions.Fraction, int}
+    assert named_classes(functools.partial(Submeter)) == {fractions.Fraction}
+
+
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
