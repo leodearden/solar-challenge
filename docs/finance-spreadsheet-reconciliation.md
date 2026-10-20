@@ -143,7 +143,9 @@ for real fleet projections.
 
 **The 0.70 assumption bills more own-use than a household consumes.** Applied to the
 named yield, it gives 0.70 × 5.5 × 1,050 = 4,042.5 kWh/home of own-use, but the
-calibration scenario's homes demand 3,400 kWh/yr (the Bristol scenarios' own assumption,
+calibration scenario's homes demand 3,400 kWh/yr (England's 2022 mean domestic
+electricity consumption per household, rounded: 3,399.87 kWh in DESNZ's *Subnational
+electricity consumption statistics 2005 to 2024*;
 `scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
 demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
 15 p own-use rate instead of the 6 p export rate credits
