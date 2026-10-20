@@ -92,6 +92,18 @@ def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) ->
     )
 
 
+def test_lint_flags_a_bare_except_in_a_package_module(project_root: Path) -> None:
+    """The lint reports a bare except in a module of the package."""
+    source = "try:\n    pass\nexcept:\n    pass\n"
+
+    findings = _lint_probe(project_root, source)
+
+    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E722", _PROBE, 3)], (
+        "the lint must report the bare except in a package module, and nothing else; it reported:\n"
+        + "\n".join(map(str, findings))
+    )
+
+
 def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
     """The lint applies pyproject.toml's rule selection, not ruff's default rules.
 
