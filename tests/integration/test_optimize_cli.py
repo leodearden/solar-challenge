@@ -246,17 +246,19 @@ class TestGenerateConfigRankingReportTable1:
         assert "400" in report, f"max outlay 400 not found:\n{report}"
 
     def test_cbs_surplus_rendered(self) -> None:
-        """Report must show the CBS surplus at the solved rate for each config."""
+        """Report must show each config's CBS surplus at the solved rate in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Config 1 surplus: 35.00  Config 2 surplus: 27.00
-        assert "35.00" in report or "35" in report, (
-            f"surplus 35 not found:\n{report}"
-        )
-        assert "27.00" in report or "27" in report, (
-            f"surplus 27 not found:\n{report}"
-        )
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£35.00",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£27.00",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["CBS Surplus (£/home/yr)"]
+            for label in expected
+        }
+        assert shown == expected, f"CBS surpluses not shown in their configs' rows:\n{report}"
 
     def test_feasibility_binding_label_present(self) -> None:
         """Report must show the human-readable binding/feasibility label."""
@@ -269,13 +271,19 @@ class TestGenerateConfigRankingReportTable1:
         )
 
     def test_total_capex_rendered(self) -> None:
-        """Report must show total_capex_gbp for each feasible config."""
+        """Report must show each feasible config's total_capex_gbp in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        # Config 1: £48,000  Config 2: £72,000
-        assert "48" in report, f"48k capex not found:\n{report}"
-        assert "72" in report, f"72k capex not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£48,000",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£72,000",
+        }
+        shown = {
+            label: _config_row(report, "## Cost-Recovery Rank", label)["Total CapEx (£)"]
+            for label in expected
+        }
+        assert shown == expected, f"total capex not shown in their configs' rows:\n{report}"
 
     def test_min_dscr_inf_shown_as_infinity_symbol(self) -> None:
         """min_dscr=inf must be rendered as '∞'."""
