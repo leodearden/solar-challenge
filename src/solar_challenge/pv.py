@@ -47,7 +47,10 @@ class PVConfig:
         module_efficiency: Panel efficiency as fraction (default 0.20 = 20%)
         temperature_coefficient: Power temp coefficient per °C (default -0.004 = -0.4%/°C)
         custom_module_params: Optional custom pvlib module parameters dict; None wires
-            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row)
+            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row). The cells take
+            NOCT-SAM's temperature from the module's T_NOCT and its rating / (A_c × 1000),
+            with DEFAULT_CEC_MODULE's value for either key the module lacks
+            (docs/pv-cell-temperature.md)
 
         # Inverter parameters (PV-005)
         inverter_efficiency: Inverter efficiency at rated output (default 0.96 = 96%), as the
@@ -183,7 +186,9 @@ def create_simple_module_params(
     characteristics without needing the full CEC parameter set.
 
     Args:
-        efficiency: Module efficiency as fraction (e.g., 0.20 for 20%)
+        efficiency: Module efficiency as fraction (e.g., 0.20 for 20%). It sets the
+            module's area, A_c = module_power_w / (efficiency × 1000 W/m²), and so,
+            through NOCT-SAM, how hot its cells run (docs/pv-cell-temperature.md)
         temperature_coefficient: Power temperature coefficient per °C
             (e.g., -0.004 for -0.4%/°C)
         module_power_w: Each module's power at STC in watts. A system holds
@@ -204,7 +209,7 @@ def create_simple_module_params(
     return {
         "pdc0": module_power_w,
         "gamma_pdc": temperature_coefficient,
-        "efficiency": efficiency,
+        "A_c": module_power_w / (efficiency * 1000),
         "STC": module_power_w,
     }
 
@@ -512,18 +517,16 @@ def _inverter_and_wiring(
 def _arrays(
     config: PVConfig, module_params: dict[str, float], wiring: _Wiring
 ) -> list[Array]:
-    """One array, so one MPPT input, for each group of strings."""
+    """One array, so one MPPT input, for each group of strings, its cells at NOCT-SAM's temperature from the module (_temperature_model_parameters; docs/pv-cell-temperature.md)."""
     mount = FixedMount(surface_tilt=config.tilt, surface_azimuth=config.azimuth)
-    temperature_model = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][
-        "open_rack_glass_glass"
-    ]
+    temperature_model_parameters = _temperature_model_parameters(module_params)
     return [
         Array(
             mount=mount,
             module_parameters=module_params,
             modules_per_string=group.modules_per_string,
             strings=group.strings,
-            temperature_model_parameters=temperature_model,
+            temperature_model_parameters=temperature_model_parameters,
         )
         for group in wiring
     ]
@@ -540,6 +543,26 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
         "module, nor an STC rating, so the modules cannot be counted; add STC, the "
         "module's DC power in W at standard test conditions"
     )
+
+
+_TRANSMITTANCE_ABSORPTANCE = 0.9
+"""NOCT-SAM's transmittance-absorptance, pvlib's noct_sam default, passed in each array's parameters so that the model reads this one value."""
+
+
+def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[str, float]:
+    """pvlib's NOCT-SAM parameters for the module's cells: its T_NOCT, and its rating over its area, A_c × 1000 W/m², as its efficiency.
+
+    A module that lacks T_NOCT or A_c takes DEFAULT_CEC_MODULE's value of that
+    key (docs/pv-cell-temperature.md).
+    """
+    default_module = cec_module_params(DEFAULT_CEC_MODULE)
+    t_noct = module_params.get("T_NOCT", default_module["T_NOCT"])
+    area_m2 = module_params.get("A_c", default_module["A_c"])
+    return {
+        "noct": t_noct,
+        "module_efficiency": _module_rating_w(module_params) / (area_m2 * 1000),
+        "transmittance_absorptance": _TRANSMITTANCE_ABSORPTANCE,
+    }
 
 
 def _module_count(config: PVConfig, module_params: dict[str, float]) -> int:
@@ -572,7 +595,9 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     gamma_pdc, e.g. one from create_simple_module_params) gets pvlib's PVWatts
     inverter at the configured AC capacity and efficiency instead. It wires the
     whole number of modules nearest capacity_kw, each rated at its pdc0 if it
-    has PVWatts parameters and at its STC otherwise (_module_rating_w).
+    has PVWatts parameters and at its STC otherwise (_module_rating_w). Each
+    array's cells run at pvlib's NOCT-SAM temperature, from the module's T_NOCT
+    and efficiency (_temperature_model_parameters; docs/pv-cell-temperature.md).
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
