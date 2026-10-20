@@ -97,7 +97,7 @@ class WeatherCache:
     _KEY_VERSION = 2
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
 
-    2: get_tmy_data caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
+    2: PvgisTmy.get caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
