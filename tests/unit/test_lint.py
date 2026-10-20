@@ -104,6 +104,26 @@ def test_lint_flags_a_bare_except_in_a_package_module(project_root: Path) -> Non
     )
 
 
+def test_lint_flags_a_package_path_it_cannot_read(project_root: Path) -> None:
+    """The lint reports a path in the package that it cannot read as a finding, not only as a warning on stderr.
+
+    No file exists at _PROBE, the path the other probes lint stdin as, so ruff
+    cannot read it. A broken symlink, or a module ruff may not open, gets the
+    same finding.
+    """
+    assert not (project_root / _PROBE).exists(), (
+        f"the probe needs no file at {_PROBE}, the path it lints, so that ruff cannot read it; "
+        "remove the file there"
+    )
+
+    findings = _lint(project_root, _PROBE)
+
+    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E902", _PROBE, 1)], (
+        "the lint must report the package path it cannot read, and nothing else; it reported:\n"
+        + "\n".join(map(str, findings))
+    )
+
+
 def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
     """The lint applies pyproject.toml's rule selection, not ruff's default rules.
 
