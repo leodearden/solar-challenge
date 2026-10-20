@@ -31,7 +31,8 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
+from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
+from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_DAYS_SENTINEL,

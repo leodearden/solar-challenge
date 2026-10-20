@@ -27,7 +27,7 @@ from solar_challenge.web.number_fields import (
     as_whole_number,
     as_whole_number_within,
 )
-from solar_challenge.web.shared import (
+from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
     require_json_object,
     resolve_location,
