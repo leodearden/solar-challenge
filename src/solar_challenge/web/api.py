@@ -42,6 +42,8 @@ from solar_challenge.web.presets import (
     home_preset_named,
     home_presets,
     save_config_preset,
+    saved_fleet_preset_named,
+    saved_fleet_presets,
 )
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
@@ -936,47 +938,33 @@ def scenarios_save_scenario() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/presets", methods=["GET"])
 def scenarios_list_presets() -> tuple[Response, int]:
-    """List built-in (from scenarios/ dir) and saved scenario presets.
+    """List the built-in scenario files, then the saved fleet presets, each by name.
+
+    When the database cannot be read, the built-in files are listed alone and
+    saved_fleet_presets logs the fault.
 
     Returns:
-        JSON with ``presets`` array containing built-in and saved items.
+        JSON with the ``presets`` array, HTTP 200.
     """
-    presets: list[dict[str, Any]] = []
-
-    for name, path in builtin_scenario_files().items():
-        presets.append({"name": name, "source": "builtin", "filename": path.name})
-
-    # Saved presets from database
-    try:
-        with get_database().transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
-            )
-            for row in cursor.fetchall():
-                presets.append({
-                    "name": row["name"],
-                    "source": "saved",
-                    "created_at": row["created_at"],
-                })
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load saved scenario presets", exc_info=True)
-
+    presets: list[dict[str, Any]] = [
+        {"name": name, "source": "builtin", "filename": path.name}
+        for name, path in builtin_scenario_files().items()
+    ]
+    presets.extend(saved_fleet_presets(get_database()))
     return jsonify({"presets": presets}), 200
 
 
 @api_bp.route("/scenarios/presets/<name>", methods=["GET"])
 def scenarios_get_preset(name: str) -> tuple[Response, int]:
-    """Load a specific preset by name (from file or DB).
-
-    Checks the scenarios/ directory first for built-in YAML files,
-    then falls back to saved presets in the database.
+    """Get the built-in scenario file named *name*, else the saved fleet preset named *name*.
 
     Args:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, or 404 if not found.
+        JSON preset object, HTTP 200; or the ``error``: HTTP 404 when neither is named *name*,
+        so a saved home preset's name is not found, and HTTP 500 for a built-in file that does
+        not parse.
     """
     # Try built-in scenarios directory
     path = builtin_scenario_files().get(name)
@@ -990,25 +978,7 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
             }), 200
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
-    # Try database
-    try:
-        with get_database().transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",
-                (name,),
-            )
-            row = cursor.fetchone()
-
-        if row:
-            cfg = json.loads(row["config_json"]) if row["config_json"] else {}
-            return jsonify({
-                "name": row["name"],
-                "source": "saved",
-                "config": cfg,
-                "created_at": row["created_at"],
-            }), 200
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
-
-    return jsonify({"error": f"Preset '{name}' not found"}), 404
+    preset = saved_fleet_preset_named(get_database(), name)
+    if preset is None:
+        return jsonify({"error": f"Preset '{name}' not found"}), 404
+    return jsonify(preset), 200

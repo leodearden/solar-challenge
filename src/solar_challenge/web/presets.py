@@ -4,7 +4,9 @@
 config_presets holds one saved preset per name, a home or a fleet preset, as the table's UNIQUE
 name declares, so a save under a name a saved preset of the other type holds is refused. A
 built-in home preset's name names that built-in preset only, so a home save under it is refused
-too, and the home presets list each name once.
+too, and the home presets list each name once. Every read is of one type: the home presets hold
+no saved fleet preset, and the saved fleet presets, which the scenario builder lists beside the
+built-in scenario files, hold no home preset.
 """
 
 import json
@@ -111,3 +113,40 @@ def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
 def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
     """The preset home_presets lists under *name*, or None when it lists none."""
     return next((preset for preset in home_presets(database) if preset["name"] == name), None)
+
+
+def saved_fleet_presets(database: Database) -> list[dict[str, Any]]:
+    """The saved fleet presets by name, each its name, its ``source`` and its ``created_at``.
+
+    When the database cannot be read, the fault is logged and none are listed.
+    """
+    try:
+        with database.transaction() as conn:
+            rows = conn.execute(
+                "SELECT name, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
+            ).fetchall()
+    except sqlite3.Error:
+        logger.warning("Failed to load saved fleet presets", exc_info=True)
+        return []
+    return [_listed_saved_fleet_preset(row) for row in rows]
+
+
+def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | None:
+    """The saved fleet preset *name*, as saved_fleet_presets lists it, with its ``config``.
+
+    None when no saved fleet preset is named *name*. A config stored as NULL or empty text
+    reads as {}.
+    """
+    with database.transaction() as conn:
+        row = conn.execute(
+            "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = 'fleet'",
+            (name,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {**_listed_saved_fleet_preset(row), "config": json.loads(row["config_json"]) if row["config_json"] else {}}
+
+
+def _listed_saved_fleet_preset(row: sqlite3.Row) -> dict[str, Any]:
+    """The entry saved_fleet_presets lists for a saved fleet preset's row."""
+    return {"name": row["name"], "source": "saved", "created_at": row["created_at"]}
