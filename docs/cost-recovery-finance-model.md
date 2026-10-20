@@ -567,7 +567,9 @@ Synthetic energy inputs (per home, annual):
   synthetic scf                  ≈ 0.346        (2,000 / (2,000 + 3,775))
 ```
 
-**[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN` / the [FIN] fixture builders):
+**[FIN] finance parameters** (from `tests/_fin_calibration.py::make_fin_finance`, the [FIN]
+finance θ and CR6 share; it takes the grant, equity, loan and own-use cells from `FIN_GOLDEN`
+and spells the other values, and CR6's anchor builds it with no self-consumption override):
 
 | Parameter | Value |
 |-----------|-------|
@@ -578,13 +580,13 @@ Synthetic energy inputs (per home, annual):
 | `equity_fraction` | 0.75 |
 | `loan_rate` | 7 % |
 | `loan_term_years` | 15 |
-| `asset_life_years` | 25 (`FinanceConfig` default; the [FIN] fixture sets it to 25) |
+| `asset_life_years` | 25 (`make_fin_finance` sets it to 25, which is also the `FinanceConfig` default) |
 | `opex_per_home_per_year_gbp` | £131 |
 | `own_use_rate_pence_per_kwh` | 15 p/kWh (configured; solved rate below) |
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
-| `standing_charge_pence_per_day` | 60 p/day (required `FinanceConfig` field; set to 60 in the [FIN] fixture builders) |
+| `standing_charge_pence_per_day` | 60 p/day (`make_fin_finance` sets it to 60; a required `FinanceConfig` field) |
 | `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
