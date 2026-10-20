@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's.
-
-HOURS_PER_MINUTE is only a unit conversion: minutes times it are hours.
-"""
+"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's."""
 
 import calendar
 from dataclasses import dataclass
