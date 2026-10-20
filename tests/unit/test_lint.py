@@ -66,6 +66,11 @@ def _lint_probe(project_root: Path, source: str, *ruff_args: str) -> list[_Findi
     return _lint(project_root, *ruff_args, "--stdin-filename", _PROBE, "-", stdin=source)
 
 
+def _located_codes(findings: list[_Finding]) -> list[tuple[str, str, int]]:
+    """Each finding's rule code, path and row: the verdict a probe pins, without ruff's wording."""
+    return [(finding.code, finding.path, finding.row) for finding in findings]
+
+
 def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> None:
     """The lint reports an unused import in a module of the package.
 
@@ -74,7 +79,7 @@ def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> 
     """
     findings = _lint_probe(project_root, "import json\n")
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("F401", _PROBE, 1)], (
+    assert _located_codes(findings) == [("F401", _PROBE, 1)], (
         "the lint must report the unused import in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
@@ -86,7 +91,7 @@ def test_lint_flags_a_mid_file_import_in_a_package_module(project_root: Path) ->
 
     findings = _lint_probe(project_root, source)
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E402", _PROBE, 2)], (
+    assert _located_codes(findings) == [("E402", _PROBE, 2)], (
         "the lint must report the mid-file import in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
@@ -98,7 +103,7 @@ def test_lint_flags_a_bare_except_in_a_package_module(project_root: Path) -> Non
 
     findings = _lint_probe(project_root, source)
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E722", _PROBE, 3)], (
+    assert _located_codes(findings) == [("E722", _PROBE, 3)], (
         "the lint must report the bare except in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
@@ -118,7 +123,7 @@ def test_lint_flags_a_package_path_it_cannot_read(project_root: Path) -> None:
 
     findings = _lint(project_root, _PROBE)
 
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("E902", _PROBE, 1)], (
+    assert _located_codes(findings) == [("E902", _PROBE, 1)], (
         "the lint must report the package path it cannot read, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
