@@ -418,13 +418,20 @@ class TestGenerateConfigRankingReportTable2:
         )
 
     def test_baseline_outlay_values_present(self) -> None:
-        """Report must show baseline_outlay_gbp for each feasible config."""
+        """Report must show each feasible config's baseline_outlay_gbp in its Fixed-15p Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        assert "360" in report, f"baseline outlay 360 not found:\n{report}"
-        assert "420" in report, f"baseline outlay 420 not found:\n{report}"
-        assert "450" in report, f"baseline outlay 450 not found:\n{report}"
+        expected = {
+            "4.0 kWp / 0.0 kWh / 5.0 kW": "£360.00",
+            "5.0 kWp / 5.0 kWh / 5.0 kW": "£420.00",
+            "6.0 kWp / 5.0 kWh / 5.0 kW": "£450.00",
+        }
+        shown = {
+            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline Outlay (£/yr)"]
+            for label in expected
+        }
+        assert shown == expected, f"baseline outlays not shown in their configs' rows:\n{report}"
 
     def test_baseline_surplus_values_present(self) -> None:
         """Report must show each feasible config's baseline_surplus_per_home_gbp in its Fixed-15p Trade-Off row."""
