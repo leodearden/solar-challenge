@@ -46,6 +46,46 @@ def _a_simulation_failing_with_a_message_sqlite_cannot_store(
     raise RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
 
 
+def _a_simulation_that_exits(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    """Stands in for simulate_home: every job it runs raises SystemExit, an error that is not an Exception."""
+    raise SystemExit("the simulation exited")
+
+
+class _AnErrorWhoseMessageCannotBeRead(BaseException):
+    """An error that is not an Exception and whose message cannot be read, so a job that raised it cannot be reported failed."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("the message of this error cannot be read")
+
+
+def _a_simulation_raising_an_error_whose_message_cannot_be_read(
+    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> SimulationResults:
+    """Stands in for simulate_home: every job it runs raises an error whose message cannot be read."""
+    raise _AnErrorWhoseMessageCannotBeRead()
+
+
+class _AnInterruption(BaseException):
+    """An error that is not an Exception."""
+
+
+class _AnErrorWhoseMessageIsInterrupted(BaseException):
+    """An error that is not an Exception, and reading whose message raises _AnInterruption, so failing a job that raised it raises an error that is not an Exception either."""
+
+    def __str__(self) -> str:
+        raise _AnInterruption("reading the message of this error was interrupted")
+
+
+def _released_then_raising(blocking_simulation: BlockingSimulation, error: Callable[[], BaseException]) -> HomeSimulator:
+    """Stands in for simulate_home: every job waits in *blocking_simulation* until it is released, then raises error()."""
+
+    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        blocking_simulation(config, start_date, end_date)
+        raise error()
+
+    return simulate
+
+
 class _ManualClock:
     """Stands in for a JobManager's clock: time stands still until advance() moves it on."""
 
@@ -178,6 +218,23 @@ def _refuse_failed_rows(storage: RunStorage, table: str) -> None:
         )
 
 
+def _queue_a_job_whose_database_cannot_be_opened_when_it_starts(
+    manager: JobManager, blocking_simulation: BlockingSimulation, tmp_path: Path
+) -> str:
+    """Queue a home job on *manager* behind one held in *blocking_simulation*, then turn its database file into a directory.
+
+    Each job has a database of its own, so the held job completes once released, and the queued job cannot open its
+    database when it starts. Returns the queued job's id.
+    """
+    _submit_home_job(manager, tmp_path / "held")
+    blocking_simulation.wait_until_started()
+    queued_storage = _run_storage(tmp_path / "queued")
+    queued_job_id = _submit_home_job_to(manager, queued_storage)
+    queued_storage.database.path.unlink()
+    queued_storage.database.path.mkdir()
+    return queued_job_id
+
+
 _JOBS_LOGGER = "solar_challenge.web.jobs"
 
 
@@ -260,7 +317,10 @@ def _status_of(manager: JobManager, job_id: str) -> str | None:
 
 
 def _submit_home_job(manager: JobManager, tmp_path: Path) -> str:
-    storage = _run_storage(tmp_path)
+    return _submit_home_job_to(manager, _run_storage(tmp_path))
+
+
+def _submit_home_job_to(manager: JobManager, storage: RunStorage) -> str:
     job_id, _ = manager.submit_home_job(
         config=_A_HOME,
         start_date=_JUNE_1,
@@ -456,6 +516,21 @@ class TestJobManagerAgeLimit:
     def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(self, tmp_path: Path) -> None:
         clock = _ManualClock()
         manager = JobManager(max_workers=1, simulate_home=RecordingSimulation(), clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_DAY)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert manager.job_state(job_id) is None
+
+    def test_a_job_whose_failure_cannot_be_reported_is_not_tracked_after_a_submit_a_day_after_it_finished(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(
+            max_workers=1, simulate_home=_a_simulation_raising_an_error_whose_message_cannot_be_read, clock=clock
+        )
         job_id = _submit_home_job(manager, tmp_path)
         assert manager.wait_until_idle(timeout=30)
         clock.advance(_A_DAY)
@@ -762,6 +837,119 @@ class TestJobManagerUnrecordedFailures:
         assert _status_of(manager, job_id) == "failed"
 
 
+class TestJobManagerEscapedErrors:
+    """Tests for a job whose runner raises an error that the runner's own failure handling does not catch."""
+
+    def test_a_job_whose_database_cannot_be_opened_when_it_starts_is_reported_failed_with_its_error_event(
+        self, blocking_simulation: BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = _queue_a_job_whose_database_cannot_be_opened_when_it_starts(manager, blocking_simulation, tmp_path)
+        queued = manager.job_state(job_id)
+        assert queued is not None
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            blocking_simulation.release()
+            assert manager.wait_until_idle(timeout=30)
+
+        failed = replace(queued, status="failed", message="unable to open database file")
+        assert manager.job_state(job_id) == failed
+        assert list(manager.get_events(job_id)) == [JobEvent("error", failed)]
+
+    def test_a_job_whose_database_cannot_be_opened_when_it_starts_is_logged_with_its_error_and_with_the_failure_it_could_not_record(
+        self, blocking_simulation: BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds())
+        _queue_a_job_whose_database_cannot_be_opened_when_it_starts(manager, blocking_simulation, tmp_path)
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
+            blocking_simulation.release()
+            assert manager.wait_until_idle(timeout=30)
+
+        assert [(record.levelno, record.getMessage()) for record in records] == [
+            (
+                logging.ERROR,
+                "Job id-3 of run id-4 failed with OperationalError('unable to open database file'),"
+                " an error that escaped its failure handling",
+            ),
+            (
+                logging.ERROR,
+                "Could not open the database to record that job id-3 of run id-4 failed with 'unable to open database file'",
+            ),
+        ]
+        assert [(type(record.exc_info[1]), str(record.exc_info[1])) for record in records if record.exc_info] == [
+            (sqlite3.OperationalError, "unable to open database file")
+        ] * 2
+
+    def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_reported_failed_with_its_error_event(
+        self, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=_a_simulation_that_exits)
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager, tmp_path)
+            assert manager.wait_until_idle(timeout=30)
+        row = job_row(storage, job_id)
+
+        failed = JobState(
+            job_id=job_id,
+            run_id=row["run_id"],
+            status="failed",
+            progress_pct=20.0,
+            current_step="Simulating",
+            message="the simulation exited",
+            created_at=row["created_at"],
+        )
+        assert manager.job_state(job_id) == failed
+        assert list(manager.get_events(job_id)) == [
+            JobEvent(
+                "progress",
+                replace(failed, status="running", progress_pct=5.0, current_step="Starting", message="Initializing..."),
+            ),
+            JobEvent("progress", replace(failed, status="running", message="Running home simulation...")),
+            JobEvent("error", failed),
+        ]
+
+    def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_recorded_failed_in_its_rows(
+        self, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=_a_simulation_that_exits)
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager, tmp_path)
+            assert manager.wait_until_idle(timeout=30)
+
+        row = job_row(storage, job_id)
+        run = _run_of_job(manager, job_id, storage)
+
+        assert (row["status"], row["message"]) == ("failed", "the simulation exited")
+        assert "SystemExit: the simulation exited" in row["error_traceback"]
+        assert row["completed_at"] is not None
+        assert (run.status, run.error_message) == ("failed", "the simulation exited")
+        assert run.completed_at is not None
+        assert manager.job_state(job_id) == _state_recorded_in_job_row(storage, job_id)
+
+    def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_logged_naming_the_job_and_its_run(
+        self, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=_a_simulation_that_exits, new_id=CountingIds())
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
+            _submit_home_job(manager, tmp_path)
+            assert manager.wait_until_idle(timeout=30)
+
+        assert [(record.levelno, record.getMessage()) for record in records] == [
+            (
+                logging.ERROR,
+                "Job id-1 of run id-2 failed with SystemExit('the simulation exited'),"
+                " an error that escaped its failure handling",
+            )
+        ]
+        assert records[0].exc_info is not None
+        error = records[0].exc_info[1]
+        assert (type(error), str(error)) == (SystemExit, "the simulation exited")
+
+
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
@@ -787,6 +975,25 @@ class TestJobManagerShutdown:
         assert ids.issued
         assert _ids_tracked_by(manager, ids.issued) == []
         assert _run_storage(tmp_path).list_runs() == []
+
+    def test_a_job_dropped_by_shutdown_keeps_the_state_it_was_queued_in_and_logs_no_error(
+        self, blocking_simulation: BlockingSimulation, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        dropped_job_id = _submit_home_job(manager, tmp_path)
+        queued = manager.job_state(dropped_job_id)
+        assert queued is not None
+        assert queued.status == "queued"
+
+        with caplog.at_level(logging.ERROR):
+            manager.shutdown()
+            blocking_simulation.release()
+            assert manager.wait_until_idle(timeout=30)
+
+        assert manager.job_state(dropped_job_id) == queued
+        assert [(record.name, record.getMessage()) for record in caplog.records if record.levelno >= logging.ERROR] == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:
         managers = [JobManager(max_workers=1, simulate_home=RecordingSimulation()) for _ in range(2)]
@@ -850,6 +1057,19 @@ class TestJobManagerWaitUntilIdle:
 
         assert manager.wait_until_idle(timeout=30) is True
         assert _status_of(manager, job_id) == "failed"
+
+    def test_a_job_whose_failure_report_is_stopped_by_an_error_that_is_not_an_exception_counts_as_finished(
+        self, blocking_simulation: BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(
+            max_workers=1,
+            simulate_home=_released_then_raising(blocking_simulation, _AnErrorWhoseMessageIsInterrupted),
+        )
+        _submit_home_job(manager, tmp_path)
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            blocking_simulation.release()
+            assert manager.wait_until_idle(timeout=30)
 
     def test_a_job_dropped_by_shutdown_does_not_keep_the_manager_busy(
         self, blocking_simulation: BlockingSimulation, tmp_path: Path

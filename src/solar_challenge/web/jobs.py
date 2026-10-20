@@ -15,14 +15,14 @@ import time
 import traceback
 import uuid
 import weakref
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
 from typing import Generator, Literal, TypeAlias
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import pandas as pd
 
@@ -155,6 +155,33 @@ def _record_failed_run_row(state: JobState, completed_at: str, conn: sqlite3.Con
             """,
             {"status": _FAILED_RUN_STATUS, "message": state.message, "completed_at": completed_at, "run_id": state.run_id},
         )
+
+
+def _record_failed_rows(state: JobState, error_traceback: str, conn: sqlite3.Connection) -> None:
+    """Record in the jobs table and in the runs table that *state*'s job failed, each in a transaction of its own on *conn*."""
+    completed_at = datetime.now(timezone.utc).isoformat()
+    _record_failed_job_row(state, error_traceback, completed_at, conn)
+    _record_failed_run_row(state, completed_at, conn)
+
+
+def _record_failed_rows_on_new_connection(state: JobState, error_traceback: str, db_path: str) -> None:
+    """Record in the jobs and runs tables of the database at *db_path* that *state*'s job failed, on a new connection to it.
+
+    An error that stops it, such as the database not opening, is logged, naming the job, its run and its failure, and
+    not raised.
+    """
+    try:
+        conn = Database(Path(db_path)).connect()
+    except Exception:
+        logger.exception(
+            "Could not open the database to record that job %s of run %s failed with %r",
+            state.job_id,
+            state.run_id,
+            state.message,
+        )
+        return
+    with closing(conn):
+        _record_failed_rows(state, error_traceback, conn)
 
 
 @dataclass
@@ -477,7 +504,28 @@ class JobManager:
             self._stop_counting_job()
             self._forget_job(job_id, run_id, db_path)
             raise
-        future.add_done_callback(lambda _future: self._finish_job(job_id))
+        future.add_done_callback(functools.partial(self._on_job_done, job_id, db_path))
+
+    def _on_job_done(self, job_id: str, db_path: str, future: Future[None]) -> None:
+        """Fail job *job_id*, whose rows are in the database at *db_path*, if its runner raised, then finish it, even if failing it raised.
+
+        The job therefore reports failed before it stops counting as unfinished. Both steps stay in this one callback:
+        the executor runs a callback added after the job finished at once, in the thread that adds it, so two callbacks
+        could run out of order.
+        """
+        try:
+            self._fail_job_if_its_runner_raised(job_id, db_path, future)
+        finally:
+            self._finish_job(job_id)
+
+    def _fail_job_if_its_runner_raised(self, job_id: str, db_path: str, future: Future[None]) -> None:
+        """Fail job *job_id*, whose rows are in the database at *db_path*, with the error its runner raised, if it raised one.
+
+        A job shutdown dropped never ran, so it is not failed: it keeps the state it was queued in.
+        """
+        error = None if future.cancelled() else future.exception()
+        if error is not None:
+            self._fail_job_whose_runner_raised(job_id, db_path, error)
 
     def _finish_job(self, job_id: str) -> None:
         """Record the clock reading when the executor was done with a job, then stop counting it as unfinished."""
@@ -581,10 +629,30 @@ class JobManager:
 
         Each row is written in a transaction of its own, so a row that is not recorded leaves the other recorded.
         """
-        state = replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
-        completed_at = datetime.now(timezone.utc).isoformat()
-        _record_failed_job_row(state, error_traceback, completed_at, conn)
-        _record_failed_run_row(state, completed_at, conn)
+        state = self._failed_state_of_running_job(job_id, message)
+        _record_failed_rows(state, error_traceback, conn)
+        self._report_state(JobEvent("error", state))
+
+    def _failed_state_of_running_job(self, job_id: str, message: str) -> JobState:
+        """Return the state a job this manager is running reports once it fails with *message*: its last state, failed with *message*."""
+        return replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
+
+    def _fail_job_whose_runner_raised(self, job_id: str, db_path: str, error: BaseException) -> None:
+        """Fail job *job_id* with *error*, which its runner raised and the runner's own failure handling did not catch.
+
+        Log *error*, record the failure in the job's rows on a new connection to the database at *db_path*, then report
+        the job failed. Rows it cannot record are left to recover_stale_jobs, which marks them failed when the next
+        server starts.
+        """
+        state = self._failed_state_of_running_job(job_id, str(error))
+        logger.error(
+            "Job %s of run %s failed with %r, an error that escaped its failure handling",
+            state.job_id,
+            state.run_id,
+            error,
+            exc_info=error,
+        )
+        _record_failed_rows_on_new_connection(state, "".join(traceback.format_exception(error)), db_path)
         self._report_state(JobEvent("error", state))
 
     def _run_job(
@@ -594,7 +662,10 @@ class JobManager:
         work_fn: Callable[[sqlite3.Connection, Callable[[float, str, str], None]], None],
         success_message: str = "Simulation completed successfully",
     ) -> None:
-        """Common job lifecycle wrapper for DB, status, progress, SSE, and errors."""
+        """Common job lifecycle wrapper for DB, status, progress, SSE, and errors.
+
+        An error that escapes it, such as one opening the job's database, reaches _fail_job_if_its_runner_raised, which fails the job.
+        """
         conn = Database(Path(db_path)).connect()
         try:
             self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
