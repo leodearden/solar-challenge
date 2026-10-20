@@ -334,6 +334,35 @@ class TestImportFleetYAML:
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(loader_refusal.value)}
 
+    def test_an_ev_charger_type_that_names_no_charger_type_is_refused_with_the_loaders_refusal(
+        self, client: FlaskClient
+    ) -> None:
+        """A scenario file whose ev block lists a charger type no charger has gets a 400 carrying the loaders' refusal, which names fleet_distribution.ev.charger_type.
+
+        The import used to answer 200 for it, listing fleet_distribution.ev as not loaded.
+        """
+        fleet = {
+            "n_homes": 1,
+            "pv": {"capacity_kw": 4.0},
+            "load": {"annual_consumption_kwh": 3400.0, "use_stochastic": False},
+            "ev": {
+                "charger_type": {"type": "weighted_discrete", "values": ["11kW"], "weights": [1]},
+                "arrival_hour": 18,
+            },
+        }
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
+        assert "fleet_distribution.ev.charger_type" in resp.get_json()["error"]
+
     @pytest.mark.parametrize(
         ("text", "reason"),
         [
