@@ -235,3 +235,4 @@ class TestGetJobResults:
         )
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Run not found"}
