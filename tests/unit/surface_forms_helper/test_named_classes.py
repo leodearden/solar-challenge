@@ -382,6 +382,25 @@ def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_t
     assert named_classes(types.FunctionType) == set()
 
 
+def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
+    assert named_classes(str.join) == set()
+    assert named_classes(", ".join) == set()
+    assert named_classes(vars(dict)["fromkeys"]) == set()
+    assert named_classes(object.__init__) == set()
+    assert named_classes((1).__add__) == set()
+
+
+def test_a_routine_or_class_whose_signature_annotates_nothing_names_no_class_though_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "def audit(share): ...\n\n\nclass Audit:\n    def __init__(self, share): ...\n"
+    earlier = imported_module(tmp_path_factory.mktemp("earlier"), monkeypatch, "auditing", source)
+    imported_module(tmp_path_factory.mktemp("later"), monkeypatch, "auditing", source)
+
+    assert named_classes(earlier.audit) == set()
+    assert named_classes(earlier.Audit) == set()
+
+
 def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_once_dropped(
     tmp_path: pathlib.Path,
 ) -> None:
