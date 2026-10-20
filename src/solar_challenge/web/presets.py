@@ -148,7 +148,8 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
     reads as {}.
 
     Raises:
-        SavedPresetUnreadable: When the database cannot be read, or the preset's config is not JSON.
+        SavedPresetUnreadable: When the database cannot be read, or the preset's config is not
+            JSON, or is JSON but not an object.
     """
     try:
         with database.transaction() as conn:
@@ -164,6 +165,8 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
         config = json.loads(row["config_json"]) if row["config_json"] else {}
     except ValueError as exc:
         raise SavedPresetUnreadable(name, "its config is not JSON") from exc
+    if not isinstance(config, dict):
+        raise SavedPresetUnreadable(name, "its config is not a JSON object")
     return {**_listed_saved_fleet_preset(row), "config": config}
 
 

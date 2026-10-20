@@ -570,6 +570,21 @@ class TestScenarioAPI:
             {"error": "Saved preset 'Broken' could not be read: its config is not JSON"},
         )
 
+    @pytest.mark.parametrize("config_json", ["[1]", "3", '"text"', "null"], ids=["array", "number", "string", "json-null"])
+    def test_a_saved_fleet_preset_whose_config_is_json_but_not_an_object_answers_500_naming_it(
+        self, app: Flask, client: FlaskClient, config_json: str
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as a saved home preset's such config is unreadable."""
+        insert_saved_fleet_preset(app.config["DATABASE"], "Not an object", config_json)
+        assert "Not an object" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        resp = client.get("/api/scenarios/presets/Not an object")
+
+        assert (resp.status_code, resp.get_json()) == (
+            500,
+            {"error": "Saved preset 'Not an object' could not be read: its config is not a JSON object"},
+        )
+
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
     """The YAML text /api/scenarios/preview-yaml answers for the builder *form*, and the document it holds."""
