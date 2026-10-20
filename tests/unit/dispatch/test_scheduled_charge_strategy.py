@@ -534,3 +534,89 @@ class TestScheduledChargeStrategyThroughTheEngine:
         assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
         assert flows[-1].grid_charge == 0.0
         assert flows[-1].grid_import == pytest.approx(0.3 / 60)
+
+
+_TO_HALF = dataclasses.replace(_NIGHTLY, target_soc_fraction=0.5)
+"""The nightly window to 0.5 of the battery's capacity, 2.5 kWh of 5.0, holding at the target."""
+
+_TO_HALF_DISCHARGING = dataclasses.replace(_TO_HALF, allow_discharge=True)
+"""The nightly window to 0.5, discharging into a shortfall down to its target."""
+
+
+class TestScheduledChargeStrategyAllowDischarge:
+    """A window that allows discharge covers a shortfall from the battery while it is above the target, and only down to the target."""
+
+    @pytest.mark.parametrize(
+        ("battery_soc_kwh", "discharge_kw"),
+        [
+            pytest.param(3.0, 1.0, id="well-above-the-target-covers-the-shortfall"),
+            pytest.param(2.505, pytest.approx(0.005 * 60), id="just-above-the-target-discharges-down-to-it"),
+        ],
+    )
+    def test_above_its_target_it_discharges_into_a_shortfall_down_to_the_target(
+        self, battery_soc_kwh: float, discharge_kw: float
+    ) -> None:
+        decision = _decide(
+            _over_self_consumption(_TO_HALF_DISCHARGING),
+            _TWO_AM_BST,
+            demand_kw=1.0,
+            battery_soc_kwh=battery_soc_kwh,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision.discharge_kw == discharge_kw
+        assert decision.grid_charge_kw == 0.0
+
+    @pytest.mark.parametrize(
+        ("battery_soc_kwh", "grid_charges"),
+        [
+            pytest.param(2.5, False, id="at-the-target-holds"),
+            pytest.param(2.4, True, id="below-the-target-charges"),
+        ],
+    )
+    def test_at_or_below_its_target_it_does_not_discharge(self, battery_soc_kwh: float, grid_charges: bool) -> None:
+        decision = _decide(
+            _over_self_consumption(_TO_HALF_DISCHARGING),
+            _TWO_AM_BST,
+            demand_kw=1.0,
+            battery_soc_kwh=battery_soc_kwh,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert decision.discharge_kw == 0.0
+        assert (decision.grid_charge_kw > 0.0) is grid_charges
+
+    def test_it_charges_a_pv_excess_above_its_target(self) -> None:
+        decision = _decide(
+            _over_self_consumption(_TO_HALF_DISCHARGING),
+            _TWO_AM_BST,
+            generation_kw=1.0,
+            battery_soc_kwh=3.0,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert (decision.charge_kw, decision.discharge_kw) == (1.0, 0.0)
+
+    def test_a_window_that_does_not_allow_discharge_holds_above_its_target(self) -> None:
+        decision = _decide(
+            _over_self_consumption(_TO_HALF),
+            _TWO_AM_BST,
+            demand_kw=1.0,
+            battery_soc_kwh=3.0,
+            grid_charge_ctx=_FLAT_RATE_CTX,
+        )
+
+        assert (decision.discharge_kw, decision.grid_charge_kw) == (0.0, 0.0)
+
+    def test_through_the_engine_the_soc_comes_down_to_the_target_and_stays_there(self) -> None:
+        """Each discharge to the target undershoots it by the discharge loss, at most (1/60 kWh)(1/0.975 - 1), about 4.3e-4 kWh, which the window tops up once.
+
+        A window that discharged and topped up by turns would grid-charge about 0.75 kWh over these 2 hours.
+        """
+        battery = Battery(_GRID_CHARGING_BATTERY, initial_soc_kwh=3.0)
+
+        flows = _window_minutes(battery, _over_self_consumption(_TO_HALF_DISCHARGING), minutes=120, demand_kw=1.0)
+
+        assert min(flow.battery_soc for flow in flows) >= 2.5 - 1e-3
+        assert battery.soc_kwh == pytest.approx(2.5, abs=1e-3)
+        assert sum(flow.grid_charge for flow in flows) < 0.01
