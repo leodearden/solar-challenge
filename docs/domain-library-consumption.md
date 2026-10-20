@@ -508,16 +508,24 @@ are registered, but no submodule is imported until a public name is accessed.
 
 ### Lazy pvlib dependency
 
-Accessing any name from `pv` or `weather` triggers `importlib.import_module`
-for that submodule, which pulls `pvlib` transitively:
+Accessing any name from `config`, `fleet`, `home`, `pv` or `weather` imports
+`pvlib` transitively.  `pv` and `weather` import it directly; `home` imports
+`pv`, `fleet` imports `home`, and `config` imports `home`, `fleet` and `pv`:
 
 ```python
 sc = solar_challenge
 mc = sc.create_model_chain(...)    # ← first access imports pv.py + pvlib
 tmy = sc.get_tmy_data(...)         # ← first access imports weather.py + pvlib
+cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 ```
 
-Consumers that want to avoid the pvlib cost must not touch these symbols.
+Accessing a name from any other public submodule (`battery`, `community`,
+`dispatch`, `finance`, `flow`, `gridservices`, `load`, `location`, `seg`,
+`tariff`) leaves `pvlib` unloaded, as of this writing.  Consumers that want to
+avoid the pvlib cost must not touch the `config`, `fleet`, `home`, `pv` or
+`weather` symbols.  Accessing a name does not run it: a function that imports
+one of those submodules at call time, as a `finance` function may when it runs
+its default simulation, loads `pvlib` when called.
 
 ### Network I/O
 
