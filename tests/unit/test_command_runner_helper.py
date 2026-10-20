@@ -171,7 +171,8 @@ def test_a_shell_command_runs_in_the_given_environments_role_and_gets_none_of_it
 def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_its_timeout_and_its_output_so_far(
     tmp_path: Path,
 ) -> None:
-    command = "echo started; echo on-stderr >&2; sleep 30"
+    """printf builds each marker as the command runs, so only its output, never the command the message quotes, can put one in the message."""
+    command = "printf OUT-%s SO-FAR; printf ERR-%s SO-FAR >&2; sleep 30"
 
     with pytest.raises(CommandTimedOut) as timed_out:
         run_command(ShellCommand(command, tmp_path), timeout_secs=1)
@@ -180,8 +181,8 @@ def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_it
     assert command in message
     assert str(tmp_path) in message
     assert "1 s" in message
-    assert "started" in message
-    assert "on-stderr" in message
+    assert "OUT-SO-FAR" in message
+    assert "ERR-SO-FAR" in message
 
 
 @pytest.mark.parametrize(
