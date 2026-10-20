@@ -1,13 +1,15 @@
 """End-to-end tests for the Fleet Results page (/results/fleet/<id>).
 
 Uses the seeded_fleet_run fixture (no live simulation needed) to verify
-the page's title, its action links, its chart tabs, and that it renders
-without errors.
+the page's title, its action links, its chart tabs, that it renders
+without errors, and that the charts of Aggregate, the tab shown on load,
+end as wide as their containers once the page settles.
 """
 
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
 from tests.e2e._results_page import show_chart_tab
 
 pytestmark = pytest.mark.e2e
@@ -128,3 +130,21 @@ def test_fleet_results_page_shows_every_tab_without_errors(
         show_chart_tab(page, tab_name, chart_ids)
 
     assert page_errors == [], f"Errors on /results/fleet/{run_id}: {page_errors}"
+
+
+# -- Each chart is drawn as wide as its container ---------------------------
+
+
+def test_each_aggregate_chart_is_as_wide_as_its_container_once_the_page_settles(
+    page: Page,
+    live_server: str,
+    seeded_fleet_run: tuple[str, str],
+) -> None:
+    """The Aggregate charts are drawn while base.html's main column slides in on load, and each ends as wide as its container."""
+    run_id, _ = seeded_fleet_run
+    page.goto(live_server + f"/results/fleet/{run_id}")
+    aggregate_chart_ids = _CHART_IDS_BY_TAB["Aggregate"]
+    for chart_id in aggregate_chart_ids:
+        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
+
+    assert charts_not_as_wide_as_their_containers(page, aggregate_chart_ids) == []
