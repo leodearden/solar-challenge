@@ -3,7 +3,9 @@
 Provides a live Flask server running in a background thread,
 configures Playwright's base_url so tests can use relative paths, and
 gives tests the server's dashboard macros, to compare a page with
-what a macro draws.
+what a macro draws. A test module chooses the weather the live
+server's jobs simulate on by overriding live_server_weather_in_place,
+which the app is built after.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
@@ -82,8 +84,17 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
-    """The Flask app the live server serves."""
+def live_server_weather_in_place() -> None:
+    """Put in place the weather the live server's jobs simulate on; this one leaves default_weather() as it is.
+
+    A test module overrides it to install its own. _e2e_app requests it, because create_app binds
+    default_weather() when it builds the app.
+    """
+
+
+@pytest.fixture(scope="session")
+def _e2e_app(tmp_path_factory: pytest.TempPathFactory, live_server_weather_in_place: None) -> Flask:
+    """The Flask app the live server serves, built once the live server's weather is in place."""
     return build_test_app(tmp_path_factory.mktemp("e2e"))
 
 

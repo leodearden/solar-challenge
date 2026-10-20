@@ -32,8 +32,9 @@ SCENARIOS = """
 
 
     # HOME_JOB simulates 1 June 2024, so Bristol's TMY is a clear day on that date.
-    @pytest.fixture(autouse=True, scope="session")
-    def _bristol_tmy(tmp_path_factory):
+    # It overrides the e2e conftest's live_server_weather_in_place, which the live server's app is built after.
+    @pytest.fixture(scope="session")
+    def live_server_weather_in_place(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
         cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
         set_weather_cache(cache)
