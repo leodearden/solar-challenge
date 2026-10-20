@@ -13,7 +13,7 @@ import pandas as pd
 from solar_challenge.battery import has_battery
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import SimulationWindow
 
 
 class ValidationError(Exception):
@@ -75,32 +75,31 @@ class ValidationReport:
 
 
 _UK_YIELD_BENCHMARK_KWH_PER_KWP = (300.0, 1200.0)
-_DAYS_PER_YEAR = 365
+_YIELD_BENCHMARK_MIN_DAYS = 365
 
 
-def _days_covered(index: pd.DatetimeIndex) -> int:
-    """The days index covers: the whole days elapsed from its first timestamp to its last, plus one."""
-    return int((index[-1] - index[0]).days) + 1
-
-
-def _annual_equivalent_kwh(power_kw: pd.Series) -> float:
-    """The energy of power_kw, 1-minute kW, scaled from the days it covers to _DAYS_PER_YEAR days."""
-    kwh = float(power_kw.sum() * HOURS_PER_MINUTE)
-    return kwh * _DAYS_PER_YEAR / _days_covered(power_kw.index)
+def _annual_equivalent_kwh(power_kw: pd.Series, window: SimulationWindow) -> float:
+    """A year's energy from power_kw, kW on window's rows."""
+    return window.energy_kwh(power_kw) * window.annualisation_scale
 
 
 def _check_annual_yield(
     generation: pd.Series, config: PVConfig
 ) -> Optional[ValidationResult]:
-    """A 365-day year's AC energy per kWp of the DC wired for config, against the UK benchmark band.
+    """A year's AC energy per kWp of the DC wired for config, against the UK benchmark band.
 
-    generation is 1-minute kW; None when it covers under 365 days, and a longer run is scaled to
-    365 days.
+    generation is kW on evenly spaced rows, at any cadence. None when its window covers
+    under 365 calendar days, since a yield benchmark needs a year of seasons; a window of
+    365 days or more is scaled to a year by its annualisation_scale.
+
+    Raises:
+        ValueError: If SimulationWindow.of_index refuses generation's index.
     """
-    if _days_covered(generation.index) < _DAYS_PER_YEAR:
+    window = SimulationWindow.of_index(generation.index)
+    if window.days < _YIELD_BENCHMARK_MIN_DAYS:
         return None
     wired_kw = wired_dc_capacity_kw(config)
-    yield_per_kwp = _annual_equivalent_kwh(generation) / wired_kw
+    yield_per_kwp = _annual_equivalent_kwh(generation, window) / wired_kw
     low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
     passed = low <= yield_per_kwp <= high
     placement = "within" if passed else "outside"
@@ -149,20 +148,25 @@ def validate_pv_generation(
     - Generation is never negative
     - Generation is zero at night (approximately)
     - Peak generation within 10% over the DC the PV model wires (pv.wired_dc_capacity_kw)
-    - Annual yield per kWp wired within the UK benchmark band (needs 365 days or more, judged per 365 days)
+    - Annual yield per kWp wired within the UK benchmark band (needs a window of 365
+      calendar days or more, scaled to a year by the window's annualisation_scale)
 
     docs/pv-annual-yield-benchmark.md records the band's source and the wired DC both checks use.
 
     Args:
-        generation: PV generation time series in kW
+        generation: PV generation in kW on evenly spaced rows, at any cadence
         pv_config: The PVConfig that produced generation. The peak check and
             the annual yield both use the DC the PV model wires for it
             (pv.wired_dc_capacity_kw), custom_module_params included.
-        check_annual: Whether to check annual yield, which needs 365 days or more of
-            data and judges a longer run per 365 days
+        check_annual: Whether to check the annual yield, which needs generation's window to
+            cover 365 calendar days or more and is scaled to a year by its annualisation_scale
 
     Returns:
         List of ValidationResult objects
+
+    Raises:
+        ValueError: If check_annual is set and SimulationWindow.of_index refuses
+            generation's index.
     """
     results: list[ValidationResult] = []
 
@@ -231,11 +235,16 @@ def validate_consumption(
     - Baseload present (consumption > 0 most times)
 
     Args:
-        demand: 1-minute demand time series in kW
-        target_annual_kwh: Expected annual consumption (optional)
+        demand: Demand in kW on evenly spaced rows, at any cadence
+        target_annual_kwh: Expected annual consumption (optional), judged against demand's
+            energy times its window's annualisation_scale
 
     Returns:
         List of ValidationResult objects
+
+    Raises:
+        ValueError: If target_annual_kwh is given and SimulationWindow.of_index refuses
+            demand's index.
     """
     results: list[ValidationResult] = []
 
@@ -301,7 +310,7 @@ def validate_consumption(
 
     # Check 4: Annual total matches target (if provided)
     if target_annual_kwh is not None:
-        annual_equivalent = _annual_equivalent_kwh(demand)
+        annual_equivalent = _annual_equivalent_kwh(demand, SimulationWindow.of_index(demand.index))
 
         # Allow 20% tolerance
         tolerance = 0.20
@@ -495,6 +504,8 @@ def validate_simulation(
     Raises:
         ValueError: Naming battery_capacity_kwh, when the self-consumption
             benchmark reads one that is negative or not finite
+        ValueError: If SimulationWindow.of_index refuses results' index, which the
+            annual yield check reads
     """
     all_results: list[ValidationResult] = []
 
