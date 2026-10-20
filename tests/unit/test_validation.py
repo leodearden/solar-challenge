@@ -148,6 +148,11 @@ _PVWATTS_250_W_AT_1_1_KW = PVConfig(
     capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
 )
 
+# Wires thirteen 300 W modules, 3.9 kWp, counted by its pdc0.
+_PVWATTS_300_W_WITHOUT_STC_AT_4_KW = PVConfig(
+    capacity_kw=4.0, custom_module_params={"pdc0": 300.0, "gamma_pdc": -0.004}
+)
+
 
 class TestValidationResult:
     """Tests for ValidationResult dataclass."""
@@ -394,6 +399,18 @@ class TestAnnualYieldPerWiredKwp:
         assert result.passed is True
         assert result.value == pytest.approx(kwh_per_wired_kwp)
 
+    def test_a_pvwatts_module_without_an_stc_is_judged_per_the_dc_its_pdc0_wires(self) -> None:
+        generation = _year_of_generation(1000.0 * 3.9)
+
+        result = _annual_yield_check(
+            validate_pv_generation(
+                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=True
+            )
+        )
+
+        assert result.value == pytest.approx(1000.0)
+        assert "3.90 kWp" in result.message
+
 
 class TestAnnualYieldScaledByItsWindow:
     """A window of 365 days or more is judged on its yield times its annualisation_scale, the rule validate_consumption scales by."""
@@ -466,6 +483,19 @@ class TestPeakWithinWiredCapacity:
         assert result.passed is False
         assert result.expected_range is not None
         assert result.expected_range[1] == pytest.approx(1.1)
+
+    def test_a_pvwatts_module_without_an_stc_is_judged_per_the_dc_its_pdc0_wires(self) -> None:
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=4.0)
+
+        result = _peak_check(
+            validate_pv_generation(
+                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=False
+            )
+        )
+
+        assert "3.90 kWp" in result.message
+        assert result.expected_range is not None
+        assert result.expected_range[1] == pytest.approx(3.9 * 1.1)
 
 
 class TestValidateConsumption:

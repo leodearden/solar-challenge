@@ -488,6 +488,24 @@ next call; the tag builds one on the first call and returns it ever after.
 `set_weather_cache` still overrides both. Consumers need no change when they
 re-pin.
 
+**Unreleased on main** (task 812): `create_pv_system`, and so
+`create_model_chain` and `simulate_pv_output`, count `custom_module_params`
+with PVWatts parameters (`pdc0` and `gamma_pdc`) in modules of their `pdc0`,
+the power pvlib's PVWatts DC model multiplies by the module count, and any
+other module in modules of its `STC`. The 0.5.0 tag counts every module
+without an `STC` key as 400 W. So 4 kW of
+`{"pdc0": 300.0, "gamma_pdc": -0.004}` now wires 13 modules, 3.9 kWp, where
+the tag wires 10, 3.0 kWp. On Bristol's scaled TMY, with the default system
+losses, that raises its annual AC from 2948 to 3857 kWh (+30.8%; measured with
+pvlib 0.15.1 on main 067b13e and on this change). Custom module parameters
+with neither PVWatts parameters nor an `STC`, such as a row of pvlib's
+`SandiaMod` library, raise `ValueError` naming `pdc0` and `STC`, with or
+without `custom_inverter_params`; the tag counts them as 400 W modules. The
+default module, and modules from `create_simple_module_params`, which carry
+`pdc0` and `STC` at one value, are counted as on the tag. Consumers that pass a
+PVWatts module without `STC` re-baseline its figures, and consumers that pass a
+module with neither key add its `STC`, when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
