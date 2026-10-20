@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import dataclasses
 
-import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig
@@ -833,9 +832,8 @@ def _make_grid_charge_sim_results_cr6(
     export_kwh: float,
     import_to_load_kwh: float,
     grid_charge_kwh: float,
-    n_steps: int = 8760,
 ) -> SimulationResults:
-    """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
+    """make_sim_results' results for a grid-charging (arbitrage) home, whose grid import also carries *grid_charge_kwh*.
 
     Energy accounting:
         total_grid_import = import_to_load + grid_charge  (both cross grid boundary)
@@ -845,33 +843,12 @@ def _make_grid_charge_sim_results_cr6(
     This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
     is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
 
-    Untariffed, like make_sim_results' results: import_cost is zero and
+    Untariffed, as make_sim_results' results are: import_cost is zero and
     grid_charge_cost is None.
     """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / n_steps
-    exp_kw = export_kwh / n_steps
-    imp_to_load_kw = import_to_load_kwh / n_steps
-    grid_charge_kw = grid_charge_kwh / n_steps
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_to_load_kw          # demand = sc + import_to_load
-    total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
-    zeros = pd.Series(0.0, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(total_imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
+    to_load = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_to_load_kwh)
+    into_battery = make_sim_results(self_kwh=0.0, export_kwh=0.0, import_kwh=grid_charge_kwh).grid_import
+    return dataclasses.replace(to_load, grid_import=to_load.grid_import + into_battery)
 
 
 def _make_grid_charge_fleet_cr6(
@@ -1151,36 +1128,13 @@ class TestCbsOwnUseKwhHelper:
 
     def test_clamp_to_zero(self) -> None:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
-        # Build a summary with demand=500, import=900 by construction.
-        # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
-        # Instead, build manually via make_sim_results with sc=0, import>demand:
-        # Use sc=500, import=900 → demand=1400 (still basis C > 0).
-        # We need a summary where demand < import to test the clamp.
-        # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
-        n_steps = 8760
-        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-        zeros = pd.Series(0.0, index=idx)
-        # demand_kw such that its hourly rows total 500 kWh
-        demand_kw = 500.0 / n_steps
-        # import_kw such that its hourly rows total 900 kWh
-        import_kw = 900.0 / n_steps
-        # gen_kw = 0 (no generation)
-        sr = SimulationResults(
-            generation=zeros.copy(),
-            demand=pd.Series(demand_kw, index=idx),
-            self_consumption=zeros.copy(),
-            battery_charge=zeros.copy(),
-            battery_discharge=zeros.copy(),
-            battery_soc=zeros.copy(),
-            grid_import=pd.Series(import_kw, index=idx),
-            grid_export=zeros.copy(),
-            import_cost=zeros.copy(),
-            export_revenue=zeros.copy(),
-            tariff_rate=zeros.copy(),
-            grid_charge_cost=None,
+        # No self-consumption, so the 400 kWh charged from the grid never reaches the load:
+        # demand = 0 + 500 = 500 kWh, grid import = 500 + 400 = 900 kWh → demand - import = -400
+        summary = calculate_summary(
+            _make_grid_charge_sim_results_cr6(
+                self_kwh=0.0, export_kwh=0.0, import_to_load_kwh=500.0, grid_charge_kwh=400.0
+            )
         )
-        summary = calculate_summary(sr)
-        # total_demand = 500, total_grid_import = 900 → demand - import = -400 → clamp to 0.0
         assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
         # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
