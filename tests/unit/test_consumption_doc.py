@@ -38,7 +38,7 @@ def test_consumption_doc_exists(project_root: Path) -> None:
     doc_path = project_root / DOC_REL_PATH
     assert doc_path.exists(), (
         f"{DOC_REL_PATH} does not exist; create it with the pinned-dependency "
-        "recipe and consumption caveats (PRD §3.4)"
+        "recipe and consumption caveats (docs/prds/domain-library-extraction.md §3.4)"
     )
     content = doc_path.read_text(encoding="utf-8").strip()
     assert content, f"{DOC_REL_PATH} exists but is empty"
