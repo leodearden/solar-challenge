@@ -13,7 +13,6 @@ from solar_challenge.home import SimulationResults, calculate_summary, simulate_
 from solar_challenge.output import (
     CommunityMetrics,
     SeasonSummary,
-    aggregate_annual,
     aggregate_daily,
     aggregate_monthly,
     calculate_export_ratio,
@@ -473,25 +472,4 @@ class TestPeriodTotalsAndPeaks:
             summary.peak_generation_kw
         )
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
-
-
-class TestAggregateAnnual:
-    """Test OUT-008: Annual aggregation."""
-
-    def test_returns_dict(self, sample_results):
-        """Returns dictionary with annual totals."""
-        annual = aggregate_annual(sample_results)
-
-        assert isinstance(annual, dict)
-        assert "generation_kwh" in annual
-        assert "demand_kwh" in annual
-
-    def test_includes_all_metrics(self, sample_results):
-        """Includes all summary metrics."""
-        annual = aggregate_annual(sample_results)
-
-        assert "self_consumption_ratio" in annual
-        assert "grid_dependency_ratio" in annual
-        assert "export_ratio" in annual
-        assert "simulation_days" in annual
 

@@ -340,52 +340,6 @@ def aggregate_monthly(results: SimulationResults) -> pd.DataFrame:
     return _aggregate_by_period(results, "ME")
 
 
-def aggregate_annual(
-    results: SimulationResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> dict[str, float]:
-    """Aggregate results to annual totals.
-
-    Args:
-        results: Simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, seg_revenue_gbp is included in the returned dictionary.
-
-    Returns:
-        Dictionary with annual energy totals in kWh, and optionally SEG revenue in GBP
-    """
-    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-
-    annual: dict[str, float] = {
-        "generation_kwh": summary.total_generation_kwh,
-        "demand_kwh": summary.total_demand_kwh,
-        "self_consumption_kwh": summary.total_self_consumption_kwh,
-        "grid_import_kwh": summary.total_grid_import_kwh,
-        "grid_export_kwh": summary.total_grid_export_kwh,
-        "battery_charge_kwh": summary.total_battery_charge_kwh,
-        "battery_discharge_kwh": summary.total_battery_discharge_kwh,
-        "peak_generation_kw": summary.peak_generation_kw,
-        "peak_demand_kw": summary.peak_demand_kw,
-        "self_consumption_ratio": summary.self_consumption_ratio,
-        "grid_dependency_ratio": summary.grid_dependency_ratio,
-        "export_ratio": summary.export_ratio,
-        "simulation_days": float(summary.simulation_days),
-    }
-
-    if summary.seg_revenue_gbp is not None:
-        annual["seg_revenue_gbp"] = summary.seg_revenue_gbp
-
-    # Include heat pump metrics if present
-    if summary.total_heat_pump_load_kwh is not None:
-        annual["heat_pump_load_kwh"] = summary.total_heat_pump_load_kwh
-    if summary.peak_heat_pump_load_kw is not None:
-        annual["peak_heat_pump_load_kw"] = summary.peak_heat_pump_load_kw
-    if summary.heat_pump_load_ratio is not None:
-        annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
-
-    return annual
-
-
 @dataclass
 class CommunityMetrics:
     """Pre-computed kWh aggregates for a community simulation result.
