@@ -1347,6 +1347,29 @@ class TestBillCore:
         )
         assert b_sc_only.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
 
+    @pytest.mark.parametrize(
+        "own_use_kwh", [0.0, 20.0], ids=["no-own-use", "own-use-from-stored-battery-energy"]
+    )
+    def test_generation_zero_gives_a_zero_self_consumption_fraction(
+        self, own_use_kwh: float
+    ) -> None:
+        """generation_kwh==0 gives self_consumption_fraction 0.0 with or without
+        own-use (none on the override path; on the physics path basis C can bill
+        energy a battery stored before the period): the bill's own identity in
+        docs/cost-recovery-finance-model.md §3.
+        """
+        b = bill(
+            period_days=30,
+            generation_kwh=0.0,
+            demand_kwh=280.0,
+            self_consumption_kwh=own_use_kwh,
+            import_kwh=280.0 - own_use_kwh,
+            import_cost_gbp=(280.0 - own_use_kwh) * 23.0 / 100.0,
+            baseline_import_cost_gbp=280.0 * 23.0 / 100.0,
+            finance=_make_finance(),
+        )
+        assert b.self_consumption_fraction == 0.0
+
 
 # ---------------------------------------------------------------------------
 # TestCbsAmountDue — CBS-collectable slice (own-use VAT + amount due)
