@@ -567,7 +567,9 @@ Synthetic energy inputs (per home, annual):
   synthetic scf                  ≈ 0.346        (2,000 / (2,000 + 3,775))
 ```
 
-**[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN` / the [FIN] fixture builders):
+**[FIN] finance parameters** (from `tests/_fin_calibration.py::make_fin_finance`, the [FIN]
+finance θ and CR6 share; it takes the grant, equity, loan and own-use cells from `FIN_GOLDEN`
+and spells the other values, and CR6's anchor builds it with no self-consumption override):
 
 | Parameter | Value |
 |-----------|-------|
@@ -578,13 +580,13 @@ Synthetic energy inputs (per home, annual):
 | `equity_fraction` | 0.75 |
 | `loan_rate` | 7 % |
 | `loan_term_years` | 15 |
-| `asset_life_years` | 25 (`FinanceConfig` default; the [FIN] fixture sets it to 25) |
+| `asset_life_years` | 25 (`make_fin_finance` sets it to 25, which is also the `FinanceConfig` default) |
 | `opex_per_home_per_year_gbp` | £131 |
 | `own_use_rate_pence_per_kwh` | 15 p/kWh (configured; solved rate below) |
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
-| `standing_charge_pence_per_day` | 60 p/day (required `FinanceConfig` field; set to 60 in the [FIN] fixture builders) |
+| `standing_charge_pence_per_day` | 60 p/day (`make_fin_finance` sets it to 60; a required `FinanceConfig` field) |
 | `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
@@ -708,7 +710,8 @@ anchor's (§7.3), for three reasons:
   financed capex, debt and equity are all zero (§6).  No debt service enters its solve,
   DSCR is `inf` and the equity IRR is `nan`, where the anchor's 100 homes finance
   £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
-  this premise in the fast suite.
+  this premise in the fast suite, under both the physics columns' finance and the 0.70
+  override at which θ's spreadsheet column prices this fleet.
 - **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
   degradation and battery fade (§4, *Battery ageing*) lower its later-year own-use.
   The anchor's injected results are the same at every age (§7.4).
