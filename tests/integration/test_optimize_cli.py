@@ -759,7 +759,7 @@ def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
 class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
-    Each test that runs a sweep passes a constant fleet simulator as the Click
+    Each test that runs a sweep passes its own fleet simulator as the Click
     context object (``obj=CliFleetSimulator(...)``), so the whole sweep,
     sensitivity panel included, runs offline without PVGIS.
     """
@@ -927,6 +927,73 @@ class TestOptimizeCLIE2EFast:
             or "known" in result.output.lower()
         ), (
             f"Expected clear error message about unknown alias in output:\n{result.output}"
+        )
+
+    def test_a_plain_value_error_while_the_sensitivity_panel_runs_exits_one_as_an_invalid_value(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A plain ValueError raised while the sensitivity panel runs ends the command with exit 1 and its invalid-value line on stderr; the panel is not skipped.
+
+        A run without the panel counts the simulations the sweep asks for; the
+        simulator answers that many and raises on the next, which the panel asks for.
+        """
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        sweep_only, sweep_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--sensitivity", ""],
+            n_homes=1,
+        )
+        assert sweep_only.exit_code == 0, sweep_only.output
+        asked: list[object] = []
+
+        def simulate(fleet_config, start, end):
+            asked.append(fleet_config)
+            if len(asked) > len(sweep_fleets):
+                raise ValueError("a defect raised while the sensitivity panel runs")
+            return one_home_fleet_results
+
+        result = invoke_cli(
+            [
+                "optimize", "configs", str(_write_optimize_scenario(tmp_path, n_homes=1)),
+                *options,
+                "--sensitivity", "grid_services",
+            ],
+            simulate,
+        )
+
+        assert len(asked) > len(sweep_fleets), "the panel asked for no simulation"
+        assert result.exit_code == 1, result.output
+        assert result.stdout == ""
+        stderr = " ".join(result.stderr.split())
+        assert "Computing sensitivity panel for axes" in stderr
+        assert stderr.endswith("Invalid value: a defect raised while the sensitivity panel runs")
+        assert "Sensitivity panel skipped" not in result.output
+
+    def test_the_sensitivity_panel_is_skipped_with_a_note_when_the_sweep_has_no_feasible_config(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """With every config infeasible, the command prints the report without the panel, notes the skip on stderr and exits 0."""
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--retained-floor", "9999999", "--sensitivity", "grid_services"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "## Cost-Recovery Rank" in result.stdout
+        assert "## Sensitivity Analysis" not in result.stdout
+        stderr = " ".join(result.stderr.split())
+        assert "Computing sensitivity panel" not in stderr
+        assert stderr.endswith(
+            "Sensitivity panel skipped: no feasible baseline config found "
+            "(sensitivity requires at least one feasible config)."
         )
 
 
