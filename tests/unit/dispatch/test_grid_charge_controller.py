@@ -105,7 +105,7 @@ class TestGridChargeContext:
 
 
 class TestComputeGridChargePowerKw:
-    """Tests for compute_grid_charge_power_kw — all branches of PRD §3.2."""
+    """Tests for compute_grid_charge_power_kw — all branches of docs/prds/tou-grid-charging-battery-arbitrage.md §3.2."""
 
     # Helper: build a "favourable" context that would yield non-zero charge power.
     # is_cheap=True, spread is profitable (peak >> current/rt_eff),
@@ -300,7 +300,8 @@ class TestComputeGridChargePowerKw:
             )
 
     def test_residual_clamp_is_battery_side(self):
-        """Residual clamp uses battery-side headroom (conservative, per PRD §3.2).
+        """Residual clamp uses battery-side headroom (conservative, per
+        docs/prds/tou-grid-charging-battery-arbitrage.md §3.2).
 
         When charge_efficiency < 1 and residual limits the result, the function
         returns ``residual_kw`` (battery-side headroom) directly, NOT

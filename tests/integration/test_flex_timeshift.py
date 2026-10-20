@@ -103,7 +103,7 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     - validate_balance=True holds (energy balance closed) in both runs
     - battery charged in ON run, grid imported in ON run
     - import_cost_gbp(ON) < import_cost_gbp(OFF)
-    - annualised delta ∈ [£100, £330]  (PRD §9.1 Seam 3 / §11 PASS gate)
+    - annualised delta ∈ [£100, £330]  (docs/prds/flexibility-value-finance-integration.md §6 decision 3, §9.1 Seam 3)
     """
     fleet = load_fleet_config(SCENARIO)
 

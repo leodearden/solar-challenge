@@ -60,7 +60,7 @@ from tests._surface_forms import (
 # ---------------------------------------------------------------------------
 # H2 surface-lock: the exact 72 public names, each with its frozen surface form
 #
-# The keys mirror PRD §3.1, grouped by origin module.  Each value is the name's
+# The keys mirror docs/prds/domain-library-extraction.md §3.1, grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
 # dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
 # members; or a constant's type.  Any add/remove to __all__ must be reflected in

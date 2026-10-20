@@ -1,7 +1,7 @@
 """Tests for flex.py flexibility value-model (banded Low/Central/High + grid-services £/kW resolver).
 
-Canonical numbers from consulting model §1.1/§1.4 and PRD §6
-(all £/battery-home/yr unless noted).
+Canonical numbers from consulting model §1.1/§1.4 and
+docs/prds/flexibility-value-finance-integration.md §6 (all £/battery-home/yr unless noted).
 """
 
 import dataclasses
@@ -119,7 +119,8 @@ class TestFlexibilityValueBand:
 class TestFlexValueBands:
     """Test FLEX_VALUE_BANDS canonical constants and REPRESENTATIVE_DISCHARGE_POWER_KW.
 
-    Numbers from consulting §1.1/§1.4 and PRD §6 (all £/battery-home/yr).
+    Numbers from consulting §1.1/§1.4 and docs/prds/flexibility-value-finance-integration.md §6
+    (all £/battery-home/yr).
     """
 
     # --- module constant ---
@@ -157,7 +158,7 @@ class TestFlexValueBands:
                 f"FLEX_VALUE_BANDS['{key}'] is not a FlexibilityValueBand"
             )
 
-    # --- Per-band canonical values (consulting §1.1 + PRD §6) ---
+    # --- Per-band canonical values (consulting §1.1 + docs/prds/flexibility-value-finance-integration.md §6) ---
 
     @pytest.mark.parametrize("band,expected", [
         ("low",     {"time_shift_gbp": 100.0, "grid_services_per_home_gbp":   4.0, "grid_services_per_kw_gbp":  1.5, "total_gbp": 120.0}),  # noqa: E241
@@ -165,7 +166,10 @@ class TestFlexValueBands:
         ("high",    {"time_shift_gbp": 330.0, "grid_services_per_home_gbp": 120.0, "grid_services_per_kw_gbp": 48.0, "total_gbp": 450.0}),  # noqa: E241
     ])
     def test_band_canonical_values(self, band: str, expected: dict[str, float]) -> None:
-        """Canonical monetary fields for each band match consulting §1.1 + PRD §6."""
+        """Canonical monetary fields for each band match consulting §1.1 and the PRD.
+
+        PRD: docs/prds/flexibility-value-finance-integration.md §6.
+        """
         fb = FLEX_VALUE_BANDS[band]
         for field, value in expected.items():
             assert getattr(fb, field) == pytest.approx(value), f"{band}.{field}"
@@ -182,7 +186,8 @@ class TestFlexValueBands:
 class TestResolveGridServicesBand:
     """Test resolve_grid_services_band and resolve_flex_band resolvers.
 
-    Pinned signal: resolve_grid_services_band("central") == 12.0 (PRD §6).
+    resolve_grid_services_band("central") == 12.0
+    (docs/prds/flexibility-value-finance-integration.md §6).
     Per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 (consulting §1.1 banding).
     """
 
@@ -194,15 +199,15 @@ class TestResolveGridServicesBand:
         assert isinstance(result, float)
 
     def test_central_pinned_signal(self):
-        """Central band returns exactly £12.0/kW/yr — the PRD §6 pinned signal."""
+        """Central band returns exactly £12.0/kW/yr (docs/prds/flexibility-value-finance-integration.md §6)."""
         assert resolve_grid_services_band("central") == pytest.approx(12.0)
 
     def test_low_rate(self):
-        """Low band returns £1.5/kW/yr (PRD §6)."""
+        """Low band returns £1.5/kW/yr (docs/prds/flexibility-value-finance-integration.md §6)."""
         assert resolve_grid_services_band("low") == pytest.approx(1.5)
 
     def test_high_rate(self):
-        """High band returns £48.0/kW/yr (PRD §6)."""
+        """High band returns £48.0/kW/yr (docs/prds/flexibility-value-finance-integration.md §6)."""
         assert resolve_grid_services_band("high") == pytest.approx(48.0)
 
     def test_each_band_matches_flex_value_bands(self):

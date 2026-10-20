@@ -783,7 +783,7 @@ class TestParseHomeConfigPVAge:
 class TestParseHomeConfigSEG:
     """Boundary tests for the SEG export-rate field round-trip (task #21).
 
-    Scope (per PRD §14): validates field population only — not end-to-end
+    Scope (per docs/prds/web-ui-engine-capability-parity.md §12 item ④): validates field population only — not end-to-end
     simulation pricing (which is task #2's already-proven math).
     """
 
