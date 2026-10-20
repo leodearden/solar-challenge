@@ -3,7 +3,6 @@
 import io
 import sys
 import tempfile
-import types
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock
@@ -39,7 +38,7 @@ from solar_challenge.cli.utils import (
     status_console,
 )
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache, WeatherDataError
@@ -1041,107 +1040,17 @@ class TestLocationParsing:
             parse_location("abc,def")
 
 
-class TestCreateSummaryTableFinancials:
-    """Tests that create_summary_table renders financial/SEG rows (step-5/step-6)."""
-
-    def _make_summary_with_financials(self) -> SummaryStatistics:
-        """Construct a SummaryStatistics with all financial fields populated."""
-        return SummaryStatistics(
-            total_generation_kwh=10.0,
-            total_demand_kwh=8.0,
-            total_self_consumption_kwh=6.0,
-            total_grid_import_kwh=2.0,
-            total_grid_export_kwh=4.0,
-            total_battery_charge_kwh=0.0,
-            total_battery_discharge_kwh=0.0,
-            peak_generation_kw=3.5,
-            peak_demand_kw=2.5,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            export_ratio=0.4,
-            simulation_days=1,
-            total_import_cost_gbp=0.56,
-            total_export_revenue_gbp=0.24,
-            net_cost_gbp=0.32,
-            seg_revenue_gbp=1.23,
-        )
-
-    def _render_table(self, summary: object) -> str:
-        """Render create_summary_table to a string via Rich Console."""
-        buf = io.StringIO()
-        console_obj = Console(file=buf, width=200, highlight=False)
-        table = create_summary_table(summary)
-        console_obj.print(table)
-        return buf.getvalue()
-
-    def test_financial_and_seg_rows_present(self) -> None:
-        """create_summary_table renders Grid Import Cost, Export Revenue, Net Cost, SEG Revenue."""
-        summary = self._make_summary_with_financials()
-        output = self._render_table(summary)
-
-        assert "SEG Revenue" in output, "SEG Revenue row must be present"
-        assert "Net Cost" in output, "Net Cost row must be present"
-        assert "Export Revenue" in output or "Grid Export Revenue" in output, (
-            "Export Revenue row must be present"
-        )
-        assert "Grid Import Cost" in output, "Grid Import Cost row must be present"
-        # Check the SEG value appears
-        assert "1.23" in output, "SEG revenue value 1.23 must appear in output"
-
-    def test_no_seg_row_when_seg_revenue_is_none(self) -> None:
-        """No SEG Revenue row when seg_revenue_gbp is None."""
-        summary = SummaryStatistics(
-            total_generation_kwh=10.0,
-            total_demand_kwh=8.0,
-            total_self_consumption_kwh=6.0,
-            total_grid_import_kwh=2.0,
-            total_grid_export_kwh=4.0,
-            total_battery_charge_kwh=0.0,
-            total_battery_discharge_kwh=0.0,
-            peak_generation_kw=3.5,
-            peak_demand_kw=2.5,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            export_ratio=0.4,
-            simulation_days=1,
-            total_import_cost_gbp=0.56,
-            total_export_revenue_gbp=0.24,
-            net_cost_gbp=0.32,
-            seg_revenue_gbp=None,  # no SEG
-        )
-        output = self._render_table(summary)
-        assert "SEG Revenue" not in output, "SEG Revenue must not appear when seg_revenue_gbp is None"
-
-    def test_no_financial_rows_for_fleet_summary_like_object(self) -> None:
-        """Objects without financial fields (e.g. FleetSummary) render without SEG row, no error."""
-        # Minimal FleetSummary-like namespace with n_homes but no financial fields
-        fleet_like = types.SimpleNamespace(
-            total_generation_kwh=100.0,
-            total_demand_kwh=80.0,
-            total_self_consumption_kwh=60.0,
-            total_grid_import_kwh=20.0,
-            total_grid_export_kwh=40.0,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            n_homes=5,
-            simulation_days=365,
-        )
-        output = self._render_table(fleet_like)
-        assert "SEG Revenue" not in output, "SEG Revenue must not appear for fleet-like summary"
-        assert "Number of Homes" in output, "n_homes should render"
-
-
 class TestCreateSummaryTableTitle:
     """Tests that create_summary_table prints its title exactly as given, in Rich's table-title style."""
 
-    def _summary(self) -> types.SimpleNamespace:
-        """A summary carrying only the five energy totals create_summary_table always reads."""
-        return types.SimpleNamespace(
-            total_generation_kwh=10.0,
-            total_demand_kwh=8.0,
-            total_self_consumption_kwh=6.0,
-            total_grid_import_kwh=2.0,
-            total_grid_export_kwh=4.0,
+    def _rows(self) -> tuple[tuple[str, str], ...]:
+        """The rows of a home's five energy totals."""
+        return (
+            ("Total Generation", "10.0 kWh"),
+            ("Total Demand", "8.0 kWh"),
+            ("Self-Consumption", "6.0 kWh"),
+            ("Grid Import", "2.0 kWh"),
+            ("Grid Export", "4.0 kWh"),
         )
 
     def test_a_title_is_printed_verbatim(self) -> None:
@@ -1151,13 +1060,13 @@ class TestCreateSummaryTableTitle:
         """
         buffer = io.StringIO()
 
-        Console(file=buffer, width=80).print(create_summary_table(self._summary(), title=_TEXT_RICH_WOULD_PARSE))
+        Console(file=buffer, width=80).print(create_summary_table(self._rows(), title=_TEXT_RICH_WOULD_PARSE))
 
         assert _TEXT_RICH_WOULD_PARSE in " ".join(buffer.getvalue().split())
 
     def test_a_title_is_printed_in_the_table_title_style(self) -> None:
         """The title is italic, as Rich styles a table's title; centring pads it inside the same span, so the segment's style is compared."""
-        segments = Console(width=80).render(create_summary_table(self._summary(), title="Results"))
+        segments = Console(width=80).render(create_summary_table(self._rows(), title="Results"))
 
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 

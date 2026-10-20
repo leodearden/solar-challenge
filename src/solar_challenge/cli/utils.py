@@ -20,6 +20,7 @@ fleet.simulate_fleet_iter and fleet.simulate_multi_sweep_iter themselves.
 """
 
 import dataclasses
+from collections.abc import Iterable
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
@@ -44,7 +45,8 @@ from rich.text import Text
 from solar_challenge.battery import has_battery
 from solar_challenge.config import load_config
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSummary, simulate_fleet
+from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherDataError
 
@@ -211,11 +213,11 @@ def verbatim_table_title(title: str) -> Text:
     return Text(title, style="table.title")
 
 
-def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Table:
-    """Create a Rich table from summary statistics.
+def create_summary_table(rows: Iterable[tuple[str, str]], title: str = "Simulation Summary") -> Table:
+    """Create a Rich table of summary rows.
 
     Args:
-        summary: SummaryStatistics or FleetSummary object
+        rows: (metric, value) pairs, printed in order under the title
         title: Table title, printed exactly as it is, never read as Rich markup or emoji codes
 
     Returns:
@@ -224,46 +226,87 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     table = Table(title=verbatim_table_title(title))
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="green")
-
-    # Energy totals
-    table.add_row("Total Generation", f"{summary.total_generation_kwh:.1f} kWh")
-    table.add_row("Total Demand", f"{summary.total_demand_kwh:.1f} kWh")
-    table.add_row("Self-Consumption", f"{summary.total_self_consumption_kwh:.1f} kWh")
-    table.add_row("Grid Import", f"{summary.total_grid_import_kwh:.1f} kWh")
-    table.add_row("Grid Export", f"{summary.total_grid_export_kwh:.1f} kWh")
-
-    # Ratios
-    if hasattr(summary, "self_consumption_ratio"):
-        table.add_row(
-            "Self-Consumption Ratio",
-            f"{summary.self_consumption_ratio:.1%}",
-        )
-    if hasattr(summary, "grid_dependency_ratio"):
-        table.add_row(
-            "Grid Dependency",
-            f"{summary.grid_dependency_ratio:.1%}",
-        )
-
-    # Fleet-specific
-    if hasattr(summary, "n_homes"):
-        table.add_row("Number of Homes", str(summary.n_homes))
-
-    # Simulation duration
-    if hasattr(summary, "simulation_days"):
-        table.add_row("Simulation Days", str(summary.simulation_days))
-
-    # Financial rows — present on SummaryStatistics; guarded so FleetSummary is unaffected
-    if hasattr(summary, "total_import_cost_gbp") and summary.total_import_cost_gbp is not None:
-        table.add_row("Grid Import Cost", f"£{summary.total_import_cost_gbp:.2f}")
-    if hasattr(summary, "total_export_revenue_gbp") and summary.total_export_revenue_gbp is not None:
-        table.add_row("Grid Export Revenue", f"£{summary.total_export_revenue_gbp:.2f}")
-    if hasattr(summary, "net_cost_gbp") and summary.net_cost_gbp is not None:
-        table.add_row("Net Cost", f"£{summary.net_cost_gbp:.2f}")
-    seg_rev = getattr(summary, "seg_revenue_gbp", None)
-    if seg_rev is not None:
-        table.add_row("SEG Revenue", f"£{seg_rev:.2f}")
-
+    for metric, value in rows:
+        table.add_row(metric, value)
     return table
+
+
+def home_summary_rows(summary: SummaryStatistics) -> tuple[tuple[str, str], ...]:
+    """The (metric, value) rows `home run` and `home quick` print for a home's summary."""
+    return (
+        *_energy_total_rows(summary),
+        ("Self-Consumption Ratio", f"{summary.self_consumption_ratio:.1%}"),
+        ("Grid Dependency", f"{summary.grid_dependency_ratio:.1%}"),
+        ("Simulation Days", str(summary.simulation_days)),
+        *_money_rows(
+            import_cost_gbp=summary.total_import_cost_gbp,
+            export_revenue_gbp=summary.total_export_revenue_gbp,
+            net_cost_gbp=summary.net_cost_gbp,
+            seg_revenue_gbp=summary.seg_revenue_gbp,
+        ),
+    )
+
+
+def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
+    """The (metric, value) rows `fleet run` prints for a fleet's summary: the fleet's totals, then, after a blank row, the spread of its homes' generation and self-consumption ratios."""
+    return (
+        *_energy_total_rows(summary),
+        ("Self-Consumption Ratio", f"{summary.fleet_self_consumption_ratio:.1%}"),
+        ("Grid Dependency", f"{summary.fleet_grid_dependency_ratio:.1%}"),
+        ("Number of Homes", str(summary.n_homes)),
+        ("Simulation Days", str(summary.simulation_days)),
+        *_money_rows(
+            import_cost_gbp=summary.total_import_cost_gbp,
+            export_revenue_gbp=summary.total_export_revenue_gbp,
+            net_cost_gbp=summary.total_net_cost_gbp,
+            seg_revenue_gbp=summary.total_seg_revenue_gbp,
+        ),
+        ("", ""),
+        (
+            "Per-Home Generation (min/max)",
+            f"{summary.per_home_generation_min_kwh:.1f} / {summary.per_home_generation_max_kwh:.1f} kWh",
+        ),
+        (
+            "Per-Home Generation (mean)",
+            f"{summary.per_home_generation_mean_kwh:.1f} kWh",
+        ),
+        (
+            "Per-Home Self-Consumption Ratio (min/max)",
+            f"{summary.per_home_self_consumption_ratio_min:.1%} / {summary.per_home_self_consumption_ratio_max:.1%}",
+        ),
+        (
+            "Per-Home Self-Consumption Ratio (mean)",
+            f"{summary.per_home_self_consumption_ratio_mean:.1%}",
+        ),
+    )
+
+
+def _energy_total_rows(summary: SummaryStatistics | FleetSummary) -> tuple[tuple[str, str], ...]:
+    """The Total Generation, Total Demand, Self-Consumption, Grid Import and Grid Export rows of a summary's energy totals."""
+    return (
+        ("Total Generation", f"{summary.total_generation_kwh:.1f} kWh"),
+        ("Total Demand", f"{summary.total_demand_kwh:.1f} kWh"),
+        ("Self-Consumption", f"{summary.total_self_consumption_kwh:.1f} kWh"),
+        ("Grid Import", f"{summary.total_grid_import_kwh:.1f} kWh"),
+        ("Grid Export", f"{summary.total_grid_export_kwh:.1f} kWh"),
+    )
+
+
+def _money_rows(
+    *,
+    import_cost_gbp: float | None,
+    export_revenue_gbp: float | None,
+    net_cost_gbp: float | None,
+    seg_revenue_gbp: float | None,
+) -> tuple[tuple[str, str], ...]:
+    """The Grid Import Cost, Grid Export Revenue, Net Cost and SEG Revenue rows, each only when its amount is not None."""
+    amounts = (
+        ("Grid Import Cost", import_cost_gbp),
+        ("Grid Export Revenue", export_revenue_gbp),
+        ("Net Cost", net_cost_gbp),
+        ("SEG Revenue", seg_revenue_gbp),
+    )
+    return tuple((metric, f"£{amount:.2f}") for metric, amount in amounts if amount is not None)
 
 
 def set_status_quiet(quiet: bool) -> None:
