@@ -183,6 +183,32 @@ def compute_grid_charge_power_kw(
     return min(gap_power_kw, residual_kw)
 
 
+def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
+    """The max_charge_kw a step's charge_kw of PV charge leaves for grid charging."""
+    return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
+
+
+def _grid_power_to_target_kw(
+    ctx: GridChargeContext,
+    *,
+    target_kwh: float,
+    battery_soc_kwh: float,
+    pv_charge_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """The grid power that charges the battery to target_kwh this step, after its pv_charge_kw of PV charge, within the headroom that charge leaves.
+
+    It predicts the SOC after the PV charge as Battery.charge stores it, and asks for
+    nothing once that SOC reaches target_kwh.
+    """
+    dt_h = timestep_minutes * HOURS_PER_MINUTE
+    soc_after_pv_kwh = battery_soc_kwh + min(pv_charge_kw, ctx.max_charge_kw) * dt_h * ctx.charge_efficiency
+    gap_kwh = target_kwh - soc_after_pv_kwh
+    if gap_kwh <= 0.0:
+        return 0.0
+    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
+
+
 class DispatchStrategy(ABC):
     """Abstract base class for battery dispatch strategies.
 
@@ -699,9 +725,31 @@ class ChargeWindow:
         return self.days == "daily" or day.weekday() in self.days
 
 
-def _window_decision(window: ChargeWindow, *, generation_kw: float, demand_kw: float) -> DispatchDecision:
-    """The decision of a step inside window: its PV excess charged, and no discharge."""
-    return DispatchDecision(charge_kw=max(0.0, generation_kw - demand_kw), discharge_kw=0.0)
+def _window_decision(
+    window: ChargeWindow,
+    *,
+    generation_kw: float,
+    demand_kw: float,
+    battery_soc_kwh: float,
+    battery_capacity_kwh: float,
+    timestep_minutes: float,
+    grid_charge_ctx: Optional[GridChargeContext],
+) -> DispatchDecision:
+    """The decision of a step inside window: its PV excess charged, no discharge, and, offered a grid-charge context, the grid power that charges the battery to the window's target whatever the rates."""
+    excess_kw = max(0.0, generation_kw - demand_kw)
+    target_kwh = window.target_soc_fraction * battery_capacity_kwh
+    grid_charge_kw = (
+        0.0
+        if grid_charge_ctx is None
+        else _grid_power_to_target_kw(
+            grid_charge_ctx,
+            target_kwh=target_kwh,
+            battery_soc_kwh=battery_soc_kwh,
+            pv_charge_kw=excess_kw,
+            timestep_minutes=timestep_minutes,
+        )
+    )
+    return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0, grid_charge_kw=grid_charge_kw)
 
 
 class ScheduledChargeStrategy(DispatchStrategy):
@@ -761,7 +809,15 @@ class ScheduledChargeStrategy(DispatchStrategy):
                 timestep_minutes=timestep_minutes,
                 grid_charge_ctx=grid_charge_ctx,
             )
-        return _window_decision(window, generation_kw=generation_kw, demand_kw=demand_kw)
+        return _window_decision(
+            window,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery_soc_kwh=battery_soc_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
 
     def _window_at(self, timestamp: datetime) -> Optional[ChargeWindow]:
         """The first listed window open at timestamp, read on tz's wall clock, or None."""
