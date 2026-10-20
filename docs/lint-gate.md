@@ -47,15 +47,16 @@ lines of the package.
 
 ## 5. Decision (task 1003, 2026-10-20): E7 and E9 Join the Selection
 
-The selection includes pycodestyle's E7, its statement rules. They flag a bare `except`,
-which also catches `KeyboardInterrupt` and `SystemExit`; `==` against `None`, `True` or
-`False`, or between types; `not x in y`; a lambda bound to a name; `l`, `O` or `I` as a
-name, which reads as a digit; and two statements on one line. While nothing checked them,
-they could build up unseen, as E402's findings did. Where `==` compares element by
-element, as on a NumPy array or a pandas Series, write E711's and E712's comparisons with
-the library's own operations (`series.isna()`, `~mask`), not with the `is` that ruff's
-unsafe fix offers. A line that has to break one of these rules carries `# noqa:` with the
-rule's code.
+The selection includes pycodestyle's E7, its statement rules; ruff's
+[rule list](https://docs.astral.sh/ruff/rules/) says what each one flags. Most flag a
+statement that does something other than it seems to, such as a bare `except`, which also
+catches `KeyboardInterrupt` and `SystemExit`. While nothing checked for them, such
+statements could build up unseen, as E402's findings did. Where `==` compares element by
+element, as on a NumPy array or a pandas Series, the unsafe fixes for E711 and E712 change
+what the code does: they rewrite `series == None` to `series is None` and `mask == False`
+to `not mask`, neither of which compares element by element. Write such a comparison with
+the library's own operations instead, such as `series.isna()` or `~mask`. A line that has
+to break one of these rules carries `# noqa:` with the rule's code.
 
 It includes E9 too. E9 makes the lint report a path it cannot read, such as a missing
 path, a broken symlink or a module ruff may not open, as an E902 finding. Without it, ruff
