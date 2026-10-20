@@ -74,7 +74,7 @@ class TestProjectMultiYearRevenue:
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
         fr = make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
 
-        # Expected CBS revenue (PRD §3.2)
+        # Expected CBS revenue (docs/prds/cost-recovery-householder-billing.md §3.2)
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
                      for r in fr.per_home_results]
         fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
