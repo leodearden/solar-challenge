@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's."""
+"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's.
+
+HOURS_PER_MINUTE is only a unit conversion: minutes times it are hours.
+"""
 
 import calendar
 from dataclasses import dataclass
@@ -10,13 +13,6 @@ import pandas as pd
 
 HOURS_PER_MINUTE = 1 / 60
 """Hours in one minute: minutes times this is hours. It says nothing about a series' cadence; SimulationWindow.step_hours is how long one row lasts."""
-
-
-def step_hours(index: pd.DatetimeIndex) -> float:
-    """The hours one row of index lasts: the gap between its first two rows, or one minute when it has fewer."""
-    if len(index) < 2:
-        return HOURS_PER_MINUTE
-    return float((index[1] - index[0]).total_seconds()) / 3600.0
 
 
 def covered_days(first_day: date, last_day: date) -> int:
