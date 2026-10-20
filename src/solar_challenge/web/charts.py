@@ -3,21 +3,24 @@
 
 Each chart builder returns Plotly figure JSON, made by fig.to_json(); heat_pump_analysis returns
 its two figures as one HeatPumpCharts.
-Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
-form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
-colour out by hand fails tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one
-some chart draws, and a role none draws fails the same test module. Neutral chrome (backgrounds,
-annotation text, outlines) and the heatmap's named colour scale mark no series and have no
-palette role. Each of the five energy flows has its label, colour role and place in the charts'
-order once, in _EnergyFlow; tests/unit/test_web_chart_energy_flows.py checks that the charts agree.
+Charts share layout defaults. COLOUR_PALETTE maps each chart role to its colour, loaded when
+this module is imported from the chart section of the theme token file, static/src/theme-tokens.json.
+Every colour a chart draws is a COLOUR_PALETTE entry, or a translucent form of one made by
+_with_alpha, so a token edit reaches it; a chart that writes a chart colour out by hand fails
+tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one some chart draws, and a
+role none draws fails the same test module. The unpriced-import note's text and the Sankey's node
+outline are roles too; only the transparent backgrounds and the heatmap's named colour scale are
+not palette colours. Each of the five energy flows has its label, colour role and place in the
+charts' order once, in _EnergyFlow; tests/unit/test_web_chart_energy_flows.py checks that the
+charts agree.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, NamedTuple, TypeVar
 
@@ -30,33 +33,11 @@ from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
+from solar_challenge.web.theme_tokens import chart_colour_palette, is_rrggbb
 
-_AMBER = "#f5a623"
-_RED = "#d0021b"
-_GREEN = "#7ed321"
-_BLUE = "#4a90e2"
-_PURPLE = "#9013fe"
+_THEME_TOKENS_FILE = Path(__file__).parent / "static" / "src" / "theme-tokens.json"
 
-COLOUR_PALETTE = {
-    "pv_generation": _AMBER,
-    "demand": _RED,
-    "self_consumption": _GREEN,
-    "grid_import": "#9b9b9b",
-    "grid_export": _BLUE,
-    "battery_charge": "#50e3c2",
-    "heat_pump": _PURPLE,
-    "cost": _RED,
-    "revenue": _GREEN,
-    "soc_low_threshold": _RED,
-    "soc_high_threshold": _GREEN,
-    "net_cost": _BLUE,
-    "winter": _BLUE,
-    "summer": _AMBER,
-    "comparison_run_1": _AMBER,
-    "comparison_run_2": _BLUE,
-    "comparison_run_3": _GREEN,
-    "comparison_run_4": _PURPLE,
-}
+COLOUR_PALETTE: Mapping[str, str] = chart_colour_palette(_THEME_TOKENS_FILE)
 
 _SHARED_LAYOUT = dict(
     font=dict(family="system-ui, sans-serif"),
@@ -66,8 +47,6 @@ _SHARED_LAYOUT = dict(
     legend=dict(orientation="h", y=-0.15),
 )
 
-_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
-
 
 def _with_alpha(colour: str, alpha: float) -> str:
     """*colour* as an rgba() string at opacity *alpha*.
@@ -75,7 +54,7 @@ def _with_alpha(colour: str, alpha: float) -> str:
     Raises:
         ValueError: If *colour* is not written #rrggbb; the message names it.
     """
-    if not _HEX_COLOUR.fullmatch(colour):
+    if not is_rrggbb(colour):
         raise ValueError(f"a translucent chart colour derives from a #rrggbb colour, not {colour!r}")
     red, green, blue = bytes.fromhex(colour[1:])
     return f"rgba({red},{green},{blue},{alpha})"
@@ -299,7 +278,7 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
         node=dict(
             pad=20,
             thickness=20,
-            line=dict(color="black", width=0.5),
+            line=dict(color=COLOUR_PALETTE["sankey_node_outline"], width=0.5),
             label=[node.label for node in nodes],
             color=[node.colour for node in nodes],
         ),
@@ -496,7 +475,7 @@ def financial_breakdown(results: SimulationResults) -> str:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font=dict(size=14, color="#888888"),
+            font=dict(size=14, color=COLOUR_PALETTE["unpriced_note"]),
         )
 
     return str(fig.to_json())
