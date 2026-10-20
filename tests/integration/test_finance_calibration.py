@@ -5,9 +5,8 @@
 H6 integration gate: verifies that the financial layer matches the investor
 spreadsheet under identical [FIN] inputs.
 
-Golden constants are transcribed from named cells in:
-  finance/Forecast Model for Community Owned Solar_INVESTOR_PITCH_v3.xlsm
-  (read 2026-06-16 via openpyxl data_only; .xlsm NOT git-tracked; NOT read at runtime).
+The golden constants are tests/_fin_calibration.py's FIN_GOLDEN, transcribed from
+the spreadsheet's named cells; their provenance is recorded there.
 
 Layout:
   - Fast (no-network) classes:
@@ -24,7 +23,6 @@ test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 
-import dataclasses
 import math
 from pathlib import Path
 
@@ -44,55 +42,13 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
-from tests._fin_calibration import make_physics_column_scenario
+from tests._fin_calibration import FIN_GOLDEN, FIN_SCF, make_fin_finance, make_physics_column_scenario
 from tests._finance_builders import make_scenario_of, make_sized_home
 
 
 # ---------------------------------------------------------------------------
-# Golden constants — transcribed from named .xlsm cells (NOT read at runtime)
-# Source: finance/Forecast Model for Community Owned Solar_INVESTOR_PITCH_v3.xlsm
-# Read: 2026-06-16 via `uv run --with openpyxl` (openpyxl not in dev env)
-# ---------------------------------------------------------------------------
-
-_FIN_GOLDEN = {
-    # Sensitivity sheet — named solver inputs
-    "inp_kWp": 5.5,              # Sensitivity!B6  (inp_kWp)
-    "inp_Batt_kWh": 5.0,         # Sensitivity!B7  (inp_Batt_kWh) — 5 kWh basis
-    "inp_kWhPerkWp": 1050.0,     # Sensitivity!B8  (inp_kWhPerkWp)
-    "out_MinCash_WithBatt": 96334.55,    # Sensitivity!B10
-    "out_RetSurplus_WithBatt": 207841.20, # Sensitivity!B12
-    # Capital Stack
-    "capital_stack_b6": 775000.0,        # Capital_Stack!B6 — Total Capex at 5 kWh
-    #   100 × (5.5×£1000 + £1000 + 5kWh×£250) = 100 × £7,750 = £775,000
-    # Workings sheet — per-roof build-up at 10 kWh basis
-    "workings_c57": 9000.0,      # Workings!C57 — £9,000/roof at 10 kWh
-    #   5.5×1000 + 1000 + 10×250 = 5500+1000+2500 = £9,000
-    "workings_c94": 900000.0,    # Workings!C94 — 100 × £9,000 = £900,000 (10 kWh basis)
-    # §2.3 delta: £900,000 − £775,000 = £125,000 = 100 × 5kWh × £250 (battery size, NOT error)
-    # Debt Analytics
-    "min_dscr": 2.10378435678433,   # Debt_Analytics!B16 (Presentation Funders!E8, Stress_Test!B9)
-    "avg_dscr": 3.1735282491711,    # Debt_Analytics!B17
-    # Equity IRR: no single labelled cell; from Debt_Analytics row 13 'Cash for IRR'
-    #   B13=-244821, C13=155947, D13=163911, E13=172837, ...
-    #   The sheet's equity is net of formation costs / fundraising fees / dividend deferral,
-    #   so the sheet equity_irr (~69% prose estimate) differs from our model (~11%).
-    #   G6 fallback: assert structural floor equity_irr > 0.
-    "equity_irr_floor": 0.0,  # G6 fallback: assert > 0
-    # [FIN] cost/rate assumptions
-    "own_use_rate_pence_per_kwh": 15.0,
-    "export_rate_pence_per_kwh": 6.0,
-    "grant_gbp": 250000.0,
-    "equity_fraction": 0.75,
-    "loan_term_years": 15,
-    "loan_rate": 0.07,
-}
-
-# [FIN] self-consumption fraction assumption (spreadsheet uses 0.70 for with-battery)
-_FIN_SCF = 0.70
-
-
-# ---------------------------------------------------------------------------
-# Helper builders; the homes and scenarios come from tests/_finance_builders.py
+# Helper builders; the homes and scenarios come from tests/_finance_builders.py,
+# the [FIN] finance from tests/_fin_calibration.py
 # ---------------------------------------------------------------------------
 
 
@@ -108,25 +64,9 @@ def _make_scenario_fin(
     return make_scenario_of([make_sized_home(pv_kwp=pv_kwp, battery_kwh=battery_kwh)] * n_homes)
 
 
-def _make_finance_fin(
-    *,
-    self_consumption_override: float = _FIN_SCF,
-) -> FinanceConfig:
-    """Build the [FIN]-aligned FinanceConfig with named-cell defaults."""
-    return FinanceConfig(
-        standing_charge_pence_per_day=60.0,
-        pv_cost_per_kwp_gbp=1000.0,
-        roof_fit_cost_gbp=1000.0,
-        battery_cost_per_kwh_gbp=250.0,
-        inverter_cost_per_kw_gbp=0.0,
-        grant_gbp=_FIN_GOLDEN["grant_gbp"],
-        equity_fraction=_FIN_GOLDEN["equity_fraction"],
-        loan_term_years=_FIN_GOLDEN["loan_term_years"],
-        loan_rate=_FIN_GOLDEN["loan_rate"],
-        opex_per_home_per_year_gbp=131.0,
-        asset_life_years=25,
-        self_consumption_override=self_consumption_override,
-    )
+def _make_finance_fin() -> FinanceConfig:
+    """The [FIN] finance at the spreadsheet's FIN_SCF self-consumption override."""
+    return make_fin_finance(self_consumption_override=FIN_SCF)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +256,7 @@ class TestFinCalibrationScenarioParses:
     def test_finance_self_consumption_override(self) -> None:
         """finance.self_consumption_override must be 0.70 ([FIN] with-battery assumption)."""
         finance = self._load_finance()
-        assert finance.self_consumption_override == pytest.approx(_FIN_SCF), (
+        assert finance.self_consumption_override == pytest.approx(FIN_SCF), (
             f"Expected self_consumption_override=0.70, "
             f"got {finance.self_consumption_override}"
         )
@@ -324,22 +264,22 @@ class TestFinCalibrationScenarioParses:
     def test_finance_grant_gbp(self) -> None:
         """finance.grant_gbp must be £250,000 ([FIN] grant)."""
         finance = self._load_finance()
-        assert finance.grant_gbp == pytest.approx(_FIN_GOLDEN["grant_gbp"])
+        assert finance.grant_gbp == pytest.approx(FIN_GOLDEN["grant_gbp"])
 
     def test_finance_equity_fraction(self) -> None:
         """finance.equity_fraction must be 0.75 ([FIN] equity split)."""
         finance = self._load_finance()
-        assert finance.equity_fraction == pytest.approx(_FIN_GOLDEN["equity_fraction"])
+        assert finance.equity_fraction == pytest.approx(FIN_GOLDEN["equity_fraction"])
 
     def test_finance_loan_term_years(self) -> None:
         """finance.loan_term_years must be 15 ([FIN] loan term)."""
         finance = self._load_finance()
-        assert finance.loan_term_years == _FIN_GOLDEN["loan_term_years"]
+        assert finance.loan_term_years == FIN_GOLDEN["loan_term_years"]
 
     def test_finance_loan_rate(self) -> None:
         """finance.loan_rate must be 0.07 ([FIN] loan interest rate)."""
         finance = self._load_finance()
-        assert finance.loan_rate == pytest.approx(_FIN_GOLDEN["loan_rate"])
+        assert finance.loan_rate == pytest.approx(FIN_GOLDEN["loan_rate"])
 
     def test_finance_pv_cost_per_kwp(self) -> None:
         """finance.pv_cost_per_kwp_gbp must be £1000 ([FIN] PV cost)."""
@@ -399,11 +339,11 @@ class TestCalibrationCapexMethodAgreement:
         """Build the [FIN]-assumption spreadsheet revenue curve."""
         return spreadsheet_revenue_curve(
             n_homes=100,
-            pv_kwp=_FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+            pv_kwp=FIN_GOLDEN["inp_kWp"],
+            kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
+            self_consumption_fraction=FIN_SCF,
+            own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+            export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
             asset_life_years=asset_life_years,
         )
 
@@ -420,9 +360,9 @@ class TestCalibrationCapexMethodAgreement:
         econ = project_economics(curve, scenario, finance)
 
         assert econ.total_capex_gbp == pytest.approx(
-            _FIN_GOLDEN["capital_stack_b6"], abs=1.0
+            FIN_GOLDEN["capital_stack_b6"], abs=1.0
         ), (
-            f"Capex (5 kWh) expected Capital_Stack!B6=£{_FIN_GOLDEN['capital_stack_b6']:,.2f}, "
+            f"Capex (5 kWh) expected Capital_Stack!B6=£{FIN_GOLDEN['capital_stack_b6']:,.2f}, "
             f"got £{econ.total_capex_gbp:,.2f}"
         )
 
@@ -452,7 +392,7 @@ class TestCalibrationCapexMethodAgreement:
             n_homes=100,
             pv_kwp=5.5,
             kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
+            self_consumption_fraction=FIN_SCF,
             own_use_rate_pence_per_kwh=15.0,
             export_rate_pence_per_kwh=6.0,
             asset_life_years=25,
@@ -461,9 +401,9 @@ class TestCalibrationCapexMethodAgreement:
         econ_10kwh = project_economics(curve, scenario_10kwh, finance)
 
         assert econ_10kwh.total_capex_gbp == pytest.approx(
-            _FIN_GOLDEN["workings_c94"], abs=1.0
+            FIN_GOLDEN["workings_c94"], abs=1.0
         ), (
-            f"Capex (10 kWh) expected Workings!C94=£{_FIN_GOLDEN['workings_c94']:,.0f}, "
+            f"Capex (10 kWh) expected Workings!C94=£{FIN_GOLDEN['workings_c94']:,.0f}, "
             f"got £{econ_10kwh.total_capex_gbp:,.2f}"
         )
 
@@ -475,7 +415,7 @@ class TestCalibrationCapexMethodAgreement:
         """
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
+            self_consumption_fraction=FIN_SCF,
             own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
             asset_life_years=25,
         )
@@ -521,11 +461,11 @@ class TestCalibrationDscrIrrMethodAgreement:
         """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
         curve = spreadsheet_revenue_curve(
             n_homes=100,
-            pv_kwp=_FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+            pv_kwp=FIN_GOLDEN["inp_kWp"],
+            kwh_per_kwp=FIN_GOLDEN["inp_kWhPerkWp"],
+            self_consumption_fraction=FIN_SCF,
+            own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+            export_rate_pence_per_kwh=FIN_GOLDEN["export_rate_pence_per_kwh"],
             asset_life_years=25,
         )
         scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
@@ -555,7 +495,7 @@ class TestCalibrationDscrIrrMethodAgreement:
         """
         econ = self._build_econ()
         assert not math.isnan(econ.equity_irr), "equity_irr must not be NaN"
-        assert econ.equity_irr > _FIN_GOLDEN["equity_irr_floor"], (
+        assert econ.equity_irr > FIN_GOLDEN["equity_irr_floor"], (
             f"equity_irr={econ.equity_irr:.4f} must be > 0 (structural sanity)"
         )
 
@@ -587,7 +527,7 @@ class TestCalibrationG6Guards:
         """Build spreadsheet-input ProjectEconomics."""
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
+            self_consumption_fraction=FIN_SCF,
             own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
             asset_life_years=25,
         )
@@ -606,7 +546,7 @@ class TestCalibrationG6Guards:
         """Spreadsheet column: capex IS hard-asserted (the primary gate)."""
         econ = self._build_spreadsheet_econ()
         # This is the canonical hard assertion
-        assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
+        assert abs(econ.total_capex_gbp - FIN_GOLDEN["capital_stack_b6"]) < 1.0
 
     def test_capex_delta_reported_not_asserted_equal(self) -> None:
         """§2.3 capex delta is a REPORTED value — assert it is non-zero (not equal).
@@ -616,7 +556,7 @@ class TestCalibrationG6Guards:
         """
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
+            self_consumption_fraction=FIN_SCF,
             own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
             asset_life_years=25,
         )
@@ -642,7 +582,7 @@ class TestCalibrationG6Guards:
         documented expected range so regressions in either direction are caught.
         """
         econ = self._build_spreadsheet_econ()
-        spreadsheet_dscr = _FIN_GOLDEN["min_dscr"]
+        spreadsheet_dscr = FIN_GOLDEN["min_dscr"]
         model_dscr = econ.min_dscr
 
         # Report for reconciliation note
@@ -690,7 +630,7 @@ class TestCalibrationPhysicsColumn:
         """
         scenario = make_physics_column_scenario()
         finance = _make_finance_fin()
-        physics_finance = dataclasses.replace(finance, self_consumption_override=None)
+        physics_finance = make_fin_finance(self_consumption_override=None)
 
         # Physics column (real PVGIS)
         physics_curve = project_multi_year(scenario, physics_finance)
@@ -699,7 +639,7 @@ class TestCalibrationPhysicsColumn:
         # Spreadsheet column (analytic)
         ss_curve = spreadsheet_revenue_curve(
             n_homes=2, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
+            self_consumption_fraction=FIN_SCF,
             own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
             asset_life_years=25,
         )
@@ -719,7 +659,7 @@ class TestCalibrationPhysicsColumn:
             " kWh/yr (window annualised)\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}"
             " kWh/yr (window annualised)\n"
-            f"  Spreadsheet scf=0.70 (named inp: {_FIN_SCF})\n"
+            f"  Spreadsheet scf=0.70 (named inp: {FIN_SCF})\n"
             f"  Note: grant > 2-home capex (no debt, no equity), so DSCR/IRR in both\n"
             f"  columns are degenerate. The 3-day physics values are a smoke report\n"
             f"  of the physics path, not the annual §2.3 tension."
