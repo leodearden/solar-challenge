@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import traces
 from tests._web_app import point_store_config_at_a_missing_directory
@@ -536,6 +538,37 @@ class TestScenarioAPI:
             (name, "builtin") for name in builtin_names
         ]
         assert logging.WARNING in [record.levelno for record in caplog.records]
+
+    def test_a_saved_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database fault in the lookup of a saved preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
+        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets/Mine")
+
+        message = "Saved preset 'Mine' could not be read: file is not a database"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Mine'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, sqlite3.DatabaseError)
+
+    def test_a_saved_fleet_preset_whose_config_is_not_json_answers_500_naming_it(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config is not JSON, is a 500 naming it, not "not found"."""
+        insert_saved_fleet_preset(app.config["DATABASE"], "Broken", "{not json")
+        assert "Broken" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        resp = client.get("/api/scenarios/presets/Broken")
+
+        assert (resp.status_code, resp.get_json()) == (
+            500,
+            {"error": "Saved preset 'Broken' could not be read: its config is not JSON"},
+        )
 
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
