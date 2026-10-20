@@ -1,0 +1,24 @@
+{"fleet": "tests/fixtures/fleet_generation/probe-pooled-heat-pump-type.yaml", "points": [
+{"sweep_value": null, "homes": [
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2000.0}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2697.663379187086}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 2655.3560296543146}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 3272.8441197611405}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 3248.365871441631}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 4797.6040256502165}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3783.2623115442466}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 4419.064198379909}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 2445.357190843593}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 3052.600424995467}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4205.601681393955}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 4252.34489695029}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 4006.866458234109}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3048.9263794852664}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 3.0}, "load": {"annual_consumption_kwh": 2536.1679178823842}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 4923.9403498588445}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 2837.5343341721746}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3098.3545915414916}, "heat_pump": null, "ev": null},
+{"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 4735.879553659798}, "heat_pump": null, "ev": {"charger_type": "7kW"}},
+{"pv": {"capacity_kw": 5.0}, "load": {"annual_consumption_kwh": 3482.05242467154}, "heat_pump": null, "ev": {"charger_type": "7kW"}}
+]}
+]}

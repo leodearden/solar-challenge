@@ -43,6 +43,7 @@ PROBE_FLEETS: tuple[str, ...] = (
     "tests/fixtures/fleet_generation/probe-ev-pools-and-normals.yaml",
     "tests/fixtures/fleet_generation/probe-legacy-pre-sampling.yaml",
     "tests/fixtures/fleet_generation/probe-proportional-battery.yaml",
+    "tests/fixtures/fleet_generation/probe-pooled-heat-pump-type.yaml",
 )
 
 PINNED_FLEETS: tuple[str, ...] = SHIPPED_FLEETS + PROBE_FLEETS
