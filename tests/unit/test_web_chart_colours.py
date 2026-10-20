@@ -1,22 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards two invariants of charts.py's COLOUR_PALETTE: it is the one home of the chart
-colours, so a palette edit reaches every copy of a chart colour, and it holds only colours
-a chart draws, so it reads as the list of them.
+"""Guards two invariants of the chart colours, whose one home is the chart section of the
+theme token file, static/src/theme-tokens.json, which charts.py loads into COLOUR_PALETTE:
+a token edit reaches every copy of a chart colour, and the palette holds only colours a
+chart draws, so it reads as the list of them.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Five
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
 checks enforce the invariants:
 
-* No dashboard source writes out a palette colour: not tailwind.config.js, not a
-  template, not the hand-written stylesheet and not a script. A colour counts as written
-  where its hex literal appears in a source, matched case-insensitively anywhere,
-  comments included, so an eight-digit #rrggbbaa copy counts through its prefix. Not
-  read: the compiled dist/style.css, which derives from the templates and the theme, and
-  rgb() or rgba() forms in those sources.
-* Every palette colour a chart builder draws follows a palette edit: with each palette
-  entry recoloured, no builder's figure still draws a shipped palette colour as #rrggbb,
-  rgb() or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
-  fails. A colour that no palette entry has, such as the transparent backgrounds, is not
-  flagged. Plotly's default template, which no builder chooses, is not read.
+* No dashboard source writes out a chart colour, one of the token file's chart hues: not
+  tailwind.config.js, not a template, not the hand-written stylesheet and not a script. A
+  colour counts as written where its hex literal appears in a source, matched
+  case-insensitively anywhere, comments included, so an eight-digit #rrggbbaa copy counts
+  through its prefix. Not read: the compiled dist/style.css, which derives from the
+  templates and the theme, and rgb() or rgba() forms in those sources.
+* Every chart colour a chart builder draws follows a palette edit: with each palette role
+  recoloured, no builder's figure still draws a chart hue as #rrggbb, rgb() or rgba(), so
+  a translucent fill or a reused hue that charts.py writes out by hand fails. A colour that
+  no hue has is not flagged, and a fully transparent colour, such as the charts'
+  transparent backgrounds, is not read, as it draws nothing. Nor is Plotly's default
+  template, which no builder chooses.
 * Every palette role is drawn by some chart: with each role recoloured with a colour no
   other role has, the figures of all the _FIGURES cases together must draw every role's
   colour, so a role no chart reads fails. Only those figures are read, so a role a builder
@@ -25,14 +27,10 @@ checks enforce the invariants:
   builder it draws with, and a public function of charts.py that no case names fails, so a
   new builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
   builder.
-* Every palette colour is written #rrggbb, the form charts.py derives translucent colours
-  from. charts.py refuses any other form only when it draws a chart that needs one; this
-  check refuses it for the whole palette.
 """
 
 import dataclasses
 import inspect
-import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any
@@ -50,15 +48,17 @@ from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._dashboard_sources import (
     HAND_WRITTEN_STYLESHEET_KEY,
     TAILWIND_CONFIG_KEY,
+    THEME_TOKENS_KEY,
     dashboard_script_sources,
     dashboard_template_sources,
     hand_written_stylesheet_source,
     tailwind_config_source,
+    theme_tokens,
 )
 from tests._finance_builders import make_fleet_results, make_sim_results
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours
 
-_CHART_COLOURS = frozenset(colour.lower() for colour in COLOUR_PALETTE.values())
+_CHART_COLOURS = frozenset(colour.lower() for colour in theme_tokens()["chart"]["hues"].values())
 
 
 def _written_chart_colours(source: str) -> list[str]:
@@ -68,7 +68,7 @@ def _written_chart_colours(source: str) -> list[str]:
 
 
 def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
-    assert _CHART_COLOURS, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
+    assert _CHART_COLOURS, f"{THEME_TOKENS_KEY}'s chart section defines no hue, so this guard would pass vacuously"
     sources = {
         TAILWIND_CONFIG_KEY: tailwind_config_source(),
         **dashboard_template_sources(),
@@ -84,17 +84,17 @@ def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
 
     listing = "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
     assert written == {}, (
-        "These dashboard sources write out colours that charts.py's COLOUR_PALETTE defines, "
-        f"so a palette edit does not reach them:{listing}\n"
-        "The charts take their colours from COLOUR_PALETTE, because Plotly needs colour "
-        "strings rather than Tailwind classes. Delete the copy. If a page must show a chart "
-        "colour, pass it from COLOUR_PALETTE to the page."
+        f"These dashboard sources write out chart colours, whose one home is {THEME_TOKENS_KEY}'s "
+        f"chart section, so a token edit does not reach them:{listing}\n"
+        "The charts take their colours from COLOUR_PALETTE, which charts.py loads from that "
+        "section, because Plotly needs colour strings rather than Tailwind classes. Delete the "
+        "copy. If a page must show a chart colour, pass it from COLOUR_PALETTE to the page."
     )
 
 
 @dataclasses.dataclass(frozen=True)
 class _Recolouring:
-    """The red, green and blue of each shipped palette colour, and of each role's substitute."""
+    """The red, green and blue of each chart hue the token file ships, and of each role's substitute."""
 
     shipped: frozenset[Rgb]
     substitutes: Mapping[str, Rgb]
@@ -105,10 +105,12 @@ def recolouring(monkeypatch: pytest.MonkeyPatch) -> _Recolouring:
     """Recolours every palette role with a colour of its own, for the test.
 
     The role at 1-based index i becomes #0000ii, so each role's substitute is shared by no
-    other role and equals no shipped colour. A figure that draws a substitute therefore
+    other role and equals no shipped hue. A figure that draws a substitute therefore
     names the one role it reads, even where several shipped roles share one hue.
     """
-    shipped = frozenset(rgb for colour in COLOUR_PALETTE.values() for _, rgb in colour_literals(colour))
+    shipped = frozenset(
+        rgb for colour in theme_tokens()["chart"]["hues"].values() for _, rgb in colour_literals(colour)
+    )
     for index, role in enumerate(list(COLOUR_PALETTE), start=1):
         monkeypatch.setitem(COLOUR_PALETTE, role, f"#0000{index:02x}")
     substitutes = {
@@ -217,14 +219,15 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
     )
 
     assert stale == [], (
-        f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
-        "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
-        "a translucent form from its palette entry."
+        f"With every COLOUR_PALETTE role recoloured, the chart still draws {', '.join(stale)}, "
+        f"a chart hue of {THEME_TOKENS_KEY}, so a token edit does not reach it. Draw the colour "
+        "through its role in COLOUR_PALETTE, giving the token file's chart section a role for it "
+        "if it has none, or derive a translucent form from its palette entry."
     )
 
 
 def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) -> None:
-    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
+    assert COLOUR_PALETTE, "COLOUR_PALETTE holds no role, so this guard would pass vacuously"
 
     drawn = {rgb for case in _FIGURES.values() for rgb in drawn_colours(case.figure()).values()}
     undrawn = sorted(role for role, substitute in recolouring.substitutes.items() if substitute not in drawn)
@@ -232,8 +235,9 @@ def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) ->
     assert undrawn == [], (
         f"No chart draws these COLOUR_PALETTE roles: {', '.join(undrawn)}. The palette reads as "
         "the list of the colours the charts draw, and the palette-edit check never reads a role "
-        "no chart draws. Delete the role, or draw it in a chart builder. If a builder draws it "
-        "only for some inputs, give _FIGURES a case with those inputs."
+        f"no chart draws. Delete the role from {THEME_TOKENS_KEY}'s chart section, or draw it in "
+        "a chart builder. If a builder draws it only for some inputs, give _FIGURES a case with "
+        "those inputs."
     )
 
 
@@ -257,24 +261,6 @@ def test_every_public_chart_builder_has_a_figure_case() -> None:
         "No _FIGURES case draws a figure with these public charts.py functions: "
         f"{', '.join(unexercised)}. Neither palette check reads the colours they draw. "
         "Add each to _FIGURES with inputs that make it draw a figure."
-    )
-
-
-def test_every_palette_colour_is_written_rrggbb() -> None:
-    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
-
-    not_rrggbb = {
-        role: colour
-        for role, colour in COLOUR_PALETTE.items()
-        if not re.fullmatch(r"#[0-9a-f]{6}", colour, re.IGNORECASE)
-    }
-
-    listing = "".join(f"\n  {role}: {colour!r}" for role, colour in not_rrggbb.items())
-    assert not_rrggbb == {}, (
-        f"These COLOUR_PALETTE entries are not written #rrggbb:{listing}\n"
-        "charts.py derives each translucent chart colour from a #rrggbb palette colour, and "
-        "raises when it draws a chart whose colour is written another way, such as #rgb "
-        "shorthand, a colour name or rgba()."
     )
 
 
