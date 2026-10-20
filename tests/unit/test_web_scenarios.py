@@ -1,6 +1,7 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -506,6 +507,35 @@ class TestScenarioAPI:
         assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["Fleet"]
         found = client.get("/api/scenarios/presets/Fleet")
         assert (found.status_code, found.get_json()["config"]) == (200, {"n_homes": 9})
+
+    def test_a_name_only_a_saved_home_preset_holds_is_not_a_scenario_preset(self, client: FlaskClient) -> None:
+        """The lookup serves saved fleet presets only, as the list holds them: a saved home preset's name is not found."""
+        assert client.post("/api/presets", json={"name": "Home only", "pv_kw": 3.0}).status_code == 201
+
+        resp = client.get("/api/scenarios/presets/Home only")
+
+        assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Home only' not found"})
+        assert "Home only" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+    def test_the_builtin_scenario_files_are_listed_alone_and_a_warning_logged_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database that cannot be read leaves the list answering, with the built-in scenario files alone, and the fault logged."""
+        builtin_names = [
+            p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"] if p["source"] == "builtin"
+        ]
+        assert builtin_names, "the list holds no built-in preset, so it cannot show them listed alone"
+        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets")
+
+        assert resp.status_code == 200
+        assert [(p["name"], p["source"]) for p in resp.get_json()["presets"]] == [
+            (name, "builtin") for name in builtin_names
+        ]
+        assert logging.WARNING in [record.levelno for record in caplog.records]
 
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
