@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_collect_only.py, the collect-only runner the orchestrator contract tests share.
+"""Unit tests for tests/_collect_only.py's collect(), the collect-only probe the orchestrator contract tests share.
 
-They pin that the command only collects, keeps its project's ini addopts in force, lists one node id
-per line, receives each extra pytest arg whole, and runs in the environment it is given; and that a
-failed run's description carries pytest's error report however long the listing, and the stderr of
-a command that failed before pytest started.
+They pin that the command runs verbatim and only collects, keeps its project's ini addopts in force,
+receives each extra pytest arg whole, and runs in the environment it is given, that environment's
+PYTHONPATH kept; that what it collected is read from the collection-report plugin's report, never from
+its output, with each test's file and parametrize id and each module or directory skipped at
+collection with its skip reason, and a run that wrote no report never reads as an empty collection,
+nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
+command's stderr, and the output of a command that failed before pytest started.
 """
 
 import os
 import shlex
 import sys
 import textwrap
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import collected_node_ids, describe_outcome, run_collect_only
+from tests._collect_only import COLLECTION_REPORT_PLUGIN, COLLECTION_REPORT_PLUGIN_DIRECTORY, CollectedTest, collect
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -25,6 +28,16 @@ _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 
 _STARTUP_ERROR_MESSAGE = "the command failed before pytest started"
 
+_LONG_STDERR_COMMAND = shlex.join(
+    [sys.executable, "-c", "import sys; sys.stderr.write('a line of a long log\\n' * 10000)"]
+)
+
+_DOUBLE_COLON_LINE = "warning: a::b"
+
+_ABSENT_PACKAGE = "a_package_this_probe_never_installs"
+
+_SKIP_AT_IMPORT = f"import pytest\n\npytest.importorskip({_ABSENT_PACKAGE!r})\n\n\n"
+
 
 def _module_of_failing_tests(*names: str) -> str:
     """Return the source of a test module defining one test per name in *names*, each failing if run."""
@@ -33,8 +46,8 @@ def _module_of_failing_tests(*names: str) -> str:
 
 @pytest.fixture
 def project_with_ini_addopts(tmp_path: Path) -> Path:
-    """A throwaway project whose ini addopts, like this repo's, raise the verbosity and ignore a test module."""
-    (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = -v --ignore=test_ignored.py\n", encoding="utf-8")
+    """A throwaway project whose ini addopts, like this repo's, ignore a test module."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --ignore=test_ignored.py\n", encoding="utf-8")
     (tmp_path / "test_kept.py").write_text(
         _module_of_failing_tests("test_alpha", "test_beta", "test_gamma"), encoding="utf-8"
     )
@@ -66,7 +79,7 @@ def project_echoing_its_environment(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def project_with_a_long_listing_and_a_broken_module(tmp_path: Path) -> Path:
-    """A throwaway project listing a thousand node ids, whose test_broken.py raises at import."""
+    """A throwaway project of a thousand tests, whose test_broken.py raises at import."""
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (tmp_path / "test_many.py").write_text(
         textwrap.dedent(
@@ -85,29 +98,27 @@ def project_with_a_long_listing_and_a_broken_module(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_lists_the_node_ids_the_projects_addopts_select_without_running_them(
-    project_with_ini_addopts: Path,
-) -> None:
-    """The ini's -v would turn a -q listing into a tree with no node ids; clearing its addopts would collect test_ignored.py."""
-    result = run_collect_only(_PYTEST, project_with_ini_addopts)
+def test_collects_the_tests_the_projects_addopts_select_without_running_them(project_with_ini_addopts: Path) -> None:
+    """Clearing the ini's addopts would collect test_ignored.py, and each test raises if run."""
+    collection = collect(_PYTEST, project_with_ini_addopts)
 
-    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
-    assert collected_node_ids(result.stdout) == [
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == (
         "test_kept.py::test_alpha",
         "test_kept.py::test_beta",
         "test_kept.py::test_gamma",
-    ], describe_outcome(result)
+    ), collection.describe()
 
 
 def test_each_extra_pytest_arg_reaches_pytest_whole(project_with_ini_addopts: Path) -> None:
-    """Split on its spaces, the -k expression would leave pytest looking for files named or and beta."""
-    result = run_collect_only(_PYTEST, project_with_ini_addopts, "-k", "alpha or beta")
+    """Split on its spaces, the -k expression would leave pytest looking for files named or and beta.
 
-    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
-    assert collected_node_ids(result.stdout) == [
-        "test_kept.py::test_alpha",
-        "test_kept.py::test_beta",
-    ], describe_outcome(result)
+    The tests read are those left after the expression deselects test_gamma.
+    """
+    collection = collect(_PYTEST, project_with_ini_addopts, "-k", "alpha or beta")
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
 
 
 def test_by_default_the_command_runs_in_this_process_environment(
@@ -115,12 +126,10 @@ def test_by_default_the_command_runs_in_this_process_environment(
 ) -> None:
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
 
-    result = run_collect_only(_PYTEST, project_echoing_its_environment)
+    collection = collect(_PYTEST, project_echoing_its_environment)
 
-    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
-    assert collected_node_ids(result.stdout) == [
-        "test_environment.py::test_environment[inherited]",
-    ], describe_outcome(result)
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_environment.py::test_environment[inherited]",), collection.describe()
 
 
 def test_a_given_environment_replaces_this_process_environment(
@@ -130,34 +139,195 @@ def test_a_given_environment_replaces_this_process_environment(
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
     environment = {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 
-    result = run_collect_only(_PYTEST, project_echoing_its_environment, env=environment)
+    collection = collect(_PYTEST, project_echoing_its_environment, env=environment)
 
-    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
-    assert collected_node_ids(result.stdout) == [
-        "test_environment.py::test_environment[unset]",
-    ], describe_outcome(result)
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
+
+
+def test_the_given_environments_pythonpath_stays_importable(tmp_path: Path) -> None:
+    """The report plugin's directory goes in front of the environment's PYTHONPATH, not in its place."""
+    helpers = tmp_path / "helpers"
+    helpers.mkdir()
+    (helpers / "probe_helper.py").write_text("", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (project / "test_importing.py").write_text(
+        "import probe_helper\n\n\ndef test_case():\n    pass\n", encoding="utf-8"
+    )
+
+    collection = collect(_PYTEST, project, env={**os.environ, "PYTHONPATH": str(helpers)})
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_importing.py::test_case",), collection.describe()
+
+
+def test_an_output_line_holding_a_double_colon_is_not_a_test(tmp_path: Path) -> None:
+    """As a uv or pytest warning naming a node id would print; a conftest's collection-finish line prints at every verbosity."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "conftest.py").write_text(
+        f"def pytest_report_collectionfinish(config, start_path, items):\n    return {_DOUBLE_COLON_LINE!r}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_two.py").write_text(_module_of_failing_tests("test_alpha", "test_beta"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert _DOUBLE_COLON_LINE in collection.stdout, collection.describe()
+    assert collection.node_ids() == ("test_two.py::test_alpha", "test_two.py::test_beta"), collection.describe()
+
+
+def test_each_collected_test_carries_its_file_and_its_parametrize_id(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "test_ids.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+
+            @pytest.mark.parametrize("minor", ["3.12", "3.13"])
+            def test_matrix(minor):
+                raise AssertionError("collect-only ran test_matrix")
+
+
+            def test_plain():
+                raise AssertionError("collect-only ran test_plain")
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    module = PurePosixPath("sub/test_ids.py")
+    assert collection.written_report().tests == (
+        CollectedTest("sub/test_ids.py::test_matrix[3.12]", module, "3.12"),
+        CollectedTest("sub/test_ids.py::test_matrix[3.13]", module, "3.13"),
+        CollectedTest("sub/test_ids.py::test_plain", module, None),
+    ), collection.describe()
+
+
+def test_a_module_skipped_at_collection_is_reported_with_its_skip_reason(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "test_needs_absent.py").write_text(
+        _SKIP_AT_IMPORT + _module_of_failing_tests("test_case"), encoding="utf-8"
+    )
+    (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
+    skipped = collection.written_report().skipped_collectors
+    assert tuple(node_id for node_id, _ in skipped) == ("test_needs_absent.py",), skipped
+    assert f"could not import {_ABSENT_PACKAGE!r}" in skipped[0][1], skipped
+
+
+def test_a_directory_whose_conftest_skips_is_reported_with_its_skip_reason(tmp_path: Path) -> None:
+    """As tests/e2e/conftest.py's module-level pytest.importorskip("werkzeug") would skip tests/e2e."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "conftest.py").write_text(_SKIP_AT_IMPORT, encoding="utf-8")
+    (tmp_path / "sub" / "test_in_sub.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+    (tmp_path / "test_present.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    assert collection.node_ids() == ("test_present.py::test_case",), collection.describe()
+    skipped = collection.written_report().skipped_collectors
+    assert tuple(node_id for node_id, _ in skipped) == ("sub",), skipped
+    assert _ABSENT_PACKAGE in skipped[0][1], skipped
+
+
+def test_a_command_that_never_runs_pytest_has_no_report_and_reading_its_node_ids_fails_naming_it(
+    tmp_path: Path,
+) -> None:
+    """It never reads as an empty collection, as when uv refuses a stale lock before pytest starts."""
+    collection = collect("false", tmp_path)
+
+    assert collection.report is None, collection.describe()
+    with pytest.raises(AssertionError) as failure:
+        collection.node_ids()
+    assert repr("false") in str(failure.value)
+
+
+def test_a_collection_that_selects_nothing_is_an_empty_report_not_a_missing_one(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "test_one.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(_PYTEST, tmp_path, "-k", "nomatch")
+
+    assert collection.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, collection.describe()
+    assert collection.report is not None, collection.describe()
+    assert collection.report.tests == (), collection.describe()
+
+
+def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_last_session(tmp_path: Path) -> None:
+    """A report describes one session: replacing the first session's report would drop its tests unseen."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "test_first.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+    (tmp_path / "test_second.py").write_text(_module_of_failing_tests("test_case"), encoding="utf-8")
+
+    collection = collect(f"{_PYTEST} test_first.py && {_PYTEST} test_second.py", tmp_path)
+
+    assert collection.returncode == pytest.ExitCode.USAGE_ERROR, collection.describe()
+    assert "more than one pytest session" in collection.stderr, collection.describe()
+
+
+def test_loaded_without_a_report_path_the_plugin_leaves_the_run_as_it_was(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It is loaded as collect() loads it, but given no --collection-report."""
+    monkeypatch.setenv("PYTHONPATH", str(COLLECTION_REPORT_PLUGIN_DIRECTORY), prepend=os.pathsep)
+    pytester.makepyfile("def test_passes():\n    pass\n")
+
+    result = pytester.runpytest_subprocess("-p", COLLECTION_REPORT_PLUGIN, "-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=1)
+    assert not list(pytester.path.rglob("*.json"))
 
 
 def test_a_failed_collection_is_described_by_its_error_report_however_long_the_listing(
     project_with_a_long_listing_and_a_broken_module: Path,
 ) -> None:
-    """pytest reports collection errors after the listing, so a description bounded to the listing's tail keeps them."""
-    result = run_collect_only(_PYTEST, project_with_a_long_listing_and_a_broken_module)
+    """pytest reports collection errors after the listing, so a description bounded to the output's tail keeps them."""
+    collection = collect(_PYTEST, project_with_a_long_listing_and_a_broken_module)
 
-    description = describe_outcome(result)
+    description = collection.describe()
 
-    assert result.returncode == pytest.ExitCode.INTERRUPTED, description
+    assert collection.returncode == pytest.ExitCode.INTERRUPTED, description
     assert _IMPORT_ERROR_MESSAGE in description, description
-    assert len(description) < len(result.stdout), (
+    assert len(description) < len(collection.stdout), (
         f"the description is {len(description)} characters long, no shorter than the "
-        f"{len(result.stdout)}-character listing it describes"
+        f"{len(collection.stdout)}-character stdout it describes"
     )
 
 
-def test_a_command_that_fails_before_pytest_starts_is_described_by_its_stderr(tmp_path: Path) -> None:
-    """As when uv cannot build the environment, the listing is empty and only stderr says what went wrong."""
+def test_a_failed_collection_is_described_by_its_error_report_however_long_the_commands_stderr(
+    project_with_a_long_listing_and_a_broken_module: Path,
+) -> None:
+    """As when uv logs at length before pytest starts: stdout and stderr are each cut to their own tail."""
+    collection = collect(f"{_LONG_STDERR_COMMAND} && {_PYTEST}", project_with_a_long_listing_and_a_broken_module)
+
+    description = collection.describe()
+
+    assert collection.returncode == pytest.ExitCode.INTERRUPTED, description
+    assert _IMPORT_ERROR_MESSAGE in description, description
+    assert len(description) < len(collection.stderr), (
+        f"the description is {len(description)} characters long, no shorter than the "
+        f"{len(collection.stderr)}-character stderr it describes"
+    )
+
+
+def test_a_command_that_fails_before_pytest_starts_is_described_by_its_output(tmp_path: Path) -> None:
+    """As when uv cannot build the environment: there is no listing, and only what the command printed says what went wrong."""
     command = shlex.join([sys.executable, "-c", f"import sys; sys.exit({_STARTUP_ERROR_MESSAGE!r})"])
 
-    description = describe_outcome(run_collect_only(command, tmp_path))
+    description = collect(command, tmp_path).describe()
 
     assert _STARTUP_ERROR_MESSAGE in description, description

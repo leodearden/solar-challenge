@@ -8,27 +8,28 @@ The contracts the job shares with every lane job are checked in
 tests/unit/test_offline_lane_contracts.py.
 """
 
+from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
 
-from tests._collect_only import requires_uv
+from tests._collect_only import CollectedTest, requires_uv
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._lane_collection import collect_lane_job, suite_node_ids_matching
+from tests._lane_collection import collect_lane_job, suite_tests_matching
 
 _MATRIX_JOB = "interpreter-matrix"
 _MATRIX_SUITE = "tests/interpreter_matrix"
 
 
 def _off_pin_interpreters(project_root: Path) -> list[str]:
-    """Return the minors the interpreter matrix must cover, as its node ids name them (e.g. "3.13"), sorted."""
+    """Return the minors the interpreter matrix must cover, as its parametrize ids name them (e.g. "3.13"), sorted."""
     return sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
 
 
-def _interpreters_named_by(node_ids: Iterable[str]) -> list[str]:
-    """Return the interpreter each interpreter-matrix node id ends in (e.g. "3.13" for "...[3.13]"), sorted."""
-    return sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
+def _interpreters_of(tests: Iterable[CollectedTest]) -> Counter[str | None]:
+    """Count the interpreter each interpreter-matrix test is parametrised by (e.g. "3.13"), None for a test that is not."""
+    return Counter(test.parametrize_id for test in tests)
 
 
 @requires_uv
@@ -45,11 +46,11 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
 
     outside = collection.node_ids_outside(_MATRIX_SUITE)
     expected = _off_pin_interpreters(project_root)
-    collected = _interpreters_named_by(collection.node_ids)
-    assert not outside and collected == expected, (
-        f"the {_MATRIX_JOB!r} lane job collected {collection.node_ids}; expected exactly one case per minor "
+    collected = _interpreters_of(collection.written_report().tests)
+    assert not outside and collected == Counter(expected), (
+        f"the {_MATRIX_JOB!r} lane job collected {collection.node_ids()}; expected exactly one case per minor "
         f"requires-python admits other than the .python-version pin {python_version_pin(project_root)}, "
-        f"each in {_MATRIX_SUITE}, its node-id ending in its interpreter: {expected}"
+        f"each in {_MATRIX_SUITE}, parametrised by its interpreter, which its node-id then names: {expected}"
     )
 
 
@@ -59,11 +60,12 @@ def test_slow_selects_one_interpreter_matrix_case_per_off_pin_admitted_minor(pro
     Each case's `uv run` provisions its interpreter's environment from PyPI
     whenever uv.lock changes, so it must run outside the offline guard.
     """
-    slow_cases = _interpreters_named_by(suite_node_ids_matching(project_root, _MATRIX_SUITE, "slow"))
+    slow_cases = suite_tests_matching(project_root, _MATRIX_SUITE, "slow")
 
     expected = _off_pin_interpreters(project_root)
-    assert slow_cases == expected, (
-        f"`-m slow` collected the interpreter-matrix cases {slow_cases}, not one per off-pin admitted minor "
-        f"{expected}; a case not marked slow runs under tests/conftest.py's offline guard, where its child uv "
-        "cannot download what a uv.lock change needs, so the lane would go red after every dependency change"
+    assert _interpreters_of(slow_cases) == Counter(expected), (
+        f"`-m slow` collected the interpreter-matrix cases {[case.node_id for case in slow_cases]}, not one per "
+        f"off-pin admitted minor {expected}; a case not marked slow runs under tests/conftest.py's offline guard, "
+        "where its child uv cannot download what a uv.lock change needs, so the lane would go red after every "
+        "dependency change"
     )
