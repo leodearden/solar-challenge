@@ -14,7 +14,6 @@ import dataclasses
 import json
 import re
 import uuid
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -33,16 +32,10 @@ from tests._finance_builders import (
     make_sim_results,
 )
 from tests._html_page import chart_figures, element_ids, script_texts, texts
-from tests._web_app import build_test_app
 from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
 _PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    return build_test_app(tmp_path)
 
 
 def _saved_home_run(

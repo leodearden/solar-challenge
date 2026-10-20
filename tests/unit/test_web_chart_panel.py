@@ -7,7 +7,6 @@ undefined, and fails the render, naming that name.
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,7 +18,6 @@ from jinja2 import UndefinedError
 
 from tests._html_page import chart_figures, element_count, element_ids, headings, texts
 from tests._server_drawn_badges import dashboard_macros_of
-from tests._web_app import build_test_app
 
 _FIGURE = json.dumps(
     {
@@ -28,11 +26,6 @@ _FIGURE = json.dumps(
     }
 )
 _NOTHING_TO_DRAW = [pytest.param(None, id="none"), pytest.param("{}", id="empty-object")]
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    return build_test_app(tmp_path)
 
 
 @pytest.fixture

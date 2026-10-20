@@ -35,7 +35,7 @@ To vendor a package, or move a vendored one to a new release:
 
 import base64
 import hashlib
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 import pytest
@@ -46,12 +46,6 @@ from flask.testing import FlaskClient
 from jinja2 import Environment
 
 from tests._html_page import element_attributes
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    return build_test_app(tmp_path)
 
 
 def _scripts_by_template(app: Flask) -> dict[str, list[tuple[str, str | None]]]:
