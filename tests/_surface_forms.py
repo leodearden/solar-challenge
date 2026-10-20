@@ -64,7 +64,7 @@ def surface_form(obj: object) -> str:
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
-    if not (inspect.isclass(obj) or _is_routine(obj)):
+    if not _is_class_or_routine(obj):
         return type(obj).__qualname__
     signature = inspect.signature(obj)
     text = str(
@@ -464,7 +464,7 @@ def _form_classes(obj: object) -> set[type]:
     """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
-    if not (inspect.isclass(obj) or _is_routine(obj)):
+    if not _is_class_or_routine(obj):
         return {type(obj)}
     annotations = _signature_annotations(inspect.signature(obj))
     if not annotations:
@@ -476,6 +476,11 @@ def _form_classes(obj: object) -> set[type]:
             for name, annotation in annotations.items()
         )
     )
+
+
+def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
+    """Whether *obj* is a class or a routine, the objects surface_form spells, an Enum aside, by their signature rather than by their type."""
+    return inspect.isclass(obj) or _is_routine(obj)
 
 
 def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
