@@ -6,7 +6,13 @@ import dataclasses
 
 import pytest
 
-from tests._fin_calibration import FIN_GOLDEN, FIN_SCF, make_fin_finance, make_physics_column_scenario
+from tests._fin_calibration import (
+    FIN_GOLDEN,
+    FIN_SCF,
+    make_fin_finance,
+    make_fin_spreadsheet_curve,
+    make_physics_column_scenario,
+)
 from tests._finance_builders import make_sized_home
 
 
@@ -27,6 +33,23 @@ def test_fin_finance_takes_its_spreadsheet_cells_from_fin_golden() -> None:
     assert finance.loan_term_years == FIN_GOLDEN["loan_term_years"]
     assert finance.loan_rate == FIN_GOLDEN["loan_rate"]
     assert finance.own_use_rate_pence_per_kwh == FIN_GOLDEN["own_use_rate_pence_per_kwh"]
+
+
+def test_fin_spreadsheet_curve_prices_the_golden_yield_at_fin_scf_and_the_golden_rates() -> None:
+    curve = make_fin_spreadsheet_curve(n_homes=3, asset_life_years=20)
+
+    generation_kwh = 3 * FIN_GOLDEN["inp_kWp"] * FIN_GOLDEN["inp_kWhPerkWp"]
+    own_use_kwh = FIN_SCF * generation_kwh
+    export_kwh = generation_kwh - own_use_kwh
+    revenue_gbp = (
+        own_use_kwh * FIN_GOLDEN["own_use_rate_pence_per_kwh"]
+        + export_kwh * FIN_GOLDEN["export_rate_pence_per_kwh"]
+    ) / 100.0
+    assert len(curve.points) == 20
+    for point in curve.points:
+        assert point.fleet_billed_own_use_kwh == pytest.approx(own_use_kwh)
+        assert point.fleet_export_kwh == pytest.approx(export_kwh)
+        assert point.fleet_revenue_gbp == pytest.approx(revenue_gbp)
 
 
 def test_physics_column_homes_are_the_golden_fin_install_on_their_own_load() -> None:
