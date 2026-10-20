@@ -8,10 +8,11 @@ batteries based on generation, demand, tariffs, and other factors.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
@@ -637,3 +638,77 @@ class PeakShavingStrategy(DispatchStrategy):
             discharge_kw=discharge_kw,
             grid_charge_kw=grid_charge_kw,
         )
+
+
+_ONE_DAY = timedelta(days=1)
+
+
+def _are_opening_days(days: object) -> bool:
+    """Whether days is 'daily' or a non-empty frozenset of date.weekday() numbers, 0 to 6, none of them a bool."""
+    if days == "daily":
+        return True
+    return (
+        isinstance(days, frozenset)
+        and len(days) > 0
+        and all(isinstance(day, int) and not isinstance(day, bool) and 0 <= day <= 6 for day in days)
+    )
+
+
+@dataclass(frozen=True)
+class ChargeWindow:
+    """One scheduled-charge slot, as on a Victron GX: while it is open, the battery is charged from the grid to its target.
+
+    Attributes:
+        days: The date.weekday() numbers (Monday 0 … Sunday 6) of the days it opens on, or
+            'daily'. A window that crosses midnight stays open into the morning after.
+        start: The wall-clock time it opens at, on its strategy's zone, so it has no tzinfo.
+        duration: How long it stays open: more than nothing, and at most a day.
+        target_soc_fraction: The state of charge it charges to, in (0, 1], as a fraction of
+            the battery capacity decide_action is given.
+        allow_discharge: Whether the battery may discharge while it is open, down to the target.
+
+    Raises:
+        ConfigurationError: For a field it cannot schedule, naming the field and its value.
+    """
+
+    days: frozenset[int] | Literal["daily"]
+    start: time
+    duration: timedelta
+    target_soc_fraction: float
+    allow_discharge: bool
+
+    def __post_init__(self) -> None:
+        """Refuse a field the window cannot schedule, naming the field and its value."""
+        if not _are_opening_days(self.days):
+            raise ConfigurationError(
+                "ChargeWindow's days are 'daily' or a non-empty frozenset of date.weekday() numbers, "
+                f"0 to 6: got days={self.days!r}"
+            )
+        if self.start.tzinfo is not None:
+            raise ConfigurationError(
+                "ChargeWindow's start is a wall-clock time on its strategy's zone, so it has no tzinfo: "
+                f"got start={self.start!r}"
+            )
+        if not timedelta(0) < self.duration <= _ONE_DAY:
+            raise ConfigurationError(
+                f"ChargeWindow's duration is more than 0 and at most a day: got duration={self.duration!r}"
+            )
+        if not 0.0 < self.target_soc_fraction <= 1.0:
+            raise ConfigurationError(
+                "ChargeWindow's target_soc_fraction is in (0, 1]: "
+                f"got target_soc_fraction={self.target_soc_fraction!r}"
+            )
+
+    def covers(self, moment: datetime) -> bool:
+        """Whether the window is open at moment, a naive wall-clock time on its strategy's zone.
+
+        It is open from start for duration on each day it opens on, so at most a day: the
+        opening that covers moment is that day's or the day before's.
+        """
+        today = moment.date()
+        openings = (datetime.combine(day, self.start) for day in (today, today - _ONE_DAY) if self._opens_on(day))
+        return any(opens <= moment < opens + self.duration for opens in openings)
+
+    def _opens_on(self, day: date) -> bool:
+        """Whether the window opens on day."""
+        return self.days == "daily" or day.weekday() in self.days
