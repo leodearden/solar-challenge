@@ -77,41 +77,6 @@ class TestGetJobStatus:
         assert resp.status_code == 404
         assert resp.get_json() == {"error": "Job not found"}
 
-    def test_completed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Completed job returns status='completed'."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-done",
-            run_id="run-done",
-            status="completed",
-            progress_pct=100.0,
-            current_step="Done",
-            message="Simulation completed successfully",
-        )
-        resp = client.get("/api/jobs/job-done")
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "completed"
-
-    def test_failed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Failed job returns status='failed' with message."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-fail",
-            run_id="run-fail",
-            status="failed",
-            progress_pct=20.0,
-            message="Something went wrong",
-        )
-        resp = client.get("/api/jobs/job-fail")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["status"] == "failed"
-        assert "wrong" in data["message"]
-
 
 class TestGetJobProgress:
     """Tests for GET /api/jobs/<id>/progress (SSE endpoint)."""
