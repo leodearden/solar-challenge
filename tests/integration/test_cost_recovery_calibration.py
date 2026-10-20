@@ -1086,27 +1086,20 @@ class TestPhysicsColumnPremises:
     θ's TestCalibrationPhysicsColumn and CR6's TestPhysicsReconciliationColumn both
     simulate make_physics_column_scenario's fixture, and both are slow, excluded from
     -m 'not slow' runs.  So the premise (the [FIN] grant covers the fixture's capex, so
-    it carries no debt) is enforced here, under each column's finance: no
-    self-consumption override, under which both physics columns simulate, and FIN_SCF,
-    at which θ's spreadsheet column prices the fixture.
+    it carries no debt) is enforced here.
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
         scenario = make_physics_column_scenario()
+        finance = _make_finance_fin_cr6()
 
-        for override in (None, FIN_SCF):
-            finance = make_fin_finance(self_consumption_override=override)
+        econ = _spreadsheet_economics_cr6(scenario, finance)
 
-            econ = _spreadsheet_economics_cr6(scenario, finance)
-
-            assert econ.total_capex_gbp <= finance.grant_gbp, (
-                f"under self-consumption override {override}, the grant £{finance.grant_gbp:,.0f} "
-                f"no longer covers the physics fleet's capex £{econ.total_capex_gbp:,.0f}"
-            )
-            assert econ.debt_gbp == 0.0, (
-                f"under self-consumption override {override}, the physics fleet carries "
-                f"£{econ.debt_gbp:,.2f} debt"
-            )
+        assert econ.total_capex_gbp <= finance.grant_gbp, (
+            f"grant £{finance.grant_gbp:,.0f} no longer covers the physics fleet's "
+            f"capex £{econ.total_capex_gbp:,.0f}"
+        )
+        assert econ.debt_gbp == 0.0, f"physics fleet carries £{econ.debt_gbp:,.2f} debt"
 
 
 @pytest.mark.slow

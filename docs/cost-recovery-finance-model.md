@@ -710,8 +710,7 @@ anchor's (§7.3), for three reasons:
   financed capex, debt and equity are all zero (§6).  No debt service enters its solve,
   DSCR is `inf` and the equity IRR is `nan`, where the anchor's 100 homes finance
   £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
-  this premise in the fast suite, under both the physics columns' finance and the 0.70
-  override at which θ's spreadsheet column prices this fleet.
+  this premise in the fast suite.
 - **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
   degradation and battery fade (§4, *Battery ageing*) lower its later-year own-use.
   The anchor's injected results are the same at every age (§7.4).
