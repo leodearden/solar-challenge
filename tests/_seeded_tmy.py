@@ -28,7 +28,6 @@ The days can also be given to simulate_home as one home's weather, with no cache
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
@@ -36,9 +35,6 @@ import pytest
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
-
-if TYPE_CHECKING:
-    from _pytest.fixtures import FixtureFunctionDefinition
 
 
 @dataclass(frozen=True)
@@ -62,7 +58,7 @@ class ClearJuneDays:
         """Put these days in *weather_cache* as Bristol's TMY, which get_tmy_data then reads in place of PVGIS."""
         weather_cache.put(self.hourly_weather(), "tmy", Location.bristol())
 
-    def bristol_tmy_fixture(self) -> FixtureFunctionDefinition:
+    def bristol_tmy_fixture(self) -> object:
         """A pytest fixture that seeds these days as Bristol's TMY for each test that uses it.
 
         Bind it to a module-level name, which pytest makes the fixture's name::
