@@ -19,10 +19,13 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
+
+_DAY = "2024-06-21"
+
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
 
 
 class TestParameterSweepConfig:
@@ -91,7 +94,6 @@ class TestParameterSweepConfig:
 class TestPVParameterSweepPreservesDegradation:
     """A PV parameter sweep simulates the base home's aged array with only the swept parameter changed."""
 
-    _DAY = "2024-06-21"
     _AGED_ARRAY = PVConfig(
         capacity_kw=4.0,
         system_age_years=20.0,
@@ -102,7 +104,7 @@ class TestPVParameterSweepPreservesDegradation:
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so the sweep and the reference simulation need no PVGIS call."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
     @pytest.mark.usefixtures("synthetic_tmy")
     @pytest.mark.parametrize(
@@ -117,7 +119,7 @@ class TestPVParameterSweepPreservesDegradation:
         self, parameter_name: str, pv_field: str, value: float
     ) -> None:
         """Generation matches the aged array with *pv_field* set to *value*, so age and rate carried over."""
-        period = SimulationPeriod(start_date=self._DAY, end_date=self._DAY)
+        period = SimulationPeriod(start_date=_DAY, end_date=_DAY)
         scenario = ScenarioConfig(
             name="aged array",
             period=period,
@@ -145,12 +147,10 @@ class TestPVParameterSweepPreservesDegradation:
 class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
     """A battery_capacity_kwh sweep refuses a value that is negative or not finite, naming the parameter, instead of simulating it as no battery."""
 
-    _DAY = "2024-06-21"
-
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so a sweep that simulates a value as no battery fails its assertion instead of reaching PVGIS."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
     @pytest.mark.usefixtures("synthetic_tmy")
     @pytest.mark.parametrize(
@@ -166,7 +166,7 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
     ) -> None:
         scenario = ScenarioConfig(
             name="battery sweep",
-            period=SimulationPeriod(start_date=self._DAY, end_date=self._DAY),
+            period=SimulationPeriod(start_date=_DAY, end_date=_DAY),
             home=HomeConfig(
                 pv_config=PVConfig(capacity_kw=4.0),
                 load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
@@ -187,12 +187,10 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
 class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
     """A household_occupants sweep holds each value, as given, to LoadConfig's occupant rule: it refuses a fraction or a boolean, which the sweep truncated to an int, and reads a whole-number float as the int it equals."""
 
-    _DAY = "2024-06-21"
-
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so a sweep that simulates a truncated count fails its assertion instead of reaching PVGIS."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
     @staticmethod
     def _home(household_occupants: int) -> HomeConfig:
@@ -207,7 +205,7 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
         return run_parameter_sweep(
             ScenarioConfig(
                 name="occupants sweep",
-                period=SimulationPeriod(start_date=self._DAY, end_date=self._DAY),
+                period=SimulationPeriod(start_date=_DAY, end_date=_DAY),
                 home=self._home(3),
             ),
             ParameterSweepConfig(parameter_name="household_occupants", values=[value]),
@@ -234,7 +232,7 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
         """A swept 2.0, as a linear sweep's points are floats, simulates the 2-occupant home: its demand follows TDCV's 2700 kWh/yr, not the base home's 3200."""
         [point] = self._sweep(2.0)
 
-        period = SimulationPeriod(start_date=self._DAY, end_date=self._DAY)
+        period = SimulationPeriod(start_date=_DAY, end_date=_DAY)
         expected = simulate_home(
             self._home(2), period.get_start_timestamp(), period.get_end_timestamp(), weather=default_weather()
         )

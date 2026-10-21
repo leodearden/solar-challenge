@@ -30,11 +30,11 @@ from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
 from solar_challenge.weather import WeatherCache
+from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 SCENARIO = Path("scenarios/bristol-community.yaml")
@@ -149,7 +149,7 @@ def clear_june_tmy(weather_cache: WeatherCache) -> None:
 
     get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
     """
-    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).seed_as_bristol_tmy(weather_cache)
 
 
 # ---------------------------------------------------------------------------

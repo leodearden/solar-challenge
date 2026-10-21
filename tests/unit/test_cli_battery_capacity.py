@@ -7,15 +7,15 @@ argument, before anything is simulated.
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
-from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
@@ -31,7 +31,7 @@ def _bristol_june_tmy_in_tmp_path(
     Before the fix, a command reads the capacity as no battery and simulates,
     so it fails its assertion instead of reaching PVGIS.
     """
-    weather_cache.put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+    ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).seed_as_bristol_tmy(weather_cache)
     monkeypatch.chdir(tmp_path)
 
 

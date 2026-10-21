@@ -37,13 +37,14 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
-from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache, WeatherDataError
 from tests._cli_table_text import table_text
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
+
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1)
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
 
@@ -589,7 +590,7 @@ class TestHomeRunFullConfigParity:
     @pytest.fixture
     def clear_june_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear 21 June as the TMY of Bristol, where `home run` puts a home whose config has no location."""
-        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
     def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
         """Write a temp YAML config with tariff, followed by *seg_yaml*.
@@ -708,7 +709,7 @@ home:
     ) -> None:
         """``--location`` places the simulated home where parse_location puts it."""
         edinburgh = parse_location("55.95,-3.19")
-        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", edinburgh)
+        weather_cache.put(_JUNE_DAYS.hourly_weather(), "tmy", edinburgh)
 
         result, captured = self._run_home(
             monkeypatch,
@@ -727,7 +728,7 @@ def clear_june_in_tmp_path(
     weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
     monkeypatch.chdir(tmp_path)
 
 

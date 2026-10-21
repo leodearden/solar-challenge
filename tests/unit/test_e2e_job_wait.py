@@ -17,12 +17,12 @@ SCENARIOS = """
     import json
     import urllib.request
 
+    import pandas as pd
     import pytest
 
-    from solar_challenge.location import Location
     from solar_challenge.weather import WeatherCache, set_weather_cache
 
-    from tests._synthetic_weather import synthetic_june_weather
+    from tests._seeded_tmy import ClearJuneDays
 
     HOME_JOB = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
 
@@ -36,7 +36,7 @@ SCENARIOS = """
     @pytest.fixture(scope="session")
     def live_server_weather_in_place(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
-        cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
+        ClearJuneDays(first_day=pd.Timestamp("2024-06-01"), count=1).seed_as_bristol_tmy(cache)
         set_weather_cache(cache)
         yield
         set_weather_cache(None)

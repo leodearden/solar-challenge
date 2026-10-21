@@ -16,17 +16,19 @@ from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, WeatherCache
 from tests._network_guard import refusing_network
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
 _DAY = "2024-06-01"
 
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
+
 
 @pytest.fixture(autouse=True)
 def _bristol_june_tmy(weather_cache: WeatherCache) -> None:
     """Serve a clear _DAY, the day `home quick` starts on, as Bristol's TMY."""
-    weather_cache.put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
 
 def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
@@ -94,7 +96,7 @@ def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_
     directory.
     """
     cache_dir = tmp_path / "weather"
-    WeatherCache(cache_dir=cache_dir).put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+    _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir=cache_dir))
     working_dir = tmp_path / "working"
     working_dir.mkdir()
 

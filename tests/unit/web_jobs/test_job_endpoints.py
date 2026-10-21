@@ -5,16 +5,16 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import build_test_app
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
@@ -38,7 +38,7 @@ def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClie
     Its jobs run on the weather create_app bound, the test's own weather cache. There Bristol's TMY is a
     clear day on 1 June 2024, the first day of every days window the API simulates.
     """
-    weather_cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
+    ClearJuneDays(first_day=pd.Timestamp("2024-06-01"), count=1).seed_as_bristol_tmy(weather_cache)
     return app.test_client()
 
 
