@@ -16,6 +16,8 @@ Tests cover:
 - Each column of a stored data.parquet, under the names runs on disk use, loads
   into its field
 - A stored config holding a retired field's key set to null still loads
+- An unset module_efficiency or temperature_coefficient is stored as null, and a run
+  stored with the 0.5.0 tag's 0.2 and -0.004 loads them as set
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
@@ -816,6 +818,55 @@ class TestRunSavedWithRetiredOptionalField:
         loaded_config, _, _ = storage.load_home_run("retired-null-001")
 
         assert loaded_config == config
+
+
+class TestRunStoredWithModuleSettings:
+    """A run stores an unset module_efficiency or temperature_coefficient as null, the module's own.
+
+    The 0.5.0 tag declared them float = 0.2 and float = -0.004, which the model never read,
+    so every run it stored holds those values; they now set the two fields.
+    """
+
+    def test_unset_settings_are_stored_as_null_and_load_back_unset(
+        self, storage: RunStorage
+    ) -> None:
+        config = _make_home_config()
+        storage.save_home_run(
+            run_id="module-settings-null-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+
+        stored = _read_json(stored_run_dir(storage, "module-settings-null-001") / "config.json")
+        loaded_config, _, _ = storage.load_home_run("module-settings-null-001")
+
+        assert stored["pv_config"]["module_efficiency"] is None
+        assert stored["pv_config"]["temperature_coefficient"] is None
+        assert loaded_config == config
+
+    def test_a_run_stored_with_the_0_5_0_values_loads_them_as_set(
+        self, storage: RunStorage
+    ) -> None:
+        config = _make_home_config()
+        storage.save_home_run(
+            run_id="module-settings-old-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+        config_path = stored_run_dir(storage, "module-settings-old-001") / "config.json"
+        stored = _read_json(config_path)
+        stored["pv_config"]["module_efficiency"] = 0.2
+        stored["pv_config"]["temperature_coefficient"] = -0.004
+        config_path.write_text(json.dumps(stored, indent=2))
+
+        loaded_config, _, _ = storage.load_home_run("module-settings-old-001")
+
+        assert loaded_config.pv_config == dataclasses.replace(
+            config.pv_config, module_efficiency=0.2, temperature_coefficient=-0.004
+        )
+        assert loaded_config.pv_config != config.pv_config
 
 
 class TestCorruptedParquet:
