@@ -515,7 +515,7 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_ty
         ),
     ],
 )
-def test_a_class_constructed_by_a_class_cpython_defines_in_c_raises_a_type_error_naming_it_and_that_class(
+def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
     cls: type, naming_it_and_its_constructor: str
 ) -> None:
     with pytest.raises(TypeError, match=naming_it_and_its_constructor):
