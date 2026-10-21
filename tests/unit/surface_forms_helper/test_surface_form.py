@@ -566,6 +566,8 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
     building = functools.wraps(Built)(lambda rate: Built(rate))
     unsigned = functools.partial(zip, [1])
     unsigned.__signature__ = None
+    wrapping = functools.partial(build, 1)
+    wrapping.__wrapped__ = zip
 
     naming_zip = r"\bbuiltins\.zip\b.*\bbuiltins\.zip\b"
     with pytest.raises(TypeError, match=naming_zip):
@@ -578,6 +580,8 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
         surface_form(Zipper().zipped)
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(unsigned)
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(wrapping)
     with pytest.raises(
         TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
     ):

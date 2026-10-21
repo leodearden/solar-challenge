@@ -513,21 +513,23 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
     """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class at the end of the chain inspect follows from it, as a partial's form is the one it leaves of the class it wraps and a wrapper's the one inspect reads of the callable it wraps."""
-    end = _signature_chain_end(obj)
+    end = _chain_end(obj, stop=_carries_signature)
     if inspect.isclass(end):
         _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
 
 
-def _signature_chain_end(obj: Callable[..., object]) -> Callable[..., object]:
-    """The callable whose own signature inspect.signature(*obj*) reads: the end of the chain it follows through a bound method's __func__, the callables a wrapper records as __wrapped__ and a functools.partial's func, each followed only while it carries no __signature__."""
+def _chain_end(
+    obj: Callable[..., object], stop: Callable[[object], bool] | None = None
+) -> Callable[..., object]:
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of."""
     if isinstance(obj, types.MethodType):
-        return _signature_chain_end(obj.__func__)
-    unwrapped: Callable[..., object] = inspect.unwrap(obj, stop=_carries_signature)
+        return _chain_end(obj.__func__, stop)
+    unwrapped: Callable[..., object] = inspect.unwrap(obj, stop=stop)
     if unwrapped is not obj:
-        return _signature_chain_end(unwrapped)
-    if isinstance(obj, functools.partial) and not _carries_signature(obj):
-        return _signature_chain_end(obj.func)
+        return _chain_end(unwrapped, stop)
+    if isinstance(obj, functools.partial) and (stop is None or not stop(obj)):
+        return _chain_end(obj.func, stop)
     return obj
 
 
@@ -632,28 +634,21 @@ def _spelling_modules(
 ) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
 
-    A routine's is that of the last callable in its chain of functools.partial funcs,
-    bound methods' __func__s and wrapped callables, where inspect.get_annotations finds
-    the namespace of a wrapper's annotations. If that callable is an object its class
-    makes callable, it is read as the __call__ its class resolves, from which inspect
-    derives its signature. A __signature__ a wrapper carries does not change that: it
-    records no module. A class's is that of the class holding its constructor; but for
-    a generated __init__, that of the nearest class in the holder's MRO that the
-    dataclass decorator processed and whose own body annotates the name, or the
-    holder's if none does.
+    A routine's is that of the end of its chain, which _chain_end follows through to
+    where inspect.get_annotations finds the namespace of a wrapper's annotations. If
+    that end is an object its class makes callable, it is read as the __call__ its
+    class resolves, from which inspect derives its signature. A __signature__ a wrapper
+    carries does not change that: it records no module. A class's is that of the class
+    holding its constructor; but for a generated __init__, that of the nearest class in
+    the holder's MRO that the dataclass decorator processed and whose own body
+    annotates the name, or the holder's if none does.
     """
-    if isinstance(obj, functools.partial):
-        return _spelling_modules(obj.func, names)
-    if isinstance(obj, types.MethodType):
-        return _spelling_modules(obj.__func__, names)
-    if not inspect.isclass(obj):
-        unwrapped = inspect.unwrap(obj)
-        if unwrapped is not obj:
-            return _spelling_modules(unwrapped, names)
-        if not _is_routine(obj):
-            return _spelling_modules(type(obj).__call__, names)
-        return dict.fromkeys(names, _defining_module(obj))
-    holder = _constructor_holder(obj)
+    end = _chain_end(obj)
+    if not inspect.isclass(end):
+        if not _is_routine(end):
+            return _spelling_modules(type(end).__call__, names)
+        return dict.fromkeys(names, _defining_module(end))
+    holder = _constructor_holder(end)
     if not _holds_generated_init(holder):
         return dict.fromkeys(names, _defining_module(holder))
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
