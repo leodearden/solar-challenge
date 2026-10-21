@@ -198,7 +198,7 @@ def tou_grid_charge_home_config(economy7_tariff_config: TariffConfig) -> HomeCon
 
 @pytest.fixture
 def flat_tariff_no_gc_home_config() -> HomeConfig:
-    """HomeConfig with flat tariff and no grid-charging (H5 invariant base)."""
+    """HomeConfig with flat tariff and no grid-charging."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
@@ -214,7 +214,7 @@ class TestSimulationResultsGridChargeCost:
     """SimulationResults.grid_charge_cost field: defaults and construction."""
 
     def test_grid_charge_cost_field_defaults_to_none(self) -> None:
-        """(a-i) SimulationResults.grid_charge_cost defaults to None (back-compat)."""
+        """SimulationResults.grid_charge_cost defaults to None (back-compat)."""
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         results = SimulationResults(
             generation=pd.Series([0.0, 0.0, 0.0], index=idx),
@@ -232,7 +232,7 @@ class TestSimulationResultsGridChargeCost:
         assert results.grid_charge_cost is None
 
     def test_grid_charge_cost_round_trips(self) -> None:
-        """(a-ii) SimulationResults accepts and returns a grid_charge_cost Series."""
+        """SimulationResults accepts and returns a grid_charge_cost Series."""
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         gc_cost = pd.Series([0.01, 0.02, 0.03], index=idx, name="grid_charge_cost_gbp")
         results = SimulationResults(
@@ -276,13 +276,13 @@ class TestCalculateSummaryGridChargeCost:
         )
 
     def test_total_grid_charge_cost_gbp_zero_when_none(self) -> None:
-        """(b-i) total_grid_charge_cost_gbp == 0.0 when grid_charge_cost is None."""
+        """total_grid_charge_cost_gbp == 0.0 when grid_charge_cost is None."""
         results = self._make_results(grid_charge_cost=None)
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0)
 
     def test_total_grid_charge_cost_gbp_equals_series_sum(self) -> None:
-        """(b-ii) total_grid_charge_cost_gbp == results.grid_charge_cost.sum() in £."""
+        """total_grid_charge_cost_gbp == results.grid_charge_cost.sum() in £."""
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         gc_cost = pd.Series([0.01, 0.02, 0.03], index=idx)
         results = self._make_results(grid_charge_cost=gc_cost)
@@ -382,7 +382,7 @@ class TestSimulateHomeGridChargeCost:
         tou_grid_charge_home_config: HomeConfig,
         night_weather_data: pd.DataFrame,
     ) -> None:
-        """(c) TOU tariff + grid_charging battery → total_grid_charge_cost_gbp > 0."""
+        """TOU tariff + grid_charging battery → total_grid_charge_cost_gbp > 0."""
         results = simulate_home(
             tou_grid_charge_home_config,
             start_date=pd.Timestamp("2024-06-21"),
@@ -404,7 +404,7 @@ class TestSimulateHomeGridChargeCost:
         night_weather_data: pd.DataFrame,
         economy7_tariff_config: TariffConfig,
     ) -> None:
-        """(c-ii) grid_charge_cost only occurs at off-peak rate timesteps.
+        """grid_charge_cost only occurs at off-peak rate timesteps.
 
         Verifies the pricing relationship rather than just non-negativity.
         A regression pricing at peak rate (0.25 £/kWh instead of 0.09) or
@@ -493,7 +493,7 @@ class TestSimulateHomeGridChargeCost:
         flat_tariff_no_gc_home_config: HomeConfig,
         night_weather_data: pd.DataFrame,
     ) -> None:
-        """(d) Flat-rate tariff, no grid_charging → total_grid_charge_cost_gbp == 0.0 (H5)."""
+        """Flat-rate tariff, no grid_charging → total_grid_charge_cost_gbp == 0.0."""
         results = simulate_home(
             flat_tariff_no_gc_home_config,
             start_date=pd.Timestamp("2024-06-21"),
@@ -503,7 +503,7 @@ class TestSimulateHomeGridChargeCost:
         )
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0), (
-            "Without grid_charging, the grid-charge cost must be 0.0 (H5 invariant)"
+            "Without grid_charging, the grid-charge cost must be 0.0"
         )
 
 
