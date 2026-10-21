@@ -12,9 +12,8 @@ pv.py's own selection, once per sizing, and each distinct pick runs one
 year-long model chain: about twelve minutes in all. --dc-kw measures a few DC
 capacities for a quick partial run, e.g. `--dc-kw 3 4 5`. The CSV holds one row
 per sizing and configuration. tests/unit/test_measurement_scripts.py runs it
-offline on a one-day TMY at one capacity, and
-tests/unit/test_mppt_window_held_power.py checks the power it holds strings at;
-the full run is not part of the test suite.
+offline on a one-day TMY at one capacity, and checks the power it holds strings
+at; the full run is not part of the test suite.
 """
 
 import argparse
