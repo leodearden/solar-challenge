@@ -422,9 +422,9 @@ def test_a_routine_that_wraps_a_class_whose_module_another_module_of_the_same_na
     assert later.__file__ in str(raised.value)
 
 
-def test_a_routine_a_class_or_a_type_variable_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.fixture
+def removed_auditing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    """The module 'auditing', imported and then removed from sys.modules, that defines a type variable, a routine, a class, a routine that wraps the class, and a class whose instances are callable."""
     auditing = imported_module(
         tmp_path,
         monkeypatch,
@@ -449,23 +449,62 @@ def test_a_routine_a_class_or_a_type_variable_whose_module_has_since_left_sys_mo
         "class Caller:\n"
         "    def __call__(self, owner, share: 'Share') -> None: ...\n",
     )
-
-    def portion(share: auditing.Portion) -> None: ...
-
-    called = types.MethodType(auditing.Caller(), object())
     monkeypatch.delitem(sys.modules, "auditing")
+    return auditing
 
-    for obj, label in (
-        (auditing.settle, "auditing.settle"),
-        (auditing.Audit, "auditing.Audit"),
-        (auditing.audit, "auditing.Audit"),
-        (portion, repr(auditing.Portion)),
-        (called, repr(called)),
-    ):
-        with pytest.raises(LookupError) as raised:
-            named_classes(obj)
-        assert label in str(raised.value)
-        assert "'auditing'" in str(raised.value)
+
+def test_a_routine_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+    removed_auditing: types.ModuleType,
+) -> None:
+    with pytest.raises(LookupError) as raised:
+        named_classes(removed_auditing.settle)
+
+    assert "auditing.settle" in str(raised.value)
+    assert "'auditing'" in str(raised.value)
+
+
+def test_a_class_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+    removed_auditing: types.ModuleType,
+) -> None:
+    with pytest.raises(LookupError) as raised:
+        named_classes(removed_auditing.Audit)
+
+    assert "auditing.Audit" in str(raised.value)
+    assert "'auditing'" in str(raised.value)
+
+
+def test_a_routine_that_wraps_a_class_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_the_class_and_that_modules_name(
+    removed_auditing: types.ModuleType,
+) -> None:
+    with pytest.raises(LookupError) as raised:
+        named_classes(removed_auditing.audit)
+
+    assert "auditing.Audit" in str(raised.value)
+    assert "'auditing'" in str(raised.value)
+
+
+def test_a_type_variable_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+    removed_auditing: types.ModuleType,
+) -> None:
+    def portion(share: removed_auditing.Portion) -> None: ...
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(portion)
+
+    assert repr(removed_auditing.Portion) in str(raised.value)
+    assert "'auditing'" in str(raised.value)
+
+
+def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+    removed_auditing: types.ModuleType,
+) -> None:
+    called = types.MethodType(removed_auditing.Caller(), object())
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(called)
+
+    assert repr(called) in str(raised.value)
+    assert "'auditing'" in str(raised.value)
 
 
 def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_the_classes_its_forms_name() -> None:
