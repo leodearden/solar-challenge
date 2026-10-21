@@ -13,7 +13,7 @@ import warnings
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
+from typing import Any, Callable, Collection, Generic, Iterator, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 import yaml
@@ -25,7 +25,7 @@ from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
-from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, household_occupant_count
 from solar_challenge.location import Location
@@ -339,7 +339,7 @@ class HeatPumpDistributionConfig:
     Values can include None to represent homes without heat pumps.
 
     Attributes:
-        heat_pump_type: Heat pump type ('ASHP' or 'GSHP'), distribution spec, or None for no heat pump
+        heat_pump_type: One of heat_pump.HEAT_PUMP_TYPES, a distribution spec over them, or None for no heat pump
         thermal_capacity_kw: Distribution for thermal capacity (default: 8.0)
         annual_heat_demand_kwh: Distribution for annual heating demand (default: 8000.0)
     """
@@ -1456,7 +1456,7 @@ def _parse_heat_pump_distribution_config(
     if heat_pump_type_raw is None:
         heat_pump_type = None
     elif isinstance(heat_pump_type_raw, str):
-        # Direct string value (e.g., "ASHP" or "GSHP")
+        # Direct string value
         heat_pump_type = heat_pump_type_raw
     elif isinstance(heat_pump_type_raw, dict):
         # Distribution spec
@@ -1728,7 +1728,7 @@ def generate_homes_from_distribution(
             naming the pool; if a setting's spec cannot be drawn for it, e.g. a
             proportional_to outside the battery and heat pump settings, naming the
             setting; if a sampled PV capacity is not positive; or if a sampled heat
-            pump type is not 'ASHP' or 'GSHP'.
+            pump type is not one of heat_pump.HEAT_PUMP_TYPES.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
@@ -1829,15 +1829,11 @@ def generate_homes_from_distribution(
                 heat_pump_type = None
 
             if heat_pump_type is not None:
-                # Runtime validation - ensure heat_pump_type is valid
-                if heat_pump_type not in ('ASHP', 'GSHP'):
+                if heat_pump_type not in HEAT_PUMP_TYPES:
                     raise ConfigurationError(
                         f"Invalid heat pump type sampled: '{heat_pump_type}'. "
-                        f"Must be 'ASHP' or 'GSHP'"
+                        f"Must be one of {HEAT_PUMP_TYPES}"
                     )
-
-                # Type narrowing - mypy now knows it's Literal['ASHP', 'GSHP']
-                heat_pump_type_literal = cast(Literal['ASHP', 'GSHP'], heat_pump_type)
 
                 thermal_capacity = sampler.sample_with_context(
                     config.heat_pump.thermal_capacity_kw, context, "heat_pump.thermal_capacity_kw"
@@ -1846,7 +1842,7 @@ def generate_homes_from_distribution(
                     config.heat_pump.annual_heat_demand_kwh, context, "heat_pump.annual_heat_demand_kwh"
                 )
                 heat_pump_config = HeatPumpConfig(
-                    heat_pump_type=heat_pump_type_literal,
+                    heat_pump_type=heat_pump_type,
                     thermal_capacity_kw=thermal_capacity if thermal_capacity is not None else 8.0,
                     annual_heat_demand_kwh=annual_heat_demand if annual_heat_demand is not None else 8000.0,
                 )

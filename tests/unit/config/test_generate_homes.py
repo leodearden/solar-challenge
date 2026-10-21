@@ -3,8 +3,9 @@
 
 import json
 import math
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import pytest
 
@@ -556,6 +557,31 @@ fleet_distribution:
                 assert h1.heat_pump_config.heat_pump_type == h2.heat_pump_config.heat_pump_type
                 assert h1.heat_pump_config.thermal_capacity_kw == h2.heat_pump_config.thermal_capacity_kw
                 assert h1.heat_pump_config.annual_heat_demand_kwh == h2.heat_pump_config.annual_heat_demand_kwh
+
+    @pytest.mark.parametrize(
+        "heat_pump_type",
+        [
+            pytest.param("XSHP", id="fixed"),
+            pytest.param(WeightedDiscreteDistribution(values=("XSHP",), weights=(1.0,)), id="weighted"),
+        ],
+    )
+    def test_a_sampled_type_outside_heat_pump_types_is_refused_naming_every_type(
+        self, heat_pump_type: Union[str, WeightedDiscreteDistribution]
+    ) -> None:
+        """A heat pump type outside heat_pump.HEAT_PUMP_TYPES, fixed or drawn, is refused naming every type."""
+        config = FleetDistributionConfig(
+            n_homes=1,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(),
+            heat_pump=HeatPumpDistributionConfig(heat_pump_type=heat_pump_type),
+            seed=42,
+        )
+
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape("Invalid heat pump type sampled: 'XSHP'. Must be one of ('ASHP', 'GSHP')"),
+        ):
+            generate_homes_from_distribution(config, Location.bristol())
 
 
 class TestGenerateHomesFromDistributionDegradation:
