@@ -28,7 +28,7 @@ from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
-# §A — Helper factories
+# §A — Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -41,6 +41,25 @@ def _make_bill_distribution() -> BillDistribution:
         median_gbp=367.5,
         max_gbp=420.0,
     )
+
+
+def _value_cell(report: str, heading: str, label: str) -> str:
+    """The Value cell of the row labelled *label* in the table of *heading*'s own section.
+
+    A section ends at the next heading, so the bill's own Min, Mean, Median and Max rows are never read as the cost-recovery block's.
+    """
+    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
+    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|")
+    ]
+    matching_rows = [row for row in rows if row[0] == label]
+    assert len(matching_rows) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
+    row = matching_rows[0]
+    assert len(row) == 2, f"Expected the {label!r} row under {heading!r} to be a label and a value, got {row!r}:\n{section}"
+    return row[1]
 
 
 # ---------------------------------------------------------------------------
@@ -88,14 +107,9 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         )
 
         report = generate_finance_report(bill, cost_recovery=sol)
-        cr_idx = report.find("## Cost-Recovery Analysis")
-        assert cr_idx >= 0, "Cost-Recovery section not found"
-        cr_section = report[cr_idx:]
 
-        # Net surplus renders as £27.00 in the CR section (format: £{value:.2f})
-        assert "£27.00" in cr_section, (
-            f"Expected '£27.00' in CR section but got:\n{cr_section}"
-        )
+        shown = _value_cell(report, "## Cost-Recovery Analysis", "CBS Net Surplus / home / yr")
+        assert shown == "£27.00", f"net surplus not shown in its row:\n{report}"
 
     def test_cost_recovery_feasible_indicator_present(self) -> None:
         """Report must contain a feasibility indicator."""
@@ -138,25 +152,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 # ---------------------------------------------------------------------------
 # §C — full board-readable content
 # ---------------------------------------------------------------------------
-
-
-def _value_cell(report: str, heading: str, label: str) -> str:
-    """The Value cell of the row labelled *label* in the table of *heading*'s own section.
-
-    A section ends at the next heading, so the bill's own Min, Mean, Median and Max rows are never read as the cost-recovery block's.
-    """
-    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
-    rows = [
-        [cell.strip() for cell in line.strip("|").split("|")]
-        for line in section.splitlines()
-        if line.startswith("|")
-    ]
-    matching_rows = [row for row in rows if row[0] == label]
-    assert len(matching_rows) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
-    row = matching_rows[0]
-    assert len(row) == 2, f"Expected the {label!r} row under {heading!r} to be a label and a value, got {row!r}:\n{section}"
-    return row[1]
 
 
 class TestGenerateFinanceReportCostRecoveryFull:
