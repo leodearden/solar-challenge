@@ -162,7 +162,7 @@ Browsable, searchable history of all simulation runs.
 | Column | Type | Sortable | Filterable |
 |--------|------|----------|------------|
 | Name | text | yes | search |
-| Type | badge (home/fleet/sweep) | yes | dropdown |
+| Type | badge (home/fleet) | yes | dropdown |
 | Date | datetime | yes | date range |
 | Duration | seconds | yes | - |
 | Generation (kWh) | number | yes | - |
@@ -331,7 +331,7 @@ The as-built chart colours are the `chart` section of `src/solar_challenge/web/s
 CREATE TABLE runs (
     id TEXT PRIMARY KEY,           -- UUID
     name TEXT NOT NULL,
-    type TEXT NOT NULL,            -- 'home', 'fleet', 'sweep'
+    type TEXT NOT NULL,            -- 'home', 'fleet'
     config_json TEXT NOT NULL,     -- Serialised HomeConfig/FleetConfig
     summary_json TEXT,             -- Serialised SummaryStatistics/FleetSummary
     status TEXT NOT NULL DEFAULT 'running',  -- 'running', 'completed', 'failed'

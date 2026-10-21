@@ -598,7 +598,7 @@ def history_list_runs() -> Response:
         per_page: Items per page (default 20)
         sort: Sort column (default 'created_at')
         order: Sort order 'asc' or 'desc' (default 'desc')
-        type: Filter by run type (home, fleet, sweep)
+        type: Filter by run type (home, fleet)
         q: Search query (searches name and notes)
         date_from: Filter runs created on or after this date
         date_to: Filter runs created on or before this date
