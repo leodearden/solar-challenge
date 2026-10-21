@@ -665,6 +665,48 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     assert named_classes(submetering.audit) == {decimal.Decimal}
 
 
+def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_names_read_where_that_callable_is_spelled_though_the_routine_carries_a_signature(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n",
+    )
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "decorating",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "def without_rate(function):\n"
+        "    @wraps(function)\n"
+        "    def wrapper(*args, **kwargs):\n"
+        "        return function(*args, **kwargs)\n"
+        "\n"
+        "    signature = inspect.signature(function)\n"
+        "    parameters = list(signature.parameters.values())[:1]\n"
+        "    wrapper.__signature__ = signature.replace(parameters=parameters)\n"
+        "    return wrapper\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decorating import without_rate\n"
+        "from metering import settle\n"
+        "\n"
+        "settled = without_rate(settle)\n",
+    )
+
+    assert named_classes(submetering.settled) == {fractions.Fraction}
+
+
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

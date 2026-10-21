@@ -111,13 +111,14 @@ def named_classes(obj: object) -> set[type]:
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, or a routine that wraps another
-    callable as functools.wraps records one, where that callable is; and a class in the
-    one sys.modules holds under the name its __module__ records. One whose module another
-    of the same name has since replaced in sys.modules raises LookupError naming it and
-    the module found there, and one whose module has since left sys.modules, LookupError
-    naming it and that module's name. A signature that annotates nothing, as that of each
-    routine CPython defines in C such as str.join, names no class, and no module is
-    looked up for it. Met again inside its own evaluation in the same module, as each
+    callable as functools.wraps records one, where that callable is, whatever
+    __signature__ the wrapper carries; and a class in the one sys.modules holds under
+    the name its __module__ records. One whose module another of the same name has since
+    replaced in sys.modules raises LookupError naming it and the module found there, and
+    one whose module has since left sys.modules, LookupError naming it and that module's
+    name. A signature that annotates nothing, as that of each routine CPython defines in
+    C such as str.join, names no class, and no module is looked up for it. Met again
+    inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
@@ -505,7 +506,15 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
 def _spelling_modules(
     obj: Callable[..., object], names: Iterable[str]
 ) -> dict[str, types.ModuleType]:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": for a functools.partial, and for a routine that wraps another callable as functools.wraps records one, those of the callable inspect derives its signature from, the partial's func or what inspect.unwrap gives; for any other routine, its own. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
+
+    A routine's is that of the last callable in its chain of functools.partial funcs and
+    wrapped callables, where inspect.get_annotations finds the namespace of a wrapper's
+    annotations. A __signature__ a wrapper carries does not change that: it records no
+    module. A class's is that of the class holding its constructor; but for a generated
+    __init__, that of the nearest class in the holder's MRO that the dataclass decorator
+    processed and whose own body annotates the name, or the holder's if none does.
+    """
     if isinstance(obj, functools.partial):
         return _spelling_modules(obj.func, names)
     if not inspect.isclass(obj):
