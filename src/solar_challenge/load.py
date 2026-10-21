@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Load profile generation for domestic energy consumption."""
 
+import contextlib
 import datetime
 import logging
 import math
 import os
 import random
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING, TypeAlias
 
@@ -69,7 +71,8 @@ class LoadConfig:
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
             Set False to force the deterministic Elexon Profile Class 1 shape.
-        seed: Random seed for stochastic load generation (for reproducibility)
+        seed: Seed of the stochastic profile: any int reproduces its profile, and
+            None draws fresh entropy on each call
     """
 
     annual_consumption_kwh: Optional[float] = None
@@ -118,7 +121,8 @@ _MINUTES_PER_DAY = 1440
 # One local calendar day's 1,440 one-minute power values in W, wall clock 00:00 to 23:59, in no time zone.
 DaySimulator: TypeAlias = Callable[[datetime.date], npt.NDArray[np.float64]]
 
-# One window's household; it draws randomness only from the module-level random and numpy.random generators.
+# One window's household. It draws randomness only from the module-level random and numpy.random
+# generators, and never calls generate_load_profile, since the RNG hand-off's lock is not re-entrant.
 HouseholdModel: TypeAlias = Callable[[LoadConfig, Sequence[datetime.date]], DaySimulator]
 
 
@@ -277,6 +281,68 @@ def _calendar_days(first: datetime.date, last: datetime.date) -> list[datetime.d
     return [first + datetime.timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
+_rng_lock = threading.Lock()
+
+
+def _generator_seeds(seed: Optional[int]) -> tuple[int, int | npt.NDArray[np.uint32 | np.uint64]]:
+    """The seeds for random.seed and numpy.random.seed that a LoadConfig's seed stands for.
+
+    A seed from 0 to 2**32 - 1 is both seeds, as it always was. Any other int seeds both
+    from one numpy.random.SeedSequence of its magnitude and sign, so s and -s differ, and
+    None from a fresh SeedSequence.
+    """
+    if seed is not None and 0 <= seed < 2**32:
+        return seed, seed
+    sequence = (
+        np.random.SeedSequence()
+        if seed is None
+        else np.random.SeedSequence((abs(seed), int(seed < 0)))
+    )
+    state = sequence.generate_state(4)
+    return int.from_bytes(state.tobytes(), "little"), state
+
+
+@contextlib.contextmanager
+def _rng_hand_off(seed: Optional[int]) -> Iterator[None]:
+    """Hand the module-level random and numpy.random generators to one stochastic window at a time across threads.
+
+    The window draws from both seeded from seed, fresh entropy when it is None, and the
+    caller gets both back in the states it left them in, however the window ends.
+    """
+    random_seed, numpy_seed = _generator_seeds(seed)
+    with _rng_lock:
+        random_state, numpy_state = random.getstate(), np.random.get_state()
+        try:
+            random.seed(random_seed)
+            np.random.seed(numpy_seed)
+            yield
+        finally:
+            random.setstate(random_state)
+            np.random.set_state(numpy_state)
+
+
+def _household_day_watts(
+    household_model: HouseholdModel, config: LoadConfig, days: Sequence[datetime.date]
+) -> list[npt.NDArray[np.float64]]:
+    """Each of days' power in W, simulated inside the RNG hand-off by the one household that household_model builds for them.
+
+    Raises:
+        ValueError: If a day's power is not 1,440 one-minute values.
+    """
+    with _rng_hand_off(config.seed):
+        simulate_day = household_model(config, days)
+        day_watts = []
+        for day in days:
+            watts = simulate_day(day)
+            if len(watts) != _MINUTES_PER_DAY:
+                raise ValueError(
+                    f"the household model simulated {len(watts)} minutes for {day}, "
+                    f"not {_MINUTES_PER_DAY}"
+                )
+            day_watts.append(watts)
+    return day_watts
+
+
 def _try_richardsonpy_profile(
     config: LoadConfig,
     start_date: pd.Timestamp,
@@ -324,23 +390,10 @@ def _try_richardsonpy_profile(
         # across the 23-hour spring-forward day.
         days = _calendar_days(start_norm.date(), end_norm.date())
 
-        # richardsonpy uses both numpy.random and Python's random module.
-        if config.seed is not None:
-            np.random.seed(config.seed)
-            random.seed(config.seed)
-        simulate_day = household_model(config, days)
-        day_watts = []
-        for day in days:
-            watts = simulate_day(day)
-            if len(watts) != _MINUTES_PER_DAY:
-                raise ValueError(
-                    f"the household model simulated {len(watts)} minutes for {day}, "
-                    f"not {_MINUTES_PER_DAY}"
-                )
-            day_watts.append(watts)
-
         # Concatenate all days and convert W → kW
-        power_kw: np.ndarray = np.concatenate(day_watts) / 1000.0
+        power_kw: np.ndarray = (
+            np.concatenate(_household_day_watts(household_model, config, days)) / 1000.0
+        )
 
         # Build 1-minute DatetimeIndex for the requested window.
         # Reuse the Elexon DST trim/pad pattern so index length is consistent.
@@ -405,6 +458,10 @@ def generate_load_profile(
     deterministic Elexon Profile Class 1 shape only when use_stochastic=False,
     or defensively if the stochastic profile cannot be built: the household
     model raises an error, or its window has no energy to scale.
+
+    A stochastic profile depends only on its LoadConfig: the call leaves the
+    module-level random and numpy.random generators in the states it found
+    them in, and stochastic windows run one at a time across threads.
 
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption using seasonal factors.
