@@ -678,6 +678,22 @@ def test_a_wrapper_of_a_callable_defined_in_c_that_inspect_reads_after_another_c
     assert surface_form(Overriding) == "(rate: int) -> None"
 
 
+def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_call_and_that_callable() -> None:
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    class Counted(metaclass=Counting):
+        def __init__(self, rate: int) -> None: ...
+
+    naming_counted_and_its_call = r"\.Counted\b.*\.Counting\.__call__\b.*\btype\.__call__\b"
+    with pytest.raises(TypeError, match=naming_counted_and_its_call):
+        surface_form(Counted)
+    with pytest.raises(TypeError, match=naming_counted_and_its_call):
+        named_classes(Counted)
+
+
 def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
