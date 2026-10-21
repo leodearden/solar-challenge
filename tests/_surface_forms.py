@@ -120,12 +120,14 @@ def named_classes(obj: object) -> set[type]:
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, or a routine that wraps another
     callable as functools.wraps records one, where that callable is, whatever
-    __signature__ the wrapper carries; and a class in the one sys.modules holds under
-    the name its __module__ records. One whose module another of the same name has since
-    replaced in sys.modules raises LookupError naming it and the module found there, and
-    one whose module has since left sys.modules, LookupError naming it and that module's
-    name. A signature that annotates nothing, as that of each routine CPython defines in
-    C such as str.join, names no class, and no module is looked up for it. Met again
+    __signature__ the wrapper carries; an object its class makes callable, where the
+    __call__ that class resolves is, which may be a base's in another module; and a
+    class in the one sys.modules holds under the name its __module__ records. One whose
+    module another of the same name has since replaced in sys.modules raises LookupError
+    naming it and the module found there, and one whose module has since left
+    sys.modules, LookupError naming it and that module's name. A signature that
+    annotates nothing, as that of each routine CPython defines in C such as str.join,
+    names no class, and no module is looked up for it. Met again
     inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
@@ -567,10 +569,12 @@ def _spelling_modules(
 
     A routine's is that of the last callable in its chain of functools.partial funcs and
     wrapped callables, where inspect.get_annotations finds the namespace of a wrapper's
-    annotations. A __signature__ a wrapper carries does not change that: it records no
-    module. A class's is that of the class holding its constructor; but for a generated
-    __init__, that of the nearest class in the holder's MRO that the dataclass decorator
-    processed and whose own body annotates the name, or the holder's if none does.
+    annotations. If that callable is an object its class makes callable, it is read as
+    the __call__ its class resolves, from which inspect derives its signature. A
+    __signature__ a wrapper carries does not change that: it records no module. A
+    class's is that of the class holding its constructor; but for a generated __init__,
+    that of the nearest class in the holder's MRO that the dataclass decorator processed
+    and whose own body annotates the name, or the holder's if none does.
     """
     if isinstance(obj, functools.partial):
         return _spelling_modules(obj.func, names)
@@ -578,6 +582,8 @@ def _spelling_modules(
         unwrapped = inspect.unwrap(obj)
         if unwrapped is not obj:
             return _spelling_modules(unwrapped, names)
+        if not _is_routine(obj):
+            return _spelling_modules(type(obj).__call__, names)
         return dict.fromkeys(names, _defining_module(obj))
     holder = _constructor_holder(obj)
     if not _holds_generated_init(holder):
