@@ -21,7 +21,7 @@ import yaml
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
@@ -356,7 +356,9 @@ class EVDistributionConfig:
     Values can include None to represent homes without EVs.
 
     Attributes:
-        charger_type: Distribution for EV charger type (can include None)
+        charger_type: null, or a weighted_discrete or shuffled_pool of EVChargerType values
+            and nulls (a null is a home without an EV); parse_fleet_distribution_config
+            refuses any other
         arrival_hour: Distribution for EV arrival hour (0-23), or fixed value
         departure_hour: Distribution for EV departure hour (0-23), default 7am
         required_charge_kwh: Distribution for daily charging requirement, default 35kWh
@@ -1507,6 +1509,37 @@ _EV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 })
 
 
+def _parse_charger_type_spec(data: Any, key_path: str) -> DistributionSpec:
+    """Read an ev block's charger_type: null, or a weighted_discrete or shuffled_pool of charger types and nulls.
+
+    Any other spec, a bare charger type among them, is refused naming *key_path*, and so is
+    a listed value that names no EVChargerType; a null is a home without an EV.
+    """
+    spec = _parse_distribution_spec(data, key_path) if isinstance(data, dict) else data
+    if spec is None:
+        return None
+    if not isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
+        raise ConfigurationError(
+            f"Invalid {key_path} {data!r}; valid specs: null, or a weighted_discrete or "
+            "shuffled_pool of charger types and nulls"
+        )
+    for value in spec.values:
+        if value is not None:
+            _require_charger_type(value, key_path)
+    return spec
+
+
+def _require_charger_type(value: object, key_path: str) -> None:
+    """Refuse *value*, listed at *key_path*, unless it names an EVChargerType."""
+    try:
+        EVChargerType(value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"Invalid {key_path} value {value!r}; valid values: null or one of "
+            f"{[charger.value for charger in EVChargerType]}"
+        ) from exc
+
+
 def _parse_ev_distribution_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[EVDistributionConfig]:
@@ -1519,7 +1552,7 @@ def _parse_ev_distribution_config(
         raise ConfigurationError("EV distribution config requires 'charger_type'")
 
     return EVDistributionConfig(
-        charger_type=_parse_distribution_spec(
+        charger_type=_parse_charger_type_spec(
             data["charger_type"], _child_path(block_path, "charger_type")
         ),
         arrival_hour=_parse_distribution_spec(

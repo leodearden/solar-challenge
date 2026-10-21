@@ -13,9 +13,11 @@ from solar_challenge.config import (
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import Location
 
 
 def _parsed_fleet_distribution(n_homes: int = 1, **sections: Any) -> FleetDistributionConfig:
@@ -28,6 +30,14 @@ def _pool_size_refusal(path: str, n_homes: int, total: int) -> str:
     return (
         f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
         f"({n_homes}), got {total}"
+    )
+
+
+def _charger_type_value_refusal(value: object) -> str:
+    """The refusal of *value*, listed in a fleet's ev.charger_type, which names no charger type."""
+    return (
+        f"Invalid fleet_distribution.ev.charger_type value {value!r}; "
+        "valid values: null or one of ['3.6kW', '7kW', '22kW']"
     )
 
 
@@ -436,3 +446,102 @@ class TestPVDistributionDegradationParsing:
         pv_dist = _parsed_fleet_distribution(pv=data).pv
         assert pv_dist.system_age_years == 0.0
         assert pv_dist.degradation_rate_per_year == 0.005
+
+
+class TestEVChargerTypeValuesAreChargerTypes:
+    """An ev block's charger_type lists EVChargerType values and nulls, and is read when the block is read, not when homes are generated."""
+
+    @pytest.mark.parametrize(
+        ("n_homes", "charger_type", "value"),
+        [
+            pytest.param(
+                1,
+                {"type": "weighted_discrete", "values": ["11kW"], "weights": [1]},
+                "11kW",
+                id="a charger type no charger has",
+            ),
+            pytest.param(
+                3,
+                {"type": "shuffled_pool", "values": [None, "7kW", "7KW"], "counts": [1, 1, 1]},
+                "7KW",
+                id="a charger type in the wrong case",
+            ),
+            pytest.param(
+                1,
+                {"type": "weighted_discrete", "values": ["7kW", 22], "weights": [1, 1]},
+                22,
+                id="a number",
+            ),
+            pytest.param(
+                1,
+                {"type": "weighted_discrete", "values": ["7kW", "11kW"], "weights": [1, 0]},
+                "11kW",
+                id="a value no home draws",
+            ),
+        ],
+    )
+    def test_a_listed_value_that_names_no_charger_type_is_refused_at_read_naming_its_key_path_and_value(
+        self, n_homes: int, charger_type: dict[str, Any], value: object
+    ) -> None:
+        """A listed value that is not a charger type is refused as the block is read, naming fleet_distribution.ev.charger_type and the value as written, even when no home draws it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(
+                n_homes, pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type}
+            )
+        assert str(refusal.value) == _charger_type_value_refusal(value)
+
+    @pytest.mark.parametrize(
+        "charger_type",
+        [
+            pytest.param("7kW", id="a bare charger type"),
+            pytest.param(["7kW", "3.6kW"], id="a bare list of charger types"),
+            pytest.param(7, id="a number"),
+            pytest.param({"type": "fixed", "value": 22}, id="a fixed number"),
+            pytest.param({"type": "normal", "mean": 7, "std": 1}, id="normal"),
+            pytest.param({"type": "uniform", "min": 3, "max": 22}, id="uniform"),
+            pytest.param({"type": "proportional_to", "source": "pv.capacity_kw"}, id="proportional_to"),
+        ],
+    )
+    def test_a_spec_other_than_null_weighted_discrete_or_shuffled_pool_is_refused_at_read_naming_its_key_path(
+        self, charger_type: object
+    ) -> None:
+        """A bare charger type, list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type and the spec as written."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
+        assert str(refusal.value) == (
+            f"Invalid fleet_distribution.ev.charger_type {charger_type!r}; "
+            "valid specs: null, or a weighted_discrete or shuffled_pool of charger types and nulls"
+        )
+
+    @pytest.mark.parametrize(
+        ("charger_type", "expected"),
+        [
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "values": [None, "3.6kW", "7kW", "22kW"],
+                    "counts": [1, 1, 1, 1],
+                },
+                sorted(["22kW", "3.6kW", "7kW", "no EV"]),
+                id="a pool of every charger type and a null",
+            ),
+            pytest.param(None, ["no EV"] * 4, id="null"),
+        ],
+    )
+    def test_charger_types_and_nulls_are_read_and_each_home_gets_the_charger_type_it_draws(
+        self, charger_type: dict[str, Any] | None, expected: list[str]
+    ) -> None:
+        """Charger types and nulls pass the read, and each generated home gets the charger type it draws, or no EV for a null."""
+        config = _parsed_fleet_distribution(
+            4,
+            pv={"capacity_kw": 4.0},
+            load={"annual_consumption_kwh": 3400.0, "use_stochastic": False},
+            ev={"charger_type": charger_type},
+        )
+
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        assert (
+            sorted(home.ev_config.charger_type if home.ev_config else "no EV" for home in homes)
+            == expected
+        )
