@@ -83,17 +83,17 @@ def _chart_tab_colours(page: Page) -> dict[str, dict[str, str]]:
     return page.evaluate("() => window.tabProbe.colours()")
 
 
-@pytest.mark.parametrize(("seeded_runs", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
+@pytest.mark.parametrize(("seeding_fixture_name", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
 def test_a_page_paints_its_chart_tabs_in_their_colours_before_alpine_starts_so_none_fades_in(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    seeded_runs: str,
+    seeding_fixture_name: str,
     path_of: Callable[[Any], str],
     tab_names: tuple[str, ...],
 ) -> None:
     """Before Alpine starts, each chart tab already has the colours it keeps once the page has settled, and no tab's colours are fading as Alpine starts."""
-    url = live_server + path_of(request.getfixturevalue(seeded_runs))
+    url = live_server + path_of(request.getfixturevalue(seeding_fixture_name))
     _open_with_the_chart_tabs_recorded(page, url, tab_names[0])
     assert page.evaluate("() => window.tabProbe.load") == {
         "colours_before_alpine": _chart_tab_colours(page),
@@ -101,17 +101,17 @@ def test_a_page_paints_its_chart_tabs_in_their_colours_before_alpine_starts_so_n
     }
 
 
-@pytest.mark.parametrize(("seeded_runs", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
+@pytest.mark.parametrize(("seeding_fixture_name", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
 def test_a_click_on_a_chart_tab_fades_the_selected_colours_from_the_tab_that_had_them_to_it_alone(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    seeded_runs: str,
+    seeding_fixture_name: str,
     path_of: Callable[[Any], str],
     tab_names: tuple[str, ...],
 ) -> None:
     """Each click fades exactly two tabs, the one selected before and the one clicked, and leaves the clicked tab alone in the colours the opening tab loaded with. The opening tab is clicked last, so its click too has to move the selection. A ternary-string :class fails it: Alpine's string form adds and undoes only the classes it added itself, so it never removes one the server drew, while the object form chart_tabs binds removes a false key's classes."""
-    url = live_server + path_of(request.getfixturevalue(seeded_runs))
+    url = live_server + path_of(request.getfixturevalue(seeding_fixture_name))
     opening_tab, *other_tabs = tab_names
     _open_with_the_chart_tabs_recorded(page, url, opening_tab)
     loaded = _chart_tab_colours(page)
