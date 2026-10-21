@@ -4,8 +4,8 @@ colours (docs/prds/chart-panels-and-theme-tokens.md §Contract). Its chart secti
 chart hues, each written #rrggbb, and the chart roles, each naming a hue; charts.py loads
 them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_palette.
 
-* No web source but the token file writes a hex colour. Until γ (task 831) adds the scripts
-  to that scan, a script is refused only the chart hues.
+* No web source but the token file writes a hex colour: no template, script, hand-written
+  stylesheet, Python module or tailwind.config.js.
 * The committed file loads to the colours the charts draw, each role in its hue's colour.
 * A token file that is not a JSON object, or whose chart section, or the chart section's
   hues or roles, is missing or not a JSON object, is refused, naming the file and the section.
@@ -77,11 +77,7 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
     """A hex colour is six hex digits after a hash, in any case, anywhere in a source, comments
     included; an eight-digit colour counts through its first six digits.
 
-    Scripts (static/js) are not read yet: chart-renderer.js and parameter-sweep.js still write
-    chart chrome colours until γ (task 831, docs/prds/chart-panels-and-theme-tokens.md) moves
-    them out. γ then adds dashboard_script_sources() here and deletes
-    test_no_script_writes_out_a_chart_hue, which until then refuses a script only the chart
-    hues. The compiled dist/style.css, static/vendor and favicon.svg are not sources.
+    The compiled dist/style.css, static/vendor and favicon.svg are not sources.
     """
     python_sources = dashboard_python_sources()
     assert {"charts.py", "theme_tokens.py"} <= python_sources.keys(), (
@@ -89,11 +85,18 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
         "theme_tokens.py, the modules that read and draw the chart colours, so this scan would "
         "pass without reading them: fix tests/_dashboard_sources.py's dashboard_python_sources"
     )
+    script_sources = dashboard_script_sources()
+    assert "static/js/chart-renderer.js" in script_sources, (
+        f"read the scripts {sorted(script_sources)}, without static/js/chart-renderer.js, the "
+        "script that colours every chart, so this scan would pass without reading it: fix "
+        "tests/_dashboard_sources.py's dashboard_script_sources"
+    )
     sources = {
         THEME_TOKENS_KEY: theme_tokens_source(),
         TAILWIND_CONFIG_KEY: tailwind_config_source(),
         HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
         **dashboard_template_sources(),
+        **script_sources,
         **python_sources,
     }
 
@@ -114,29 +117,9 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
         "such as [&::-webkit-slider-thumb]:bg-primary-500; then rebuild with "
         "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         "static/dist/style.css. A chart colour is reached through a role of the token file's "
-        "chart section, read through charts.py's COLOUR_PALETTE."
-    )
-
-
-def test_no_script_writes_out_a_chart_hue() -> None:
-    """The scripts' share of the scan above until γ adds them to it: a script may still write a
-    hex colour, read as that scan reads one, but not one of the token file's chart hues."""
-    chart_hues = {hue.lower() for hue in theme_tokens()["chart"]["hues"].values()}
-    assert chart_hues, f"{THEME_TOKENS_KEY}'s chart section defines no hue, so this check would pass vacuously"
-
-    written = {
-        path: hues
-        for path, source in dashboard_script_sources().items()
-        if (hues := sorted(chart_hues.intersection(colour.lower() for colour in _HEX_COLOUR.findall(source))))
-    }
-
-    listing = "".join(f"\n  {path}: {' '.join(hues)}" for path, hues in written.items())
-    assert written == {}, (
-        f"These scripts write out chart hues, whose one home is {THEME_TOKENS_KEY}'s chart "
-        f"section, so a token edit does not reach them:{listing}\n"
-        "The charts take their colours from COLOUR_PALETTE, which charts.py loads from that "
-        "section, because Plotly needs colour strings rather than Tailwind classes. Delete the "
-        "copy. If a page must show a chart colour, pass it from COLOUR_PALETTE to the page."
+        "chart section, read through charts.py's COLOUR_PALETTE. A chart's chrome colour, its "
+        "text and grid, is named by the classes of components/macros.html's chart_panel "
+        "container, and chart-renderer.js reads it from the container's computed style."
     )
 
 
