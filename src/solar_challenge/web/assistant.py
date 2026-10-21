@@ -378,13 +378,13 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
 def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
     """Return a list of recent simulation runs, newest first.
 
-    Read-only SELECT on the runs table; limit is clamped to
-    [1, _LIST_RUNS_MAX_LIMIT] so callers cannot request an unbounded result
-    set.  Returns identifying fields plus key summary metrics for each run.
+    Read-only SELECT on the runs table; a limit above _LIST_RUNS_MAX_LIMIT is
+    clamped to it, so callers cannot request an unbounded result set.  Returns
+    identifying fields plus key summary metrics for each run.
 
     Args:
-        limit:    Maximum number of runs to return (clamped to
-                  1–_LIST_RUNS_MAX_LIMIT; _LIST_RUNS_DEFAULT_LIMIT when <= 0).
+        limit:    Maximum number of runs to return (at most
+                  _LIST_RUNS_MAX_LIMIT; _LIST_RUNS_DEFAULT_LIMIT when <= 0).
         database: The Database whose runs table is read.
 
     Returns:
@@ -394,13 +394,7 @@ def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
         On any DB error returns ``{"runs": [], "error": "<reason>"}``.
         Never raises.
     """
-    effective_limit = max(
-        1,
-        min(
-            limit if limit > 0 else _LIST_RUNS_DEFAULT_LIMIT,
-            _LIST_RUNS_MAX_LIMIT,
-        ),
-    )
+    effective_limit = min(limit if limit > 0 else _LIST_RUNS_DEFAULT_LIMIT, _LIST_RUNS_MAX_LIMIT)
 
     try:
         with database.transaction() as conn:
