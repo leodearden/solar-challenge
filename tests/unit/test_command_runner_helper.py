@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ import yaml
 
 from tests._collect_only import collect
 from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
-from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
+from tests._orchestrator_config import OrchestratorCommand, VerifyRole, lane_command, verify_command
 from tests._verify_suite import run_verify_suite
 
 _PROBE_VARIABLE = "COMMAND_RUNNER_PROBE"
@@ -58,6 +59,15 @@ part.rename(pid_file)
 time.sleep(lifetime_secs)
 released_file.touch()
 """
+
+
+@dataclass(frozen=True)
+class _CommandOfAnotherType:
+    """A command value that is neither a ShellCommand nor an OrchestratorCommand."""
+
+    command: str
+    directory: Path
+    role: VerifyRole | None
 
 
 def _project_with_a_lane_job_and_a_test_command(project_root: Path, command: str) -> Path:
@@ -244,6 +254,25 @@ def test_a_shell_command_runs_in_the_given_environments_role_and_gets_none_of_it
     monkeypatch.delenv("DF_VERIFY_ROLE", raising=False)
 
     result = run_command(ShellCommand(_ECHO_ROLE, tmp_path), {**os.environ, **given}, timeout_secs=60)
+
+    assert result.stdout == f"{printed}\n", describe_outcome(result)
+
+
+@pytest.mark.parametrize(
+    ("role", "printed"),
+    [
+        pytest.param("task", "task", id="task"),
+        pytest.param("offline", "offline", id="offline"),
+        pytest.param(None, "merge", id="no-role"),
+    ],
+)
+def test_a_command_of_any_type_runs_in_the_role_it_carries_and_with_none_in_the_inherited_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: VerifyRole | None, printed: str
+) -> None:
+    """Whether and how run_command sets DF_VERIFY_ROLE is the command's role field, never which type the command is."""
+    monkeypatch.setenv("DF_VERIFY_ROLE", "merge")
+
+    result = run_command(_CommandOfAnotherType(_ECHO_ROLE, tmp_path, role), timeout_secs=60)
 
     assert result.stdout == f"{printed}\n", describe_outcome(result)
 
