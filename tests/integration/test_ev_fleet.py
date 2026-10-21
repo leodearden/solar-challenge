@@ -21,18 +21,12 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache
 from tests._computed_once import ComputedOnce
 from tests._june_fleet_runs import june_fleet_runs
 from tests._seeded_tmy import ClearJuneDays
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
-
-
-@pytest.fixture
-def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Seed _JUNE_DAYS as Bristol's TMY, the location of every home these tests simulate."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 
 @pytest.fixture(scope="module")
