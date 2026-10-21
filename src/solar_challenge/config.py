@@ -1616,6 +1616,19 @@ def parse_fleet_distribution_config(
     )
 
 
+def _nearest_count(draw: float, spec: Union[NormalDistribution, UniformDistribution]) -> float:
+    """Return the whole number nearest *draw* among those from *spec*'s min to its max, as a float.
+
+    A half rounds up. A min or max that *spec* leaves unset, or that is not finite,
+    bounds nothing.
+    """
+    least: float = math.ceil(spec.min) if spec.min is not None and math.isfinite(spec.min) else -math.inf
+    greatest: float = math.floor(spec.max) if spec.max is not None and math.isfinite(spec.max) else math.inf
+    whole = math.floor(draw)
+    nearest = whole + 1 if draw - whole >= 0.5 else whole
+    return float(min(max(nearest, least), greatest))
+
+
 class _DistributionSampler:
     """Draws a fleet's settings home by home, from one RNG seeded with the fleet's seed.
 
@@ -1699,13 +1712,12 @@ class _DistributionSampler:
     def sample_count(self, spec: DistributionSpec, setting: str) -> Optional[float]:
         """Sample a count of *setting* from *spec*.
 
-        A draw from a normal or uniform distribution is rounded to the nearest
-        whole number, a half rounding up: a draw clamped to a min of 2.5 gives
-        3.0. The whole number is returned as a float, so a refusal of the count
-        names it as drawn, 1e+300 rather than the 301-digit int it equals. It
-        can lie outside the spec's min and max, as 0.0 does for a draw of 0.45
-        under a min of 0.4. A fixed value is returned as the spec gives it, and
-        any other value as drawn.
+        A draw from a normal or uniform distribution gives the whole number
+        nearest it among those from the spec's min to its max, a half rounding
+        up, as _nearest_count states. The whole number is returned as a float,
+        so a refusal of the count names it as drawn, 1e+300 rather than the
+        301-digit int it equals. A fixed value is returned as the spec gives
+        it, and any other value as drawn.
 
         Args:
             spec: The setting's distribution specification
@@ -1719,8 +1731,7 @@ class _DistributionSampler:
             return spec
         value = self.sample(spec, setting)
         if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
-            whole = math.floor(value)
-            return float(whole + 1 if value - whole >= 0.5 else whole)
+            return _nearest_count(value, spec)
         return value
 
     def sample_with_context(
