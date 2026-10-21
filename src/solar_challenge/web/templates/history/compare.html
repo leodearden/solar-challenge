@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_panel, run_type_badge %}
+{% from "components/macros.html" import chart_panel, chart_tabs, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -8,133 +8,115 @@
 {{ page_header("Compare Runs", subtitle="Side-by-side comparison of selected simulation runs", breadcrumbs=[{"label": "History", "url": "/history/runs"}, {"label": "Compare"}]) }}
 
 {% if runs|length >= 2 %}
-<div x-data="{ activeTab: 'bar' }">
-    {# Run header row with names and type badges #}
-    <div class="grid gap-4 mb-6" style="grid-template-columns: repeat({{ runs|length }}, minmax(0, 1fr));">
-        {% for run in runs %}
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-center">
-            <h3 class="text-lg font-bold text-slate-900 dark:text-white truncate">{{ run.name or 'Unnamed Run' }}</h3>
-            <div class="mt-1">{{ run_type_badge(run.type) }}</div>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ run.created_at[:19] if run.created_at else '-' }}</p>
-        </div>
-        {% endfor %}
+{# Run header row with names and type badges #}
+<div class="grid gap-4 mb-6" style="grid-template-columns: repeat({{ runs|length }}, minmax(0, 1fr));">
+    {% for run in runs %}
+    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-center">
+        <h3 class="text-lg font-bold text-slate-900 dark:text-white truncate">{{ run.name or 'Unnamed Run' }}</h3>
+        <div class="mt-1">{{ run_type_badge(run.type) }}</div>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ run.created_at[:19] if run.created_at else '-' }}</p>
     </div>
+    {% endfor %}
+</div>
 
-    {# Summary metric cards with deltas #}
-    {% set metrics = [
-        ("Total Generation", "total_generation_kwh", "kWh", true),
-        ("Total Demand", "total_demand_kwh", "kWh", none),
-        ("Self-Consumption", "total_self_consumption_kwh", "kWh", true),
-        ("Grid Import", "total_grid_import_kwh", "kWh", false),
-        ("Grid Export", "total_grid_export_kwh", "kWh", true),
-        ("Self-Consumption Ratio", "self_consumption_ratio", "%", true),
-    ] %}
+{# Summary metric cards with deltas #}
+{% set metrics = [
+    ("Total Generation", "total_generation_kwh", "kWh", true),
+    ("Total Demand", "total_demand_kwh", "kWh", none),
+    ("Self-Consumption", "total_self_consumption_kwh", "kWh", true),
+    ("Grid Import", "total_grid_import_kwh", "kWh", false),
+    ("Grid Export", "total_grid_export_kwh", "kWh", true),
+    ("Self-Consumption Ratio", "self_consumption_ratio", "%", true),
+] %}
 
-    <div class="mb-8">
-        <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Key Metrics</h2>
-        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700/50">
-                    <tr>
-                        <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Metric</th>
-                        {% for run in runs %}
-                        <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{{ run.name or 'Run ' ~ loop.index }}</th>
-                        {% endfor %}
-                        {% if runs|length == 2 %}
-                        <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Delta</th>
-                        <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">% Change</th>
-                        {% endif %}
-                    </tr>
-                </thead>
-                <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                    {% for label, key, unit, higher_is_better in metrics %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                        <td class="px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</td>
-                        {% for run in runs %}
-                        {% set val = run.summary.get(key) if run.summary else None %}
-                        <td class="px-4 py-3 text-sm text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                            {% if val is not none %}
-                                {% if unit == '%' %}
-                                    {{ "%.1f"|format(val * 100) }}%
-                                {% else %}
-                                    {{ "%.1f"|format(val) }} {{ unit }}
-                                {% endif %}
-                            {% else %}-{% endif %}
-                        </td>
-                        {% endfor %}
-                        {% if runs|length == 2 %}
-                            {% set val_a = runs[0].summary.get(key) if runs[0].summary else None %}
-                            {% set val_b = runs[1].summary.get(key) if runs[1].summary else None %}
-                            {% if val_a is not none and val_b is not none %}
-                                {% set delta = val_b - val_a %}
-                                {% set pct = ((delta / val_a) * 100) if val_a != 0 else 0 %}
-                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (delta >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
-                                    {% if unit == '%' %}
-                                        {{ "%+.1f"|format(delta * 100) }} pp
-                                    {% else %}
-                                        {{ "%+.1f"|format(delta) }} {{ unit }}
-                                    {% endif %}
-                                </td>
-                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (pct >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
-                                    {{ "%+.1f"|format(pct) }}%
-                                </td>
-                            {% else %}
-                                <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
-                                <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
-                            {% endif %}
-                        {% endif %}
-                    </tr>
+<div class="mb-8">
+    <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Key Metrics</h2>
+    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-700/50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Metric</th>
+                    {% for run in runs %}
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{{ run.name or 'Run ' ~ loop.index }}</th>
                     {% endfor %}
-                </tbody>
-            </table>
-        </div>
+                    {% if runs|length == 2 %}
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Delta</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">% Change</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                {% for label, key, unit, higher_is_better in metrics %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <td class="px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</td>
+                    {% for run in runs %}
+                    {% set val = run.summary.get(key) if run.summary else None %}
+                    <td class="px-4 py-3 text-sm text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                        {% if val is not none %}
+                            {% if unit == '%' %}
+                                {{ "%.1f"|format(val * 100) }}%
+                            {% else %}
+                                {{ "%.1f"|format(val) }} {{ unit }}
+                            {% endif %}
+                        {% else %}-{% endif %}
+                    </td>
+                    {% endfor %}
+                    {% if runs|length == 2 %}
+                        {% set val_a = runs[0].summary.get(key) if runs[0].summary else None %}
+                        {% set val_b = runs[1].summary.get(key) if runs[1].summary else None %}
+                        {% if val_a is not none and val_b is not none %}
+                            {% set delta = val_b - val_a %}
+                            {% set pct = ((delta / val_a) * 100) if val_a != 0 else 0 %}
+                            <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (delta >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                                {% if unit == '%' %}
+                                    {{ "%+.1f"|format(delta * 100) }} pp
+                                {% else %}
+                                    {{ "%+.1f"|format(delta) }} {{ unit }}
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (pct >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                                {{ "%+.1f"|format(pct) }}%
+                            </td>
+                        {% else %}
+                            <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
+                            <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
+                        {% endif %}
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# Tabbed chart area #}
+<h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Charts</h2>
+{% call chart_tabs([
+    {'key': 'bar', 'label': 'Energy Totals'},
+    {'key': 'radar', 'label': 'Efficiency Ratios'},
+]) %}
+    {# Bar chart #}
+    <div x-show="activeTab === 'bar'">
+        {{ chart_panel('chart-comparison-bar', 'Energy Totals Comparison', charts.get('bar'), '450px', empty_message='No chart data available.') }}
     </div>
 
-    {# Tabbed chart area #}
-    <div class="mb-8">
-        <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Charts</h2>
-        <div class="border-b border-slate-200 dark:border-slate-700 mb-4">
-            <nav class="flex gap-4">
-                <button
-                    @click="activeTab = 'bar'"
-                    class="pb-3 px-1 text-sm font-medium border-b-2 transition-colors"
-                    :class="activeTab === 'bar'
-                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                        : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
-                >Energy Totals</button>
-                <button
-                    @click="activeTab = 'radar'"
-                    class="pb-3 px-1 text-sm font-medium border-b-2 transition-colors"
-                    :class="activeTab === 'radar'
-                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                        : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
-                >Efficiency Ratios</button>
-            </nav>
-        </div>
-
-        {# Bar chart #}
-        <div x-show="activeTab === 'bar'">
-            {{ chart_panel('chart-comparison-bar', 'Energy Totals Comparison', charts.get('bar'), '450px', empty_message='No chart data available.') }}
-        </div>
-
-        {# Radar chart #}
-        <div x-show="activeTab === 'radar'" x-cloak>
-            {{ chart_panel('chart-comparison-radar', 'Efficiency Ratios', charts.get('radar'), '450px', empty_message='No chart data available.') }}
-        </div>
+    {# Radar chart #}
+    <div x-show="activeTab === 'radar'" x-cloak>
+        {{ chart_panel('chart-comparison-radar', 'Efficiency Ratios', charts.get('radar'), '450px', empty_message='No chart data available.') }}
     </div>
+{% endcall %}
 
-    {# Back link #}
-    <div class="mt-6">
-        <a
-            href="/history/runs"
-            class="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 transition-colors"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-            Back to Run History
-        </a>
-    </div>
+{# Back link #}
+<div class="mt-6">
+    <a
+        href="/history/runs"
+        class="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 transition-colors"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+        </svg>
+        Back to Run History
+    </a>
 </div>
 
 {% else %}
