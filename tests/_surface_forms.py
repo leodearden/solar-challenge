@@ -63,16 +63,10 @@ def surface_form(obj: object) -> str:
     a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor, and so does a routine inspect
-    reads as such a class, through functools.partial funcs, bound methods' __func__s and
-    the callables a wrapper records as __wrapped__, short of one that carries a
-    __signature__. Such a constructor is the __call__ the class's metaclass resolves,
-    which inspect looks up before any __new__ or __init__, or else the one inspect reads
-    first of those its holder holds, when it wraps a callable defined in C, as the
-    __new__ warnings.deprecated writes for a class wraps object.__new__; or a
-    functools.partial held as __init__, unless the class holding it also holds a __new__
-    not defined in C, which inspect reads first; or one held by a class defined in C
-    other than object.
+    it and the class in its MRO holding that constructor; so does a routine that wraps
+    such a class, through a functools.partial, a bound method or a functools.wraps
+    wrapper, unless one of them carries a __signature__, which inspect reads as given.
+    _refuse_minor_dependent_constructor lists the constructors it refuses.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -512,7 +506,7 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class at the end of the chain inspect follows from it, as a partial's form is the one it leaves of the class it wraps and a wrapper's the one inspect reads of the callable it wraps."""
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one."""
     end = _chain_end(obj, stop=_carries_signature)
     if inspect.isclass(end):
         _refuse_minor_dependent_constructor(end)
@@ -544,14 +538,17 @@ _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    Such a constructor is the __call__ *cls*'s metaclass resolves, which inspect looks up
-    before any __new__ or __init__, or else the one inspect reads first of those the
-    holder's own namespace holds, when it wraps a callable defined in C, as the __new__
-    warnings.deprecated writes for a class wraps object.__new__; or a functools.partial
-    the holder's own namespace holds as __init__, unless that namespace also holds a
-    __new__ not defined in C, which inspect reads first; or the constructor of a holder
-    defined in C other than object, each __new__ and __init__ its own namespace holds
-    being of a kind in _C_CONSTRUCTOR_KINDS.
+    The constructors it refuses, in the order it checks them:
+
+    - the __call__ *cls*'s metaclass resolves, which inspect looks up before any __new__
+      or __init__, if it wraps a callable defined in C;
+    - the constructor inspect reads first of those the holder's own namespace holds, if
+      it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
+      class wraps object.__new__;
+    - a functools.partial the holder's own namespace holds as __init__, unless that
+      namespace also holds a __new__ not defined in C, which inspect reads first;
+    - the constructor of a holder defined in C other than object: each __new__ and
+      __init__ its own namespace holds is of a kind in _C_CONSTRUCTOR_KINDS.
     """
     metaclass = type(cls)
     _refuse_wrapper_of_c_callable(
@@ -585,7 +582,7 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
 
 
 def _first_read_constructor(holder: type) -> tuple[str, object]:
-    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it, which unwraps a staticmethod as inspect does, unless that is defined in C beside an __init__; else its __init__."""
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), unless that is defined in C beside an __init__; else its __init__."""
     namespace = vars(holder)
     if "__new__" in namespace:
         new = getattr(holder, "__new__")
@@ -600,9 +597,7 @@ def _refuse_wrapper_of_c_callable(
     """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps one.
 
     inspect reads such a wrapper through that callable on some Python releases, and skips
-    it as defined in C on others, reading the next constructor instead. The callable is
-    named by its qualified name alone: a builtin carries no module of its own to name it
-    by, as object.__new__'s __module__ is None and object.__init__ records none.
+    it as defined in C on others, reading the next constructor instead.
     """
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return
