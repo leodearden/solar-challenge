@@ -30,6 +30,8 @@ _STREAM_TAIL_CHARS = 5000
 
 _DRAIN_AFTER_KILL_SECS = 5
 
+_MAX_KILL_SWEEPS = 10
+
 VerifyRole = Literal["task", "offline"]
 
 
@@ -180,14 +182,24 @@ def _kill_session(shell: subprocess.Popen[str]) -> None:
     setpgid, so killing only the shell's group would leave timeout, uv and pytest
     running. *shell*'s own group, whose id is the session's, is killed first, so
     the shell can start no further group while the session's others are looked
-    for; then every group /proc lists in the session is killed. Where /proc cannot
+    for. Then each sweep kills every group /proc lists in the session that is not
+    yet killed, until a sweep finds none or _MAX_KILL_SWEEPS have run: a process in
+    a group of its own, such as a timeout whose command starts another, can start a
+    group while a sweep looks. A killed group's processes stay listed until they
+    are reaped, so a sweep looks only for groups not yet killed. Where /proc cannot
     be listed, as on macOS, only *shell*'s own group is killed.
     """
     if shell.returncode is not None:
         return
     _kill_group(shell.pid)
-    for group in _process_groups_in_session(shell.pid):
-        _kill_group(group)
+    killed = {shell.pid}
+    for _ in range(_MAX_KILL_SWEEPS):
+        found = _process_groups_in_session(shell.pid) - killed
+        if not found:
+            return
+        for group in found:
+            _kill_group(group)
+        killed |= found
 
 
 def _kill_group(group: int) -> None:
