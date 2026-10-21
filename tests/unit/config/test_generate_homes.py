@@ -3,6 +3,7 @@
 
 import json
 import math
+import random
 import re
 from pathlib import Path
 from typing import Optional, Union
@@ -772,41 +773,91 @@ class TestGenerateHomesHouseholdOccupants:
         )
 
     @pytest.mark.parametrize(
-        "household_occupants",
+        ("household_occupants", "whole_numbers"),
         [
-            pytest.param(NormalDistribution(mean=3.0, std=1.0, min=2.6, max=3.4), id="normal"),
-            pytest.param(UniformDistribution(min=2.6, max=3.4), id="uniform"),
+            pytest.param(
+                NormalDistribution(mean=3.0, std=1.5, min=1.0, max=6.0),
+                (1, 2, 3, 4, 5, 6),
+                id="normal-between-whole-bounds",
+            ),
+            pytest.param(
+                UniformDistribution(min=1.0, max=5.0),
+                (1, 2, 3, 4, 5),
+                id="uniform-between-whole-bounds",
+            ),
+            pytest.param(
+                NormalDistribution(mean=4.0, std=1.0, min=1.0, max=3.5),
+                (1, 2, 3),
+                id="normal-clamped-to-a-max-of-3.5",
+            ),
+            pytest.param(
+                NormalDistribution(mean=1.0, std=0.1, min=2.4, max=4.0),
+                (3, 4),
+                id="normal-clamped-to-a-min-of-2.4",
+            ),
+            pytest.param(
+                UniformDistribution(min=2.2, max=4.7),
+                (3, 4),
+                id="uniform-between-fractional-bounds",
+            ),
         ],
     )
-    def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
-        self, household_occupants: DistributionSpec
+    def test_each_home_gets_the_whole_number_nearest_its_draw_among_those_from_its_specs_min_to_its_max(
+        self,
+        household_occupants: Union[NormalDistribution, UniformDistribution],
+        whole_numbers: tuple[int, ...],
     ) -> None:
-        """Every draw from 2.6 to 3.4 gives its home the int 3, the nearest whole number, where truncation gives 2 to every draw below 3.
+        """Each home gets, as an int, the whole number nearest its draw among those from its spec's min to its max.
 
-        The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
+        The expected counts apply that rule to the spec's own draws from the fleet's seed, which the fleet takes in order because it draws nothing else from its RNG.
+        A fractional bound excludes the whole number past it: a draw clamped to a max of 3.5 gives 3, not 4, and one clamped to a min of 2.4 gives 3, not 2.
         """
+        rng = random.Random(42)
+        draws = [household_occupants.draw(rng) for _ in range(20)]
+
         homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
 
         occupants = [home.load_config.household_occupants for home in homes]
-        assert [(type(count), count) for count in occupants] == [(int, 3)] * 20
+        assert [(type(count), count) for count in occupants] == [
+            (int, min(whole_numbers, key=lambda whole: abs(whole - draw))) for draw in draws
+        ]
 
     @pytest.mark.parametrize(
-        "household_occupants",
+        ("mean", "count"),
         [
-            pytest.param(NormalDistribution(mean=1.0, std=0.1, min=2.5), id="normal-clamped-to-its-min"),
-            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-bounds"),
+            pytest.param(2.5, 3, id="two-and-a-half"),
+            pytest.param(4.5, 5, id="four-and-a-half"),
         ],
     )
-    def test_a_draw_halfway_between_two_whole_numbers_rounds_up(
-        self, household_occupants: DistributionSpec
-    ) -> None:
-        """Every draw is 2.5 and gives its home 3 occupants, where rounding a half to even gives 2.
+    def test_a_draw_halfway_between_two_whole_numbers_rounds_up(self, mean: float, count: int) -> None:
+        """Every draw is the mean, halfway between two whole numbers, and gives its home the upper one, where rounding a half to even gives 2 and 4.
 
-        The normal spec's mean lies 15 standard deviations below its min, so every draw is clamped to the min whatever the seed.
+        The spec's std is 0 and it sets no bound, so every draw is exactly its mean whatever the seed, and no bound decides the count.
         """
+        household_occupants = NormalDistribution(mean=mean, std=0.0)
+
         homes = generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
 
-        assert [home.load_config.household_occupants for home in homes] == [3, 3]
+        assert [home.load_config.household_occupants for home in homes] == [count, count]
+
+    def test_an_infinite_min_or_max_bounds_nothing(self) -> None:
+        """A normal with an infinite min and an infinite max gives each home the whole number nearest its draw, 3 for draws near 3.0."""
+        household_occupants = NormalDistribution(mean=3.0, std=0.1, min=-math.inf, max=math.inf)
+
+        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3] * 20
+
+    def test_a_nan_bound_is_refused_as_the_nan_draw_it_clamps_to(self) -> None:
+        """A NaN min clamps every draw to NaN, so the fleet is refused as drawing a sample that is not a finite number, not as a NaN bound."""
+        household_occupants = NormalDistribution(mean=3.0, std=1.0, min=math.nan)
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+
+        assert str(exc_info.value) == (
+            "load.household_occupants must draw samples that are finite numbers, got a sample of nan"
+        )
 
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
