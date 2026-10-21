@@ -102,9 +102,17 @@ def clear_june_in_tmp_path(
     monkeypatch.chdir(tmp_path)
 
 
+def _printed_rows(stdout: str) -> list[tuple[str, str]]:
+    """The (metric, value) cells of each body row of the Rich table on stdout, in order; only body rows open with "│", since the header opens with "┃" and the borders with "┏", "┡" and "└"."""
+    return [
+        (cells[1].strip(), cells[2].strip())
+        for cells in (line.split("│") for line in stdout.splitlines() if line.startswith("│"))
+    ]
+
+
 def _printed_metrics(stdout: str) -> list[str]:
-    """The metric cell of each body row of the Rich table on stdout, in order; only body rows open with "│", since the header opens with "┃" and the borders with "┏", "┡" and "└"."""
-    return [line.split("│")[1].strip() for line in stdout.splitlines() if line.startswith("│")]
+    """The metric cell of each body row of the Rich table on stdout, in order."""
+    return [metric for metric, _value in _printed_rows(stdout)]
 
 
 class TestHomeSummaryRows:
@@ -245,3 +253,26 @@ class TestPrintedSummaryTables:
             "Grid Export Revenue",
             "Net Cost",
         ]
+
+    def test_home_run_prints_a_seg_blocks_export_income_once(self) -> None:
+        """`home run` on a home with a seg: block prints its export income once, as Grid Export Revenue: its export at the SEG rate, to the table's rounding.
+
+        simulate_home prices every export at the SEG rate, so a SEG Revenue row would repeat that income.
+        """
+        rate_pence_per_kwh = 15.0
+        Path("home.yaml").write_text(
+            yaml.safe_dump({"home": {"name": "Bristol", **_HOME}, "seg": {"rate_pence_per_kwh": rate_pence_per_kwh}})
+        )
+
+        result = CliRunner().invoke(
+            app, ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0
+        rows = dict(_printed_rows(result.stdout))
+        assert "SEG Revenue" not in rows
+        export_kwh = float(rows["Grid Export"].removesuffix(" kWh"))
+        assert export_kwh > 0
+        assert float(rows["Grid Export Revenue"].removeprefix("£")) == pytest.approx(
+            export_kwh * rate_pence_per_kwh / 100, abs=0.02
+        )
