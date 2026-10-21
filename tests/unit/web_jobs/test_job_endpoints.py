@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager."""
 
-import time
 from pathlib import Path
 from typing import Any
 
@@ -369,7 +368,7 @@ class TestJobResultsEndpoint:
 class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
 
-    def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
+    def test_home_job_completes(self, app: Flask, real_simulation_client: FlaskClient) -> None:
         """A submitted home job completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         # Submit a minimal 1-day simulation
         submit_resp = real_simulation_client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "name": "E2E Test"})
@@ -377,19 +376,11 @@ class TestJobCompletion:
         job_id = submit_resp.get_json()["job_id"]
         run_id = submit_resp.get_json()["run_id"]
 
-        # Poll until completed (with timeout)
-        deadline = time.monotonic() + 120  # 120 second timeout
-        status = "queued"
-        while time.monotonic() < deadline:
-            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
-            assert status_resp.status_code == 200
-            status_data = status_resp.get_json()
-            status = status_data["status"]
-            if status in ("completed", "failed"):
-                break
-            time.sleep(1)
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
 
-        assert status == "completed", f"Job did not complete in time, last status: {status}"
+        status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        assert status_resp.get_json()["status"] == "completed", status_resp.get_json()
 
         # Now fetch results
         results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
@@ -399,7 +390,7 @@ class TestJobCompletion:
         assert "summary" in results_data
         assert results_data["summary"]["total_generation_kwh"] > 0
 
-    def test_home_job_with_battery_completes(self, real_simulation_client: FlaskClient) -> None:
+    def test_home_job_with_battery_completes(self, app: Flask, real_simulation_client: FlaskClient) -> None:
         """A submitted home job with a battery completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         submit_resp = real_simulation_client.post(
             "/api/simulate/home",
@@ -408,18 +399,11 @@ class TestJobCompletion:
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
 
-        # Poll until completed
-        deadline = time.monotonic() + 120
-        status = "queued"
-        while time.monotonic() < deadline:
-            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
-            status_data = status_resp.get_json()
-            status = status_data["status"]
-            if status in ("completed", "failed"):
-                break
-            time.sleep(1)
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
 
-        assert status == "completed", f"Job did not complete, last status: {status}"
+        status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        assert status_resp.get_json()["status"] == "completed", status_resp.get_json()
 
         results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
         assert results_resp.status_code == 200
