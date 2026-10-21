@@ -35,6 +35,7 @@ from solar_challenge.pv import (
 from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._scripts import load_script
+from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 _QUIET_DIODE_SOLVER = pytest.mark.filterwarnings(
@@ -55,25 +56,27 @@ def default_module() -> Mapping[str, Any]:
     return dict(create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters)
 
 
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("1990-06-21"), count=1)
+
+
 @pytest.fixture(scope="module")
 def one_day_tmy() -> pd.DataFrame:
     """One clear June day, 24 hourly rows, standing in for Bristol's TMY."""
-    return synthetic_june_weather("1990-06-21")
+    return _JUNE_DAYS.hourly_weather()
 
 
 @pytest.fixture(scope="module")
 def census_rows(
     mppt_window: ModuleType,
-    one_day_tmy: pd.DataFrame,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> pd.DataFrame:
-    """The CSV measure_mppt_window.main writes for 4 kW dc, reading one_day_tmy from a weather cache seeded with it.
+    """The CSV measure_mppt_window.main writes for 4 kW dc, reading the day one_day_tmy holds from a weather cache seeded with it.
 
     The cache holds Bristol's TMY, so main fetches nothing. The inverter_kw
     column is read as the labels in the script's COLUMNS.
     """
     cache_dir = tmp_path_factory.mktemp("weather-cache")
-    WeatherCache(cache_dir).put(one_day_tmy, "tmy", Location.bristol())
+    _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir))
     csv_path = tmp_path_factory.mktemp("census") / "mppt-window.csv"
     mppt_window.main(["--cache-dir", str(cache_dir), "--csv", str(csv_path), "--dc-kw", "4"])
     return pd.read_csv(csv_path, dtype={"inverter_kw": str})
@@ -443,7 +446,7 @@ class TestMeasureChargeWindowBills:
         """The cache holds one clear June day as Bristol's TMY, so main fetches nothing."""
         home = bristol_arbitrage_home()
         cache_dir = tmp_path_factory.mktemp("weather-cache")
-        WeatherCache(cache_dir).put(synthetic_june_weather("1990-06-21"), "tmy", home.location)
+        _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir))
 
         charge_window_bills.main(["--cache-dir", str(cache_dir), "--start", "2024-06-21", "--end", "2024-06-21"])
         report = capsys.readouterr().out
