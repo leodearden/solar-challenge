@@ -422,6 +422,52 @@ def test_a_routine_that_wraps_a_class_whose_module_another_module_of_the_same_na
     assert later.__file__ in str(raised.value)
 
 
+def test_a_routine_a_class_or_a_type_variable_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auditing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "auditing",
+        "from functools import wraps\n"
+        "from typing import TYPE_CHECKING, TypeVar\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "Portion = TypeVar('Portion', bound='Share')\n"
+        "\n"
+        "def settle(share: 'Share') -> None: ...\n"
+        "\n"
+        "class Audit:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "@wraps(Audit)\n"
+        "def audit(*args, **kwargs):\n"
+        "    return Audit(*args, **kwargs)\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, owner, share: 'Share') -> None: ...\n",
+    )
+
+    def portion(share: auditing.Portion) -> None: ...
+
+    called = types.MethodType(auditing.Caller(), object())
+    monkeypatch.delitem(sys.modules, "auditing")
+
+    for obj, label in (
+        (auditing.settle, "auditing.settle"),
+        (auditing.Audit, "auditing.Audit"),
+        (auditing.audit, "auditing.Audit"),
+        (portion, repr(auditing.Portion)),
+        (called, repr(called)),
+    ):
+        with pytest.raises(LookupError) as raised:
+            named_classes(obj)
+        assert label in str(raised.value)
+        assert "'auditing'" in str(raised.value)
+
+
 def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_the_classes_its_forms_name() -> None:
     assert named_classes(types.ModuleType) == set()
     assert named_classes(types.FunctionType) == set()
