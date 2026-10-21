@@ -19,8 +19,6 @@ E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
 
 ALPINE_CORE = "http://127.0.0.1:5000/static/vendor/alpinejs/alpinejs-3.14.8.min.js"
 
-ALPINE_COLLAPSE = "http://127.0.0.1:5000/static/vendor/alpinejs/collapse-3.14.8.min.js"
-
 PRESETS_API = "http://127.0.0.1:5000/api/presets"
 
 PLAYWRIGHT_FIXTURE_STUBS = '''
@@ -158,7 +156,7 @@ RERUN_LISTS_LAST_ATTEMPT = f"""
 
     import pytest
 
-    LOST_ON_ATTEMPT = {{1: {ALPINE_COLLAPSE!r}, 2: {PRESETS_API!r}}}
+    LOST_ON_ATTEMPT = {{1: {ALPINE_CORE!r}, 2: {PRESETS_API!r}}}
 
     attempts = Counter()
 
@@ -173,11 +171,21 @@ RERUN_LISTS_LAST_ATTEMPT = f"""
 def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_its_last_attempt_lost_to_network_changes(
     e2e_suite: pytest.Pytester, e2e_scenarios: ScenarioSession
 ) -> None:
+    """Its own failure report lists, right after its traceback, only the request its last attempt lost."""
     run = e2e_scenarios.run_in(e2e_suite)
 
     assert run.outcomes("test_rerun_lists_last_attempt") == {"rerun": 1, "failed": 1}
-    run.result.stdout.fnmatch_lines([f"GET {PRESETS_API}"])
-    run.result.stdout.no_fnmatch_line(f"GET {ALPINE_COLLAPSE}")
+    run.result.stdout.fnmatch_lines(
+        [
+            "test_rerun_lists_last_attempt.py:*: in test_loses_a_different_request_to_a_network_change_on_each_attempt",
+            '    pytest.fail("the page never became ready")',
+            "E   Failed: the page never became ready",
+            "*- requests Chromium failed with net::ERR_NETWORK_CHANGED -*",
+            f"GET {PRESETS_API}",
+            "docs/e2e-network-change-reruns.md says *",
+        ],
+        consecutive=True,
+    )
 
 
 SCENARIOS = {
@@ -190,4 +198,4 @@ SCENARIOS = {
 @pytest.fixture(scope="module")
 def e2e_scenarios() -> ScenarioSession:
     """The one session all the scenarios above run in, under the e2e_suite of whichever test here asks for its run first."""
-    return ScenarioSession(SCENARIOS, "-v", "-p", "no:cacheprovider")
+    return ScenarioSession(SCENARIOS, "-v", "--tb=short", "-p", "no:cacheprovider")
