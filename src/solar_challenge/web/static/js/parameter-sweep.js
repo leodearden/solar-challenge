@@ -157,13 +157,11 @@ document.addEventListener('alpine:init', () => {
                         }
                     } catch(err) {}
                     end();
-                    this._checkAllDone();
                 });
 
                 const fail = () => {
                     row.status = 'failed';
                     end();
-                    this._checkAllDone();
                 };
                 onJobProgressStreamErrors(es, { failed: fail, lost: fail });
             });
@@ -184,37 +182,6 @@ document.addEventListener('alpine:init', () => {
                         ? s.total_grid_import_kwh.toFixed(1) : '-';
                 }
             } catch(err) {}
-        },
-
-        // Check if all sweep jobs are done and render chart
-        _checkAllDone() {
-            const allDone = this.sweepResults.every(r => r.status === 'completed' || r.status === 'failed');
-            if (allDone) {
-                this._renderChart();
-            }
-        },
-
-        // Render sweep results chart
-        _renderChart() {
-            const canvas = document.getElementById('sweep-chart');
-            if (!canvas || typeof Chart === 'undefined') return;
-            const ctx = canvas.getContext('2d');
-            const labels = this.sweepResults.map(r => r.value);
-            const genData = this.sweepResults.map(r => parseFloat(r.generation) || 0);
-            const importData = this.sweepResults.map(r => parseFloat(r.grid_import) || 0);
-
-            if (canvas._chartInstance) canvas._chartInstance.destroy();
-            canvas._chartInstance = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        { label: 'Generation (kWh)', data: genData, borderColor: '#f59e0b', fill: false },
-                        { label: 'Grid Import (kWh)', data: importData, borderColor: '#6b7280', fill: false },
-                    ]
-                },
-                options: { responsive: true, scales: { x: { title: { display: true, text: this.currentParam.label } } } }
-            });
         }
     }));
 });
