@@ -250,7 +250,8 @@ def run(
         homes=list(fleet_config.homes),
         location=loc,
         finance=finance,
-        # Only --cost-recovery passes the rate on: test_project_economics_are_the_same_with_and_without_cost_recovery
+        # Only --cost-recovery passes the rate on:
+        # tests/integration/test_finance_run_cli.py::test_project_economics_are_the_same_with_and_without_cost_recovery
         seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
     )
     economics_result = (
