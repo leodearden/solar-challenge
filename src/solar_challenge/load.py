@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Load profile generation for domestic energy consumption."""
 
+import datetime
 import logging
 import math
+import os
 import random
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.timebase import SimulationWindow
@@ -109,6 +113,15 @@ class LoadConfig:
         return base_consumption
 
 
+_MINUTES_PER_DAY = 1440
+
+# One local calendar day's 1,440 one-minute power values in W, wall clock 00:00 to 23:59, in no time zone.
+DaySimulator: TypeAlias = Callable[[datetime.date], npt.NDArray[np.float64]]
+
+# One window's household; it draws randomness only from the module-level random and numpy.random generators.
+HouseholdModel: TypeAlias = Callable[[LoadConfig, Sequence[datetime.date]], DaySimulator]
+
+
 # Elexon Profile Class 1 (Domestic Unrestricted) typical shape
 # Simplified as 48 half-hourly values representing relative demand
 # Values normalized so sum = 1.0 for one day
@@ -201,36 +214,67 @@ def _interpolate_half_hourly_to_minute(
     return minute_power
 
 
-def _simulate_stochastic_day(
-    wrapper: Any,
-    occupancy_day: "np.ndarray[tuple[int], np.dtype[np.int64]]",
-    irradiance_day: "np.ndarray[tuple[int], np.dtype[np.float64]]",
-    day_of_year: int,
-    is_weekend: bool,
-) -> "np.ndarray[tuple[int], np.dtype[np.float64]]":
-    """Simulate one day of stochastic electric load via richardsonpy's per-day API.
+def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
+    """The default HouseholdModel: richardsonpy's household for the window of days.
 
-    Calls ElectricityProfile.power_sim exactly once, returning the 1440-element
-    (1-minute resolution) total-power array in Watts.
-
-    Args:
-        wrapper: richardsonpy ElectricityProfile instance
-        occupancy_day: 144-element occupancy array (10-min resolution)
-        irradiance_day: 1440-element irradiance array (1-min resolution, W/m²)
-        day_of_year: 1-based day of year — used to determine the month for
-            appliance activity statistics inside power_sim
-        is_weekend: True if Saturday or Sunday
-
-    Returns:
-        1440-element array of total electric power in Watts
+    It bypasses richardsonpy's ElectricLoad, which always simulates a full year: one
+    occupancy chain runs over the window, with one set of appliances and lights, and
+    the day simulator calls ElectricityProfile.power_sim once per date it is given.
+    The day simulator refuses a date outside the window.
     """
-    total_power, _light, _app = wrapper.power_sim(
-        irradiation=irradiance_day,
-        weekend=is_weekend,
-        day=day_of_year,
-        occupancy=occupancy_day,
+    from richardsonpy.classes.occupancy import Occupancy
+    from richardsonpy.classes.appliance import Appliances
+    from richardsonpy.classes.lighting import load_lighting_profile
+    from richardsonpy.classes.stochastic_el_load_wrapper import ElectricityProfile
+    import richardsonpy.classes.electric_load as _el_mod
+
+    inputs_dir = os.path.join(os.path.dirname(os.path.dirname(_el_mod.__file__)), "inputs")
+    occupancy = Occupancy(
+        number_occupants=min(config.household_occupants, 5),  # richardsonpy's cap
+        initial_day=days[0].isoweekday(),
+        nb_days=len(days),
     )
-    return total_power  # type: ignore[no-any-return]
+    # Appliances take 91% of the annual demand and lighting the rest, as in
+    # ElectricLoad.calc_stoch_el_profile.
+    appliances = Appliances(
+        os.path.join(inputs_dir, "Appliances.csv"),
+        annual_consumption=0.91 * config.get_annual_consumption(),
+    )
+    lights = load_lighting_profile(filename=os.path.join(inputs_dir, "LightBulbs.csv"), index=0)
+    electricity = ElectricityProfile(appliances, lights)
+
+    # A sinusoidal daylight for the lighting model, in W/m²: 6 am to 8 pm, peak at 1 pm.
+    hour = np.arange(_MINUTES_PER_DAY) / 60.0
+    daylight_irradiance = np.where(
+        (hour >= 6.0) & (hour <= 20.0),
+        100.0 * np.maximum(0.0, np.sin((hour - 6.0) * np.pi / 14.0)),
+        0.0,
+    )
+    ten_minute_steps_per_day = 144
+
+    def simulate_day(day: datetime.date) -> npt.NDArray[np.float64]:
+        position = (day - days[0]).days
+        if not 0 <= position < len(days):
+            raise ValueError(
+                f"richardsonpy_household was built for {days[0]} to {days[-1]}; "
+                f"it cannot simulate {day}"
+            )
+        total_w, _lights_w, _appliances_w = electricity.power_sim(
+            irradiation=daylight_irradiance,
+            weekend=day.isoweekday() >= 6,
+            day=day.timetuple().tm_yday,
+            occupancy=occupancy.occupancy[
+                ten_minute_steps_per_day * position : ten_minute_steps_per_day * (position + 1)
+            ],
+        )
+        return np.asarray(total_w, dtype=np.float64)
+
+    return simulate_day
+
+
+def _calendar_days(first: datetime.date, last: datetime.date) -> list[datetime.date]:
+    """The calendar dates from first through last, consecutive and ascending."""
+    return [first + datetime.timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 def _try_richardsonpy_profile(
@@ -238,13 +282,13 @@ def _try_richardsonpy_profile(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     timezone: str,
+    household_model: HouseholdModel,
 ) -> Optional[pd.Series]:
-    """Generate a windowed stochastic load profile using richardsonpy's per-day API.
+    """Generate a windowed stochastic load profile from household_model, richardsonpy's by default.
 
-    Bypasses richardsonpy's full-year ElectricLoad (which always simulates 365
-    days due to its irradiance-length assertion) and drives ElectricityProfile.
-    power_sim directly.  Exactly one day is simulated per requested window day:
-    a 1-day request runs 1 simulation cycle, a 7-day request runs 7 — not 365.
+    Builds one household for the window and simulates each of the window's
+    calendar days once, in order: a 1-day request simulates 1 day, a 7-day
+    request 7.
 
     Normalization is performed by scaling the raw stochastic shape, with
     scale_profile_to_energy, to the same seasonal daily energy target used by
@@ -252,37 +296,22 @@ def _try_richardsonpy_profile(
     target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[month]).
 
     The Elexon path is a defensive fallback: any exception returns None,
-    including a richardsonpy runtime error and a window with no energy, which
-    scale_profile_to_energy refuses to scale.
+    including an error from the household model, a day that is not 1,440
+    minutes long, and a window with no energy, which scale_profile_to_energy
+    refuses to scale.
 
     Args:
         config: Load configuration
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         timezone: IANA timezone string
+        household_model: Builds the window's household, whose day simulator
+            gives each day's power in W
 
     Returns:
         Load profile Series if successful, None otherwise (triggers Elexon fallback)
     """
     try:
-        import os
-        from richardsonpy.classes.occupancy import Occupancy
-        from richardsonpy.classes.appliance import Appliances
-        from richardsonpy.classes.lighting import load_lighting_profile
-        from richardsonpy.classes.stochastic_el_load_wrapper import ElectricityProfile
-        import richardsonpy.classes.electric_load as _el_mod
-
-        # Resolve paths to richardsonpy's bundled default input CSV files
-        _src_path = os.path.dirname(os.path.dirname(_el_mod.__file__))
-        _path_app = os.path.join(_src_path, "inputs", "Appliances.csv")
-        _path_light = os.path.join(_src_path, "inputs", "LightBulbs.csv")
-
-        # Set random seed for reproducibility if provided.
-        # richardsonpy uses both numpy.random and Python's random module.
-        if config.seed is not None:
-            np.random.seed(config.seed)
-            random.seed(config.seed)
-
         # Normalise dates (strip any intra-day time component)
         start_norm = start_date.normalize()
         end_norm = end_date.normalize()
@@ -293,63 +322,25 @@ def _try_richardsonpy_profile(
 
         # Calendar dates, not timedelta.days, which undercounts a window
         # across the 23-hour spring-forward day.
-        window_days = (end_norm.date() - start_norm.date()).days + 1
+        days = _calendar_days(start_norm.date(), end_norm.date())
 
-        # richardsonpy initial_day:  1=Monday … 5=Friday, 6=Saturday, 7=Sunday
-        # pandas dayofweek:           0=Monday … 4=Friday, 5=Saturday, 6=Sunday
-        start_weekday = int(start_norm.dayofweek) + 1  # convert to 1-7
-
-        # Build windowed occupancy for ONLY the requested window (not 365 days)
-        occupants = min(config.household_occupants, 5)  # richardsonpy cap is 5
-        occ = Occupancy(
-            number_occupants=occupants,
-            initial_day=start_weekday,
-            nb_days=window_days,
-        )
-
-        # Appliances calibrated to 91% of annual demand (lighting uses ~9%)
-        # — consistent with ElectricLoad.calc_stoch_el_profile's split
-        appliances_demand = 0.91 * config.get_annual_consumption()
-        appliances = Appliances(_path_app, annual_consumption=appliances_demand)
-        lights = load_lighting_profile(filename=_path_light, index=0)
-        wrapper = ElectricityProfile(appliances, lights)
-
-        # Simulate each day in the requested window — exactly one power_sim call
-        # per window day.  Loop count == window_days (the key windowing invariant).
-        _timesteps_per_day = 144  # occupancy at 10-min resolution: 86400/600
-
-        all_days_power: list[np.ndarray] = []
-
-        for i in range(window_days):  # exactly window_days iterations
-            current_date = start_norm + pd.Timedelta(days=i)
-            is_weekend = int(current_date.dayofweek) >= 5
-            day_of_year = int(current_date.dayofyear)
-
-            # 1-minute diurnal irradiance for lighting model (W/m²)
-            # Simple sinusoidal daylight pattern: 6 am–8 pm, peak at 1 pm
-            _hour = np.arange(1440) / 60.0
-            irradiance_day: np.ndarray = np.where(
-                (_hour >= 6.0) & (_hour <= 20.0),
-                100.0 * np.maximum(0.0, np.sin((_hour - 6.0) * np.pi / 14.0)),
-                0.0,
-            )
-
-            # 10-min occupancy for this day (144 values)
-            occupancy_day = occ.occupancy[
-                _timesteps_per_day * i : _timesteps_per_day * (i + 1)
-            ]
-
-            day_power_w = _simulate_stochastic_day(
-                wrapper=wrapper,
-                occupancy_day=occupancy_day,
-                irradiance_day=irradiance_day,
-                day_of_year=day_of_year,
-                is_weekend=is_weekend,
-            )
-            all_days_power.append(day_power_w)
+        # richardsonpy uses both numpy.random and Python's random module.
+        if config.seed is not None:
+            np.random.seed(config.seed)
+            random.seed(config.seed)
+        simulate_day = household_model(config, days)
+        day_watts = []
+        for day in days:
+            watts = simulate_day(day)
+            if len(watts) != _MINUTES_PER_DAY:
+                raise ValueError(
+                    f"the household model simulated {len(watts)} minutes for {day}, "
+                    f"not {_MINUTES_PER_DAY}"
+                )
+            day_watts.append(watts)
 
         # Concatenate all days and convert W → kW
-        power_kw: np.ndarray = np.concatenate(all_days_power) / 1000.0
+        power_kw: np.ndarray = np.concatenate(day_watts) / 1000.0
 
         # Build 1-minute DatetimeIndex for the requested window.
         # Reuse the Elexon DST trim/pad pattern so index length is consistent.
@@ -380,7 +371,7 @@ def _try_richardsonpy_profile(
             * SEASONAL_FACTORS.get(
                 int((start_norm + pd.Timedelta(days=j)).month), 1.0
             )
-            for j in range(window_days)
+            for j in range(len(days))
         )
         return scale_profile_to_energy(profile, target_window_kwh)
 
@@ -403,15 +394,17 @@ def generate_load_profile(
     end_date: pd.Timestamp,
     timezone: str = "Europe/London",
     ev_config: "Optional[EVConfig]" = None,
+    *,
+    household_model: HouseholdModel = richardsonpy_household,
 ) -> pd.Series:
     """Generate domestic load profile.
 
-    Uses the windowed richardsonpy stochastic model when config.use_stochastic
-    is True (the default).  richardsonpy is a hard dependency so this path is
-    always available.  Falls back to the deterministic Elexon Profile Class 1
-    shape only when use_stochastic=False, or defensively if the stochastic
-    profile cannot be built: richardsonpy raises a runtime error, or its window
-    has no energy to scale.
+    Uses the windowed stochastic household_model, richardsonpy's by default,
+    when config.use_stochastic is True (the default).  richardsonpy is a hard
+    dependency so this path is always available.  Falls back to the
+    deterministic Elexon Profile Class 1 shape only when use_stochastic=False,
+    or defensively if the stochastic profile cannot be built: the household
+    model raises an error, or its window has no energy to scale.
 
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption using seasonal factors.
@@ -425,13 +418,18 @@ def generate_load_profile(
         end_date: End of simulation period (inclusive)
         timezone: IANA timezone string for output index
         ev_config: Optional EV configuration for charging load
+        household_model: Called once per stochastic window with config and the
+            window's dates; the day simulator it returns is called once per
+            date. Unused when config.use_stochastic is False.
 
     Returns:
         Series with 1-minute DatetimeIndex and power values in kW
     """
-    # Try richardsonpy first if enabled
+    # Try the stochastic household model first if enabled
     if config.use_stochastic:
-        result = _try_richardsonpy_profile(config, start_date, end_date, timezone)
+        result = _try_richardsonpy_profile(
+            config, start_date, end_date, timezone, household_model
+        )
         if result is not None:
             base_load = result
         else:
