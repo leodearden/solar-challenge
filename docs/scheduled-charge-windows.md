@@ -138,9 +138,10 @@ base peak hours, the finance and the period, as §4 shows.
 
 ## 4. Measured Annual Bills
 
-Run from this task's worktree at commit `e6d9d4a` (this file adds no code), on the main
-checkout's cached Bristol TMY, in 1 min 45 s; from the main checkout the default
-`--cache-dir` (`.cache/weather`) is the same cache:
+Run on task 1016's branch from main `5a3c2ed` (2026-10-20), and again from main `b25f7fa`
+(2026-10-21) with identical output, on the main checkout's cached Bristol TMY, each in
+under two minutes; from the main checkout the default `--cache-dir` (`.cache/weather`) is
+the same cache:
 
     uv run --locked --extra dev python scripts/measure_charge_window_bills.py --cache-dir /home/leo/src/solar-challenge/.cache/weather
 
