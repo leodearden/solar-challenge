@@ -499,6 +499,24 @@ def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
     assert surface_form(Plain) == "()"
 
 
+def test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    with pytest.raises(
+        TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(functools.partial(Built, 1))
+    with pytest.raises(TypeError, match=r"\bbuiltins\.dict\b.*\bbuiltins\.dict\b"):
+        surface_form(functools.partial(dict, rate=1.0))
+    with pytest.raises(
+        TypeError, match=r"\bfunctools\.partial\b.*\bfunctools\.partial\b"
+    ):
+        named_classes(functools.partial(functools.partial, print))
+
+
 def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
