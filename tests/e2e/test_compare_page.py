@@ -19,6 +19,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
+from tests.e2e._results_page import show_chart_tab
 
 pytestmark = pytest.mark.e2e
 
@@ -124,12 +125,6 @@ _TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS = r"""charts => charts.flatMap(chart =>
 })"""
 
 
-def _show_tab(page: Page, tab_name: str, chart: str) -> None:
-    """Click tab_name's tab and wait until Plotly has drawn its chart, the element the selector chart selects, visible."""
-    page.get_by_role("tab", name=tab_name, exact=True).click()
-    expect(page.locator(f"{chart}.js-plotly-plot")).to_be_visible()
-
-
 def _relative_luminance(rgb: Sequence[float]) -> float:
     """The WCAG 2 relative luminance of the sRGB colour whose red, green and blue, each 0 to 255, are rgb."""
     linear = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in (channel / 255 for channel in rgb))
@@ -166,7 +161,7 @@ def test_compare_radar_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
     expect(page.locator(f"{_RADAR_CHART}.js-plotly-plot")).to_have_count(0)
 
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
 
     assert charts_not_as_wide_as_their_containers(page, [_RADAR_CHART_ID]) == []
 
@@ -185,8 +180,8 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
     url = f"/history/compare?ids={id1},{id2}"
     page.goto(live_server + url)
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
-    _show_tab(page, "Energy Totals", _BAR_CHART)
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
+    show_chart_tab(page, "Energy Totals", (_BAR_CHART_ID,))
 
     assert page_errors == [], f"Errors on {url}: {page_errors}"
 
@@ -218,7 +213,7 @@ def test_compare_chart_titles_and_legends_are_legible(
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
     if switched_to_dark:
         page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
 
     texts = page.locator(".js-plotly-plot").evaluate_all(_TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS)
 

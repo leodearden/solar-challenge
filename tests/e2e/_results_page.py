@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Drive a results page's chart tabs, on /results/home/<id> or /results/fleet/<id>, through its UI."""
+"""Drive the chart tabs components/macros.html's chart_tabs draws, on the results pages and the compare page, through the UI."""
 
 from playwright.sync_api import Page, expect
 
