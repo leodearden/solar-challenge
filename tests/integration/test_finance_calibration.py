@@ -209,8 +209,8 @@ class TestSpreadsheetRevenueCurve:
 class TestFinCalibrationScenarioParses:
     """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
 
-    The scenario uses fleet_distribution format (100 identical homes), which is
-    parsed via load_fleet_config (matching how the finance CLI loads scenarios).
+    The fleet (fleet_distribution format, parsed with load_fleet_config as the
+    finance CLI parses it) is 100 homes, each with FIN_GOLDEN's install.
     The finance block is parsed with load_config and parse_finance_config, as the
     finance CLI parses it (src/solar_challenge/cli/finance.py,
     _required_finance_block), and checked as one equality with θ's [FIN] finance,
@@ -267,24 +267,6 @@ class TestFinCalibrationScenarioParses:
             assert home.battery_config is not None, f"Home {i}: no battery config"
             install = (home.pv_config.capacity_kw, home.battery_config.capacity_kwh)
             assert install == fin_install, f"Home {i}: (PV kWp, battery kWh) is not the [FIN] install"
-
-    def test_fleet_is_homogeneous_5_5kwp(self) -> None:
-        """All homes must have pv_kwp=5.5 ([FIN] inp_kWp=5.5)."""
-        homes = self._load_homes()
-        assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
-        for i, h in enumerate(homes):
-            assert h.pv_config.capacity_kw == pytest.approx(5.5), (
-                f"Home {i}: expected pv_kwp=5.5, got {h.pv_config.capacity_kw}"
-            )
-
-    def test_fleet_is_homogeneous_5kwh_battery(self) -> None:
-        """All homes must have battery_kwh=5.0 ([FIN] inp_Batt_kWh=5)."""
-        homes = self._load_homes()
-        for i, h in enumerate(homes):
-            assert h.battery_config is not None, f"Home {i}: no battery config"
-            assert h.battery_config.capacity_kwh == pytest.approx(5.0), (
-                f"Home {i}: expected battery_kwh=5.0, got {h.battery_config.capacity_kwh}"
-            )
 
 
 # ---------------------------------------------------------------------------
