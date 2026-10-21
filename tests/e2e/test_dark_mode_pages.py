@@ -193,11 +193,18 @@ class _ChartPage:
 
 
 def _show_each_chart_tab(page: Page, theme: str) -> None:
-    """Show each chart tab of the page in turn, waiting until each chart it shows has its title in theme's text colour."""
-    for tab in page.get_by_role("tab").all():
+    """Show each chart tab of the page in turn, waiting until each chart in its panel has its title in theme's text colour.
+
+    A tab's panel is an x-show child of chart_tabs' root, one per tab in the tabs' order. Alpine shows and hides
+    the panels an animation frame after a tab is selected, so the panel being shown, not the tab being selected,
+    says that the tab's charts are shown.
+    """
+    tablist = page.get_by_role("tablist", name="Chart tabs")
+    panels = tablist.locator("xpath=../../*[@x-show]")
+    for tab, panel in zip(tablist.get_by_role("tab").all(), panels.all(), strict=True):
         tab.click()
-        expect(tab).to_have_attribute("aria-selected", "true")
-        for chart in page.locator("[data-chart-figure]").filter(visible=True).all():
+        expect(panel).to_be_visible()
+        for chart in panel.locator("[data-chart-figure]").all():
             expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
 
 
