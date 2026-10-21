@@ -860,6 +860,28 @@ class TestGenerateHomesHouseholdOccupants:
         )
 
     @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(UniformDistribution(min=2.3, max=2.45), id="uniform-within-one-unit"),
+            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-halfway-bounds"),
+            pytest.param(
+                NormalDistribution(mean=2.4, std=0.1, min=2.3, max=2.45), id="normal-within-one-unit"
+            ),
+        ],
+    )
+    def test_a_spec_with_no_whole_number_from_its_min_to_its_max_is_refused_naming_it(
+        self, household_occupants: Union[NormalDistribution, UniformDistribution]
+    ) -> None:
+        """No count a home could get lies from the spec's min to its max, so the fleet is refused, naming the setting, the min and the max."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+
+        assert str(exc_info.value) == (
+            "load.household_occupants is a count, so a whole number must lie from its min to its max, "
+            f"got a min of {household_occupants.min!r} and a max of {household_occupants.max!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
         [
             pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
