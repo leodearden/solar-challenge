@@ -44,8 +44,9 @@ uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slo
 # verify never runs them
 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
 
-# Tailwind rebuild: after editing tailwind.config.js, static/src/input.css, a
-# template or a script, rebuild static/dist/style.css and commit it; in a sandbox
+# Tailwind rebuild: after editing tailwind.config.js, static/src/theme-tokens.json's
+# tailwind section, static/src/input.css, a template or a script, rebuild
+# static/dist/style.css and commit it; in a sandbox
 # that cannot write ~/.npm, give npm ci `--cache /tmp/<dir>`
 cd src/solar_challenge/web && npm ci && npm run build:css
 

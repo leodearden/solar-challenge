@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Check that the web package's static/dist/ holds what its committed sources and locked npm packages make.
 
-Tailwind compiles static/dist/style.css from tailwind.config.js,
+Tailwind compiles static/dist/style.css from tailwind.config.js, the
+tailwind section of static/src/theme-tokens.json that it reads,
 static/src/input.css, and the templates and scripts it scans.
 tests/unit/test_web_compiled_css.py checks only class names, so a theme or
 input edit committed without a rebuild passes it. This module rebuilds the
@@ -126,7 +127,8 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package
     rebuilt = rebuilt_stylesheet.read_bytes()
     assert rebuilt == committed, (
         "static/dist/style.css is not what its sources build to: a tailwind.config.js, "
-        "static/src/input.css, template or script change was committed without a rebuild. Rebuild "
+        "static/src/theme-tokens.json (its tailwind section), static/src/input.css, template or "
+        "script change was committed without a rebuild. Rebuild "
         "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         f"static/dist/style.css. The rules that differ:\n{_rule_diff(committed.decode(), rebuilt.decode())}"
     )

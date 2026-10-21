@@ -1,0 +1,40 @@
+{
+  "tailwind": {
+    "primary": "amber"
+  },
+  "chart": {
+    "hues": {
+      "amber": "#f5a623",
+      "red": "#d0021b",
+      "green": "#7ed321",
+      "blue": "#4a90e2",
+      "purple": "#9013fe",
+      "grey": "#9b9b9b",
+      "teal": "#50e3c2",
+      "mid_grey": "#888888",
+      "black": "#000000"
+    },
+    "roles": {
+      "pv_generation": "amber",
+      "demand": "red",
+      "self_consumption": "green",
+      "grid_import": "grey",
+      "grid_export": "blue",
+      "battery_charge": "teal",
+      "heat_pump": "purple",
+      "cost": "red",
+      "revenue": "green",
+      "soc_low_threshold": "red",
+      "soc_high_threshold": "green",
+      "net_cost": "blue",
+      "winter": "blue",
+      "summer": "amber",
+      "comparison_run_1": "amber",
+      "comparison_run_2": "blue",
+      "comparison_run_3": "green",
+      "comparison_run_4": "purple",
+      "unpriced_note": "mid_grey",
+      "sankey_node_outline": "black"
+    }
+  }
+}

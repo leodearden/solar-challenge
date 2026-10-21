@@ -235,7 +235,7 @@ Conversational AI interface for configuring, running, and interpreting simulatio
 
 ### Colour Palette
 
-The as-built chart colours are `COLOUR_PALETTE` in `src/solar_challenge/web/charts.py`, which the Plotly figures read. They are not Tailwind theme colours: Plotly takes colour strings, not classes.
+The as-built chart colours are the `chart` section of `src/solar_challenge/web/static/src/theme-tokens.json`, which `src/solar_challenge/web/charts.py` loads into `COLOUR_PALETTE`, the palette the Plotly figures read. They are not Tailwind theme colours: Plotly takes colour strings, not classes.
 
 ### Single Home Charts
 
