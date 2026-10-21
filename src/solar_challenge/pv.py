@@ -529,10 +529,23 @@ def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
 
 
 def _module_parameters(config: PVConfig) -> dict[str, float]:
-    """The module's parameters, of the caller's own: a copy of the custom module parameters, or DEFAULT_CEC_MODULE's row."""
+    """The module's parameters, of the caller's own: its template with each set field applied in the template's own terms.
+
+    The template is a copy of the custom module parameters, or DEFAULT_CEC_MODULE's
+    row. An unset field leaves the template as it is (docs/pv-module-settings.md).
+    """
     if config.custom_module_params is not None:
-        return dict(config.custom_module_params)
-    return cec_module_params(DEFAULT_CEC_MODULE)
+        module_params = dict(config.custom_module_params)
+    else:
+        module_params = cec_module_params(DEFAULT_CEC_MODULE)
+    if config.module_efficiency is not None:
+        module_params = _with_module_efficiency(module_params, config.module_efficiency)
+    return module_params
+
+
+def _with_module_efficiency(template: Mapping[str, float], efficiency: float) -> dict[str, float]:
+    """The template with the area A_c over which its rating is efficiency: rating / (efficiency × 1000 W/m²)."""
+    return {**template, "A_c": _module_rating_w(template) / (efficiency * 1000)}
 
 
 def _inverter_and_wiring(
