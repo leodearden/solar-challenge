@@ -6,7 +6,8 @@
     the one the request was routed to: the nav item whose "endpoint" is
     request.endpoint, the endpoint its link's URL is built from. Alpine.js
     opens and closes the groups; on desktop, the group holding the current
-    page is always shown open while the sidebar is expanded.
+    page is always shown open while the sidebar is expanded. The server also
+    draws that group's desktop button highlighted.
     base.html's head script puts sidebar-collapsed on <html> before first
     paint, so the sidebar-collapsed: classes style the collapsed desktop
     sidebar from the first paint. The toggle flips that class, body's
@@ -79,6 +80,7 @@
 
 {# ── Shared macro: render all nav links ────────────────────────────── #}
 {% macro render_nav_links(items, is_mobile) %}
+{% set highlight_classes = "bg-slate-100 dark:bg-slate-700" %}
 {% for item in items %}
     {% if item.children is not defined %}
         {# ── Simple top-level link (e.g. Dashboard) ── #}
@@ -100,10 +102,10 @@
         <div class="mb-1">
             <button
                 @click="openGroup = openGroup === '{{ item.id }}' ? '' : '{{ item.id }}'"
-                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700{% if holds_current_page and not is_mobile %} {{ highlight_classes }}{% endif %}"
                 {% if not is_mobile %}
                 :class="{
-                    'bg-slate-100 dark:bg-slate-700': openGroup === '{{ item.id }}' || {{ holds_current_page | tojson }}
+                    '{{ highlight_classes }}': openGroup === '{{ item.id }}' || {{ holds_current_page | tojson }}
                 }"
                 {% endif %}
             >
