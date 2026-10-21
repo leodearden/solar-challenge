@@ -209,10 +209,11 @@ class TestSpreadsheetRevenueCurve:
 class TestFinCalibrationScenarioParses:
     """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
 
-    The scenario uses fleet_distribution format (100 identical homes), which is
-    parsed via load_fleet_config (matching how the finance CLI loads scenarios).
-    Finance block is parsed separately via parse_finance_config + load_config,
-    exactly as the finance CLI does internally.
+    The fleet (fleet_distribution format, parsed with load_fleet_config as the
+    finance CLI parses it) is 100 homes, each with FIN_GOLDEN's install.
+    The finance block is parsed with load_config and parse_finance_config, as the
+    finance CLI parses it, and checked as one equality with θ's [FIN] finance,
+    _make_finance_fin().
     """
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
@@ -247,81 +248,24 @@ class TestFinCalibrationScenarioParses:
             f"{self._SCENARIO_PATH} not found — create it in step-4"
         )
 
-    def test_finance_parses_without_error(self) -> None:
-        """The scenario YAML must parse finance block without raising exceptions."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_scenario_has_finance_block(self) -> None:
-        """Parsed scenario must have a finance block (not None)."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_finance_self_consumption_override(self) -> None:
-        """finance.self_consumption_override must be 0.70 ([FIN] with-battery assumption)."""
-        finance = self._load_finance()
-        assert finance.self_consumption_override == pytest.approx(FIN_SCF), (
-            f"Expected self_consumption_override=0.70, "
-            f"got {finance.self_consumption_override}"
+    def test_finance_block_is_the_fin_finance_at_fin_scf(self) -> None:
+        """The finance block is θ's [FIN] finance: make_fin_finance at the spreadsheet's FIN_SCF override."""
+        assert self._load_finance() == _make_finance_fin(), (
+            f"{self._SCENARIO_PATH}'s finance block is not the [FIN] finance at FIN_SCF"
         )
-
-    def test_finance_grant_gbp(self) -> None:
-        """finance.grant_gbp must be £250,000 ([FIN] grant)."""
-        finance = self._load_finance()
-        assert finance.grant_gbp == pytest.approx(FIN_GOLDEN["grant_gbp"])
-
-    def test_finance_equity_fraction(self) -> None:
-        """finance.equity_fraction must be 0.75 ([FIN] equity split)."""
-        finance = self._load_finance()
-        assert finance.equity_fraction == pytest.approx(FIN_GOLDEN["equity_fraction"])
-
-    def test_finance_loan_term_years(self) -> None:
-        """finance.loan_term_years must be 15 ([FIN] loan term)."""
-        finance = self._load_finance()
-        assert finance.loan_term_years == FIN_GOLDEN["loan_term_years"]
-
-    def test_finance_loan_rate(self) -> None:
-        """finance.loan_rate must be 0.07 ([FIN] loan interest rate)."""
-        finance = self._load_finance()
-        assert finance.loan_rate == pytest.approx(FIN_GOLDEN["loan_rate"])
-
-    def test_finance_pv_cost_per_kwp(self) -> None:
-        """finance.pv_cost_per_kwp_gbp must be £1000 ([FIN] PV cost)."""
-        finance = self._load_finance()
-        assert finance.pv_cost_per_kwp_gbp == pytest.approx(1000.0)
-
-    def test_finance_battery_cost_per_kwh(self) -> None:
-        """finance.battery_cost_per_kwh_gbp must be £250 ([FIN] battery cost)."""
-        finance = self._load_finance()
-        assert finance.battery_cost_per_kwh_gbp == pytest.approx(250.0)
-
-    def test_finance_asset_life_years(self) -> None:
-        """finance.asset_life_years must be 25."""
-        finance = self._load_finance()
-        assert finance.asset_life_years == 25
 
     def test_fleet_is_100_homes(self) -> None:
         """Fleet must have exactly 100 homes ([FIN] n_homes=100)."""
         homes = self._load_homes()
         assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
 
-    def test_fleet_is_homogeneous_5_5kwp(self) -> None:
-        """All homes must have pv_kwp=5.5 ([FIN] inp_kWp=5.5)."""
-        homes = self._load_homes()
-        assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
-        for i, h in enumerate(homes):
-            assert h.pv_config.capacity_kw == pytest.approx(5.5), (
-                f"Home {i}: expected pv_kwp=5.5, got {h.pv_config.capacity_kw}"
-            )
-
-    def test_fleet_is_homogeneous_5kwh_battery(self) -> None:
-        """All homes must have battery_kwh=5.0 ([FIN] inp_Batt_kWh=5)."""
-        homes = self._load_homes()
-        for i, h in enumerate(homes):
-            assert h.battery_config is not None, f"Home {i}: no battery config"
-            assert h.battery_config.capacity_kwh == pytest.approx(5.0), (
-                f"Home {i}: expected battery_kwh=5.0, got {h.battery_config.capacity_kwh}"
-            )
+    def test_every_home_has_the_fin_install(self) -> None:
+        """Every home has the [FIN] install: FIN_GOLDEN's inp_kWp of PV and an inp_Batt_kWh kWh battery."""
+        fin_install = (FIN_GOLDEN["inp_kWp"], FIN_GOLDEN["inp_Batt_kWh"])
+        for i, home in enumerate(self._load_homes()):
+            assert home.battery_config is not None, f"Home {i}: no battery config"
+            install = (home.pv_config.capacity_kw, home.battery_config.capacity_kwh)
+            assert install == fin_install, f"Home {i}: (PV kWp, battery kWh) is not the [FIN] install"
 
 
 # ---------------------------------------------------------------------------
