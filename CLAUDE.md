@@ -19,7 +19,7 @@ pytest
 pytest tests/unit/test_battery.py -v
 
 # Run a specific test
-pytest tests/unit/test_battery.py::TestBatteryConfig::test_default_config -v
+pytest tests/unit/test_battery.py::TestBatteryConfigDefaults::test_default_5kwh -v
 
 # Type checking
 mypy src/solar_challenge
