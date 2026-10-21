@@ -61,12 +61,18 @@ def surface_form(obj: object) -> str:
     order, unsafe_hash and frozen that are on, whether set on the class or on the base it
     inherits them from. An annotation in that signature which it has no rule for, such as
     a type alias, raises TypeError naming it and its type.
+
+    A class whose constructor inspect reads differently by minor raises TypeError naming
+    it and the class in its MRO holding that constructor, and so does a functools.partial
+    of such a class. Such a constructor is either a functools.partial held as __init__,
+    unless the class holding it also holds a __new__ not defined in C, which inspect
+    reads first; or one held by a class defined in C other than object.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
     if not _is_class_or_routine(obj):
         return type(obj).__qualname__
-    signature = inspect.signature(obj)
+    signature = _signature(obj)
     text = str(
         signature.replace(
             parameters=[
@@ -122,7 +128,9 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type. A class's constructor is spelled in the module of the class
+    naming it and its type; a class whose constructor surface_form refuses, or a
+    functools.partial of such a class, raises the TypeError surface_form raises for it.
+    A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
     module of the nearest class in that MRO the decorator processed whose own body
@@ -469,7 +477,7 @@ def _form_classes(obj: object) -> set[type]:
         return set()
     if not _is_class_or_routine(obj):
         return {type(obj)}
-    annotations = _signature_annotations(inspect.signature(obj))
+    annotations = _signature_annotations(_signature(obj))
     if not annotations:
         return set()
     modules = _spelling_modules(obj, annotations)
@@ -489,6 +497,51 @@ def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]
 def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
     """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
     return inspect.isroutine(obj) or isinstance(obj, functools.partial)
+
+
+def _signature(obj: Callable[..., object]) -> inspect.Signature:
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class a functools.partial wraps, as a partial's form is the one it leaves of that class."""
+    wrapped = obj
+    while isinstance(wrapped, functools.partial):
+        wrapped = wrapped.func
+    if inspect.isclass(wrapped):
+        _refuse_minor_dependent_constructor(wrapped)
+    return inspect.signature(obj)
+
+
+_C_CONSTRUCTOR_KINDS: tuple[type, ...] = (types.BuiltinFunctionType, types.WrapperDescriptorType)
+
+
+def _refuse_minor_dependent_constructor(cls: type) -> None:
+    """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
+
+    Such a constructor is either a functools.partial the holder's own namespace holds as
+    __init__, unless that namespace also holds a __new__ not defined in C, which inspect
+    reads first; or the constructor of a holder defined in C other than object, each
+    __new__ and __init__ its own namespace holds being of a kind in _C_CONSTRUCTOR_KINDS.
+    """
+    holder = _constructor_holder(cls)
+    namespace = vars(holder)
+    new_read_first = "__new__" in namespace and not isinstance(
+        getattr(holder, "__new__"), _C_CONSTRUCTOR_KINDS
+    )
+    if isinstance(namespace.get("__init__"), functools.partial) and not new_read_first:
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
+            "functools.partial, which Python 3.14 binds to the instance as a method and "
+            "earlier minors call without it: define __init__ with def"
+        )
+    constructors = [namespace[name] for name in ("__new__", "__init__") if name in namespace]
+    if holder is not object and all(
+        isinstance(constructor, _C_CONSTRUCTOR_KINDS) for constructor in constructors
+    ):
+        raise TypeError(
+            f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
+            "builtin or extension type), so inspect reads its signature from a text "
+            "signature, which a release of its package can add or rewrite, as CPython's "
+            "minors do: make the name private, or give the class an __init__ or __new__ "
+            "defined with def"
+        )
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
@@ -743,7 +796,7 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
 
 def _constructor_parameters(cls: type) -> set[str]:
     """The names of the parameters of *cls*'s constructor that surface_form(cls) spells, self excluded."""
-    return set(inspect.signature(cls).parameters)
+    return set(_signature(cls).parameters)
 
 
 def _defaulted_fields(cls: type) -> set[str]:

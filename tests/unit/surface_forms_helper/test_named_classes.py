@@ -507,11 +507,6 @@ def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_mod
     assert "'auditing'" in str(raised.value)
 
 
-def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_the_classes_its_forms_name() -> None:
-    assert named_classes(types.ModuleType) == set()
-    assert named_classes(types.FunctionType) == set()
-
-
 def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
     assert named_classes(str.join) == set()
     assert named_classes(", ".join) == set()

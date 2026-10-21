@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form, one per test.
 
-Wrapper is defined at module level, where its qualified name carries no '<locals>'.
+Wrapper and Ledger are defined at module level, where their qualified names carry no
+'<locals>'.
 """
 
 import collections.abc
 import datetime
+import decimal
 import enum
 import fractions
 import functools
@@ -53,6 +55,10 @@ class Wrapper:
 
     def __repr__(self) -> str:
         return f"Wrapper[{self.inner.__qualname__}]"
+
+
+class Ledger(dict):
+    """A class that inherits its constructor from dict, which CPython defines in C."""
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -413,6 +419,135 @@ def test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wrap
         surface_form(functools.partial(settle, fractions.Fraction(1, 2)))
         == "(rate: int, *, fee: float | None = None) -> None"
     )
+
+
+def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Rebuilt(Built):
+        pass
+
+    naming_built_and_its_init = r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        surface_form(Built)
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        named_classes(Built)
+    with pytest.raises(
+        TypeError, match=r"\.Rebuilt\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Rebuilt)
+
+
+def test_a_class_whose_new_is_a_partial_is_spelled_by_the_signature_the_partial_leaves_less_cls() -> None:
+    def make(cls: type, rate: int, scale: float = 1.0) -> object: ...
+
+    class Made:
+        __new__ = functools.partial(make, scale=2.0)
+
+    assert surface_form(Made) == "(rate: int, *, scale: float = 2.0) -> object"
+
+
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Both:
+        def __new__(cls, rate: int) -> object: ...
+
+        __init__ = functools.partial(build, scale=2.0)
+
+    assert surface_form(Both) == "(rate: int) -> object"
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        pytest.param(object.__new__, id="builtin"),
+        pytest.param(staticmethod(object.__new__), id="staticmethod"),
+    ],
+)
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_type_error_naming_the_partial(
+    new: object,
+) -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Assigned:
+        __new__ = new
+        __init__ = functools.partial(build, scale=2.0)
+
+    with pytest.raises(
+        TypeError, match=r"\.Assigned\b.*\.Assigned\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Assigned)
+
+
+@pytest.mark.parametrize(
+    ("cls", "naming_it_and_its_constructor"),
+    [
+        pytest.param(
+            functools.partial,
+            r"\bfunctools\.partial\b.*\bfunctools\.partial\b",
+            id="functools.partial",
+        ),
+        pytest.param(int, r"\bbuiltins\.int\b.*\bbuiltins\.int\b", id="int"),
+        pytest.param(list, r"\bbuiltins\.list\b.*\bbuiltins\.list\b", id="list"),
+        pytest.param(
+            decimal.Decimal,
+            r"\bdecimal\.Decimal\b.*\bdecimal\.Decimal\b",
+            id="decimal.Decimal",
+        ),
+        pytest.param(
+            types.ModuleType,
+            r"\bbuiltins\.module\b.*\bbuiltins\.module\b",
+            id="types.ModuleType",
+        ),
+        pytest.param(
+            types.FunctionType,
+            r"\bbuiltins\.function\b.*\bbuiltins\.function\b",
+            id="types.FunctionType",
+        ),
+        pytest.param(
+            Ledger,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form\.Ledger\b.*\bbuiltins\.dict\b",
+            id="Ledger",
+        ),
+    ],
+)
+def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
+    cls: type, naming_it_and_its_constructor: str
+) -> None:
+    with pytest.raises(TypeError, match=naming_it_and_its_constructor):
+        surface_form(cls)
+    with pytest.raises(TypeError, match=naming_it_and_its_constructor):
+        named_classes(cls)
+
+
+def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
+    class Plain:
+        pass
+
+    assert surface_form(object) == "()"
+    assert surface_form(Plain) == "()"
+
+
+def test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    with pytest.raises(
+        TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(functools.partial(Built, 1))
+    with pytest.raises(TypeError, match=r"\bbuiltins\.dict\b.*\bbuiltins\.dict\b"):
+        surface_form(functools.partial(dict, rate=1.0))
+    with pytest.raises(
+        TypeError, match=r"\bfunctools\.partial\b.*\bfunctools\.partial\b"
+    ):
+        named_classes(functools.partial(functools.partial, print))
 
 
 def test_a_constant_form_is_its_type_qualified_name() -> None:
