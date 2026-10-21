@@ -6,6 +6,8 @@ them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_
 
 * No web source but the token file writes a hex colour.
 * The committed file loads to the colours the charts draw, each role in its hue's colour.
+* A token file that is not a JSON object, or whose chart section, or the chart section's
+  hues or roles, is missing or not a JSON object, is refused, naming the file and the section.
 * A token file whose role names a hue it does not define, or whose hue is not written
   #rrggbb, is refused, naming them.
 * A hue edit reaches every role that names it, and the figures that draw those roles.
@@ -66,7 +68,7 @@ _CHART_ROLE_COLOURS = {
 _SHIPPED_AMBER = "#f5a623"
 _RECOLOURED_AMBER = "#0000aa"
 
-_TokenCopy = Callable[[dict[str, Any]], Path]
+_TokenCopy = Callable[[object], Path]
 
 
 def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
@@ -109,9 +111,9 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
 
 @pytest.fixture
 def token_copy(tmp_path: Path) -> _TokenCopy:
-    """Writes a tokens dict as JSON to tmp_path / "theme-tokens.json", and returns the file's path."""
+    """Writes tokens, a JSON value such as a tokens dict, to tmp_path / "theme-tokens.json", and returns the file's path."""
 
-    def write(tokens: dict[str, Any]) -> Path:
+    def write(tokens: object) -> Path:
         copy = tmp_path / "theme-tokens.json"
         copy.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
         return copy
@@ -129,6 +131,40 @@ def _refusal(tokens_file: Path) -> str:
 def test_colour_palette_holds_each_chart_role_in_its_hues_colour() -> None:
     """These are the colours the charts draw, so recolouring a role is a deliberate edit of this table."""
     assert dict(charts.COLOUR_PALETTE) == _CHART_ROLE_COLOURS
+
+
+@pytest.mark.parametrize(
+    ("tokens", "refusal"),
+    [
+        pytest.param(["chart"], "the top level must be a JSON object, got list", id="a top level that is a list"),
+        pytest.param({"tailwind": {"primary": "amber"}}, "the 'chart' section is missing", id="no chart section"),
+        pytest.param(
+            {"chart": ["hues", "roles"]},
+            "the 'chart' section must be a JSON object, got list",
+            id="a chart section that is a list",
+        ),
+        pytest.param({"chart": {"roles": {}}}, "the 'chart.hues' section is missing", id="no hues"),
+        pytest.param(
+            {"chart": {"hues": "amber", "roles": {}}},
+            "the 'chart.hues' section must be a JSON object, got str",
+            id="hues that are a string",
+        ),
+        pytest.param({"chart": {"hues": {}}}, "the 'chart.roles' section is missing", id="no roles"),
+        pytest.param(
+            {"chart": {"hues": {}, "roles": ["summer"]}},
+            "the 'chart.roles' section must be a JSON object, got list",
+            id="roles that are a list",
+        ),
+    ],
+)
+def test_a_token_file_missing_a_section_or_holding_one_not_a_json_object_is_refused_naming_the_file_and_the_section(
+    token_copy: _TokenCopy, tokens: object, refusal: str
+) -> None:
+    copy = token_copy(tokens)
+
+    message = _refusal(copy)
+
+    assert str(copy) in message and refusal in message, message
 
 
 def test_a_role_naming_a_hue_the_token_file_does_not_define_is_refused_naming_the_role_and_the_hue(
