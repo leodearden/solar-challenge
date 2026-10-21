@@ -1512,10 +1512,10 @@ _EV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 def _parse_charger_type_spec(data: Any, key_path: str) -> DistributionSpec:
     """Read an ev block's charger_type: null, or a weighted_discrete or shuffled_pool of charger types and nulls.
 
-    Any other spec, and a listed value that names no EVChargerType, is refused naming
-    *key_path*; a null is a home without an EV.
+    Any other spec, a bare charger type among them, is refused naming *key_path*, and so is
+    a listed value that names no EVChargerType; a null is a home without an EV.
     """
-    spec = _parse_distribution_spec(data, key_path)
+    spec = _parse_distribution_spec(data, key_path) if isinstance(data, dict) else data
     if spec is None:
         return None
     if not isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
