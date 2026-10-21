@@ -491,6 +491,27 @@ class TestEVChargerTypeValuesAreChargerTypes:
         assert str(refusal.value) == _charger_type_value_refusal(value)
 
     @pytest.mark.parametrize(
+        "charger_type",
+        [
+            pytest.param(7, id="a number"),
+            pytest.param({"type": "fixed", "value": 22}, id="a fixed number"),
+            pytest.param({"type": "normal", "mean": 7, "std": 1}, id="normal"),
+            pytest.param({"type": "uniform", "min": 3, "max": 22}, id="uniform"),
+            pytest.param({"type": "proportional_to", "source": "pv.capacity_kw"}, id="proportional_to"),
+        ],
+    )
+    def test_a_spec_that_draws_numbers_is_refused_at_read_naming_its_key_path(
+        self, charger_type: object
+    ) -> None:
+        """A spec that draws numbers lists no charger types, so it is refused as the block is read, naming fleet_distribution.ev.charger_type and the spec as written."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
+        assert str(refusal.value) == (
+            f"Invalid fleet_distribution.ev.charger_type {charger_type!r}; "
+            "valid specs: null, or a weighted_discrete or shuffled_pool of charger types and nulls"
+        )
+
+    @pytest.mark.parametrize(
         ("charger_type", "expected"),
         [
             pytest.param(
