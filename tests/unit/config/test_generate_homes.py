@@ -800,6 +800,11 @@ class TestGenerateHomesHouseholdOccupants:
                 (3, 4),
                 id="uniform-between-fractional-bounds",
             ),
+            pytest.param(
+                NormalDistribution(mean=4.5, std=0.0, min=1.0, max=6.0),
+                (1, 2, 3, 4, 5, 6),
+                id="normal-drawing-halfway-between-whole-numbers-within-whole-bounds",
+            ),
         ],
     )
     def test_each_home_gets_the_whole_number_nearest_its_draw_among_those_from_its_specs_min_to_its_max(
@@ -807,10 +812,11 @@ class TestGenerateHomesHouseholdOccupants:
         household_occupants: Union[NormalDistribution, UniformDistribution],
         whole_numbers: tuple[int, ...],
     ) -> None:
-        """Each home gets, as an int, the whole number nearest its draw among those from its spec's min to its max.
+        """Each home gets, as an int, the whole number nearest its draw among those from its spec's min to its max, a half rounding up.
 
         The expected counts apply that rule to the spec's own draws from the fleet's seed, which the fleet takes in order because it draws nothing else from its RNG.
         A fractional bound excludes the whole number past it: a draw clamped to a max of 3.5 gives 3, not 4, and one clamped to a min of 2.4 gives 3, not 2.
+        A draw of 4.5, equally near 4 and 5, gives 5: the expected count breaks a tie toward the greater whole number.
         """
         rng = random.Random(42)
         draws = [household_occupants.draw(rng) for _ in range(20)]
@@ -819,7 +825,7 @@ class TestGenerateHomesHouseholdOccupants:
 
         occupants = [home.load_config.household_occupants for home in homes]
         assert [(type(count), count) for count in occupants] == [
-            (int, min(whole_numbers, key=lambda whole: abs(whole - draw))) for draw in draws
+            (int, min(whole_numbers, key=lambda whole: (abs(whole - draw), -whole))) for draw in draws
         ]
 
     @pytest.mark.parametrize(
