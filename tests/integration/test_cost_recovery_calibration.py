@@ -15,10 +15,6 @@ Layout:
       TestPhysicsColumnPremises — fast no-debt guard for the one fixture both slow physics columns (θ's and CR6's) simulate
   - @pytest.mark.slow class:
       TestPhysicsReconciliationColumn — real-PVGIS physics column (reported, not asserted ==)
-
-NOTE: This file mixes fast and slow tests; it must NOT be added to
-test_marker_registration.py's INTEGRATION_FILES list.  (test_finance_calibration.py
-has the same structure and is also excluded for this reason.)
 """
 from __future__ import annotations
 

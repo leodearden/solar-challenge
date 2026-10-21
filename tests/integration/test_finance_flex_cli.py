@@ -4,8 +4,7 @@
 
 All tests are offline (the fleet simulator is injected through Click's context
 object) and run without @pytest.mark.slow so they execute in the offline verify
-loop.  This file must NOT be added to tests/unit/test_marker_registration.py's
-INTEGRATION_FILES allow-list.
+loop.
 """
 from __future__ import annotations
 
