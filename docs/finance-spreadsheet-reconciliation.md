@@ -182,6 +182,16 @@ scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
   home 0 no longer generates in 2024.
 - The H6 hard asserts (§3.3) are analytic, so the losses leave them unchanged.
 
+**[Amended 2026-10-20, task 823: the figures above predate task 236's configured inverter
+efficiency ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)) and task 823's
+NOCT-SAM cell temperature, from the module's own NOCT and efficiency
+([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by the same method on task
+823's commit 2be9d1b (same interpreter and libraries, the same TMY): home 0 generates
+5,654.0 kWh with the losses, 1,028.0 kWh per nameplate kWp against the sheet's 1,050 and
+1,008.6 per wired kWp; without them 6,583.6 kWh, 1,197.0 and 1,174.4. The losses take
+929.6 kWh of its 2024. The five-home solve under the 0.70 override reads 2.20 p/kWh
+without the losses and 3.77 with them.]**
+
 ---
 
 ## 5. Summary
@@ -202,3 +212,5 @@ scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
 - With task 252's system losses the calibration home's physics yield is 1,013.8 kWh per
   nameplate kWp against the sheet's 1,050 (1,181.9 without them), and the 5-home
   cost-recovery solve under the 0.70 override rises from 2.34 to 3.90 p/kWh (§4.2)
+  **[Amended 2026-10-20, task 823: under NOCT-SAM's cell temperature the yield is 1,028.0
+  (1,197.0 without the losses), and the solve rises from 2.20 to 3.77 p/kWh (§4.2).]**

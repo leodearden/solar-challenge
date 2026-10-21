@@ -94,6 +94,19 @@ Belfast's monthly +0.0%, Glasgow's raw TMY +7.4% and Plymouth's monthly +0.2%. E
 other figure in the tables is unchanged. Bristol's AC with the losses, in kWh: real
 years 3866–4281 (mean 4014); raw TMY 3714; annual-scaled 4004; monthly-scaled 3968.]**
 
+**[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+([pv-cell-temperature.md](pv-cell-temperature.md)). Every AC figure here and in §2, §5
+and §6, task 252's above included, was measured under SAPM, and before task 236's
+configured inverter efficiency ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)).
+Bristol's annual-scaled TMY, the year `get_tmy_data` serves, re-measured by
+[`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s
+`measure` on task 823's commit 2be9d1b: 4052.83 kWh with the losses and 4716.89 without.
+The real years, the raw and monthly-scaled TMYs and the other sites need PVGIS's
+responses, so their AC figures, and every AC deviation in the tables, predate NOCT-SAM.
+The GHI totals, the factors, the peaks and the months do not depend on the PV model, and
+stand.]**
+
 **Seven sites.** AC against the mean of the real years; peak hourly GHI in W/m².
 
 | Site (lat, lon) | k | raw TMY | annual scale | monthly scale | peak GHI raw / annual / monthly / record |
@@ -191,6 +204,11 @@ power, deducted before the inverter ([pv-system-losses.md](pv-system-losses.md))
   (2026-10-09). PVGIS's own estimate at its 14% loss is 1001.1 for the same 2005–2020
   years; on 2026-10-03 its PVcalc gave 1022.8 over 2005–2023
   ([pv-system-losses.md](pv-system-losses.md) §5).
+  **[Amended 2026-10-20, task 823: the 999.9 was measured under SAPM's generic cell
+  temperature, and task 236's configured inverter efficiency made it 993.1. Under
+  NOCT-SAM's cell temperature, from the module's own NOCT and efficiency
+  ([pv-cell-temperature.md](pv-cell-temperature.md)), it reads 1012.1, re-measured on
+  task 823's commit 2be9d1b.]**
 
 ## 8. When to Revisit
 

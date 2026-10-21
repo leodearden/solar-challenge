@@ -47,7 +47,10 @@ class PVConfig:
         module_efficiency: Panel efficiency as fraction (default 0.20 = 20%)
         temperature_coefficient: Power temp coefficient per °C (default -0.004 = -0.4%/°C)
         custom_module_params: Optional custom pvlib module parameters dict; None wires
-            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row)
+            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row). The cells take
+            NOCT-SAM's temperature from the module's T_NOCT and its rating / (A_c × 1000),
+            with DEFAULT_CEC_MODULE's value for either key the module lacks
+            (docs/pv-cell-temperature.md)
 
         # Inverter parameters (PV-005)
         inverter_efficiency: Inverter efficiency at rated output (default 0.96 = 96%), as the
@@ -183,7 +186,9 @@ def create_simple_module_params(
     characteristics without needing the full CEC parameter set.
 
     Args:
-        efficiency: Module efficiency as fraction (e.g., 0.20 for 20%)
+        efficiency: Module efficiency as fraction (e.g., 0.20 for 20%). It sets the
+            module's area, A_c = module_power_w / (efficiency × 1000 W/m²), and so,
+            through NOCT-SAM, how hot its cells run (docs/pv-cell-temperature.md)
         temperature_coefficient: Power temperature coefficient per °C
             (e.g., -0.004 for -0.4%/°C)
         module_power_w: Each module's power at STC in watts. A system holds
@@ -204,7 +209,7 @@ def create_simple_module_params(
     return {
         "pdc0": module_power_w,
         "gamma_pdc": temperature_coefficient,
-        "efficiency": efficiency,
+        "A_c": module_power_w / (efficiency * 1000),
         "STC": module_power_w,
     }
 
@@ -512,18 +517,16 @@ def _inverter_and_wiring(
 def _arrays(
     config: PVConfig, module_params: dict[str, float], wiring: _Wiring
 ) -> list[Array]:
-    """One array, so one MPPT input, for each group of strings."""
+    """One array, so one MPPT input, for each group of strings, its cells at NOCT-SAM's temperature from the module (_temperature_model_parameters; docs/pv-cell-temperature.md)."""
     mount = FixedMount(surface_tilt=config.tilt, surface_azimuth=config.azimuth)
-    temperature_model = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][
-        "open_rack_glass_glass"
-    ]
+    temperature_model_parameters = _temperature_model_parameters(module_params)
     return [
         Array(
             mount=mount,
             module_parameters=module_params,
             modules_per_string=group.modules_per_string,
             strings=group.strings,
-            temperature_model_parameters=temperature_model,
+            temperature_model_parameters=temperature_model_parameters,
         )
         for group in wiring
     ]
@@ -540,6 +543,83 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
         "module, nor an STC rating, so the modules cannot be counted; add STC, the "
         "module's DC power in W at standard test conditions"
     )
+
+
+_TRANSMITTANCE_ABSORPTANCE = 0.9
+"""NOCT-SAM's transmittance-absorptance, pvlib's noct_sam default, passed in each array's parameters so that the model and the bound on a module's efficiency read one value."""
+
+_NOCT_TEST_AIR_C = 20.0
+"""The air temperature, in °C, at which a module's NOCT is measured."""
+
+
+@dataclass(frozen=True)
+class _NoctSamInput:
+    """A module's T_NOCT or A_c as NOCT-SAM reads it: the module's own value, or DEFAULT_CEC_MODULE's for a key the module lacks (docs/pv-cell-temperature.md)."""
+
+    key: str
+    value: float
+    from_default_module: bool
+
+    @classmethod
+    def for_module(cls, module_params: Mapping[str, float], key: str) -> "_NoctSamInput":
+        if key in module_params:
+            return cls(key, module_params[key], from_default_module=False)
+        return cls(key, cec_module_params(DEFAULT_CEC_MODULE)[key], from_default_module=True)
+
+    def refusal(self, domain: str) -> ValueError:
+        """The ValueError for a value outside domain, naming a value the module lacks as DEFAULT_CEC_MODULE's, for the module to give its own."""
+        why = (
+            "NOCT-SAM heats a sunlit cell above the air only inside that domain, since pvlib's "
+            f"noct_sam raises it in proportion to (T_NOCT - {_NOCT_TEST_AIR_C:g} °C)"
+            "(1 - efficiency / transmittance-absorptance)"
+        )
+        if not self.from_default_module:
+            return ValueError(f"Module parameter {self.key}={self.value} is not {domain}. {why}")
+        return ValueError(
+            f"{self.key}={self.value} (DEFAULT_CEC_MODULE's, since the module gives none) is not "
+            f"{domain}. {why}. Give the module its own {self.key}"
+        )
+
+
+def _require_cells_noct_sam_can_heat(
+    t_noct: _NoctSamInput, area: _NoctSamInput, rating_w: float
+) -> None:
+    """Refuse a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
+
+    That takes a finite T_NOCT above NOCT's test air, and a finite area A_c over
+    which the module's rating is an efficiency, rating / (A_c × 1000), below
+    _TRANSMITTANCE_ABSORPTANCE.
+    """
+    if not _NOCT_TEST_AIR_C < t_noct.value < math.inf:
+        raise t_noct.refusal(
+            f"a finite temperature above {_NOCT_TEST_AIR_C:g} °C, the air temperature at which "
+            "NOCT is measured"
+        )
+    smallest_area_m2 = rating_w / (_TRANSMITTANCE_ABSORPTANCE * 1000)
+    if not max(0.0, smallest_area_m2) < area.value < math.inf:
+        raise area.refusal(
+            f"a finite area above {smallest_area_m2:.4g} m², over which the module's {rating_w} W "
+            "rating is an efficiency, rating / (A_c × 1000), below NOCT-SAM's "
+            f"{_TRANSMITTANCE_ABSORPTANCE} transmittance-absorptance"
+        )
+
+
+def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[str, float]:
+    """pvlib's NOCT-SAM parameters for the module's cells: its T_NOCT, and its rating over its area, A_c × 1000 W/m², as its efficiency.
+
+    A module that lacks T_NOCT or A_c takes DEFAULT_CEC_MODULE's value of that
+    key (_NoctSamInput; docs/pv-cell-temperature.md). A module whose cells
+    NOCT-SAM cannot heat above the air is refused (_require_cells_noct_sam_can_heat).
+    """
+    t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
+    area = _NoctSamInput.for_module(module_params, "A_c")
+    rating_w = _module_rating_w(module_params)
+    _require_cells_noct_sam_can_heat(t_noct, area, rating_w)
+    return {
+        "noct": t_noct.value,
+        "module_efficiency": rating_w / (area.value * 1000),
+        "transmittance_absorptance": _TRANSMITTANCE_ABSORPTANCE,
+    }
 
 
 def _module_count(config: PVConfig, module_params: dict[str, float]) -> int:
@@ -572,7 +652,9 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     gamma_pdc, e.g. one from create_simple_module_params) gets pvlib's PVWatts
     inverter at the configured AC capacity and efficiency instead. It wires the
     whole number of modules nearest capacity_kw, each rated at its pdc0 if it
-    has PVWatts parameters and at its STC otherwise (_module_rating_w).
+    has PVWatts parameters and at its STC otherwise (_module_rating_w). Each
+    array's cells run at pvlib's NOCT-SAM temperature, from the module's T_NOCT
+    and efficiency (_temperature_model_parameters; docs/pv-cell-temperature.md).
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -587,8 +669,10 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         ValueError: If the module parameters rate the module by neither a
             PVWatts module's pdc0 nor an STC, if they have neither PVWatts
             parameters nor a V_mp_ref and no custom inverter parameters are
-            given, or if no CEC inverter's MPPT window admits a string of the
-            module's voltage.
+            given, if no CEC inverter's MPPT window admits a string of the
+            module's voltage, or if NOCT-SAM cannot heat the module's cells
+            above the air with its T_NOCT and A_c
+            (_require_cells_noct_sam_can_heat).
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0)
@@ -698,9 +782,11 @@ def create_model_chain_picking_from(
         ValueError: If the module parameters rate the module by neither a
             PVWatts module's pdc0 nor an STC, if they have neither PVWatts
             parameters nor a V_mp_ref and no custom inverter parameters are
-            given, if no candidate's MPPT window admits the strings, or if
-            pvlib infers an inverter model that can not read its DC model's
-            output, e.g. custom Sandia inverter parameters with PVWatts module
+            given, if no candidate's MPPT window admits the strings, if
+            NOCT-SAM cannot heat the module's cells above the air with its
+            T_NOCT and A_c (_require_cells_noct_sam_can_heat), or if pvlib
+            infers an inverter model that can not read its DC model's output,
+            e.g. custom Sandia inverter parameters with PVWatts module
             parameters.
     """
     pv_system = _pv_system(config, candidates)
