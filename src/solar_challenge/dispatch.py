@@ -168,24 +168,34 @@ def compute_grid_charge_power_kw(
 
     # Gate 3: how much energy is still needed to reach the target SOC?
     target_kwh = ctx.target_soc_fraction * capacity_kwh
-    gap_kwh = max(0.0, target_kwh - battery_soc_kwh)
-    if gap_kwh <= 0.0:
-        return 0.0
-
-    # Convert SOC gap to a grid-side charge-power request for this timestep.
-    # gap_kwh / charge_efficiency: more grid energy needed than actually stored.
-    dt_h = timestep_minutes * HOURS_PER_MINUTE
-    gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
-
-    # The max_charge_kw headroom PV charging leaves.
-    residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
-
-    return min(gap_power_kw, residual_kw)
+    return _grid_power_for_gap_kw(
+        ctx,
+        gap_kwh=target_kwh - battery_soc_kwh,
+        pv_charge_kw=pv_charge_power_kw,
+        timestep_minutes=timestep_minutes,
+    )
 
 
 def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
     """The max_charge_kw a step's charge_kw of PV charge leaves for grid charging."""
     return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
+
+
+def _grid_power_for_gap_kw(
+    ctx: GridChargeContext,
+    *,
+    gap_kwh: float,
+    pv_charge_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """The grid power that stores gap_kwh this step, within the headroom the step's pv_charge_kw of PV charge leaves, and none unless the gap is positive.
+
+    Storing gap_kwh draws gap_kwh / charge_efficiency from the grid.
+    """
+    if not gap_kwh > 0.0:
+        return 0.0
+    dt_h = timestep_minutes * HOURS_PER_MINUTE
+    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
 
 
 def _grid_power_to_target_kw(
@@ -203,10 +213,9 @@ def _grid_power_to_target_kw(
     """
     dt_h = timestep_minutes * HOURS_PER_MINUTE
     soc_after_pv_kwh = battery_soc_kwh + min(pv_charge_kw, ctx.max_charge_kw) * dt_h * ctx.charge_efficiency
-    gap_kwh = target_kwh - soc_after_pv_kwh
-    if gap_kwh <= 0.0:
-        return 0.0
-    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
+    return _grid_power_for_gap_kw(
+        ctx, gap_kwh=target_kwh - soc_after_pv_kwh, pv_charge_kw=pv_charge_kw, timestep_minutes=timestep_minutes
+    )
 
 
 class DispatchStrategy(ABC):
