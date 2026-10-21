@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every connection the dashboard opens to its database comes from a Database, which applies one policy.
 
-Rows are read by column name, the schema's foreign keys are enforced, and nothing is read
+Rows are read by column name, the foreign keys of any table on the database are enforced, and nothing is read
 from the file before the first statement. A database init_db created journals in WAL mode,
 so every connection to it reports wal. A transaction commits a block that succeeds, rolls
 back a block that raises, and closes its connection either way.
@@ -58,26 +58,33 @@ def test_a_dashboard_connection_reads_rows_by_column_name(
         assert conn.execute("SELECT 1 AS value").fetchone()["value"] == 1
 
 
+def _create_a_table_whose_rows_reference_a_run(conn: sqlite3.Connection) -> None:
+    """Create, on *conn*, the table run_notes, whose run_id references a run and whose rows are deleted with it."""
+    conn.execute("CREATE TABLE run_notes (id TEXT PRIMARY KEY, run_id TEXT REFERENCES runs(id) ON DELETE CASCADE)")
+
+
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_a_dashboard_connection_refuses_a_job_whose_run_id_names_no_run(
+def test_a_dashboard_connection_refuses_a_row_whose_run_id_names_no_run(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:
+        _create_a_table_whose_rows_reference_a_run(conn)
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
-            conn.execute("INSERT INTO jobs (id, run_id) VALUES ('job-1', 'no-such-run')")
+            conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'no-such-run')")
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_deleting_a_run_on_a_dashboard_connection_deletes_its_jobs(
+def test_deleting_a_run_on_a_dashboard_connection_deletes_the_rows_that_reference_it(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:
+        _create_a_table_whose_rows_reference_a_run(conn)
         conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
-        conn.execute("INSERT INTO jobs (id, run_id) VALUES ('job-1', 'run-1')")
+        conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'run-1')")
 
         conn.execute("DELETE FROM runs WHERE id = 'run-1'")
 
-        assert conn.execute("SELECT id FROM jobs").fetchall() == []
+        assert conn.execute("SELECT id FROM run_notes").fetchall() == []
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
