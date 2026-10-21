@@ -21,7 +21,6 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from functools import partial
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Generator, assert_never
 from uuid import uuid4
@@ -430,12 +429,7 @@ def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
 
 
-def run_home_simulation(
-    params: Mapping[str, Any],
-    job_manager: JobManager,
-    db_path: "str | Path",
-    data_dir: "str | Path",
-) -> dict[str, Any]:
+def run_home_simulation(params: Mapping[str, Any], job_manager: JobManager) -> dict[str, Any]:
     """Submit a home simulation job via the JobManager and return {run_id, results_url}.
 
     Parses *params* with ``parse_home_config`` from
@@ -449,9 +443,8 @@ def run_home_simulation(
                      the JSON body accepted by POST /api/simulate/home, and
                      its window is read as that endpoint reads it.  Params
                      that send no window run _TRIGGER_TOOL_DEFAULT_DAYS days.
-        job_manager: The app's JobManager.
-        db_path:     Path to the SQLite database.
-        data_dir:    Root directory for storing run artefacts.
+        job_manager: The app's JobManager, which records the job's run in
+                     the app's RunStorage.
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
@@ -469,8 +462,6 @@ def run_home_simulation(
             config=home_config,
             start_date=start_date,
             end_date=end_date,
-            db_path=str(db_path),
-            data_dir=str(data_dir),
             name=name,
         )
     except Exception as exc:
@@ -479,13 +470,7 @@ def run_home_simulation(
     return {"run_id": run_id, "results_url": f"/results/home/{run_id}"}
 
 
-def run_fleet_simulation(
-    n_homes: int,
-    params: Mapping[str, Any],
-    job_manager: JobManager,
-    db_path: "str | Path",
-    data_dir: "str | Path",
-) -> dict[str, Any]:
+def run_fleet_simulation(n_homes: int, params: Mapping[str, Any], job_manager: JobManager) -> dict[str, Any]:
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
     Builds a homogeneous fleet by parsing the per-home *params* once with
@@ -499,9 +484,8 @@ def run_fleet_simulation(
                      (pv_kw, battery_kwh, location, days or start/end, …),
                      without ``n_homes``.  Params that send no window run
                      _TRIGGER_TOOL_DEFAULT_DAYS days.
-        job_manager: The app's JobManager.
-        db_path:     Path to the SQLite database.
-        data_dir:    Root directory for storing run artefacts.
+        job_manager: The app's JobManager, which records the job's run in
+                     the app's RunStorage.
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
@@ -530,8 +514,6 @@ def run_fleet_simulation(
             configs=configs,
             start_date=start_date,
             end_date=end_date,
-            db_path=str(db_path),
-            data_dir=str(data_dir),
             name=name or "Fleet Simulation",
         )
     except Exception as exc:
@@ -544,10 +526,9 @@ def run_fleet_simulation(
 class ToolContext:
     """The collaborators a tool call runs with.
 
-    *storage* is the app's RunStorage: the lookup tools read its runs, and the
-    jobs the trigger tools submit record their runs in its database and their
-    artefacts under its data_dir. *job_manager* is the app's JobManager, which
-    the trigger tools submit jobs to.
+    *storage* is the app's RunStorage, whose runs the lookup tools read.
+    *job_manager* is the app's JobManager, which the trigger tools submit jobs
+    to and which records their runs in the app's RunStorage.
     """
 
     storage: RunStorage
@@ -622,9 +603,7 @@ def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a run_home_simulation call: submit the home *tool_input* describes to *context*'s JobManager."""
-    return run_home_simulation(
-        tool_input, context.job_manager, context.storage.database.path, context.storage.data_dir
-    )
+    return run_home_simulation(tool_input, context.job_manager)
 
 
 def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -634,8 +613,6 @@ def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolConte
         as_whole_number(tool_input["n_homes"], "n_homes"),
         per_home,
         context.job_manager,
-        context.storage.database.path,
-        context.storage.data_dir,
     )
 
 

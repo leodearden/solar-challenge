@@ -18,7 +18,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import CHAT_ROLES, JOB_STATUSES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
+from solar_challenge.web.database import CHAT_ROLES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
@@ -116,18 +116,14 @@ VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS = [
     pytest.param("status", "queued", id="status-a-job-status"),
 ]
 
-JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES = [
-    *(pytest.param("jobs", "status", job_status, id=f"jobs-status-{job_status}") for job_status in JOB_STATUSES),
-    pytest.param("jobs", "status", None, id="jobs-status-null"),
+CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES = [
     *(pytest.param("chat_messages", "role", chat_role, id=f"chat_messages-role-{chat_role}") for chat_role in CHAT_ROLES),
     pytest.param("chat_messages", "role", None, id="chat_messages-role-null"),
     *(pytest.param("config_presets", "type", preset_type, id=f"config_presets-type-{preset_type}") for preset_type in PRESET_TYPES),
     pytest.param("config_presets", "type", None, id="config_presets-type-null"),
 ]
 
-VALUES_OUTSIDE_THE_JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS = [
-    pytest.param("jobs", "status", "complete", id="jobs-status-typo"),
-    pytest.param("jobs", "status", "Queued", id="jobs-status-capitalised"),
+VALUES_OUTSIDE_THE_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS = [
     pytest.param("chat_messages", "role", "system", id="chat_messages-role-system"),
     pytest.param("chat_messages", "role", "User", id="chat_messages-role-capitalised"),
     pytest.param("config_presets", "type", "sweep", id="config_presets-type-a-run-type"),
@@ -159,15 +155,15 @@ class TestDatabaseInitialization:
             )
             assert cursor.fetchone() is not None
 
-    def test_init_db_creates_jobs_table(self, db_path):
-        """Test init_db creates jobs table."""
+    def test_init_db_creates_no_jobs_table(self, db_path):
+        """A fresh database has no jobs table: a job's state lives in its JobManager, and its run's row is its outcome."""
         init_db(db_path)
         with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
             )
-            assert cursor.fetchone() is not None
+            assert cursor.fetchone() is None
 
     def test_init_db_creates_chat_messages_table(self, db_path):
         """Test init_db creates chat_messages table."""
@@ -190,18 +186,15 @@ class TestDatabaseInitialization:
             assert cursor.fetchone() is not None
 
     def test_init_db_creates_indexes(self, db_path):
-        """Test init_db creates indexes."""
+        """init_db creates exactly the runs and chat_messages indexes, besides those SQLite makes itself."""
         init_db(db_path)
         with Database(db_path).transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
             )
-            indexes = [row[0] for row in cursor.fetchall()]
-            assert "idx_runs_created_at" in indexes
-            assert "idx_runs_type" in indexes
-            assert "idx_jobs_run_id" in indexes
-            assert "idx_chat_messages_session_id" in indexes
+            indexes = {row[0] for row in cursor.fetchall() if not row[0].startswith("sqlite_")}
+        assert indexes == {"idx_runs_created_at", "idx_runs_type", "idx_chat_messages_session_id"}
 
     def test_init_db_is_idempotent(self, db_path):
         """Test init_db can be called multiple times safely."""
@@ -211,8 +204,8 @@ class TestDatabaseInitialization:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
-            # Should have our 4 tables (may also have sqlite_sequence for AUTOINCREMENT)
-            expected_tables = {'runs', 'jobs', 'chat_messages', 'config_presets'}
+            # Should have our 3 tables (may also have sqlite_sequence for AUTOINCREMENT)
+            expected_tables = {'runs', 'chat_messages', 'config_presets'}
             actual_tables = {t for t in tables if not t.startswith('sqlite_')}
             assert actual_tables == expected_tables
 
@@ -255,9 +248,9 @@ class TestDatabaseInitialization:
         """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
         assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet", "sweep"), ("running", "completed", "failed"))
 
-    @pytest.mark.parametrize(("table", "column", "value"), JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)
-    def test_init_db_jobs_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
-        """The jobs table stores each job status or NULL as a job's status, chat_messages each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
+    @pytest.mark.parametrize(("table", "column", "value"), CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)
+    def test_init_db_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
+        """The chat_messages table stores each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
         init_db(db_path)
         with Database(db_path).transaction() as conn:
             rowid = conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,)).lastrowid
@@ -265,26 +258,17 @@ class TestDatabaseInitialization:
 
         assert stored == value
 
-    @pytest.mark.parametrize(("table", "column", "value"), VALUES_OUTSIDE_THE_JOBS_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS)
-    def test_init_db_jobs_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
-        """The jobs table refuses a status that is not a job status, chat_messages a role that is not a chat role, and config_presets a type that is not a preset type."""
+    @pytest.mark.parametrize(("table", "column", "value"), VALUES_OUTSIDE_THE_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS)
+    def test_init_db_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
+        """The chat_messages table refuses a role that is not a chat role, and config_presets a type that is not a preset type."""
         init_db(db_path)
         with Database(db_path).transaction() as conn:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,))
 
-    def test_init_db_gives_a_job_inserted_without_a_status_the_status_queued(self, db_path):
-        """A job inserted without a status has the status 'queued'."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            conn.execute("INSERT INTO jobs (id) VALUES ('no-status')")
-            status = conn.execute("SELECT status FROM jobs WHERE id = 'no-status'").fetchone()[0]
-
-        assert status == "queued"
-
-    def test_job_status_chat_role_and_preset_type_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
+    def test_chat_role_and_preset_type_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
         """init_db creates each table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
-        assert (JOB_STATUSES, CHAT_ROLES, PRESET_TYPES) == (("queued", "running", "completed", "failed"), ("user", "assistant"), ("home", "fleet"))
+        assert (CHAT_ROLES, PRESET_TYPES) == (("user", "assistant"), ("home", "fleet"))
 
 
 class TestHomeRunRoundTrip:

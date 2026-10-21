@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every connection the dashboard opens to its database comes from a Database, which applies one policy.
 
-Rows are read by column name, the schema's foreign keys are enforced, and nothing is read
+Rows are read by column name, the foreign keys of any table on the database are enforced, and nothing is read
 from the file before the first statement. A database init_db created journals in WAL mode,
 so every connection to it reports wal. A transaction commits a block that succeeds, rolls
 back a block that raises, and closes its connection either way.
@@ -12,14 +12,9 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, closing, suppress
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import Database, init_db
-from solar_challenge.web.jobs import JobManager
 
 
 def _connected(database: Database) -> AbstractContextManager[sqlite3.Connection]:
@@ -63,26 +58,33 @@ def test_a_dashboard_connection_reads_rows_by_column_name(
         assert conn.execute("SELECT 1 AS value").fetchone()["value"] == 1
 
 
+def _create_a_table_whose_rows_reference_a_run(conn: sqlite3.Connection) -> None:
+    """Create, on *conn*, the table run_notes, whose run_id references a run and whose rows are deleted with it."""
+    conn.execute("CREATE TABLE run_notes (id TEXT PRIMARY KEY, run_id TEXT REFERENCES runs(id) ON DELETE CASCADE)")
+
+
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_a_dashboard_connection_refuses_a_job_whose_run_id_names_no_run(
+def test_a_dashboard_connection_refuses_a_row_whose_run_id_names_no_run(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:
+        _create_a_table_whose_rows_reference_a_run(conn)
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
-            conn.execute("INSERT INTO jobs (id, run_id) VALUES ('job-1', 'no-such-run')")
+            conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'no-such-run')")
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_deleting_a_run_on_a_dashboard_connection_deletes_its_jobs(
+def test_deleting_a_run_on_a_dashboard_connection_deletes_the_rows_that_reference_it(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:
+        _create_a_table_whose_rows_reference_a_run(conn)
         conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
-        conn.execute("INSERT INTO jobs (id, run_id) VALUES ('job-1', 'run-1')")
+        conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'run-1')")
 
         conn.execute("DELETE FROM runs WHERE id = 'run-1'")
 
-        assert conn.execute("SELECT id FROM jobs").fetchall() == []
+        assert conn.execute("SELECT id FROM run_notes").fetchall() == []
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
@@ -148,39 +150,3 @@ def test_a_transaction_closes_its_connection_when_its_block_exits(
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         conn.execute("SELECT 1")
 
-
-def _a_simulation_the_job_must_not_reach(
-    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
-) -> SimulationResults:
-    raise RuntimeError("the job reached its simulation")
-
-
-def test_a_running_jobs_connection_refuses_a_write_that_would_leave_a_job_of_no_run(
-    dashboard_database: Database, tmp_path: Path
-) -> None:
-    """A job's own connection enforces the schema's foreign keys too.
-
-    A job whose start would insert a job of no run fails with the refusal, and leaves no such row.
-    """
-    with dashboard_database.transaction() as conn:
-        conn.execute(
-            "CREATE TRIGGER insert_a_job_of_no_run_when_a_job_starts_running AFTER UPDATE OF status ON jobs "
-            "WHEN OLD.status = 'queued' AND NEW.status = 'running' "
-            "BEGIN INSERT INTO jobs (id, run_id) VALUES ('job-of-no-run', 'no-such-run'); END"
-        )
-    manager = JobManager(max_workers=1, simulate_home=_a_simulation_the_job_must_not_reach)
-
-    job_id, _ = manager.submit_home_job(
-        config=HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
-        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
-        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
-        db_path=str(dashboard_database.path),
-        data_dir=str(tmp_path / "data"),
-    )
-    assert manager.wait_until_idle(timeout=30)
-
-    state = manager.job_state(job_id)
-    assert state is not None
-    assert (state.status, state.message) == ("failed", "FOREIGN KEY constraint failed")
-    with dashboard_database.transaction() as conn:
-        assert [row["id"] for row in conn.execute("SELECT id FROM jobs")] == [job_id]

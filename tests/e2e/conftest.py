@@ -161,7 +161,7 @@ def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[Non
 
 
 @pytest.fixture
-def release_held_simulations(_e2e_app: Flask) -> Iterator[Callable[[], None]]:
+def release_held_simulations(_e2e_app: Flask, _e2e_storage: RunStorage) -> Iterator[Callable[[], None]]:
     """Hold each job the live server runs during the test inside its simulation until the test calls the function this yields.
 
     The jobs run on a JobManager of their own, two at a time as on the session's.
@@ -176,7 +176,7 @@ def release_held_simulations(_e2e_app: Flask) -> Iterator[Callable[[], None]]:
         return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
 
     session_job_manager = _e2e_app.extensions["job_manager"]
-    held_job_manager = JobManager(simulate_home=held_simulation)
+    held_job_manager = JobManager(_e2e_storage, simulate_home=held_simulation)
     _e2e_app.extensions["job_manager"] = held_job_manager
     yield released.set
     released.set()

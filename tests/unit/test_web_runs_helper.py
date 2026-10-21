@@ -39,13 +39,15 @@ _JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
 _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
 
-def _job_manager_simulating(homes: list[HomeConfig], results: list[SimulationResults]) -> JobManager:
-    """A JobManager whose simulation of each of *homes* returns the results at the same place in *results*."""
+def _job_manager_simulating(
+    storage: RunStorage, homes: list[HomeConfig], results: list[SimulationResults]
+) -> JobManager:
+    """A JobManager recording its jobs' runs in *storage*, whose simulation of each of *homes* returns the results at the same place in *results*."""
 
     def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
         return results[homes.index(config)]
 
-    return JobManager(max_workers=1, simulate_home=simulate)
+    return JobManager(storage, max_workers=1, simulate_home=simulate)
 
 
 def _wait_until_completed(manager: JobManager, job_id: str) -> None:
@@ -59,14 +61,8 @@ def _summaries_a_finished_fleet_job_saves(
     storage: RunStorage, fleet: FleetResults
 ) -> tuple[FleetSummary, list[SummaryStatistics]]:
     """The fleet and per-home summaries a fleet job saves to *storage* when simulating *fleet*'s homes gives its results."""
-    manager = _job_manager_simulating(fleet.home_configs, fleet.per_home_results)
-    job_id, run_id = manager.submit_fleet_job(
-        configs=fleet.home_configs,
-        start_date=_JUNE_1,
-        end_date=_JUNE_2,
-        db_path=str(storage.database.path),
-        data_dir=str(storage.data_dir),
-    )
+    manager = _job_manager_simulating(storage, fleet.home_configs, fleet.per_home_results)
+    job_id, run_id = manager.submit_fleet_job(configs=fleet.home_configs, start_date=_JUNE_1, end_date=_JUNE_2)
     _wait_until_completed(manager, job_id)
     _, fleet_summary, per_home_summaries = storage.load_fleet_run(run_id)
     return fleet_summary, per_home_summaries
@@ -76,14 +72,8 @@ def _summary_a_finished_home_job_saves(
     storage: RunStorage, config: HomeConfig, results: SimulationResults
 ) -> SummaryStatistics:
     """The summary a home job saves to *storage* when simulating *config* gives *results*."""
-    manager = _job_manager_simulating([config], [results])
-    job_id, run_id = manager.submit_home_job(
-        config=config,
-        start_date=_JUNE_1,
-        end_date=_JUNE_2,
-        db_path=str(storage.database.path),
-        data_dir=str(storage.data_dir),
-    )
+    manager = _job_manager_simulating(storage, [config], [results])
+    job_id, run_id = manager.submit_home_job(config=config, start_date=_JUNE_1, end_date=_JUNE_2)
     _wait_until_completed(manager, job_id)
     _, _, summary = storage.load_home_run(run_id)
     return summary

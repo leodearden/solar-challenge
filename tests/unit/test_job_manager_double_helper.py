@@ -13,8 +13,6 @@ _SUBMIT_HOME_JOB_ARGUMENTS: Mapping[str, object] = MappingProxyType({
     "config": object(),
     "start_date": pd.Timestamp("2024-06-01"),
     "end_date": pd.Timestamp("2024-06-07"),
-    "db_path": "runs.db",
-    "data_dir": "runs",
 })
 
 

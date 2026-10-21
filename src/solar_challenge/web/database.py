@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SQLite database module for Solar Challenge web dashboard persistence.
 
-Provides schema initialization for storing simulation runs, background jobs,
-chat messages, and configuration presets, and Database, through which every
-connection to the dashboard's database is opened.
+Provides schema initialization for storing simulation runs, chat messages,
+and configuration presets, and Database, through which every connection to
+the dashboard's database is opened.
 
 Schema migration strategy:
     There is currently no automated migration framework.  When the schema
@@ -27,11 +27,7 @@ RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
 
 RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
 RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
-_DEFAULT_RUN_STATUS: RunStatus = "running"
-
-JobStatus = Literal["queued", "running", "completed", "failed"]  # the status of a background job, held by the jobs table's status column
-JOB_STATUSES: tuple[JobStatus, ...] = get_args(JobStatus)
-DEFAULT_JOB_STATUS: JobStatus = "queued"
+UNFINISHED_RUN_STATUS: RunStatus = "running"
 
 ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
 CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
@@ -92,7 +88,7 @@ class Database:
 def init_db(db_path: str | Path) -> Database:
     """Initialize the SQLite database with the required schema, and return the Database for it.
 
-    Creates tables for runs, jobs, chat_messages, and config_presets.
+    Creates tables for runs, chat_messages, and config_presets.
     Safe to call multiple times - uses CREATE TABLE IF NOT EXISTS.
 
     Args:
@@ -118,29 +114,13 @@ def init_db(db_path: str | Path) -> Database:
             type TEXT {_check_one_of("type", RUN_TYPES)},
             config_json TEXT,
             summary_json TEXT,
-            status TEXT DEFAULT {_sql_string_literal(_DEFAULT_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
+            status TEXT DEFAULT {_sql_string_literal(UNFINISHED_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
             error_message TEXT,
             created_at TEXT,
             completed_at TEXT,
             duration_seconds REAL,
             n_homes INTEGER DEFAULT 1,
             notes TEXT
-        )
-    """)
-
-    # Jobs table - tracks background processing jobs
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
-            status TEXT DEFAULT {_sql_string_literal(DEFAULT_JOB_STATUS)} {_check_one_of("status", JOB_STATUSES)},
-            progress_pct REAL DEFAULT 0,
-            current_step TEXT,
-            message TEXT,
-            created_at TEXT,
-            started_at TEXT,
-            completed_at TEXT,
-            error_traceback TEXT
         )
     """)
 
@@ -175,10 +155,6 @@ def init_db(db_path: str | Path) -> Database:
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_runs_type
         ON runs(type)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_jobs_run_id
-        ON jobs(run_id)
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
