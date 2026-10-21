@@ -29,8 +29,8 @@
     /** A layout key naming a subplot: an x axis, a y axis or a polar subplot, such as 'yaxis2'. */
     var _SUBPLOT_KEY = /^(?:[xy]axis|polar)\d*$/;
 
-    /** The containers whose charts are drawn. */
-    var _drawn = [];
+    /** The containers whose charts are drawn, each mapped to the keys of its chart's subplots. */
+    var _drawn = new Map();
 
     /**
      * The chrome colours the computed style of container names: text, its
@@ -58,18 +58,23 @@
         }));
     }
 
+    /** Whether the subplot key names a polar subplot, such as 'polar2'. */
+    function _isPolar(key) {
+        return key.startsWith('polar');
+    }
+
     /**
-     * The Plotly attribute paths, such as 'yaxis2.gridcolor', that draw the
-     * chrome of layout's chart in colours, each mapped to its colour. A polar
-     * disc is a plot area, so it takes layout's plot background. A path sets
-     * only its leaf, so Plotly.relayout keeps the rest of the attribute's
-     * container, such as an axis title or a radial axis range.
+     * The Plotly attribute paths, such as 'yaxis2.gridcolor', that draw a
+     * chart's chrome in colours, each mapped to its colour: the chart's texts,
+     * and the grid, zero and polar axis lines of the subplots whose keys
+     * subplots lists. A path sets only its leaf, so Plotly.relayout keeps the
+     * rest of the attribute's container, such as an axis title or a radial
+     * axis range.
      */
-    function _chrome(layout, colours) {
+    function _chrome(subplots, colours) {
         var paths = { 'font.color': colours.text };
-        _subplotKeys(layout).forEach(function (key) {
-            if (key.startsWith('polar')) {
-                paths[key + '.bgcolor'] = layout.plot_bgcolor;
+        subplots.forEach(function (key) {
+            if (_isPolar(key)) {
                 ['radialaxis', 'angularaxis'].forEach(function (axis) {
                     paths[key + '.' + axis + '.gridcolor'] = colours.grid;
                     paths[key + '.' + axis + '.linecolor'] = colours.grid;
@@ -78,6 +83,18 @@
                 paths[key + '.gridcolor'] = colours.grid;
                 paths[key + '.zerolinecolor'] = colours.grid;
             }
+        });
+        return paths;
+    }
+
+    /**
+     * The Plotly attribute paths, such as 'polar.bgcolor', that draw in
+     * background the disc of each polar subplot whose key subplots lists.
+     */
+    function _polarDiscs(subplots, background) {
+        var paths = {};
+        subplots.filter(_isPolar).forEach(function (key) {
+            paths[key + '.bgcolor'] = background;
         });
         return paths;
     }
@@ -114,19 +131,23 @@
 
     /**
      * Draws the chart of container's figure in the chrome colours container
-     * names. The theme-changed listener recolours only drawn charts, so a
-     * chart whose container names other colours once its drawing finishes,
-     * after a theme change, is recoloured here.
+     * names. A polar disc is a plot area, so it is drawn in the figure's plot
+     * background, in every theme. The theme-changed listener recolours only
+     * drawn charts, so a chart whose container names other colours once its
+     * drawing finishes, after a theme change, is recoloured here.
      */
     function _draw(container) {
+        var subplots;
         var drawnIn;
         _attempt(container, 'draw the figure of', function () {
             var fig = JSON.parse(container.dataset.chartFigure);
             var layout = fig.layout || {};
+            subplots = _subplotKeys(layout);
             drawnIn = _chromeColours(container);
-            return Plotly.newPlot(container, fig.data, _setPaths(layout, _chrome(layout, drawnIn)), SOLAR_CHART_CONFIG);
+            var paths = Object.assign(_polarDiscs(subplots, layout.plot_bgcolor), _chrome(subplots, drawnIn));
+            return Plotly.newPlot(container, fig.data, _setPaths(layout, paths), SOLAR_CHART_CONFIG);
         }, function () {
-            _drawn.push(container);
+            _drawn.set(container, subplots);
             _fitWhileShown.observe(container);
             if (!_sameColours(_chromeColours(container), drawnIn)) {
                 _recolourOnceShown.observe(container);
@@ -137,8 +158,7 @@
     /** Recolours the chart of container, which is drawn, in the chrome colours container names now, and changes nothing else of it. */
     function _recolour(container) {
         _attempt(container, 'recolour the chart of', function () {
-            var layout = JSON.parse(container.dataset.chartFigure).layout || {};
-            return Plotly.relayout(container, _chrome(layout, _chromeColours(container)));
+            return Plotly.relayout(container, _chrome(_drawn.get(container), _chromeColours(container)));
         });
     }
 
@@ -188,7 +208,7 @@
 
     /** Recolours each drawn chart once it is shown, in the chrome colours its container names then (AC10). */
     document.addEventListener('theme-changed', function () {
-        _drawn.forEach(function (container) {
+        _drawn.forEach(function (subplots, container) {
             _recolourOnceShown.observe(container);
         });
     });
