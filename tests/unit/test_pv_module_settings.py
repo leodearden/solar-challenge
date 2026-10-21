@@ -21,6 +21,7 @@ from solar_challenge.pv import (
     PVConfig,
     cec_module_params,
     create_pv_system,
+    create_pvwatts_inverter_params,
     create_simple_module_params,
     simulate_pv_output,
     wired_dc_capacity_kw,
@@ -179,10 +180,26 @@ class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
 
         assert config.temperature_coefficient == -0.004
 
-    def test_a_module_efficiency_has_no_form_rule(self, sapm_module: dict[str, float]) -> None:
-        config = PVConfig(capacity_kw=4.0, module_efficiency=0.15, custom_module_params=sapm_module)
+    def test_a_module_efficiency_has_no_form_rule(
+        self, pdc0_module_without_gamma_pdc: dict[str, float]
+    ) -> None:
+        """A module in neither form takes an efficiency over its rating, its STC; it has no V_mp_ref to voltage-match a CEC inverter to, so it takes custom inverter parameters."""
+        efficiency = 0.15
+        config = PVConfig(
+            capacity_kw=4.0,
+            module_efficiency=efficiency,
+            custom_module_params=pdc0_module_without_gamma_pdc,
+            custom_inverter_params=create_pvwatts_inverter_params(),
+        )
 
-        assert config.module_efficiency == 0.15
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["A_c"] == pytest.approx(
+                pdc0_module_without_gamma_pdc["STC"] / (efficiency * 1000)
+            )
+            assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(
+                efficiency
+            )
+            _assert_equal_apart_from(array.module_parameters, pdc0_module_without_gamma_pdc, {"A_c"})
 
 
 _PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
