@@ -94,9 +94,9 @@ conventions:
       (`uv run --locked --extra dev python -m tests._fleet_generation_pins`), with an Unreleased on
       main line in docs/domain-library-consumption.md. A profile must not depend on what ran
       before it or beside it on another thread: tests/unit/test_load_reproducibility.py pins that,
-      and that the hand-off is the only src code calling a module-level function of random or
-      numpy.random; tests/unit/web_jobs/test_seeded_jobs_reproduce.py pins it for two seeded
-      dashboard jobs run together.
+      and tests/unit/web_jobs/test_seeded_jobs_reproduce.py pins it for two seeded dashboard jobs
+      run together. tests/unit/test_global_rng_calls.py pins that the hand-off is the only src code
+      calling a module-level function of random or numpy.random.
 
   - rule: "mypy --strict must pass; do not widen ignore_missing_imports or add Any-typed config fields."
     why: >
