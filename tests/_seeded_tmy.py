@@ -10,6 +10,14 @@ Usage::
     start, end = june_days.window(2)
     results = simulate_fleet(config, start, end)
 
+A module whose tests run on its days binds a fixture of them once, under the name its tests apply::
+
+    _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
+    bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
+
+    @pytest.mark.usefixtures("bristol_june_tmy")
+    class TestFleetSimulation: ...
+
 The days can also be given to simulate_home as one home's weather, with no cache::
 
     from tests._synthetic_weather import weather_for
@@ -20,12 +28,17 @@ The days can also be given to simulate_home as one home's weather, with no cache
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pandas as pd
+import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
+
+if TYPE_CHECKING:
+    from _pytest.fixtures import FixtureFunctionDefinition
 
 
 @dataclass(frozen=True)
@@ -48,6 +61,21 @@ class ClearJuneDays:
     def seed_as_bristol_tmy(self, weather_cache: WeatherCache) -> None:
         """Put these days in *weather_cache* as Bristol's TMY, which get_tmy_data then reads in place of PVGIS."""
         weather_cache.put(self.hourly_weather(), "tmy", Location.bristol())
+
+    def bristol_tmy_fixture(self) -> FixtureFunctionDefinition:
+        """A pytest fixture that seeds these days as Bristol's TMY for each test that uses it.
+
+        Bind it to a module-level name, which pytest makes the fixture's name::
+
+            bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
+        """
+
+        @pytest.fixture
+        def seeded_bristol_tmy(weather_cache: WeatherCache) -> None:
+            """Seed the clear June days this fixture was made of as Bristol's TMY, which default_weather() then serves in place of PVGIS."""
+            self.seed_as_bristol_tmy(weather_cache)
+
+        return seeded_bristol_tmy
 
     def window(self, days: int) -> tuple[pd.Timestamp, pd.Timestamp]:
         """The start and end dates of a simulation over the first *days* of these days."""
