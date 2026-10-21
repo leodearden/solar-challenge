@@ -415,6 +415,35 @@ def test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wrap
     )
 
 
+def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Rebuilt(Built):
+        pass
+
+    naming_built_and_its_init = r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        surface_form(Built)
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        named_classes(Built)
+    with pytest.raises(
+        TypeError, match=r"\.Rebuilt\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Rebuilt)
+
+
+def test_a_class_whose_new_is_a_partial_is_spelled_by_the_signature_the_partial_leaves_less_cls() -> None:
+    def make(cls: type, rate: int, scale: float = 1.0) -> object: ...
+
+    class Made:
+        __new__ = functools.partial(make, scale=2.0)
+
+    assert surface_form(Made) == "(rate: int, *, scale: float = 2.0) -> object"
+
+
 def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
