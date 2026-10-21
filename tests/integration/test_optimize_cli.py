@@ -151,13 +151,15 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
-    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header.
-
-    A section ends at the next heading of any level, so a sub-section's table is never read as *heading*'s.
-    """
+def _section(report: str, heading: str) -> str:
+    """The text under *heading* in *report*, up to the next heading of any level, so a sub-section is never read as *heading*'s."""
     assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+    return report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+
+
+def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
+    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header."""
+    section = _section(report, heading)
     header, _delimiter_row, *rows = (
         [cell.strip() for cell in line.strip("|").split("|")]
         for line in section.splitlines()
@@ -523,7 +525,7 @@ class TestGenerateConfigRankingReportTable2:
         )
 
     def test_infeasible_absent_from_table2(self) -> None:
-        """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
+        """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics); the Infeasible Configurations section lists them."""
         r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
         sweep = _make_ranked_sweep(
@@ -532,10 +534,11 @@ class TestGenerateConfigRankingReportTable2:
         )
         report = generate_config_ranking_report(sweep)
 
-        # 9.9 kWp appears in Table 1's infeasible section, but not in Table 2
-        assert "9.9" in report  # present somewhere (Table 1)
-        # Table 2 heading should appear before infeasible section
-        assert "fixed-15p" in report.lower() or "trade-off" in report.lower() or "baseline" in report.lower()
+        infeasible = "9.9 kWp / 15.0 kWh / 5.0 kW"
+        row = _config_row(report, "### Infeasible Configurations", infeasible)
+        assert row["Config"] == infeasible, f"infeasible config's Config cell is not exactly its dims:\n{report}"
+        table2 = _section(report, "## Fixed-15p Trade-Off")
+        assert infeasible not in table2, f"infeasible config {infeasible!r} listed under '## Fixed-15p Trade-Off':\n{table2}"
 
     def test_two_tables_both_present(self) -> None:
         """Both Table 1 and Table 2 headings must appear in the same report."""
