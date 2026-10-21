@@ -147,9 +147,11 @@ def _value_cell(report: str, heading: str, label: str) -> str:
         for line in section.splitlines()
         if line.startswith("|")
     ]
-    values = [value for row_label, value in rows if row_label == label]
-    assert len(values) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
-    return values[0]
+    matching_rows = [row for row in rows if row[0] == label]
+    assert len(matching_rows) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
+    row = matching_rows[0]
+    assert len(row) == 2, f"Expected the {label!r} row under {heading!r} to be a label and a value, got {row!r}:\n{section}"
+    return row[1]
 
 
 class TestGenerateFinanceReportCostRecoveryFull:
