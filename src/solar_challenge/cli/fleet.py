@@ -87,8 +87,7 @@ def _print_community_section(community_results: "CommunityResults") -> None:
         "",
     )
 
-    # Community Billing rows — only when VNM billing was computed (task ε / #34)
-    # Strictly additive and guarded so the no-billing path is byte-unchanged.
+    # Community billing rows, only when VNM billing was computed
     if community_results.community_savings_gbp is not None:
         table.add_row("", "", "", "")  # separator before billing block
         table.add_row(
@@ -221,7 +220,7 @@ def run(
         _export_fleet_results(results, output)
         print_success(f"Aggregate results saved to {output}")
 
-    # Community sharing layer — strictly additive; base path is byte-unchanged
+    # Community sharing layer
     community_config = load_community_config(config)
     if community_config is not None:
         community_results = simulate_community(results, community_config)
