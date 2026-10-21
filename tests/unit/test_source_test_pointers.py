@@ -18,6 +18,10 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from tests._working_tree import working_tree_files
+
+_PACKAGE_DIR = PurePosixPath("src/solar_challenge")
+
 _POINTER = re.compile(
     r"""
     (?<![\w./-])
@@ -164,6 +168,26 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
         for statement in body
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
+
+
+def test_every_pointer_from_the_package_into_tests_resolves(project_root: Path) -> None:
+    sources = [path for path in working_tree_files(project_root) if path.is_relative_to(_PACKAGE_DIR)]
+    pointers = _pointers(project_root, sources)
+    assert pointers, (
+        f"found no pointer into tests/ in any file git lists under {_PACKAGE_DIR}, so this gate would pass vacuously;"
+        " fix the listing or the grammar"
+    )
+
+    dangling = _dangling(project_root, pointers)
+
+    assert dangling == [], "\n".join(
+        [
+            *dangling,
+            "A renamed or moved test's pointers must follow it. Point at a test by its node-id from the project root,"
+            " tests/<file>.py::<test> or tests/<file>.py::<Class>::<test>, which this gate resolves and pytest runs"
+            " as written.",
+        ]
+    )
 
 
 @pytest.fixture
