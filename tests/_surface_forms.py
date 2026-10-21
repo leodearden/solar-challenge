@@ -66,7 +66,9 @@ def surface_form(obj: object) -> str:
     it and the class in its MRO holding that constructor, and so does a routine inspect
     reads as such a class, through functools.partial funcs, bound methods' __func__s and
     the callables a wrapper records as __wrapped__, short of one that carries a
-    __signature__. Such a constructor is either a functools.partial held as __init__,
+    __signature__. Such a constructor is the one inspect reads first of those its holder
+    holds, when that wraps a callable defined in C, as the __new__ warnings.deprecated
+    writes for a class wraps object.__new__; or a functools.partial held as __init__,
     unless the class holding it also holds a __new__ not defined in C, which inspect
     reads first; or one held by a class defined in C other than object.
     """
@@ -532,31 +534,37 @@ def _carries_signature(obj: object) -> bool:
     return hasattr(obj, "__signature__")
 
 
-_C_CONSTRUCTOR_KINDS: tuple[type, ...] = (types.BuiltinFunctionType, types.WrapperDescriptorType)
+_C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 
 
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    Such a constructor is either a functools.partial the holder's own namespace holds as
-    __init__, unless that namespace also holds a __new__ not defined in C, which inspect
-    reads first; or the constructor of a holder defined in C other than object, each
-    __new__ and __init__ its own namespace holds being of a kind in _C_CONSTRUCTOR_KINDS.
+    Such a constructor is the one inspect reads first of those the holder's own namespace
+    holds, when it wraps a callable defined in C, as the __new__ warnings.deprecated
+    writes for a class wraps object.__new__; or a functools.partial the holder's own
+    namespace holds as __init__, unless that namespace also holds a __new__ not defined
+    in C, which inspect reads first; or the constructor of a holder defined in C other
+    than object, each __new__ and __init__ its own namespace holds being of a kind in
+    _C_CONSTRUCTOR_KINDS.
     """
     holder = _constructor_holder(cls)
-    namespace = vars(holder)
-    new_read_first = "__new__" in namespace and not isinstance(
-        getattr(holder, "__new__"), _C_CONSTRUCTOR_KINDS
-    )
-    if isinstance(namespace.get("__init__"), functools.partial) and not new_read_first:
+    name, constructor = _first_read_constructor(holder)
+    _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
+    if name == "__init__" and isinstance(constructor, functools.partial):
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
             "functools.partial, which Python 3.14 binds to the instance as a method and "
             "earlier minors call without it: define __init__ with def"
         )
-    constructors = [namespace[name] for name in ("__new__", "__init__") if name in namespace]
+    namespace = vars(holder)
+    own_constructors = [
+        namespace[constructor_name]
+        for constructor_name in ("__new__", "__init__")
+        if constructor_name in namespace
+    ]
     if holder is not object and all(
-        isinstance(constructor, _C_CONSTRUCTOR_KINDS) for constructor in constructors
+        isinstance(own, _C_CONSTRUCTOR_KINDS) for own in own_constructors
     ):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
@@ -564,6 +572,39 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
             "signature, which a release of its package can add or rewrite, as CPython's "
             "minors do: make the name private, or give the class an __init__ or __new__ "
             "defined with def"
+        )
+
+
+def _first_read_constructor(holder: type) -> tuple[str, object]:
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it, which unwraps a staticmethod as inspect does, unless that is defined in C beside an __init__; else its __init__."""
+    namespace = vars(holder)
+    if "__new__" in namespace:
+        new = getattr(holder, "__new__")
+        if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and "__init__" in namespace):
+            return "__new__", new
+    return "__init__", namespace["__init__"]
+
+
+def _refuse_wrapper_of_c_callable(
+    cls: type, owner: type, name: str, constructor: object
+) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps one.
+
+    inspect reads such a wrapper through that callable on some Python releases, and skips
+    it as defined in C on others, reading the next constructor instead. The callable is
+    named by its qualified name alone: a builtin carries no module of its own to name it
+    by, as object.__new__'s __module__ is None and object.__init__ records none.
+    """
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+        return
+    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    if isinstance(wrapped, _C_CONSTRUCTOR_KINDS):
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(owner)}.{name}, which wraps "
+            f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
+            "that callable on some Python releases and skips it as defined in C on "
+            f"others: make the name private, or define {name} with def, wrapping no "
+            "callable defined in C"
         )
 
 
