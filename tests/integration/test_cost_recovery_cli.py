@@ -139,8 +139,44 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 # ---------------------------------------------------------------------------
 
 
+def _value_cell(report: str, heading: str, label: str) -> str:
+    """The Value cell of the row labelled *label* in the table of *heading*'s own section.
+
+    A section ends at the next heading, so the bill's own Min, Mean, Median and Max rows are never read as the cost-recovery block's.
+    """
+    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
+    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|")
+    ]
+    values = [value for row_label, value in rows if row_label == label]
+    assert len(values) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
+    return values[0]
+
+
 class TestGenerateFinanceReportCostRecoveryFull:
     """Full board-readable content — distribution table, binding labels."""
+
+    def _report_with_distinct_outlay_figures(self) -> str:
+        """The finance report of a solution whose outlay's representative, min, mean, median and max are five different figures, none of them one of the bill's.
+
+        So a cost-recovery row that shows the wrong one of them fails the test that reads it.
+        """
+        cr_outlay = make_bill_distribution_from_statistics(
+            representative_outlay_gbp=337.0,
+            min_gbp=289.0,
+            mean_gbp=341.0,
+            median_gbp=335.0,
+            max_gbp=393.0,
+        )
+        sol = make_cost_recovery_solution(
+            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
+            feasible=True, binding="floor",
+            outlay=cr_outlay,
+        )
+        return generate_finance_report(_make_bill_distribution(), cost_recovery=sol)
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
@@ -169,23 +205,10 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_representative_outlay_renders(self) -> None:
         """Cost-recovery block must render the representative_outlay_gbp."""
-        # Use a distinct mean_gbp (342.0) so the CR section's £342.00 cannot be
-        # confused with the main-bill section's £367.50 (default mean).
-        cr_outlay = _make_bill_distribution(mean_gbp=342.0)
-        bill = _make_bill_distribution()  # defaults; mean_gbp=367.5
-        sol = make_cost_recovery_solution(
-            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
-            feasible=True, binding="floor",
-            outlay=cr_outlay,
-        )
+        report = self._report_with_distinct_outlay_figures()
 
-        report = generate_finance_report(bill, cost_recovery=sol)
-        cr_idx = report.find("## Cost-Recovery Analysis")
-        assert cr_idx >= 0, "Cost-Recovery section not found"
-        cr_section = report[cr_idx:]
-
-        # representative_outlay_gbp = cr_outlay.representative.total_outlay_gbp = 342.0 → £342.00
-        assert "£342.00" in cr_section, f"representative_outlay_gbp not in CR section:\n{cr_section}"
+        shown = _value_cell(report, "## Cost-Recovery Analysis", "Representative Householder Outlay")
+        assert shown == "£337.00", f"representative outlay not shown in its row:\n{report}"
 
     def test_saving_vs_baseline_renders(self) -> None:
         """Cost-recovery block must render saving_vs_baseline_gbp."""
