@@ -39,23 +39,6 @@ from tests._finance_builders import make_fleet_results
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_distribution(
-    *,
-    min_gbp: float,
-    mean_gbp: float,
-    median_gbp: float,
-    max_gbp: float,
-) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution whose representative sits at *median_gbp*."""
-    return make_bill_distribution_from_statistics(
-        representative_outlay_gbp=median_gbp,
-        min_gbp=min_gbp,
-        mean_gbp=mean_gbp,
-        median_gbp=median_gbp,
-        max_gbp=max_gbp,
-    )
-
-
 def _make_ranked_sweep(
     results: tuple[ConfigResult, ...],
     infeasible: tuple[ConfigPoint, ...] = (),
@@ -183,7 +166,10 @@ class TestGenerateConfigRankingReportTable1:
     INFEASIBLE = "6.0 kWp / 10.0 kWh / 5.0 kW"
 
     def _make_sweep_two_feasible(self) -> RankedSweep:
-        """Build a RankedSweep with two feasible configs and one infeasible."""
+        """Build a RankedSweep with two feasible configs and one infeasible.
+
+        Each feasible config's representative outlay differs from its outlay's min, mean, median and max, so a cell showing the wrong one of them fails the test that reads it.
+        """
         # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
         r1 = make_config_result(
             pv_kwp=4.0,
@@ -199,7 +185,13 @@ class TestGenerateConfigRankingReportTable1:
             payback_years=11.0,
             baseline_outlay_gbp=375.0,
             baseline_surplus_per_home_gbp=40.0,
-            outlay=_make_bill_distribution(min_gbp=300.0, mean_gbp=345.0, median_gbp=350.0, max_gbp=400.0),
+            outlay=make_bill_distribution_from_statistics(
+                representative_outlay_gbp=352.0,
+                min_gbp=300.0,
+                mean_gbp=345.0,
+                median_gbp=350.0,
+                max_gbp=400.0,
+            ),
         )
         # Config 2 (second cheapest): 5 kWp, 5 kWh battery
         r2 = make_config_result(
@@ -216,7 +208,13 @@ class TestGenerateConfigRankingReportTable1:
             payback_years=14.5,
             baseline_outlay_gbp=410.0,
             baseline_surplus_per_home_gbp=55.0,
-            outlay=_make_bill_distribution(min_gbp=325.0, mean_gbp=368.0, median_gbp=370.0, max_gbp=420.0),
+            outlay=make_bill_distribution_from_statistics(
+                representative_outlay_gbp=372.0,
+                min_gbp=325.0,
+                mean_gbp=368.0,
+                median_gbp=370.0,
+                max_gbp=420.0,
+            ),
         )
         # Infeasible: 6 kWp, 10 kWh — ConfigPoint only in RankedSweep
         infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
@@ -254,8 +252,8 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            self.CHEAPEST: "£350.00",
-            self.SECOND_CHEAPEST: "£370.00",
+            self.CHEAPEST: "£352.00",
+            self.SECOND_CHEAPEST: "£372.00",
         }
         shown = _column(report, "## Cost-Recovery Rank", "Rep Outlay (£)", expected)
         assert shown == expected, f"representative outlays not shown in their configs' rows:\n{report}"
