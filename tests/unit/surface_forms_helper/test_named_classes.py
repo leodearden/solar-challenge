@@ -422,6 +422,55 @@ def test_a_routine_that_wraps_a_class_whose_module_another_module_of_the_same_na
     assert later.__file__ in str(raised.value)
 
 
+def test_a_routine_that_wraps_a_callable_object_whose_call_methods_module_another_module_of_the_same_name_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_that_method_and_the_replacement(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from functools import wraps\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "caller = Caller()\n"
+        "\n"
+        "@wraps(caller)\n"
+        "def call(*args, **kwargs):\n"
+        "    return caller(*args, **kwargs)\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from functools import wraps\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "caller = Caller()\n"
+        "\n"
+        "@wraps(caller)\n"
+        "def call(*args, **kwargs):\n"
+        "    return caller(*args, **kwargs)\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.call)
+
+    assert "auditing.Caller.__call__" in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
 @pytest.fixture
 def removed_auditing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     """The module 'auditing', imported and then removed from sys.modules, that defines a type variable, a routine, a class, a routine that wraps the class, and a class whose instances are callable."""
@@ -710,6 +759,52 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     )
 
     assert named_classes(submetering.settled) == {fractions.Fraction}
+
+
+def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "calling",
+        "from fractions import Fraction as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "def settle(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "def logged(function):\n"
+        "    @wraps(function)\n"
+        "    def wrapper(*args, **kwargs):\n"
+        "        return function(*args, **kwargs)\n"
+        "    return wrapper\n",
+    )
+    recalling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "recalling",
+        "from decimal import Decimal as Share\n"
+        "from functools import partial\n"
+        "\n"
+        "from calling import Caller, logged, settle\n"
+        "\n"
+        "class Subcaller(Caller):\n"
+        "    pass\n"
+        "\n"
+        "class Settler:\n"
+        "    __call__ = settle\n"
+        "\n"
+        "called = logged(Subcaller())\n"
+        "settled = logged(Settler())\n"
+        "halved = partial(Subcaller())\n",
+    )
+
+    assert named_classes(recalling.called) == {fractions.Fraction}
+    assert named_classes(recalling.settled) == {fractions.Fraction}
+    assert named_classes(recalling.halved) == {fractions.Fraction}
 
 
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
