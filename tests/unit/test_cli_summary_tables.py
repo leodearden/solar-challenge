@@ -255,7 +255,10 @@ class TestPrintedSummaryTables:
         ]
 
     def test_home_run_prints_a_seg_blocks_export_income_once(self) -> None:
-        """`home run` on a home with a seg: block prints its export income once, as Grid Export Revenue, its export at the SEG rate to the table's rounding: simulate_home priced every export at that rate, so a SEG Revenue row would repeat it."""
+        """`home run` on a home with a seg: block prints its export income once, as Grid Export Revenue: its export at the SEG rate, to the table's rounding.
+
+        simulate_home prices every export at the SEG rate, so a SEG Revenue row would repeat that income.
+        """
         rate_pence_per_kwh = 15.0
         Path("home.yaml").write_text(
             yaml.safe_dump({"home": {"name": "Bristol", **_HOME}, "seg": {"rate_pence_per_kwh": rate_pence_per_kwh}})
