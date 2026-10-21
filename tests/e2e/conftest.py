@@ -387,7 +387,7 @@ def runs_api_returns_a_run_of_each_badge(
 
     The pairs name every run type and every status a run is stored with, and 'queued', a status with no badge colours of its own.
     """
-    badges = [("home", "running"), ("fleet", "completed"), ("sweep", "failed"), ("home", "queued")]
+    badges = [("home", "running"), ("fleet", "completed"), ("fleet", "failed"), ("home", "queued")]
     listed = page.request.get(
         live_server + "/api/history/runs",
         params={"q": seeded_home_run[1]},

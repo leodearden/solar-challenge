@@ -88,7 +88,7 @@ def test_each_status_a_run_is_stored_with_has_colours_of_its_own(
     [
         pytest.param("home", _colours("blue"), id="home"),
         pytest.param("fleet", _colours("green"), id="fleet"),
-        pytest.param("sweep", _colours("purple"), id="sweep"),
+        pytest.param("sweep", _NEUTRAL, id="sweep, no longer a run type"),
         pytest.param("batch", _NEUTRAL, id="a type with no colours of its own"),
     ],
 )
