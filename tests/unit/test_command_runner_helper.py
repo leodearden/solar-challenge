@@ -15,7 +15,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -190,14 +190,14 @@ def _process_exists(pid: int) -> bool:
     return True
 
 
-def _gone_within(pid: int, seconds: float) -> bool:
-    """Return whether the process *pid* is gone, ended and reaped, within *seconds*."""
+def _not_gone_within(pids: Iterable[int], seconds: float) -> list[int]:
+    """Return those of *pids* whose process is not gone, ended and reaped, within *seconds* of this call."""
     deadline = time.monotonic() + seconds
-    while _process_exists(pid):
-        if time.monotonic() >= deadline:
-            return False
+    existing = [pid for pid in pids if _process_exists(pid)]
+    while existing and time.monotonic() < deadline:
         time.sleep(0.01)
-    return True
+        existing = [pid for pid in existing if _process_exists(pid)]
+    return existing
 
 
 def test_runs_the_command_verbatim_through_sh_in_its_directory_and_the_given_environment(tmp_path: Path) -> None:
@@ -317,7 +317,7 @@ def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_it
 def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: ProbeStart) -> None:
     background_pid = _pid_of_a_background_child_killed_in_a_hang(tmp_path, start)
 
-    outlived = not _gone_within(background_pid, seconds=10)
+    outlived = _not_gone_within([background_pid], seconds=10)
     if outlived:
         os.kill(background_pid, signal.SIGKILL)
 
@@ -334,7 +334,7 @@ def test_no_process_outlives_a_hung_command_that_keeps_moving_processes_into_gro
     started = 0
     for trial in range(_REGROUP_TRIALS):
         timeouts = _timeouts_a_regrouping_hang_started(tmp_path / f"trial-{trial}")
-        survivors = [pid for pid in timeouts if not _gone_within(pid, seconds=10)]
+        survivors = _not_gone_within(timeouts, seconds=10)
         for survivor in survivors:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(survivor, signal.SIGKILL)
