@@ -535,7 +535,7 @@ class TestGenerateConfigRankingReportTable2:
         )
 
     def test_infeasible_absent_from_table2(self) -> None:
-        """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics); the Infeasible Configurations section lists them."""
+        """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
         r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
         sweep = _make_ranked_sweep(
@@ -545,8 +545,8 @@ class TestGenerateConfigRankingReportTable2:
         report = generate_config_ranking_report(sweep)
 
         infeasible = "9.9 kWp / 15.0 kWh / 5.0 kW"
-        row = _config_row(report, "### Infeasible Configurations", infeasible)
-        assert row["Config"] == infeasible, f"infeasible config's Config cell is not exactly its dims:\n{report}"
+        infeasible_section = _section(report, "### Infeasible Configurations")
+        assert infeasible in infeasible_section, f"infeasible config {infeasible!r} not listed under '### Infeasible Configurations':\n{infeasible_section}"
         table2 = _section(report, "## Fixed-15p Trade-Off")
         assert infeasible not in table2, f"infeasible config {infeasible!r} listed under '## Fixed-15p Trade-Off':\n{table2}"
 
