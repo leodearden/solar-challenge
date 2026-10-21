@@ -10,6 +10,7 @@ in the offline verify loop.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
 
@@ -167,8 +168,17 @@ def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
     return dict(zip(header, matches[0], strict=True))
 
 
+def _column(report: str, heading: str, column: str, labels: Iterable[str]) -> dict[str, str]:
+    """The *column* cell of each of *labels*' rows in *heading*'s table, keyed by label."""
+    return {label: _config_row(report, heading, label)[column] for label in labels}
+
+
 class TestGenerateConfigRankingReportTable1:
     """generate_config_ranking_report renders the COST-RECOVERY RANK table."""
+
+    CHEAPEST = "4.0 kWp / 0.0 kWh / 5.0 kW"
+    SECOND_CHEAPEST = "5.0 kWp / 5.0 kWh / 5.0 kW"
+    INFEASIBLE = "6.0 kWp / 10.0 kWh / 5.0 kW"
 
     def _make_sweep_two_feasible(self) -> RankedSweep:
         """Build a RankedSweep with two feasible configs and one infeasible."""
@@ -230,13 +240,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "12.50 p/kWh",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "18.75 p/kWh",
+            self.CHEAPEST: "12.50 p/kWh",
+            self.SECOND_CHEAPEST: "18.75 p/kWh",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Solved Rate (p/kWh)"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Solved Rate (p/kWh)", expected)
         assert shown == expected, f"solved own-use rates not shown in their configs' rows:\n{report}"
 
     def test_outlay_distribution_values(self) -> None:
@@ -245,13 +252,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "£300 / £345 / £350 / £400",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "£325 / £368 / £370 / £420",
+            self.CHEAPEST: "£300 / £345 / £350 / £400",
+            self.SECOND_CHEAPEST: "£325 / £368 / £370 / £420",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Min/Mean/Median/Max (£)"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Min/Mean/Median/Max (£)", expected)
         assert shown == expected, f"outlay distributions not shown in their configs' rows:\n{report}"
 
     def test_cbs_surplus_rendered(self) -> None:
@@ -260,13 +264,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "£35.00",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "£27.00",
+            self.CHEAPEST: "£35.00",
+            self.SECOND_CHEAPEST: "£27.00",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["CBS Surplus (£/home/yr)"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "CBS Surplus (£/home/yr)", expected)
         assert shown == expected, f"CBS surpluses not shown in their configs' rows:\n{report}"
 
     def test_feasibility_binding_label_present(self) -> None:
@@ -275,13 +276,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "✔ Surplus meets floor",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "✔ Surplus meets floor",
+            self.CHEAPEST: "✔ Surplus meets floor",
+            self.SECOND_CHEAPEST: "✔ Surplus meets floor",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Feasibility"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Feasibility", expected)
         assert shown == expected, f"feasibility labels not shown in their configs' rows:\n{report}"
 
     def test_total_capex_rendered(self) -> None:
@@ -290,13 +288,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "£48,000",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "£72,000",
+            self.CHEAPEST: "£48,000",
+            self.SECOND_CHEAPEST: "£72,000",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Total CapEx (£)"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Total CapEx (£)", expected)
         assert shown == expected, f"total capex not shown in their configs' rows:\n{report}"
 
     def test_min_dscr_inf_shown_as_infinity_symbol(self) -> None:
@@ -304,7 +299,7 @@ class TestGenerateConfigRankingReportTable1:
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        row = _config_row(report, "## Cost-Recovery Rank", "4.0 kWp / 0.0 kWh / 5.0 kW")
+        row = _config_row(report, "## Cost-Recovery Rank", self.CHEAPEST)
         assert row["Min DSCR"] == "∞", f"'∞' for inf DSCR not found in the Min DSCR cell:\n{report}"
 
     def test_equity_irr_formatted_as_percent(self) -> None:
@@ -313,13 +308,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "9.0%",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "7.0%",
+            self.CHEAPEST: "9.0%",
+            self.SECOND_CHEAPEST: "7.0%",
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Equity IRR"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Equity IRR", expected)
         assert shown == expected, f"equity IRRs not shown in their configs' rows:\n{report}"
 
     def test_payback_none_shown_as_dash(self) -> None:
@@ -354,13 +346,10 @@ class TestGenerateConfigRankingReportTable1:
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            "4.0 kWp / 0.0 kWh / 5.0 kW": "4.0 kWp / 0.0 kWh / 5.0 kW ★ RECOMMENDATION",
-            "5.0 kWp / 5.0 kWh / 5.0 kW": "5.0 kWp / 5.0 kWh / 5.0 kW",
+            self.CHEAPEST: f"{self.CHEAPEST} ★ RECOMMENDATION",
+            self.SECOND_CHEAPEST: self.SECOND_CHEAPEST,
         }
-        shown = {
-            label: _config_row(report, "## Cost-Recovery Rank", label)["Config"]
-            for label in expected
-        }
+        shown = _column(report, "## Cost-Recovery Rank", "Config", expected)
         assert shown == expected, f"RECOMMENDATION marker not on the cheapest config alone:\n{report}"
 
     def test_infeasible_section_lists_config_dims(self) -> None:
@@ -368,9 +357,8 @@ class TestGenerateConfigRankingReportTable1:
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
-        dims = "6.0 kWp / 10.0 kWh / 5.0 kW"
-        row = _config_row(report, "### Infeasible Configurations", dims)
-        assert row["Config"] == dims, f"infeasible config's Config cell is not exactly its dims:\n{report}"
+        row = _config_row(report, "### Infeasible Configurations", self.INFEASIBLE)
+        assert row["Config"] == self.INFEASIBLE, f"infeasible config's Config cell is not exactly its dims:\n{report}"
 
     def test_empty_infeasible_no_infeasible_section(self) -> None:
         """When there are no infeasible configs, the infeasible section is omitted."""
