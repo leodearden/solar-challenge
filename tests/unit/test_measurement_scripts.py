@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from pvlib.modelchain import ModelChain
 
 import solar_challenge
 from solar_challenge.finance import BillBreakdown
@@ -78,6 +79,12 @@ def census_rows(
     return pd.read_csv(csv_path, dtype={"inverter_kw": str})
 
 
+def _default_array_on(inverter: dict[str, float]) -> ModelChain:
+    """The default 4 kW array on custom inverter parameters, which wire all its modules as one string on one MPPT input."""
+    config = dataclasses.replace(PVConfig.default_4kw(), custom_inverter_params=inverter)
+    return create_model_chain(config, Location.bristol())
+
+
 class TestMeasureMpptWindow:
     """measure_mppt_window measures pv.py's own pick and model chain under each sizing (docs/pv-inverter-string-matching.md §3)."""
 
@@ -136,6 +143,34 @@ class TestMeasureMpptWindow:
                 f"{row.longest_string_stc_v:.1f} V at STC times {factor:.4f} is above the "
                 f"inverter's Mppt_high of {row.mppt_high_v:.1f} V"
             )
+
+    def test_strings_held_at_either_edge_keep_at_most_their_maximum_power_less_the_same_losses(
+        self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
+    ) -> None:
+        """Each edge sits 0.1% inside the day's string V_mp, where the IV curve's power is flat, so a string held at it keeps all but about 1e-5 of its p_mp, and never more.
+
+        (a) feeds the inverter the same edge voltage at p_mp itself, and
+        sandia_multi's AC from one MPPT input rises with its DC power, so (b)'s
+        held AC is at most (a)'s clipped AC. It comes within 1e-5 of the clipped AC
+        only if the held power carries the system losses that p_mp carries.
+        """
+        inverter = create_pv_system(PVConfig.default_4kw()).inverter_parameters
+        in_window = _default_array_on(inverter)
+        in_window.run_model(one_day_tmy)
+        v_mp = in_window.results.dc["v_mp"]
+        producing_v_mp = v_mp[v_mp > 0]
+        narrowed = {
+            **inverter,
+            "Mppt_low": 1.001 * producing_v_mp.min(),
+            "Mppt_high": 0.999 * producing_v_mp.max(),
+        }
+
+        year = mppt_window.measure_year(_default_array_on(narrowed), one_day_tmy)
+
+        for edge, held in (("ceiling", year.above_ceiling), ("floor", year.below_floor)):
+            assert held.hours > 0, edge
+            assert held.ac_kwh_held <= held.ac_kwh_clipped, edge
+            assert held.ac_kwh_held == pytest.approx(held.ac_kwh_clipped, rel=1e-5), edge
 
     def test_the_stc_sizing_picks_from_pvs_own_candidates(self, mppt_window: ModuleType) -> None:
         assert mppt_window.STC.candidates() == candidate_cec_inverters()
