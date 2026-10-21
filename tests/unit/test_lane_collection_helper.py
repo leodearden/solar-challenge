@@ -84,10 +84,14 @@ def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
     assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
 
-def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
+def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_this_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """As an inherited UV_FROZEN must not reach a lane job's `uv run --locked`."""
+    """The command runs in the environment env_for returns when given that very command, not in this process's.
+
+    So an environment keyed on the command, as a shared uv environment is, fits
+    what runs, and an inherited UV_FROZEN never reaches a lane job's `uv run --locked`.
+    """
     project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_environment.py")
     (project_root / "test_environment.py").write_text(
         textwrap.dedent(
@@ -105,10 +109,15 @@ def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
         encoding="utf-8",
     )
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
-    environment = {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
+    asked_for: list[str] = []
 
-    collection = collect_lane_job(project_root, "probe", env=environment)
+    def env_for(command: str) -> dict[str, str]:
+        asked_for.append(command)
+        return {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 
+    collection = collect_lane_job(project_root, "probe", env_for=env_for)
+
+    assert asked_for == [collection.command]
     assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
 
 
