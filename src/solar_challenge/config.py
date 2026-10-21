@@ -251,7 +251,8 @@ class PVDistributionConfig:
         capacity_kw: Distribution for PV capacity (required)
         azimuth: Distribution for azimuth angle (default: 180)
         tilt: Distribution for tilt angle (default: 35)
-        module_efficiency: Distribution for module efficiency (default: 0.20)
+        module_efficiency: Distribution for module efficiency (default: None, which leaves
+            each home's module its own)
         inverter_efficiency: Distribution for inverter efficiency (default: 0.96)
         system_age_years: Distribution for system age in years (default: 0.0)
         degradation_rate_per_year: Distribution for annual degradation rate (default: 0.005)
@@ -260,7 +261,7 @@ class PVDistributionConfig:
     capacity_kw: DistributionSpec
     azimuth: DistributionSpec = 180.0
     tilt: DistributionSpec = 35.0
-    module_efficiency: DistributionSpec = 0.20
+    module_efficiency: DistributionSpec = None
     inverter_efficiency: DistributionSpec = 0.96
     system_age_years: DistributionSpec = 0.0
     degradation_rate_per_year: DistributionSpec = 0.005
@@ -1396,7 +1397,7 @@ def _parse_pv_distribution_config(
         ),
         tilt=_parse_distribution_spec(data.get("tilt", 35.0), _child_path(block_path, "tilt")),
         module_efficiency=_parse_distribution_spec(
-            data.get("module_efficiency", 0.20), _child_path(block_path, "module_efficiency")
+            data.get("module_efficiency"), _child_path(block_path, "module_efficiency")
         ),
         inverter_efficiency=_parse_distribution_spec(
             data.get("inverter_efficiency", 0.96), _child_path(block_path, "inverter_efficiency")
@@ -1860,7 +1861,7 @@ def generate_homes_from_distribution(
             capacity_kw=pv_capacity,
             azimuth=pv_azimuth if pv_azimuth is not None else 180.0,
             tilt=pv_tilt if pv_tilt is not None else 35.0,
-            module_efficiency=pv_module_eff if pv_module_eff is not None else 0.20,
+            module_efficiency=pv_module_eff,
             inverter_efficiency=pv_inverter_eff if pv_inverter_eff is not None else 0.96,
             system_age_years=pv_age if pv_age is not None else 0.0,
             degradation_rate_per_year=pv_degradation if pv_degradation is not None else 0.005,
