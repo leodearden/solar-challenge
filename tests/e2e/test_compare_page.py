@@ -126,7 +126,7 @@ _TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS = r"""charts => charts.flatMap(chart =>
 
 def _show_tab(page: Page, tab_name: str, chart: str) -> None:
     """Click tab_name's tab and wait until Plotly has drawn its chart, the element the selector chart selects, visible."""
-    page.get_by_role("button", name=tab_name, exact=True).click()
+    page.get_by_role("tab", name=tab_name, exact=True).click()
     expect(page.locator(f"{chart}.js-plotly-plot")).to_be_visible()
 
 
