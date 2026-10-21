@@ -51,6 +51,9 @@ DAYS_WINDOW_START = date(2024, 6, 1)
 #: days=FULL_YEAR_DAYS_SENTINEL and a request without dates run; rationale in
 #: docs/web-ui-design.md (Period).
 MAX_WINDOW_DAYS: int = (FULL_YEAR_END - FULL_YEAR_START).days + 1
+#: The most days a body may send: FULL_YEAR_DAYS_SENTINEL, so the full year is the one
+#: year-long window days runs; rationale in docs/web-ui-design.md (Period).
+MAX_DAYS: int = FULL_YEAR_DAYS_SENTINEL
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -160,10 +163,11 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     A body sets its window in one of two ways, never both:
 
-    - ``days``: :data:`FULL_YEAR_DAYS_SENTINEL` is the sentinel for the full
-      year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`; any other
-      whole number from 1 to :data:`MAX_WINDOW_DAYS` runs that many days from
-      :data:`DAYS_WINDOW_START`.
+    - ``days``: a whole number from 1 to :data:`MAX_DAYS`.
+      :data:`FULL_YEAR_DAYS_SENTINEL`, the largest, is the sentinel for the
+      full year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`. Any other
+      runs that many days from :data:`DAYS_WINDOW_START`, on past
+      :data:`FULL_YEAR_END` when it is longer than the rest of that year.
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
       as :data:`FULL_YEAR_START` / :data:`FULL_YEAR_END`.
 
@@ -181,7 +185,7 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     Raises:
         ValueError: If ``days`` is sent with a start or end, naming days and
             each of them as sent; if ``days`` is not a whole number from 1 to
-            MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an ISO 8601
+            MAX_DAYS, or if ``start`` or ``end`` is not an ISO 8601
             date, naming the field and the value sent; or if the window ends
             before it starts or spans more than MAX_WINDOW_DAYS days, naming
             start and end as read.
@@ -190,7 +194,7 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     days = sent.pop("days", None)
     _refuse_days_with_dates(days, sent)
     if days is not None:
-        start, end = _days_window(as_whole_number_within(days, "days", 1, MAX_WINDOW_DAYS))
+        start, end = _days_window(as_whole_number_within(days, "days", 1, MAX_DAYS))
     else:
         start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
         end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
