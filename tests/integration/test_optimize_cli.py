@@ -18,7 +18,7 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
     ConfigPoint,
