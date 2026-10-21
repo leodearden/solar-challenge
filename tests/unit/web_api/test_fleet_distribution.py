@@ -12,6 +12,7 @@ from flask.testing import FlaskClient
 from solar_challenge.config import (
     DispatchStrategyConfig,
     GridChargeConfig,
+    generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
 from solar_challenge.errors import ConfigurationError
@@ -877,6 +878,28 @@ class TestFleetFromDistribution:
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
         assert "pv.capacity_kw" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_distribution_whose_draws_overflow_a_float_returns_400_carrying_the_samplers_refusal_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A household_occupants uniform whose every draw overflows a float is a 400 whose error is the fleet sampler's refusal, naming load.household_occupants; no fleet is queued."""
+        body = {
+            **self._VALID_BODY,
+            "load": {
+                "annual_consumption_kwh": 3500.0,
+                "household_occupants": {"type": "uniform", "min": -1.7e308, "max": 1.7e308},
+            },
+        }
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(
+                parse_fleet_distribution_config(form_to_fleet_distribution_config(body)),
+                resolve_location(body["location"]),
+            )
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(refusal.value)}
+        assert "load.household_occupants" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

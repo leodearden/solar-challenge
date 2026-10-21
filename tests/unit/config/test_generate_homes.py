@@ -23,10 +23,49 @@ from solar_challenge.config import (
     WeightedDiscreteDistribution,
     generate_homes_from_distribution,
     load_fleet_config,
+    parse_fleet_distribution_config,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.tariff import TariffConfig
+
+
+#: A uniform whose max - min overflows a float, so every draw from it is inf whatever the seed.
+_OVERFLOWING_UNIFORM = {"type": "uniform", "min": -1.7e308, "max": 1.7e308}
+
+#: A fleet_distribution block that draws each of _DRAWN_SETTINGS for every home: a battery's charge
+#: powers are drawn only for a home with a capacity, and the heat pump and EV settings only for a home
+#: with a heat pump type and a charger.
+_EVERY_SETTING_DRAWN: dict = {
+    "n_homes": 2,
+    "seed": 42,
+    "pv": {"capacity_kw": 4.0},
+    "load": {"annual_consumption_kwh": 3500.0, "use_stochastic": False},
+    "battery": {"capacity_kwh": 5.0},
+    "heat_pump": {"heat_pump_type": "ASHP"},
+    "ev": {"charger_type": {"type": "weighted_discrete", "values": ["7kW"], "weights": [1]}},
+}
+
+#: Each setting a normal or uniform can be drawn for, as its block and field in a fleet_distribution block.
+_DRAWN_SETTINGS = (
+    ("pv", "capacity_kw"),
+    ("pv", "azimuth"),
+    ("pv", "tilt"),
+    ("pv", "module_efficiency"),
+    ("pv", "inverter_efficiency"),
+    ("pv", "system_age_years"),
+    ("pv", "degradation_rate_per_year"),
+    ("load", "annual_consumption_kwh"),
+    ("load", "household_occupants"),
+    ("battery", "capacity_kwh"),
+    ("battery", "max_charge_kw"),
+    ("battery", "max_discharge_kw"),
+    ("heat_pump", "thermal_capacity_kw"),
+    ("heat_pump", "annual_heat_demand_kwh"),
+    ("ev", "arrival_hour"),
+    ("ev", "departure_hour"),
+    ("ev", "required_charge_kwh"),
+)
 
 
 class TestDistributionSampling:
@@ -309,6 +348,54 @@ class TestGenerationRefusesAPoolNotSizedToTheFleet:
             generate_homes_from_distribution(config, Location.bristol())
 
         assert str(use_refusal.value) == str(construction_refusal.value)
+
+
+class TestGenerateHomesRefusesADrawThatIsNotFinite:
+    """generate_homes_from_distribution refuses a normal or uniform draw that is not a finite number, naming its setting and the draw."""
+
+    @pytest.mark.parametrize(
+        ("block", "field"),
+        [pytest.param(block, field, id=f"{block}.{field}") for block, field in _DRAWN_SETTINGS],
+    )
+    def test_an_overflowing_draw_is_refused_naming_its_setting_and_the_draw(self, block: str, field: str) -> None:
+        """A draw that overflows a float is refused naming its setting and the inf it drew, whichever setting it is drawn for."""
+        fleet = parse_fleet_distribution_config(
+            {**_EVERY_SETTING_DRAWN, block: {**_EVERY_SETTING_DRAWN[block], field: _OVERFLOWING_UNIFORM}}
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(fleet, Location.bristol())
+        assert str(exc_info.value) == f"{block}.{field} must draw samples that are finite numbers, got a sample of inf"
+
+    def test_an_overflowing_draw_pre_sampled_in_bristol_legacy_order_is_refused_as_a_fresh_one_is(self) -> None:
+        """random_order bristol_legacy draws every home's annual consumption before it builds the first home; an overflowing one is refused naming its setting and the draw."""
+        fleet = parse_fleet_distribution_config(
+            {
+                **_EVERY_SETTING_DRAWN,
+                "random_order": "bristol_legacy",
+                "load": {**_EVERY_SETTING_DRAWN["load"], "annual_consumption_kwh": _OVERFLOWING_UNIFORM},
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(fleet, Location.bristol())
+        assert str(exc_info.value) == (
+            "load.annual_consumption_kwh must draw samples that are finite numbers, got a sample of inf"
+        )
+
+    def test_a_normal_whose_bounds_clamp_its_overflowing_draws_is_accepted(self) -> None:
+        """A normal whose draws overflow a float, but whose min and max clamp them, gives each home a finite capacity from its min to its max."""
+        config = FleetDistributionConfig(
+            n_homes=20,
+            pv=PVDistributionConfig(capacity_kw=NormalDistribution(mean=1.7e308, std=1e308, min=1.0, max=10.0)),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        capacities = [home.pv_config.capacity_kw for home in generate_homes_from_distribution(config, Location.bristol())]
+
+        assert len(capacities) == 20
+        assert all(1.0 <= capacity <= 10.0 for capacity in capacities)
 
 
 class TestHeatPumpDistribution:
@@ -694,13 +781,14 @@ class TestGenerateHomesHouseholdOccupants:
     def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
         self, household_occupants: DistributionSpec
     ) -> None:
-        """Every draw from 2.6 to 3.4 gives its home 3 occupants, the nearest whole number, where truncation gives 2 to every draw below 3.
+        """Every draw from 2.6 to 3.4 gives its home the int 3, the nearest whole number, where truncation gives 2 to every draw below 3.
 
         The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
         """
         homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
 
-        assert [home.load_config.household_occupants for home in homes] == [3] * 20
+        occupants = [home.load_config.household_occupants for home in homes]
+        assert [(type(count), count) for count in occupants] == [(int, 3)] * 20
 
     @pytest.mark.parametrize(
         "household_occupants",
@@ -737,18 +825,23 @@ class TestGenerateHomesHouseholdOccupants:
                 id="shuffled-pool-zero",
             ),
             pytest.param(
-                UniformDistribution(min=-1.7e308, max=1.7e308),
-                "Household occupants seems unrealistic: inf",
-                id="uniform-draws-overflowing-to-infinity",
+                UniformDistribution(min=1e300, max=1e300),
+                "Household occupants seems unrealistic: 1e+300",
+                id="uniform-draw-too-large-for-a-count",
+            ),
+            pytest.param(
+                UniformDistribution(min=-1e300, max=-1e300),
+                "Household occupants must be at least 1, got -1e+300",
+                id="uniform-draw-far-below-one",
             ),
         ],
     )
     def test_a_count_load_config_refuses_is_refused_as_it_refuses_it(
         self, household_occupants: DistributionSpec, refusal: str
     ) -> None:
-        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, replaced by the default 3, or left to raise OverflowError.
+        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, or replaced by the default 3, and a drawn count is named as drawn, 1e+300 rather than the 301-digit int it equals.
 
-        The uniform spec's max - min overflows, so every draw from it is inf whatever the seed.
+        A uniform between equal bounds draws its bound whatever the seed.
         """
         with pytest.raises(ValueError) as exc_info:
             generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
