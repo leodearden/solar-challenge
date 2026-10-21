@@ -444,10 +444,7 @@ class TestGenerateConfigRankingReportTable2:
             "5.0 kWp / 5.0 kWh / 5.0 kW": "£420.00",
             "6.0 kWp / 5.0 kWh / 5.0 kW": "£450.00",
         }
-        shown = {
-            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline Outlay (£/yr)"]
-            for label in expected
-        }
+        shown = _column(report, "## Fixed-15p Trade-Off", "Baseline Outlay (£/yr)", expected)
         assert shown == expected, f"baseline outlays not shown in their configs' rows:\n{report}"
 
     def test_baseline_surplus_values_present(self) -> None:
@@ -460,10 +457,7 @@ class TestGenerateConfigRankingReportTable2:
             "5.0 kWp / 5.0 kWh / 5.0 kW": "£80.00",
             "6.0 kWp / 5.0 kWh / 5.0 kW": "£60.00",
         }
-        shown = {
-            label: _config_row(report, "## Fixed-15p Trade-Off", label)["Baseline CBS Surplus (£/home/yr)"]
-            for label in expected
-        }
+        shown = _column(report, "## Fixed-15p Trade-Off", "Baseline CBS Surplus (£/home/yr)", expected)
         assert shown == expected, f"baseline surpluses not shown in their configs' rows:\n{report}"
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
