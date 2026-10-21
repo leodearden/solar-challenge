@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Direct access to the rows of a dashboard database's config_presets table.
 
-insert_saved_home_preset writes a saved home preset no save writes, such as one under a
-built-in home preset's name or one whose config is not JSON. saved_preset_names reads the
-name of every saved preset, so a test can show what a save wrote.
+insert_saved_home_preset and insert_saved_fleet_preset write a saved home or fleet preset no
+save writes, such as a home preset under a built-in home preset's name, or a preset whose config
+is not JSON or is NULL. saved_preset_names reads the name of every saved preset, so a test can
+show what a save wrote.
 
 Usage::
 
@@ -19,15 +20,27 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
+from solar_challenge.web.database import PresetType
 
-def insert_saved_home_preset(db_path: str | Path, name: str, config_json: str) -> str:
-    """Insert the saved home preset *name*, whose config is the text *config_json*, into the database at *db_path*. Returns its id."""
+
+def insert_saved_home_preset(db_path: str | Path, name: str, config_json: str | None) -> str:
+    """Insert the saved home preset *name*, whose config is the text *config_json*, NULL for None, into the database at *db_path*. Returns its id."""
+    return _insert_saved_preset(db_path, name, "home", config_json)
+
+
+def insert_saved_fleet_preset(db_path: str | Path, name: str, config_json: str | None) -> str:
+    """Insert the saved fleet preset *name*, whose config is the text *config_json*, NULL for None, into the database at *db_path*. Returns its id."""
+    return _insert_saved_preset(db_path, name, "fleet", config_json)
+
+
+def _insert_saved_preset(db_path: str | Path, name: str, preset_type: PresetType, config_json: str | None) -> str:
+    """Insert the saved *preset_type* preset *name*, whose config is the text *config_json*, NULL for None, into the database at *db_path*. Returns its id."""
     preset_id = str(uuid.uuid4())
     with closing(sqlite3.connect(db_path)) as conn:
         with conn:
             conn.execute(
-                "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, 'home', ?, ?)",
-                (preset_id, name, config_json, datetime.now(timezone.utc).isoformat()),
+                "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (preset_id, name, preset_type, config_json, datetime.now(timezone.utc).isoformat()),
             )
     return preset_id
 
