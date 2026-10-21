@@ -223,32 +223,20 @@ class TestFinCalibrationScenarioParses:
 
     def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
-        path = Path(self._SCENARIO_PATH)
-        if not path.exists():
-            pytest.fail(
-                f"Scenario file not found: {self._SCENARIO_PATH}. "
-                "Create it with step-4 impl."
-            )
-        raw = load_config(path)
+        raw = load_config(self._SCENARIO_PATH)
         finance = parse_finance_config(raw.get("finance"))
         assert finance is not None, "Expected finance block in scenario, got None"
         return finance
 
     def _load_homes(self) -> list:
         """Parse the fleet homes from the calibration scenario YAML."""
-        path = Path(self._SCENARIO_PATH)
-        if not path.exists():
-            pytest.fail(
-                f"Scenario file not found: {self._SCENARIO_PATH}. "
-                "Create it with step-4 impl."
-            )
-        fleet = load_fleet_config(path)
+        fleet = load_fleet_config(self._SCENARIO_PATH)
         return list(fleet.homes)
 
     def test_scenario_file_exists(self) -> None:
         """scenarios/bristol-fin-calibration.yaml must exist on disk."""
         assert Path(self._SCENARIO_PATH).exists(), (
-            f"{self._SCENARIO_PATH} not found — create it in step-4"
+            f"{self._SCENARIO_PATH} not found"
         )
 
     def test_finance_block_is_the_fin_finance_at_fin_scf(self) -> None:
