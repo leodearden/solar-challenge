@@ -284,6 +284,16 @@ def _calendar_days(first: datetime.date, last: datetime.date) -> list[datetime.d
 _rng_lock = threading.Lock()
 
 
+def _replace_rng_lock_in_forked_child() -> None:
+    """A forked child must not inherit the lock held by a thread that does not exist in it."""
+    global _rng_lock
+    _rng_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):  # only where os.fork exists
+    os.register_at_fork(after_in_child=_replace_rng_lock_in_forked_child)
+
+
 def _generator_seeds(seed: Optional[int]) -> tuple[int, int | npt.NDArray[np.uint32 | np.uint64]]:
     """The seeds for random.seed and numpy.random.seed that a LoadConfig's seed stands for.
 
