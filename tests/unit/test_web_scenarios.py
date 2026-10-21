@@ -124,6 +124,11 @@ class TestSweepRoute:
         page = response.get_data(as_text=True)
         assert texts(page).count("Sweep Point Preview") == 1
 
+    def test_sweep_page_shows_no_sweep_id(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep mentions no Sweep ID: a sweep answers none, only its points' job ids."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        assert [text for text in texts(page) if "Sweep ID" in text] == []
+
     def test_sweep_page_days_input_allows_the_days_the_server_accepts(self, client: FlaskClient) -> None:
         """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_WINDOW_DAYS: the days parse_date_range accepts."""
         page = client.get("/scenarios/sweep").get_data(as_text=True)

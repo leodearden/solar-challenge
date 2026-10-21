@@ -86,7 +86,7 @@ class TestSimulateSweep:
     """Tests for POST /api/simulate/sweep."""
 
     def test_valid_linear_sweep_returns_201(self, client: FlaskClient) -> None:
-        """A linear sweep from a base config returns 201 with the parameter, values evenly spaced from min to max, and each point's job id in point order."""
+        """A linear sweep from a base config returns 201 with a body of exactly three keys: the parameter, values evenly spaced from min to max, and each point's job id in point order."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
@@ -99,10 +99,11 @@ class TestSimulateSweep:
             },
         )
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert data["parameter"] == "pv_capacity_kw"
-        assert data["values"] == [2.0, 4.0, 6.0, 8.0]
-        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
+        assert resp.get_json() == {
+            "parameter": "pv_capacity_kw",
+            "values": [2.0, 4.0, 6.0, 8.0],
+            "job_ids": ["job-1", "job-2", "job-3", "job-4"],
+        }
 
     def test_valid_geometric_sweep_returns_201(self, client: FlaskClient) -> None:
         """A geometric sweep's values grow by a constant ratio from min to max."""

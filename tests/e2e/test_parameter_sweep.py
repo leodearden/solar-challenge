@@ -168,8 +168,8 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 
 def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
     """Filling the form with a 3-point geometric sweep from 1 to 9 and clicking its
-    button returns 201 with a sweep id, the geometric sweep values and one
-    distinct background home-job id per sweep point.
+    button returns 201 with the geometric sweep values and one distinct
+    background home-job id per sweep point.
 
     Min, max, steps and mode are all moved off their defaults, so the response's
     values prove that each filled control reached the request.
@@ -189,7 +189,6 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
     assert response.status == 201
 
     data = response.json()
-    assert data["sweep_id"]
     assert data["values"] == [1.0, 3.0, 9.0]
 
     job_ids = data["job_ids"]
@@ -211,7 +210,7 @@ class _SweepJobs:
 
 @pytest.fixture
 def sweep_jobs(page: Page) -> Iterator[_SweepJobs]:
-    """Accept the page's Nth sweep as sweep-N, whose two points, N and N + 10, run as the jobs sweep-N-point-1 and sweep-N-point-2, so no point reaches the live server's JobManager; abort the requests still held at teardown."""
+    """Accept the page's Nth sweep with two points, N and N + 10, which run as the jobs sweep-N-point-1 and sweep-N-point-2, so no point reaches the live server's JobManager; abort the requests still held at teardown."""
     sweep_numbers = itertools.count(1)
 
     def _accept(route: Route) -> None:
@@ -219,7 +218,6 @@ def sweep_jobs(page: Page) -> Iterator[_SweepJobs]:
         route.fulfill(
             status=201,
             json={
-                "sweep_id": f"sweep-{n}",
                 "parameter": "pv_capacity_kw",
                 "values": [float(n), float(n + 10)],
                 "job_ids": [f"sweep-{n}-point-1", f"sweep-{n}-point-2"],
