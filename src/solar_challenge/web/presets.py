@@ -114,13 +114,11 @@ def _builtin_home_presets() -> list[dict[str, Any]]:
 
 
 def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
-    """The preset a saved home preset's row holds; None, with a logged warning, when its config is not a JSON object."""
+    """The preset a saved home preset's row holds; None, with a logged warning naming it, when its config cannot be read."""
     try:
-        config = json.loads(row["config_json"]) if row["config_json"] else {}
-    except ValueError:
-        config = None
-    if not isinstance(config, dict):
-        logger.warning("Saved home preset %r is not listed: its config is not a JSON object", row["name"])
+        config = _saved_preset_config(row)
+    except SavedPresetUnreadable as unreadable:
+        logger.warning("%s, so it is not listed", unreadable)
         return None
     return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
 
@@ -140,6 +138,21 @@ def _saved_preset_row(database: Database, name: str, preset_type: PresetType) ->
     except sqlite3.Error as exc:
         raise SavedPresetUnreadable(name, str(exc)) from exc
     return row
+
+
+def _saved_preset_config(row: sqlite3.Row) -> dict[str, Any]:
+    """The config a saved preset's row holds, a JSON object; a config stored as NULL or empty text reads as {}.
+
+    Raises:
+        SavedPresetUnreadable: When the config is not JSON, or is JSON but not an object.
+    """
+    try:
+        config = json.loads(row["config_json"]) if row["config_json"] else {}
+    except ValueError as exc:
+        raise SavedPresetUnreadable(row["name"], "its config is not JSON") from exc
+    if not isinstance(config, dict):
+        raise SavedPresetUnreadable(row["name"], "its config is not a JSON object")
+    return config
 
 
 def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
@@ -183,15 +196,7 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
             JSON, or is JSON but not an object.
     """
     row = _saved_preset_row(database, name, "fleet")
-    if row is None:
-        return None
-    try:
-        config = json.loads(row["config_json"]) if row["config_json"] else {}
-    except ValueError as exc:
-        raise SavedPresetUnreadable(name, "its config is not JSON") from exc
-    if not isinstance(config, dict):
-        raise SavedPresetUnreadable(name, "its config is not a JSON object")
-    return {**_listed_saved_fleet_preset(row), "config": config}
+    return None if row is None else {**_listed_saved_fleet_preset(row), "config": _saved_preset_config(row)}
 
 
 def _listed_saved_fleet_preset(row: sqlite3.Row) -> dict[str, Any]:
