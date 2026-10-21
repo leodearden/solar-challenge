@@ -570,6 +570,16 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
     }
 
 
+def test_a_class_with_a_partialmethod_member_raises_the_type_error_member_forms_raises_for_it() -> None:
+    class Meter:
+        def settle(self, share: fractions.Fraction, rate: int) -> None: ...
+
+        half = functools.partialmethod(settle, rate=1)
+
+    with pytest.raises(TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partialmethod\b"):
+        named_classes(Meter)
+
+
 def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

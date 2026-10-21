@@ -368,3 +368,13 @@ def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
 
     assert member_forms(Base) == {"read": "(self) -> float"}
     assert member_forms(Child) == {"reset": "(self) -> None"}
+
+
+def test_a_partialmethod_member_raises_a_type_error_naming_the_class_and_the_member() -> None:
+    class Meter:
+        def settle(self, site: pathlib.Path, rate: int) -> None: ...
+
+        half = functools.partialmethod(settle, rate=1)
+
+    with pytest.raises(TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partialmethod\b"):
+        member_forms(Meter)
