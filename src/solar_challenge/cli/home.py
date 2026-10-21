@@ -164,14 +164,8 @@ def run(
             generate_summary_report(results, home_config.name, seg_tariff_pence_per_kwh=seg_rate)
         )
     else:
-        # Calculate summary for the default table.  When seg_tariff is already set on
-        # HomeConfig, the engine prices every export timestep at the SEG rate, so
-        # total_export_revenue_gbp is the authoritative figure.  Omitting
-        # seg_tariff_pence_per_kwh here prevents a duplicate "SEG Revenue" row in the
-        # table that would equal "Grid Export Revenue" and mislead users into thinking
-        # the revenue is counted twice.  The --report branch above does pass seg_rate
-        # to generate_summary_report, so the report has its detailed "## SEG Revenue"
-        # section.
+        # Why this summary gets no SEG rate:
+        # tests/unit/test_cli_summary_tables.py::TestPrintedSummaryTables::test_home_run_prints_a_seg_blocks_export_income_once
         summary = calculate_summary(results)
         console.print(
             create_summary_table(home_summary_rows(summary), title=f"Simulation Results: {home_config.name}")
