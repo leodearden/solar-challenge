@@ -26,11 +26,11 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
-from solar_challenge.web.database import Database
+from solar_challenge.web.database import RUN_TYPES, Database
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
-from tests._html_page import element_count, texts_after
+from tests._html_page import element_attributes, element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
@@ -127,6 +127,13 @@ class TestRunBrowserRoute:
         html = response.data.decode("utf-8")
         assert "filter-type" in html
         assert "filter-search" in html
+
+    def test_the_type_filter_offers_all_then_exactly_the_run_types(self, client: FlaskClient) -> None:
+        """The type filter, the page's only select, offers All and then each run type, labelled Home and Fleet."""
+        page = client.get("/history/runs").get_data(as_text=True)
+
+        assert [option.get("value") for option in element_attributes(page, "option")] == ["", *RUN_TYPES]
+        assert texts_after(page, "All", len(RUN_TYPES)) == ["Home", "Fleet"]
 
 
 # ---------------------------------------------------------------------------

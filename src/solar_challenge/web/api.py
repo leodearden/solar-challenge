@@ -10,7 +10,6 @@ import json
 import logging
 import math
 import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
 from types import MappingProxyType
@@ -478,7 +477,8 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "annual_consumption_kwh": "consumption_kwh",
 }
 
-_MAX_SWEEP_POINTS = 50
+#: The most steps a sweep may have, which the sweep page's Steps input offers.
+SWEEP_MAX_STEPS = 50
 
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
@@ -489,14 +489,14 @@ def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
     Generates a set of sweep points (linear or geometric) and submits one
-    background home-simulation job per point.  Returns the sweep id, the
-    rounded sweep values and the ids of the submitted jobs.
+    background home-simulation job per point.  Returns the rounded sweep
+    values and the ids of the submitted jobs.
 
     Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: finite number (default 1.0)
       - max: finite number (default 10.0)
-      - steps: whole number, 2 to _MAX_SWEEP_POINTS (default 5)
+      - steps: whole number, 2 to SWEEP_MAX_STEPS (default 5)
       - mode: "linear" | "geometric"
       - base_config: JSON object (optional, default {}), the home config
         every sweep point starts from.  A window it sends is read as
@@ -504,10 +504,10 @@ def simulate_sweep() -> tuple[Response, int]:
         with_default_days reads a body, runs _SWEEP_DEFAULT_DAYS days.
 
     Returns:
-        JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+        JSON with parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
         ones), a min, max or steps it cannot use, or a steps outside 2 to
-        _MAX_SWEEP_POINTS (the error names the field and the value sent), an
+        SWEEP_MAX_STEPS (the error names the field and the value sent), an
         invalid range, a min and max too far apart for the sweep's points to
         be computed (the error names both), a base_config that is not a JSON
         object (the error names the type sent), or a point whose home config
@@ -525,7 +525,7 @@ def simulate_sweep() -> tuple[Response, int]:
     try:
         min_val = as_finite_float(data.get("min", 1.0), "min")
         max_val = as_finite_float(data.get("max", 10.0), "max")
-        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, _MAX_SWEEP_POINTS)
+        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, SWEEP_MAX_STEPS)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     if min_val >= max_val:
@@ -563,7 +563,6 @@ def simulate_sweep() -> tuple[Response, int]:
         point_homes.append((val, home_config, start_date, end_date))
 
     # Submit one home job per sweep point
-    sweep_id = str(uuid.uuid4())
     job_manager = get_job_manager()
 
     job_ids: list[str] = []
@@ -577,7 +576,6 @@ def simulate_sweep() -> tuple[Response, int]:
         job_ids.append(job_id)
 
     return jsonify({
-        "sweep_id": sweep_id,
         "parameter": parameter,
         "values": rounded_values,
         "job_ids": job_ids,
@@ -598,7 +596,7 @@ def history_list_runs() -> Response:
         per_page: Items per page (default 20)
         sort: Sort column (default 'created_at')
         order: Sort order 'asc' or 'desc' (default 'desc')
-        type: Filter by run type (home, fleet, sweep)
+        type: Filter by run type (home, fleet)
         q: Search query (searches name and notes)
         date_from: Filter runs created on or after this date
         date_to: Filter runs created on or before this date

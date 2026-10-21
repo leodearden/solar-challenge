@@ -8,6 +8,7 @@ from typing import Any
 
 from flask import Blueprint, render_template
 
+from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 
@@ -51,4 +52,5 @@ def sweep() -> str:
     return str(render_template(
         "scenarios/sweep.html",
         max_window_days=MAX_WINDOW_DAYS,
+        sweep_max_steps=SWEEP_MAX_STEPS,
     ))

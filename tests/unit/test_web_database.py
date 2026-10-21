@@ -112,6 +112,7 @@ RUNS_COLUMN_VALUES = [
 VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS = [
     pytest.param("type", "hom", id="type-typo"),
     pytest.param("type", "Home", id="type-capitalised"),
+    pytest.param("type", "sweep", id="type-sweep"),
     pytest.param("status", "complete", id="status-typo"),
     pytest.param("status", "queued", id="status-a-job-status"),
 ]
@@ -126,7 +127,7 @@ CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES = [
 VALUES_OUTSIDE_THE_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS = [
     pytest.param("chat_messages", "role", "system", id="chat_messages-role-system"),
     pytest.param("chat_messages", "role", "User", id="chat_messages-role-capitalised"),
-    pytest.param("config_presets", "type", "sweep", id="config_presets-type-a-run-type"),
+    pytest.param("config_presets", "type", "sweep", id="config_presets-type-sweep"),
     pytest.param("config_presets", "type", "Home", id="config_presets-type-capitalised"),
 ]
 
@@ -246,7 +247,7 @@ class TestDatabaseInitialization:
 
     def test_run_type_and_run_status_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
         """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
-        assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet", "sweep"), ("running", "completed", "failed"))
+        assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet"), ("running", "completed", "failed"))
 
     @pytest.mark.parametrize(("table", "column", "value"), CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)
     def test_init_db_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
@@ -1005,7 +1006,7 @@ class TestRunRecordTypeAndStatus:
     @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
     def test_a_run_record_refuses_a_type_or_status_outside_its_definition(self, north_roof_record, column, value):
         """A type that is not a run type, or a status that is not a run status, raises ValueError naming the field, the value and the values allowed."""
-        allowed = {"type": "['home', 'fleet', 'sweep']", "status": "['running', 'completed', 'failed']"}[column]
+        allowed = {"type": "['home', 'fleet']", "status": "['running', 'completed', 'failed']"}[column]
         refusal = f"RunRecord.{column} is {value!r}, not one of {allowed} or None"
 
         with pytest.raises(ValueError, match=re.escape(refusal)):

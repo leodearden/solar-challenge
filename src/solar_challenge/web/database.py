@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-RunType = Literal["home", "fleet", "sweep"]  # the type of a run, held by the runs table's type column
+RunType = Literal["home", "fleet"]  # the type of a run, held by the runs table's type column
 RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
 
 RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
@@ -106,7 +106,7 @@ def init_db(db_path: str | Path) -> Database:
 
     cursor = conn.cursor()
 
-    # Runs table - stores metadata for home/fleet/sweep simulations
+    # Runs table - stores metadata for home/fleet simulations
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
