@@ -1,22 +1,25 @@
 """Tests for load profile generation."""
 
 import dataclasses
+import datetime
 import logging
 import math
 import re
+from collections.abc import Sequence
+from typing import NoReturn
 
 import numpy as np
 import pandas as pd
 import pytest
-import richardsonpy.classes.appliance as _app_mod
-from richardsonpy.classes.stochastic_el_load_wrapper import ElectricityProfile
-import solar_challenge.load as load_module
 from solar_challenge.load import (
+    DaySimulator,
+    HouseholdModel,
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
     energy_kwh,
     generate_load_profile,
     household_occupant_count,
+    richardsonpy_household,
     scale_profile_to_energy,
 )
 
@@ -436,62 +439,58 @@ class TestRichardsonpyIntegration:
         assert profile.index.tz is not None
 
 
+def _raise_simulated_richardsonpy_failure(*_: object) -> NoReturn:
+    raise RuntimeError("Simulated richardsonpy internal failure")
+
+
+class _RecordingRichardsonpyHousehold:
+    """richardsonpy's household model, recording each window it builds a household for and each date that household simulates."""
+
+    def __init__(self) -> None:
+        self.windows: list[list[datetime.date]] = []
+        self.days_simulated: list[datetime.date] = []
+
+    def __call__(self, config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
+        self.windows.append(list(days))
+        simulate_day = richardsonpy_household(config, days)
+
+        def simulate_and_record_day(day: datetime.date) -> np.ndarray:
+            self.days_simulated.append(day)
+            return simulate_day(day)
+
+        return simulate_and_record_day
+
+
+def _household_of_days(day_watts: DaySimulator) -> HouseholdModel:
+    """A household model whose household, in any window, simulates each day with day_watts."""
+    return lambda config, days: day_watts
+
+
 class TestWindowedStochasticGeneration:
     """Test windowed stochastic generation (task #13 FIX windowing)."""
 
-    def test_window_1day_calls_run_simulation_exactly_once(self, monkeypatch):
-        """1-day stochastic request triggers exactly 1 run_application_simulation call.
-
-        The original ElectricLoad-based code calls run_application_simulation
-        365 times regardless of the requested window. The windowed implementation
-        must call it exactly window_days times.
-        """
-        call_count = [0]
-        _original = _app_mod.run_application_simulation
-
-        def _counting_wrapper(*args, **kwargs):
-            call_count[0] += 1
-            return _original(*args, **kwargs)
-
-        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
-
+    def test_a_one_day_window_builds_one_household_and_simulates_its_one_day(self) -> None:
+        """Only the window's day is simulated, not the full year richardsonpy's ElectricLoad simulates."""
+        household = _RecordingRichardsonpyHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
+        day = pd.Timestamp("2024-06-21")
 
-        generate_load_profile(config, start, end)
+        generate_load_profile(config, day, day, household_model=household)
 
-        # Exactly ONE day simulated — not 365 (the full-year bug)
-        assert call_count[0] == 1, (
-            f"Expected 1 simulated day for a 1-day window, got {call_count[0]}"
-        )
+        assert household.windows == [[datetime.date(2024, 6, 21)]]
+        assert household.days_simulated == [datetime.date(2024, 6, 21)]
 
-    def test_window_3day_calls_run_simulation_exactly_three_times(self, monkeypatch):
-        """3-day stochastic request triggers exactly 3 run_application_simulation calls.
-
-        Ensures window scaling is proportional to the requested range, not pinned
-        to a constant (365 or otherwise).  Also checks structural invariants on
-        the returned Series.
-        """
-        call_count = [0]
-        _original = _app_mod.run_application_simulation
-
-        def _counting_wrapper(*args, **kwargs):
-            call_count[0] += 1
-            return _original(*args, **kwargs)
-
-        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
-
+    def test_a_three_day_window_simulates_each_of_its_days_once_in_order(self) -> None:
+        household = _RecordingRichardsonpyHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-23")  # 3 days, no DST transition
 
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, start, end, household_model=household)
 
-        # Exactly THREE simulated days
-        assert call_count[0] == 3, (
-            f"Expected 3 simulated days for a 3-day window, got {call_count[0]}"
-        )
+        june_days = [datetime.date(2024, 6, day) for day in (21, 22, 23)]
+        assert household.windows == [june_days]
+        assert household.days_simulated == june_days
 
         # Structural invariants
         assert isinstance(profile, pd.Series)
@@ -563,85 +562,70 @@ class TestWindowedStochasticGeneration:
         assert not stochastic.equals(elexon)
         assert energy_kwh(stochastic) == pytest.approx(energy_kwh(elexon), rel=1e-9)
 
-    def test_window_crossing_spring_dst_counts_calendar_days(self, monkeypatch):
-        """3-calendar-day window spanning the spring DST change calls run_application_simulation 3 times.
-
-        UK spring forward: 2024-03-31 01:00 GMT → 02:00 BST.
-        The absolute timedelta from 2024-03-30 00:00 GMT to 2024-04-01 00:00 BST
-        is only 47 h (not 48 h), so int(timedelta.days) == 1 → window_days = 2
-        (the off-by-one bug).  Calendar-date arithmetic gives
-        (Apr 1 − Mar 30).days + 1 = 3, which is correct.
-        """
-        call_count = [0]
-        _original = _app_mod.run_application_simulation
-
-        def _counting_wrapper(*args, **kwargs):
-            call_count[0] += 1
-            return _original(*args, **kwargs)
-
-        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
-
+    def test_a_window_across_the_spring_clock_change_simulates_each_of_its_calendar_days(
+        self,
+    ) -> None:
+        """The window's first and last midnights are 47 hours apart, since the clocks go forward on 2024-03-31, yet it holds three calendar days."""
+        household = _RecordingRichardsonpyHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        # 3-calendar-day window that crosses the UK spring-forward on 2024-03-31
         start = pd.Timestamp("2024-03-30")
         end = pd.Timestamp("2024-04-01")
 
-        profile = generate_load_profile(config, start, end, timezone="Europe/London")
-
-        # Must simulate exactly 3 calendar days, not 2 (the timedelta-based bug)
-        assert call_count[0] == 3, (
-            f"Expected 3 simulated days for a DST-crossing 3-calendar-day window, "
-            f"got {call_count[0]}"
+        profile = generate_load_profile(
+            config, start, end, timezone="Europe/London", household_model=household
         )
 
-        # Profile must be structurally valid
-        assert isinstance(profile, pd.Series)
+        assert household.days_simulated == [
+            datetime.date(2024, 3, 30),
+            datetime.date(2024, 3, 31),
+            datetime.date(2024, 4, 1),
+        ]
         assert profile.index.tz is not None, "Index must be tz-aware"
         assert (profile >= 0).all(), "No negative power values"
 
-    def test_richardsonpy_runtime_error_falls_back_to_elexon(self, monkeypatch):
-        """A runtime exception inside _simulate_stochastic_day falls back to Elexon.
-
-        With richardsonpy as a hard dependency the Elexon path is a *defensive*
-        fallback, not a missing-extra gate.  Any richardsonpy runtime error must
-        degrade gracefully to the deterministic profile instead of crashing the
-        simulation.
-
-        The returned profile must still be a valid 1-minute Series (Elexon shape).
-        """
-        def _always_raise(*args, **kwargs):
-            raise RuntimeError("Simulated richardsonpy internal failure")
-
-        monkeypatch.setattr(load_module, "_simulate_stochastic_day", _always_raise)
-
+    @pytest.mark.parametrize(
+        "household_model",
+        [
+            pytest.param(_raise_simulated_richardsonpy_failure, id="household"),
+            pytest.param(_household_of_days(_raise_simulated_richardsonpy_failure), id="day"),
+        ],
+    )
+    def test_a_household_model_that_raises_gives_the_elexon_profile_with_a_warning(
+        self, household_model: HouseholdModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
+        day = pd.Timestamp("2024-06-21")
 
-        # Must NOT raise — must degrade to Elexon fallback
-        profile = generate_load_profile(config, start, end)
+        with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
+            profile = generate_load_profile(config, day, day, household_model=household_model)
 
-        assert isinstance(profile, pd.Series), "Fallback must return a Series"
-        assert len(profile) == 1440, "Fallback must return a full 1-day profile"
-        assert (profile >= 0).all(), "Fallback profile must have no negative values"
-        assert profile.index.tz is not None, "Fallback profile index must be tz-aware"
+        pd.testing.assert_series_equal(
+            profile,
+            generate_load_profile(dataclasses.replace(config, use_stochastic=False), day, day),
+        )
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "solar_challenge.load"
+        ] == [
+            "richardsonpy stochastic generation failed; falling back to Elexon "
+            "deterministic profile: RuntimeError: Simulated richardsonpy internal failure"
+        ]
 
-    def test_a_richardsonpy_window_with_no_energy_falls_back_to_the_elexon_profile_with_a_warning(
-        self, monkeypatch, caplog
-    ):
-        """A window richardsonpy fills with zeros cannot be scaled to its seasonal energy, so the Elexon profile replaces it and a warning names the cause."""
-
-        def _no_power(_wrapper, irradiation, weekend, day, occupancy):
-            zeros = np.zeros(1440)
-            return zeros, zeros, zeros
-
-        monkeypatch.setattr(ElectricityProfile, "power_sim", _no_power)
-
+    def test_a_household_whose_days_have_no_energy_gives_the_elexon_profile_with_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A window whose days are all zeros cannot be scaled to its seasonal energy, so the Elexon profile replaces it and a warning names the cause."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
         start = end = pd.Timestamp("2024-06-21")
 
         with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
-            profile = generate_load_profile(config, start, end)
+            profile = generate_load_profile(
+                config,
+                start,
+                end,
+                household_model=_household_of_days(lambda day: np.zeros(1440)),
+            )
 
         elexon = generate_load_profile(
             dataclasses.replace(config, use_stochastic=False), start, end
@@ -653,3 +637,69 @@ class TestWindowedStochasticGeneration:
             if record.name == "solar_challenge.load"
             and "zero consumption" in record.getMessage()
         ] == [logging.WARNING]
+
+
+class TestHouseholdModelSeam:
+    """generate_load_profile builds one household per stochastic window and simulates each of its dates once, in order, placing each day's W; richardsonpy_household simulates only its window's dates."""
+
+    def test_no_household_is_built_for_a_profile_that_is_not_stochastic(self) -> None:
+        household = _RecordingRichardsonpyHousehold()
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
+        day = pd.Timestamp("2024-06-21")
+
+        generate_load_profile(config, day, day, household_model=household)
+
+        assert household.windows == []
+        assert household.days_simulated == []
+
+    def test_each_days_watts_land_on_that_days_rows_in_order(self) -> None:
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+
+        profile = generate_load_profile(
+            config,
+            pd.Timestamp("2024-06-21"),
+            pd.Timestamp("2024-06-23"),
+            household_model=_household_of_days(lambda day: np.full(1440, float(day.day))),
+        )
+
+        rows = profile.to_numpy().reshape(3, 1440)
+        assert (rows == rows[:, :1]).all()
+        assert rows[:, 0] / rows[0, 0] == pytest.approx([1, 22 / 21, 23 / 21])
+
+    def test_a_day_of_the_wrong_length_gives_the_elexon_profile_with_a_warning_naming_the_day_and_its_length(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        day = pd.Timestamp("2024-06-21")
+
+        with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
+            profile = generate_load_profile(
+                config, day, day, household_model=_household_of_days(lambda _: np.ones(1439))
+            )
+
+        pd.testing.assert_series_equal(
+            profile,
+            generate_load_profile(dataclasses.replace(config, use_stochastic=False), day, day),
+        )
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "solar_challenge.load"
+        ] == [
+            "richardsonpy stochastic generation failed; falling back to Elexon "
+            "deterministic profile: ValueError: the household model simulated 1439 "
+            "minutes for 2024-06-21, not 1440"
+        ]
+
+    def test_a_richardsonpy_household_refuses_a_date_outside_its_window(self) -> None:
+        simulate_day = richardsonpy_household(
+            LoadConfig(annual_consumption_kwh=3400.0), [datetime.date(2024, 6, 21)]
+        )
+
+        with pytest.raises(ValueError) as refusal:
+            simulate_day(datetime.date(2024, 6, 22))
+
+        assert str(refusal.value) == (
+            "richardsonpy_household was built for 2024-06-21 to 2024-06-21; "
+            "it cannot simulate 2024-06-22"
+        )
