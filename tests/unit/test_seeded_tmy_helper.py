@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_seeded_tmy.py: the clear June days a test seeds as Bristol's TMY, and the simulation windows within them."""
+"""Unit tests for tests/_seeded_tmy.py: the clear June days a test seeds as Bristol's TMY, the fixture a module binds to seed them, and the simulation windows within them."""
 
 from pathlib import Path
 
@@ -12,6 +12,7 @@ from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather
 
 _THREE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
+bristol_june_tmy = _THREE_DAYS.bristol_tmy_fixture()
 
 
 def test_the_days_are_the_clear_june_day_once_each_from_the_first_day() -> None:
@@ -40,6 +41,13 @@ def test_days_seeded_into_a_cache_of_the_tests_own_are_the_bristol_tmy_a_provide
 
     pd.testing.assert_frame_equal(
         PvgisTmy(cache).get(Location.bristol()), _THREE_DAYS.hourly_weather(), check_exact=True
+    )
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
+def test_the_fixture_a_module_binds_seeds_the_days_as_the_bristol_tmy_default_weather_serves() -> None:
+    pd.testing.assert_frame_equal(
+        default_weather().get(Location.bristol()), _THREE_DAYS.hourly_weather(), check_exact=True
     )
 
 
