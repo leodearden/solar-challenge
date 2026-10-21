@@ -118,7 +118,7 @@ def test_filter_controls_exist(page: Page, live_server: str) -> None:
 
 
 def test_type_filter_dropdown(page: Page, live_server: str) -> None:
-    """The Type filter has options: All, Home, Fleet, Sweep."""
+    """The Type filter has options: All, Home, Fleet."""
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
 
@@ -129,7 +129,6 @@ def test_type_filter_dropdown(page: Page, live_server: str) -> None:
         ("", "All"),
         ("home", "Home"),
         ("fleet", "Fleet"),
-        ("sweep", "Sweep"),
     ]
 
     options = type_select.locator("option")
