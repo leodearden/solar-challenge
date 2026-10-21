@@ -122,7 +122,7 @@ _MINUTES_PER_DAY = 1440
 DaySimulator: TypeAlias = Callable[[datetime.date], npt.NDArray[np.float64]]
 
 # One window's household. It draws randomness only from the module-level random and numpy.random
-# generators, and never calls generate_load_profile, since the RNG hand-off's lock is not re-entrant.
+# generators, and never generates a load profile, which _rng_hand_off refuses inside a window.
 HouseholdModel: TypeAlias = Callable[[LoadConfig, Sequence[datetime.date]], DaySimulator]
 
 
@@ -294,6 +294,15 @@ if hasattr(os, "register_at_fork"):  # only where os.fork exists
     os.register_at_fork(after_in_child=_replace_rng_lock_in_forked_child)
 
 
+class _HandOffThreadState(threading.local):
+    """Whether the thread reading it is inside an RNG hand-off window; each thread reads its own."""
+
+    in_window: bool = False
+
+
+_this_thread = _HandOffThreadState()
+
+
 def _generator_seeds(seed: Optional[int]) -> tuple[int, int | npt.NDArray[np.uint32 | np.uint64]]:
     """The seeds for random.seed and numpy.random.seed that a LoadConfig's seed stands for.
 
@@ -318,15 +327,27 @@ def _rng_hand_off(seed: Optional[int]) -> Iterator[None]:
 
     The window draws from both seeded from seed, fresh entropy when it is None, and the
     caller gets both back in the states it left them in, however the window ends.
+
+    Raises:
+        RuntimeError: If the calling thread is already inside a window, as when a household
+            model generates a load profile: the hand-off's lock is not re-entrant, so that
+            thread would otherwise wait on it forever.
     """
+    if _this_thread.in_window:
+        raise RuntimeError(
+            "a household model must not generate a load profile: "
+            "the RNG hand-off is not re-entrant"
+        )
     random_seed, numpy_seed = _generator_seeds(seed)
     with _rng_lock:
         random_state, numpy_state = random.getstate(), np.random.get_state()
+        _this_thread.in_window = True
         try:
             random.seed(random_seed)
             np.random.seed(numpy_seed)
             yield
         finally:
+            _this_thread.in_window = False
             random.setstate(random_state)
             np.random.set_state(numpy_state)
 

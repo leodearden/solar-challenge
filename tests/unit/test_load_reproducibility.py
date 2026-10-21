@@ -5,6 +5,7 @@ import ast
 import datetime
 import inspect
 import logging
+import logging.handlers
 import multiprocessing
 import random
 import threading
@@ -157,6 +158,15 @@ def test_a_negative_seed_and_its_absolute_value_give_different_profiles(seed: in
     assert not negative.equals(positive)
 
 
+_needs_fork = pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="multiprocessing has no fork start method on this platform",
+)
+_ignores_the_multi_threaded_fork_warning = pytest.mark.filterwarnings(
+    r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child.:DeprecationWarning"
+)
+
+
 def _generate_the_seed_42_profile_of_21_june_2024_expecting(expected: pd.Series) -> None:
     """A forked child's work: it fails unless its seed-42 profile of 21 June 2024 is expected."""
     day = pd.Timestamp("2024-06-21")
@@ -164,13 +174,8 @@ def _generate_the_seed_42_profile_of_21_june_2024_expecting(expected: pd.Series)
         raise AssertionError("the forked child's seed-42 profile differs from its parent's")
 
 
-@pytest.mark.skipif(
-    "fork" not in multiprocessing.get_all_start_methods(),
-    reason="multiprocessing has no fork start method on this platform",
-)
-@pytest.mark.filterwarnings(
-    r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child.:DeprecationWarning"
-)
+@_needs_fork
+@_ignores_the_multi_threaded_fork_warning
 def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_profile() -> None:
     day = pd.Timestamp("2024-06-21")
     expected = generate_load_profile(_stochastic(42), day, day)
@@ -207,6 +212,56 @@ def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_prof
             child.kill()
             child.join()
     assert not holder.is_alive()
+
+
+def _generate_a_profile_inside_a_household_model() -> None:
+    """A forked child's work: it fails unless a profile generated inside a household model is the Elexon profile, logged with the one warning that names the rule."""
+    day = pd.Timestamp("2024-06-21")
+    profiles_inside: list[pd.Series] = []
+
+    def household_that_generates_a_profile(
+        config: LoadConfig, days: Sequence[datetime.date]
+    ) -> DaySimulator:
+        profiles_inside.append(generate_load_profile(config, day, day))
+        return lambda _: np.ones(1440)
+
+    logged = logging.handlers.BufferingHandler(capacity=10)
+    logging.getLogger("solar_challenge.load").addHandler(logged)
+    generate_load_profile(
+        _stochastic(7), day, day, household_model=household_that_generates_a_profile
+    )
+
+    elexon = generate_load_profile(replace(_stochastic(7), use_stochastic=False), day, day)
+    if not (len(profiles_inside) == 1 and profiles_inside[0].equals(elexon)):
+        raise AssertionError("the profile generated inside the household model is not the Elexon profile")
+    messages = [record.getMessage() for record in logged.buffer]
+    if messages != [
+        "richardsonpy stochastic generation failed; falling back to Elexon deterministic profile: "
+        "RuntimeError: a household model must not generate a load profile: the RNG hand-off is "
+        "not re-entrant"
+    ]:
+        raise AssertionError(f"the forked child logged {messages}")
+
+
+@_needs_fork
+@_ignores_the_multi_threaded_fork_warning
+def test_a_profile_generated_inside_a_household_model_is_the_elexon_profile_with_a_warning_naming_the_rule() -> None:
+    """The RNG hand-off is not re-entrant, so it refuses the inner profile's window rather than wait forever on the lock its own window holds. A forked child runs the case, so that such a wait hangs only the child."""
+    child = multiprocessing.get_context("fork").Process(
+        target=_generate_a_profile_inside_a_household_model
+    )
+    child.start()
+    try:
+        child.join(30)
+        assert child.exitcode == 0, (
+            f"the child whose household model generates a load profile exited {child.exitcode}: "
+            "None if it did not finish within 30 s, as when the profile inside waits on the RNG "
+            "hand-off's lock its own window holds, or 1 if that profile or the warning differed"
+        )
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join()
 
 
 # The modules whose module-level functions draw from, seed or set the state of a generator the
