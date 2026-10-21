@@ -28,7 +28,9 @@ from solar_challenge.config import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
+from solar_challenge.pv import simulate_pv_output
 from solar_challenge.tariff import TariffConfig
+from tests._synthetic_weather import synthetic_june_weather
 
 
 #: A uniform whose max - min overflows a float, so every draw from it is inf whatever the seed.
@@ -786,6 +788,22 @@ class TestGenerateHomesFromDistributionModuleEfficiency:
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
         assert {home.pv_config.module_efficiency for home in homes} == {None, 0.15, 0.22}
+
+    def test_homes_drawing_different_efficiencies_generate_differently(self) -> None:
+        """On the tests' synthetic clear June day the 0.15 home's cells run hotter, so it yields less (measured x0.994987 and x1.001836 of the default's 26.8194 kWh)."""
+        fleet = self._fleet(
+            2, module_efficiency=ShuffledPoolDistribution(values=(0.15, 0.22), counts=(1, 1))
+        )
+        clear_day = synthetic_june_weather("2024-06-21")
+
+        kwh_by_efficiency = {
+            home.pv_config.module_efficiency: float(
+                simulate_pv_output(home.pv_config, Location.bristol(), clear_day).sum()
+            )
+            for home in generate_homes_from_distribution(fleet, Location.bristol())
+        }
+
+        assert kwh_by_efficiency[0.15] < kwh_by_efficiency[0.22], kwh_by_efficiency
 
 
 class TestGenerateHomesHouseholdOccupants:
