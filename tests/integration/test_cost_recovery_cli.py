@@ -94,9 +94,8 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
         report = generate_finance_report(bill, cost_recovery=sol)
 
-        assert "18.75" in report, (
-            f"Expected solved rate '18.75' in report but got:\n{report}"
-        )
+        shown = _value_cell(report, "## Cost-Recovery Analysis", "Solved Own-Use Rate")
+        assert shown == "18.75 p/kWh", f"solved rate not shown in its row:\n{report}"
 
     def test_cost_recovery_net_surplus_rendered(self) -> None:
         """Report must show the CBS net surplus per home per year."""
