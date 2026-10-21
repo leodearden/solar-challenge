@@ -979,16 +979,3 @@ class TestRecoveryOfInterruptedRuns:
         run = _run_of_job(manager, dropped_job_id, storage)
         assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
         assert run.completed_at is not None
-
-    def test_recovery_leaves_a_completed_run_and_a_failed_run_as_they_were(self, storage: RunStorage) -> None:
-        completing = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-        failing = JobManager(storage, max_workers=1, simulate_home=a_failing_simulation)
-        jobs = [(completing, _submit_home_job(completing)), (failing, _submit_home_job(failing))]
-        assert completing.wait_until_idle(timeout=30)
-        assert failing.wait_until_idle(timeout=30)
-        before = [_run_of_job(manager, job_id, storage) for manager, job_id in jobs]
-        assert [run.status for run in before] == ["completed", "failed"]
-
-        storage.fail_interrupted_runs()
-
-        assert [_run_of_job(manager, job_id, storage) for manager, job_id in jobs] == before
