@@ -366,8 +366,9 @@ class TestGenerateConfigRankingReportTable1:
         sweep = _make_ranked_sweep(results=(r,), infeasible=())
         report = generate_config_ranking_report(sweep)
 
-        # No 'infeasible configuration' heading needed when empty
-        assert "cost-recovery rank" in report.lower()
+        assert "### Infeasible Configurations" not in report, (
+            f"Infeasible Configurations heading rendered with no infeasible configs:\n{report}"
+        )
 
 
 # ---------------------------------------------------------------------------
