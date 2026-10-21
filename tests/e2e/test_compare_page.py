@@ -8,7 +8,7 @@ load, and the bar chart ends as wide as its container once the page
 settles; the radar chart's tab is hidden on load, so its chart is drawn
 only once the tab is shown, and then fills its container; both charts
 draw without errors, with titles and legends legible in light and dark
-mode.
+mode, and the radar chart's tick labels legible on its disc.
 Uses seeded run pair fixtures.
 """
 
@@ -123,6 +123,27 @@ _TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS = r"""charts => charts.flatMap(chart =>
         backdrop,
     }));
 })"""
+# The radar's radial tick labels, each with its fill and the disc it sits on as the disc shows: its fill at
+# its fill-opacity over the first opaque background behind the chart. Plotly paints a transparent disc as
+# fill rgb(0, 0, 0) with fill-opacity 0.
+_RADIAL_TICK_LABELS_ON_THE_DISC = r"""chart => {
+    const channels = colour => colour.match(/[\d.]+/g).map(Number);
+    let backdrop = null;
+    for (let el = chart.querySelector('.main-svg'); el && !backdrop; el = el.parentElement) {
+        const rgba = channels(getComputedStyle(el).backgroundColor);
+        if (rgba.length === 3 || rgba[3] === 1) backdrop = rgba.slice(0, 3);
+    }
+    if (!backdrop) throw new Error(`No opaque background lies behind #${chart.id}`);
+    const discStyle = getComputedStyle(chart.querySelector('.plotbg path'));
+    const [red, green, blue, alpha = 1] = channels(discStyle.fill);
+    const opacity = alpha * Number(discStyle.fillOpacity);
+    const disc = [red, green, blue].map((channel, i) => channel * opacity + backdrop[i] * (1 - opacity));
+    return [...chart.querySelectorAll('.radial-axis text')].map(label => ({
+        text: label.textContent,
+        fill: channels(getComputedStyle(label).fill).slice(0, 3),
+        disc,
+    }));
+}"""
 
 
 def _relative_luminance(rgb: Sequence[float]) -> float:
@@ -186,7 +207,9 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
     assert page_errors == [], f"Errors on {url}: {page_errors}"
 
 
-@pytest.mark.parametrize(
+# The themes a legibility check reads the charts in: dark mode on load, switched to dark mode once the
+# first chart is drawn, or light throughout.
+_IN_EACH_THEME = pytest.mark.parametrize(
     ("dark_on_load", "switched_to_dark"),
     [
         pytest.param(False, False, id="light"),
@@ -194,6 +217,27 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
         pytest.param(False, True, id="switched-to-dark"),
     ],
 )
+
+
+def _show_both_charts(
+    page: Page, live_server: str, runs: list[tuple[str, str]], dark_on_load: bool, switched_to_dark: bool
+) -> None:
+    """Open the compare page of runs and show the radar chart's tab, so both charts are drawn.
+
+    The page is in dark mode when it loads if dark_on_load, and is switched to dark mode once the bar chart is drawn if switched_to_dark.
+    """
+    (id1, _), (id2, _) = runs
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    if dark_on_load:
+        page.evaluate("() => localStorage.setItem('theme', 'dark')")
+        page.reload()
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    if switched_to_dark:
+        page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
+
+
+@_IN_EACH_THEME
 def test_compare_chart_titles_and_legends_are_legible(
     page: Page,
     live_server: str,
@@ -205,15 +249,7 @@ def test_compare_chart_titles_and_legends_are_legible(
 
     The page is in dark mode when it loads, or is switched to dark mode once its first chart is drawn, or stays light.
     """
-    (id1, _), (id2, _) = seeded_home_runs_pair
-    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    if dark_on_load:
-        page.evaluate("() => localStorage.setItem('theme', 'dark')")
-        page.reload()
-    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
-    if switched_to_dark:
-        page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
-    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
+    _show_both_charts(page, live_server, seeded_home_runs_pair, dark_on_load, switched_to_dark)
 
     texts = page.locator(".js-plotly-plot").evaluate_all(_TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS)
 
@@ -233,6 +269,33 @@ def test_compare_chart_titles_and_legends_are_legible(
     assert illegible == [], (
         f"These chart texts, as (chart, text, fill, backdrop, contrast), fall short of WCAG AA's "
         f"{_WCAG_AA_CONTRAST}:1 contrast with the background behind their chart: {illegible}"
+    )
+
+
+@_IN_EACH_THEME
+def test_compare_radar_tick_labels_are_legible_on_its_disc(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+    dark_on_load: bool,
+    switched_to_dark: bool,
+) -> None:
+    """Each radial tick label reaches WCAG AA's 4.5:1 contrast with the disc it sits on, as the disc shows: its fill over the first opaque background behind the chart (task 737)."""
+    _show_both_charts(page, live_server, seeded_home_runs_pair, dark_on_load, switched_to_dark)
+
+    labels = page.locator(_RADAR_CHART).evaluate(_RADIAL_TICK_LABELS_ON_THE_DISC)
+
+    assert [label["text"] for label in labels] == ["0", "20", "40", "60", "80", "100"], (
+        f"Expected the radar's radial tick labels 0 to 100; read {labels}"
+    )
+    illegible = [
+        (label["text"], label["fill"], [round(channel) for channel in label["disc"]], round(ratio, 2))
+        for label in labels
+        if (ratio := _contrast_ratio(label["fill"], label["disc"])) < _WCAG_AA_CONTRAST
+    ]
+    assert illegible == [], (
+        f"These radial tick labels, as (text, fill, disc, contrast), fall short of WCAG AA's "
+        f"{_WCAG_AA_CONTRAST}:1 contrast with the radar's disc: {illegible}"
     )
 
 
