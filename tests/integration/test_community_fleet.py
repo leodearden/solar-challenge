@@ -33,7 +33,6 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
@@ -143,13 +142,7 @@ def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
     return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
 
 
-@pytest.fixture
-def clear_june_tmy(weather_cache: WeatherCache) -> None:
-    """Serve a clear 21 June as Bristol's TMY, the location of every fleet these tests run.
-
-    get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
-    """
-    ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).seed_as_bristol_tmy(weather_cache)
+clear_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
 
 
 # ---------------------------------------------------------------------------

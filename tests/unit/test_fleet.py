@@ -595,12 +595,7 @@ class TestFleetSummary:
 
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21", tz="Europe/London"), count=1)
-
-
-@pytest.fixture
-def bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Serve a clear 21 June as Bristol's TMY, the location of every home these tests simulate."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 
 @pytest.fixture
