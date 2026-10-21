@@ -450,6 +450,39 @@ def test_a_class_whose_new_is_a_partial_is_spelled_by_the_signature_the_partial_
     assert surface_form(Made) == "(rate: int, *, scale: float = 2.0) -> object"
 
 
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Both:
+        def __new__(cls, rate: int) -> object: ...
+
+        __init__ = functools.partial(build, scale=2.0)
+
+    assert surface_form(Both) == "(rate: int) -> object"
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        pytest.param(object.__new__, id="builtin"),
+        pytest.param(staticmethod(object.__new__), id="staticmethod"),
+    ],
+)
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_type_error_naming_the_partial(
+    new: object,
+) -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Assigned:
+        __new__ = new
+        __init__ = functools.partial(build, scale=2.0)
+
+    with pytest.raises(
+        TypeError, match=r"\.Assigned\b.*\.Assigned\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Assigned)
+
+
 @pytest.mark.parametrize(
     ("cls", "naming_it_and_its_constructor"),
     [

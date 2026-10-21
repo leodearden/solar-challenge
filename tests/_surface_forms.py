@@ -65,11 +65,12 @@ def surface_form(obj: object) -> str:
     A class whose constructor inspect reads differently by minor raises TypeError naming
     it and the class in its MRO holding that constructor, and so does a
     functools.partial of such a class. One such constructor is a functools.partial held
-    as __init__, since 3.14 binds the partial to the instance as a method and earlier
-    minors do not; a partial held as __new__ is read alike on every minor, and spelled.
-    Another is one held by a class CPython defines in C, since inspect reads it from a
-    text signature CPython adds or rewrites by minor; object's, '()' on every minor, is
-    spelled, for object and for every class that inherits it.
+    as __init__, unless the class holding it also holds a __new__ not defined in C,
+    which inspect reads first: 3.14 binds the partial to the instance as a method and
+    earlier minors do not. A partial held as __new__ is read alike on every minor, and
+    spelled. Another is one held by a class CPython defines in C, since inspect reads it
+    from a text signature CPython adds or rewrites by minor; object's, '()' on every
+    minor, is spelled, for object and for every class that inherits it.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -516,23 +517,24 @@ _C_CONSTRUCTOR_KINDS: tuple[type, ...] = (types.BuiltinFunctionType, types.Wrapp
 
 
 def _refuse_minor_dependent_constructor(cls: type) -> None:
-    """Raise TypeError naming *cls* and the class holding its constructor if that class's own __init__ is a functools.partial, or if CPython defines that class in C and it is not object: inspect reads either constructor differently by minor.
+    """Raise TypeError naming *cls* and the class holding its constructor if that class's own __init__ is a functools.partial that inspect reads, or if CPython defines that class in C and it is not object: inspect reads either constructor differently by minor.
 
     inspect reads a partial __init__ with self before Python 3.14 and without it from
-    3.14, as 3.14 binds a partial to the instance as a method. A class is defined in C if
-    each __new__ and __init__ its own namespace holds is of a kind in
+    3.14, as 3.14 binds a partial to the instance as a method; it reads a __new__ the
+    same namespace holds first, unless that __new__ is defined in C. A class is defined
+    in C if each __new__ and __init__ its own namespace holds is of a kind in
     _C_CONSTRUCTOR_KINDS. inspect reads its constructor from a text signature, which
     CPython adds or rewrites by minor: functools.partial gained one in 3.13, and map's
     changed in 3.14. So such a class is refused even where its text signature reads alike
     today, as list's and decimal.Decimal's do. object is exempt: its '()' reads alike on
     every minor, and it holds the constructor of every class whose MRO holds no other.
-
-    The holder's namespace is read through vars(), never by attribute, since reading a
-    partial as an attribute of a class emits a FutureWarning on 3.13.
     """
     holder = _constructor_holder(cls)
     namespace = vars(holder)
-    if isinstance(namespace.get("__init__"), functools.partial):
+    new_read_first = "__new__" in namespace and not isinstance(
+        getattr(holder, "__new__"), _C_CONSTRUCTOR_KINDS
+    )
+    if isinstance(namespace.get("__init__"), functools.partial) and not new_read_first:
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
             "functools.partial, which Python 3.14 binds to the instance as a method and "
