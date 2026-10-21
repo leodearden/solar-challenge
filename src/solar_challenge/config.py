@@ -1616,14 +1616,25 @@ def parse_fleet_distribution_config(
     )
 
 
-def _nearest_count(draw: float, spec: Union[NormalDistribution, UniformDistribution]) -> float:
+def _nearest_count(
+    draw: float, spec: Union[NormalDistribution, UniformDistribution], setting: str
+) -> float:
     """Return the whole number nearest *draw* among those from *spec*'s min to its max, as a float.
 
     A half rounds up. A min or max that *spec* leaves unset, or that is not finite,
     bounds nothing.
+
+    Raises:
+        ConfigurationError: If no whole number lies from *spec*'s min to its max,
+            naming *setting*, the min and the max.
     """
     least: float = math.ceil(spec.min) if spec.min is not None and math.isfinite(spec.min) else -math.inf
     greatest: float = math.floor(spec.max) if spec.max is not None and math.isfinite(spec.max) else math.inf
+    if least > greatest:
+        raise ConfigurationError(
+            f"{setting} is a count, so a whole number must lie from its min to its max, "
+            f"got a min of {spec.min!r} and a max of {spec.max!r}"
+        )
     whole = math.floor(draw)
     nearest = whole + 1 if draw - whole >= 0.5 else whole
     return float(min(max(nearest, least), greatest))
@@ -1724,14 +1735,16 @@ class _DistributionSampler:
             setting: The setting's path in the fleet distribution, e.g. 'load.household_occupants'
 
         Raises:
-            ConfigurationError: As sample does, for a normal or uniform draw that
+            ConfigurationError: If *spec* is a normal or uniform distribution with
+                no whole number from its min to its max, naming *setting*, the min
+                and the max; or, as sample does, for a normal or uniform draw that
                 is not a finite number.
         """
         if isinstance(spec, (int, float)):
             return spec
         value = self.sample(spec, setting)
         if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
-            return _nearest_count(value, spec)
+            return _nearest_count(value, spec, setting)
         return value
 
     def sample_with_context(
@@ -1794,8 +1807,10 @@ def generate_homes_from_distribution(
             naming the pool; if a setting's spec cannot be drawn for it, e.g. a
             proportional_to outside the battery and heat pump settings, naming the
             setting; if a normal or uniform draw is not a finite number, naming the
-            setting and the draw; if a sampled PV capacity is not positive; or if a
-            sampled heat pump type is not one of heat_pump.HEAT_PUMP_TYPES.
+            setting and the draw; if load.household_occupants is a normal or uniform
+            with no whole number from its min to its max, naming it, the min and the
+            max; if a sampled PV capacity is not positive; or if a sampled heat pump
+            type is not one of heat_pump.HEAT_PUMP_TYPES.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
