@@ -63,12 +63,13 @@ def surface_form(obj: object) -> str:
     a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor. One such constructor is a
-    functools.partial held as __init__, since 3.14 binds the partial to the instance as
-    a method and earlier minors do not; a partial held as __new__ is read alike on every
-    minor, and spelled. Another is one held by a class CPython defines in C, since
-    inspect reads it from a text signature CPython adds or rewrites by minor; object's,
-    '()' on every minor, is spelled, for object and for every class that inherits it.
+    it and the class in its MRO holding that constructor, and so does a
+    functools.partial of such a class. One such constructor is a functools.partial held
+    as __init__, since 3.14 binds the partial to the instance as a method and earlier
+    minors do not; a partial held as __new__ is read alike on every minor, and spelled.
+    Another is one held by a class CPython defines in C, since inspect reads it from a
+    text signature CPython adds or rewrites by minor; object's, '()' on every minor, is
+    spelled, for object and for every class that inherits it.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -130,8 +131,8 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type; a class whose constructor surface_form refuses raises the
-    TypeError surface_form raises for it.
+    naming it and its type; a class whose constructor surface_form refuses, or a
+    functools.partial of such a class, raises the TypeError surface_form raises for it.
     A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
@@ -502,9 +503,12 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads."""
-    if inspect.isclass(obj):
-        _refuse_minor_dependent_constructor(obj)
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class a functools.partial wraps, as a partial's form is the one it leaves of that class."""
+    wrapped = obj
+    while isinstance(wrapped, functools.partial):
+        wrapped = wrapped.func
+    if inspect.isclass(wrapped):
+        _refuse_minor_dependent_constructor(wrapped)
     return inspect.signature(obj)
 
 
