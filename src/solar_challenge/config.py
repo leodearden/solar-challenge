@@ -324,12 +324,19 @@ class LoadDistributionConfig:
         household_occupants: Distribution for occupants (default: 3), drawn with
             _DistributionSampler.sample_count and held to
             load.household_occupant_count. A null draw takes LoadConfig's default.
+            A normal or uniform with no whole number from its min to its max is
+            refused on construction, and again as drawn.
         use_stochastic: Whether to use stochastic load profiles (default: True)
     """
 
     annual_consumption_kwh: DistributionSpec = None
     household_occupants: DistributionSpec = 3
     use_stochastic: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a normal or uniform household_occupants with no whole number from its min to its max; draws are checked as drawn."""
+        if isinstance(self.household_occupants, (NormalDistribution, UniformDistribution)):
+            _count_bounds(self.household_occupants, "load.household_occupants")
 
 
 @dataclass
@@ -1616,6 +1623,45 @@ def parse_fleet_distribution_config(
     )
 
 
+def _count_bounds(
+    spec: Union[NormalDistribution, UniformDistribution], setting: str
+) -> tuple[float, float]:
+    """Return the least and greatest whole numbers from *spec*'s min to its max.
+
+    A min or max that *spec* leaves unset, or that is not finite, bounds nothing:
+    the least is then -inf and the greatest inf.
+
+    Raises:
+        ConfigurationError: If no whole number lies from *spec*'s min to its max,
+            naming *setting*, the min and the max.
+    """
+    least: float = math.ceil(spec.min) if spec.min is not None and math.isfinite(spec.min) else -math.inf
+    greatest: float = math.floor(spec.max) if spec.max is not None and math.isfinite(spec.max) else math.inf
+    if least > greatest:
+        raise ConfigurationError(
+            f"{setting} is a count, so a whole number must lie from its min to its max, "
+            f"got a min of {spec.min!r} and a max of {spec.max!r}"
+        )
+    return least, greatest
+
+
+def _nearest_count(
+    draw: float, spec: Union[NormalDistribution, UniformDistribution], setting: str
+) -> float:
+    """Return the whole number nearest *draw* among those from *spec*'s min to its max, as a float.
+
+    A half rounds up. _count_bounds says which whole numbers *spec* allows.
+
+    Raises:
+        ConfigurationError: As _count_bounds, if no whole number lies from *spec*'s
+            min to its max.
+    """
+    least, greatest = _count_bounds(spec, setting)
+    whole = math.floor(draw)
+    nearest = whole + 1 if draw - whole >= 0.5 else whole
+    return float(min(max(nearest, least), greatest))
+
+
 class _DistributionSampler:
     """Draws a fleet's settings home by home, from one RNG seeded with the fleet's seed.
 
@@ -1699,28 +1745,28 @@ class _DistributionSampler:
     def sample_count(self, spec: DistributionSpec, setting: str) -> Optional[float]:
         """Sample a count of *setting* from *spec*.
 
-        A draw from a normal or uniform distribution is rounded to the nearest
-        whole number, a half rounding up: a draw clamped to a min of 2.5 gives
-        3.0. The whole number is returned as a float, so a refusal of the count
-        names it as drawn, 1e+300 rather than the 301-digit int it equals. It
-        can lie outside the spec's min and max, as 0.0 does for a draw of 0.45
-        under a min of 0.4. A fixed value is returned as the spec gives it, and
-        any other value as drawn.
+        A draw from a normal or uniform distribution gives the whole number
+        nearest it among those from the spec's min to its max, a half rounding
+        up, as _nearest_count states. The whole number is returned as a float,
+        so a refusal of the count names it as drawn, 1e+300 rather than the
+        301-digit int it equals. A fixed value is returned as the spec gives
+        it, and any other value as drawn.
 
         Args:
             spec: The setting's distribution specification
             setting: The setting's path in the fleet distribution, e.g. 'load.household_occupants'
 
         Raises:
-            ConfigurationError: As sample does, for a normal or uniform draw that
+            ConfigurationError: If *spec* is a normal or uniform distribution with
+                no whole number from its min to its max, naming *setting*, the min
+                and the max; or, as sample does, for a normal or uniform draw that
                 is not a finite number.
         """
         if isinstance(spec, (int, float)):
             return spec
         value = self.sample(spec, setting)
         if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
-            whole = math.floor(value)
-            return float(whole + 1 if value - whole >= 0.5 else whole)
+            return _nearest_count(value, spec, setting)
         return value
 
     def sample_with_context(
@@ -1783,8 +1829,10 @@ def generate_homes_from_distribution(
             naming the pool; if a setting's spec cannot be drawn for it, e.g. a
             proportional_to outside the battery and heat pump settings, naming the
             setting; if a normal or uniform draw is not a finite number, naming the
-            setting and the draw; if a sampled PV capacity is not positive; or if a
-            sampled heat pump type is not one of heat_pump.HEAT_PUMP_TYPES.
+            setting and the draw; if load.household_occupants is a normal or uniform
+            with no whole number from its min to its max, naming it, the min and the
+            max; if a sampled PV capacity is not positive; or if a sampled heat pump
+            type is not one of heat_pump.HEAT_PUMP_TYPES.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
