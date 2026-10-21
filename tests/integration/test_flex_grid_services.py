@@ -32,8 +32,6 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from tests._finance_builders import make_fleet_results_of
 
-pytestmark = pytest.mark.integration
-
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
 

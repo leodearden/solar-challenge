@@ -22,7 +22,6 @@ from tests._synthetic_weather import weather_for
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.mark.integration
 class TestSingleHomeSimulation:
     """Integration test for single home simulation."""
 

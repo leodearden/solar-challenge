@@ -37,8 +37,6 @@ from solar_challenge.tariff import FlatRateTariff
 from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
-pytestmark = pytest.mark.integration
-
 SCENARIO = Path("scenarios/bristol-community.yaml")
 
 

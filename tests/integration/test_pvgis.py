@@ -25,7 +25,6 @@ def bristol_tmy() -> pd.DataFrame:
 
 
 @pytest.mark.slow
-@pytest.mark.integration
 class TestPVGISTMY:
     """Test PVGIS TMY data retrieval."""
 

@@ -79,7 +79,6 @@ strict_markers = true
 markers = [
     "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
-    "integration: marks tests that exercise multiple modules together (full simulation; may hit real PVGIS)",
     "build: tests that invoke the build toolchain (uv build --wheel); requires uv and cached build-backend deps",
 ]
 
