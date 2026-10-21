@@ -719,6 +719,31 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     assert named_classes(submetering.audit) == {decimal.Decimal}
 
 
+def test_a_partial_that_wraps_another_callable_as_functools_wraps_records_one_names_the_classes_that_callable_names_read_where_that_callable_is_spelled_not_where_its_func_is(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    billing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "billing",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n",
+    )
+    reconciling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reconciling",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    audited = functools.update_wrapper(functools.partial(billing.settle, rate=1), reconciling.audit)
+
+    assert named_classes(audited) == {decimal.Decimal}
+
+
 def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_names_read_where_that_callable_is_spelled_though_the_routine_carries_a_signature(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
