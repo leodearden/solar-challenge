@@ -4,6 +4,10 @@
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none.
+
+A test function or class named any other way, as test_<name> or Test<Name> alone or next to its file in prose, is
+refused: the settled form is the node-id, which pytest runs as written and this gate resolves. A name the Python
+module's own code uses, such as a parameter called test_config, is no pointer.
 """
 
 import ast
@@ -17,8 +21,10 @@ import pytest
 _POINTER = re.compile(
     r"""
     (?<![\w./-])
-    (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
-    (?P<names>(?:::\w+)*)
+    (?:
+        (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)(?P<names>(?:::\w+)*)
+      | (?P<bare>test_\w+|Test[A-Z]\w*)
+    )
     """,
     re.VERBOSE,
 )
@@ -26,15 +32,19 @@ _POINTER = re.compile(
 
 @dataclass(frozen=True)
 class _Pointer:
-    """A pointer into tests/: the file holding it, relative to the project root, its line, and the path and names it gives."""
+    """A pointer into tests/: the file holding it, relative to the project root, its line, and the path and names it gives.
+
+    A test named without its file has no path, and its name is the one name.
+    """
 
     source: PurePosixPath
     line: int
-    path: PurePosixPath
+    path: PurePosixPath | None
     names: tuple[str, ...]
 
     def __str__(self) -> str:
-        return f"{self.source}:{self.line}: {'::'.join([str(self.path), *self.names])}"
+        parts = self.names if self.path is None else (str(self.path), *self.names)
+        return f"{self.source}:{self.line}: {'::'.join(parts)}"
 
 
 def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
@@ -56,16 +66,49 @@ def _utf8_text(path: Path) -> str | None:
 
 
 def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
-    """Return the pointers in *text*, the text of the file *source*, in text order."""
+    """Return the pointers in *text*, the text of the file *source*, in text order.
+
+    In a Python module, a test name given alone that the module's own code uses is not one.
+    """
+    matches = list(_POINTER.finditer(text))
+    has_bare_name = any(match["bare"] is not None for match in matches)
+    own_names = _code_names(text) if source.suffix == ".py" and has_bare_name else frozenset()
     return [
-        _Pointer(
-            source=source,
-            line=text.count("\n", 0, match.start()) + 1,
-            path=PurePosixPath(match["path"]),
-            names=tuple(match["names"].split("::")[1:]),
-        )
-        for match in _POINTER.finditer(text)
+        _pointer(source, text, match)
+        for match in matches
+        if match["bare"] is None or match["bare"] not in own_names
     ]
+
+
+def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer:
+    """Return the pointer *match* found in *text*, the text of the file *source*."""
+    line = text.count("\n", 0, match.start()) + 1
+    if match["bare"] is not None:
+        return _Pointer(source=source, line=line, path=None, names=(match["bare"],))
+    return _Pointer(
+        source=source, line=line, path=PurePosixPath(match["path"]), names=tuple(match["names"].split("::")[1:])
+    )
+
+
+def _code_names(text: str) -> frozenset[str]:
+    """Return the names of the variables, arguments, attributes, keywords, defs and classes in the Python module *text*."""
+    return frozenset(name for node in ast.walk(ast.parse(text)) if (name := _code_name(node)) is not None)
+
+
+def _code_name(node: ast.AST) -> str | None:
+    """Return the name *node* gives, if it is a variable, argument, attribute, keyword, def or class; None otherwise."""
+    match node:
+        case (
+            ast.Name(id=name)
+            | ast.arg(arg=name)
+            | ast.Attribute(attr=name)
+            | ast.keyword(arg=str() as name)
+            | ast.FunctionDef(name=name)
+            | ast.AsyncFunctionDef(name=name)
+            | ast.ClassDef(name=name)
+        ):
+            return name
+    return None
 
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
@@ -76,8 +119,14 @@ def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
 def _unresolved(root: Path, pointer: _Pointer) -> str | None:
     """Return why *pointer* leads to no file, directory or test under *root*, or None if it leads to one.
 
-    Its path must exist. Its names are read from the Python file's syntax tree, and the file is never imported.
+    It must give a path, and that path must exist. Its names are read from the Python file's syntax tree, and the file
+    is never imported.
     """
+    if pointer.path is None:
+        return (
+            "names a test without its file: point at it by its node-id from the project root,"
+            " tests/<file>.py::[<Class>::]<name>"
+        )
     target = root / pointer.path
     if not target.exists():
         return f"{pointer.path} does not exist"
@@ -119,7 +168,7 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """Return a project root whose tests/unit holds notes.txt and test_pointed_at.py, defining a test, a class and a nested class."""
+    """Return a project root whose tests/unit holds notes.txt and test_pointed_at.py, defining tests, a class and a nested one."""
     tests = tmp_path / "tests" / "unit"
     tests.mkdir(parents=True)
     (tests / "test_pointed_at.py").write_text(
