@@ -142,7 +142,10 @@ class TestSweepRoute:
         ]
 
     def test_sweep_page_has_no_chart_card_that_nothing_draws(self, client: FlaskClient) -> None:
-        """No script draws a chart on the sweep page, so the page carries no chart area."""
+        """The sweep page holds no sweep-chart card, since no script draws a chart into one.
+
+        Task 835, which draws the sweep's charts, replaces this test.
+        """
         page = client.get("/scenarios/sweep").get_data(as_text=True)
         assert "sweep-chart" not in element_ids(page)
 
