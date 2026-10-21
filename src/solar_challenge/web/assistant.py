@@ -304,6 +304,10 @@ _TRIGGER_TOOL_DEFAULT_DAYS = 7
 # The most homes run_fleet_simulation submits: a larger n_homes is clamped to it, to protect the single-worker JobManager.
 _FLEET_TOOL_MAX_HOMES = 100
 
+# The runs list_recent_runs returns when the model sends no positive limit, and the most it returns for any limit.
+_LIST_RUNS_DEFAULT_LIMIT = 10
+_LIST_RUNS_MAX_LIMIT = 50
+
 # The window both trigger tools take, days or a start and end, as parse_date_range reads it.
 _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
@@ -374,13 +378,13 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
 def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
     """Return a list of recent simulation runs, newest first.
 
-    Read-only SELECT on the runs table; limit is clamped to [1, 50] so callers
-    cannot request an unbounded result set.  Returns identifying fields plus key
-    summary metrics for each run.
+    Read-only SELECT on the runs table; limit is clamped to
+    [1, _LIST_RUNS_MAX_LIMIT] so callers cannot request an unbounded result
+    set.  Returns identifying fields plus key summary metrics for each run.
 
     Args:
-        limit:    Maximum number of runs to return (clamped to 1–50; defaults to
-                  10 when <= 0).
+        limit:    Maximum number of runs to return (clamped to
+                  1–_LIST_RUNS_MAX_LIMIT; _LIST_RUNS_DEFAULT_LIMIT when <= 0).
         database: The Database whose runs table is read.
 
     Returns:
@@ -390,10 +394,13 @@ def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
         On any DB error returns ``{"runs": [], "error": "<reason>"}``.
         Never raises.
     """
-    # Clamp limit to a sane range; treat <= 0 as "use default 10"
-    _DEFAULT_LIMIT = 10
-    _MAX_LIMIT = 50
-    effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
+    effective_limit = max(
+        1,
+        min(
+            limit if limit > 0 else _LIST_RUNS_DEFAULT_LIMIT,
+            _LIST_RUNS_MAX_LIMIT,
+        ),
+    )
 
     try:
         with database.transaction() as conn:
@@ -720,8 +727,10 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                     "limit": {
                         "type": "integer",
                         "description": (
-                            "Maximum number of runs to return (1–50, default 10). "
-                            "Values <= 0 are treated as the default (10)."
+                            f"Maximum number of runs to return (1–{_LIST_RUNS_MAX_LIMIT}, "
+                            f"default {_LIST_RUNS_DEFAULT_LIMIT}). "
+                            "Values <= 0 are treated as the default "
+                            f"({_LIST_RUNS_DEFAULT_LIMIT})."
                         ),
                     },
                 },
