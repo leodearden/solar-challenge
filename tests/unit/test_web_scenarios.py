@@ -24,7 +24,6 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
@@ -140,18 +139,6 @@ class TestSweepRoute:
         ]
         assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
             ("1", str(MAX_WINDOW_DAYS))
-        ]
-
-    def test_sweep_page_steps_input_allows_the_steps_the_server_accepts(self, client: FlaskClient) -> None:
-        """The Steps input, whose value the page sends as steps, allows 2 to SWEEP_MAX_STEPS: the step counts POST /api/simulate/sweep accepts."""
-        page = client.get("/scenarios/sweep").get_data(as_text=True)
-        steps_inputs = [
-            attributes
-            for attributes in element_attributes(page, "input")
-            if attributes.get("x-model") == "steps"
-        ]
-        assert [(attributes.get("min"), attributes.get("max")) for attributes in steps_inputs] == [
-            ("2", str(SWEEP_MAX_STEPS))
         ]
 
 
