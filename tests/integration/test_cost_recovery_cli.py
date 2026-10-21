@@ -18,7 +18,12 @@ from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._factories import make_bill_distribution_from_statistics, make_cost_recovery_solution
+from tests._factories import (
+    make_bill_breakdown,
+    make_bill_distribution,
+    make_bill_distribution_from_statistics,
+    make_cost_recovery_solution,
+)
 from tests._finance_builders import make_fleet_results
 
 
@@ -160,10 +165,13 @@ class TestGenerateFinanceReportCostRecoveryFull:
     def _report_with_distinct_outlay_figures(self) -> str:
         """The finance report of a solution whose outlay's representative, min, mean, median and max are five different figures, none of them one of the bill's.
 
-        So a cost-recovery row that shows the wrong one of them fails the test that reads it.
+        Nor is its representative's saving vs baseline the bill's representative's.
+        So a cost-recovery row that shows the wrong figure fails the test that reads it.
         """
-        cr_outlay = make_bill_distribution_from_statistics(
-            representative_outlay_gbp=337.0,
+        cr_outlay = make_bill_distribution(
+            representative=make_bill_breakdown(
+                total_outlay_gbp=337.0, saving_vs_baseline_gbp=163.0, saving_pct=32.6,
+            ),
             min_gbp=289.0,
             mean_gbp=341.0,
             median_gbp=335.0,
@@ -196,37 +204,17 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_saving_vs_baseline_renders(self) -> None:
         """Cost-recovery block must render saving_vs_baseline_gbp."""
-        bill = _make_bill_distribution()
-        sol = make_cost_recovery_solution(
-            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
-            feasible=True, binding="floor",
-        )
-        # make_bill_breakdown default: saving_vs_baseline_gbp=132.5 → renders as £132.50
+        report = self._report_with_distinct_outlay_figures()
 
-        report = generate_finance_report(bill, cost_recovery=sol)
-        cr_idx = report.find("## Cost-Recovery Analysis")
-        assert cr_idx >= 0, "Cost-Recovery section not found"
-        cr_section = report[cr_idx:]
-
-        # Scope to CR section; the main-bill section also contains £132.50 at the same format
-        assert "£132.50" in cr_section, f"saving_vs_baseline_gbp not in CR section:\n{cr_section}"
+        shown = _value_cell(report, "## Cost-Recovery Analysis", "Saving vs Baseline")
+        assert shown == "£163.00 (32.6%)", f"saving vs baseline not shown in its row:\n{report}"
 
     def test_saving_pct_renders(self) -> None:
         """Cost-recovery block must render saving_pct."""
-        bill = _make_bill_distribution()
-        sol = make_cost_recovery_solution(
-            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
-            feasible=True, binding="floor",
-        )
-        # make_bill_breakdown default: saving_pct=26.5 → renders as "26.5%" in CR section
+        report = self._report_with_distinct_outlay_figures()
 
-        report = generate_finance_report(bill, cost_recovery=sol)
-        cr_idx = report.find("## Cost-Recovery Analysis")
-        assert cr_idx >= 0, "Cost-Recovery section not found"
-        cr_section = report[cr_idx:]
-
-        # Scope to CR section; the main-bill "Saving vs Baseline" row also contains "(26.5%)"
-        assert "26.5" in cr_section, f"saving_pct not rendered in CR section:\n{cr_section}"
+        shown = _value_cell(report, "## Cost-Recovery Analysis", "Saving vs Baseline")
+        assert shown == "£163.00 (32.6%)", f"saving vs baseline not shown in its row:\n{report}"
 
     def test_binding_floor_label_distinct(self) -> None:
         """binding='floor' must render a 'surplus meets floor' label."""
