@@ -27,7 +27,7 @@ RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
 
 RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
 RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
-_DEFAULT_RUN_STATUS: RunStatus = "running"
+UNFINISHED_RUN_STATUS: RunStatus = "running"
 
 ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
 CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
@@ -114,7 +114,7 @@ def init_db(db_path: str | Path) -> Database:
             type TEXT {_check_one_of("type", RUN_TYPES)},
             config_json TEXT,
             summary_json TEXT,
-            status TEXT DEFAULT {_sql_string_literal(_DEFAULT_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
+            status TEXT DEFAULT {_sql_string_literal(UNFINISHED_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
             error_message TEXT,
             created_at TEXT,
             completed_at TEXT,

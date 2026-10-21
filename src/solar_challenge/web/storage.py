@@ -31,7 +31,7 @@ import pandas as pd
 import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, Database, RunStatus, RunType
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
 
 T = TypeVar("T")
 
@@ -224,7 +224,6 @@ RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 _COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
-_UNFINISHED_RUN_STATUS: RunStatus = "running"
 _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
 
@@ -401,7 +400,7 @@ class RunStorage:
             type=run_type,
             config_json=None,
             summary_json=None,
-            status=_UNFINISHED_RUN_STATUS,
+            status=UNFINISHED_RUN_STATUS,
             error_message=None,
             created_at=created_at,
             completed_at=None,
@@ -430,7 +429,7 @@ class RunStorage:
             The number of runs it marked failed.
         """
         return self._fail_runs(
-            "status = :unfinished_status", {"unfinished_status": _UNFINISHED_RUN_STATUS}, _INTERRUPTED_BY_RESTART_MESSAGE
+            "status = :unfinished_status", {"unfinished_status": UNFINISHED_RUN_STATUS}, _INTERRUPTED_BY_RESTART_MESSAGE
         )
 
     def _fail_runs(self, condition: str, condition_values: Mapping[str, str], message: str) -> int:
