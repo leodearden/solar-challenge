@@ -4,24 +4,34 @@ No tab's colours fade in as the page loads, and a click still fades the selected
 colours from the tab that had them to the clicked tab alone.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
-# Each page with chart tabs: the fixture seeding its run, its path less the run id, and its tabs' names, the opening tab first.
+# Each page with chart tabs: the fixture seeding the runs it shows, its path given that fixture's value, and its tabs'
+# names, the opening tab first.
 _PAGES_WITH_CHART_TABS = [
     pytest.param(
         "seeded_home_run",
-        "/results/home/",
+        lambda run: f"/results/home/{run[0]}",
         ("Overview", "Power Flow", "Battery & Finance", "Analysis"),
         id="results-home",
     ),
     pytest.param(
         "seeded_fleet_run",
-        "/results/fleet/",
+        lambda run: f"/results/fleet/{run[0]}",
         ("Aggregate", "Per-Home", "Distributions"),
         id="results-fleet",
+    ),
+    pytest.param(
+        "seeded_home_runs_pair",
+        lambda runs: "/history/compare?ids=" + ",".join(run_id for run_id, _ in runs),
+        ("Energy Totals", "Efficiency Ratios"),
+        id="history-compare",
     ),
 ]
 
@@ -73,37 +83,37 @@ def _chart_tab_colours(page: Page) -> dict[str, dict[str, str]]:
     return page.evaluate("() => window.tabProbe.colours()")
 
 
-@pytest.mark.parametrize(("seeded_run", "path", "tab_names"), _PAGES_WITH_CHART_TABS)
+@pytest.mark.parametrize(("seeded_runs", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
 def test_a_page_paints_its_chart_tabs_in_their_colours_before_alpine_starts_so_none_fades_in(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    seeded_run: str,
-    path: str,
+    seeded_runs: str,
+    path_of: Callable[[Any], str],
     tab_names: tuple[str, ...],
 ) -> None:
     """Before Alpine starts, each chart tab already has the colours it keeps once the page has settled, and no tab's colours are fading as Alpine starts."""
-    run_id, _ = request.getfixturevalue(seeded_run)
-    _open_with_the_chart_tabs_recorded(page, live_server + path + run_id, tab_names[0])
+    url = live_server + path_of(request.getfixturevalue(seeded_runs))
+    _open_with_the_chart_tabs_recorded(page, url, tab_names[0])
     assert page.evaluate("() => window.tabProbe.load") == {
         "colours_before_alpine": _chart_tab_colours(page),
         "fading_as_alpine_starts": [],
     }
 
 
-@pytest.mark.parametrize(("seeded_run", "path", "tab_names"), _PAGES_WITH_CHART_TABS)
+@pytest.mark.parametrize(("seeded_runs", "path_of", "tab_names"), _PAGES_WITH_CHART_TABS)
 def test_a_click_on_a_chart_tab_fades_the_selected_colours_from_the_tab_that_had_them_to_it_alone(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    seeded_run: str,
-    path: str,
+    seeded_runs: str,
+    path_of: Callable[[Any], str],
     tab_names: tuple[str, ...],
 ) -> None:
     """Each click fades exactly two tabs, the one selected before and the one clicked, and leaves the clicked tab alone in the colours the opening tab loaded with. The opening tab is clicked last, so its click too has to move the selection. A ternary-string :class fails it: Alpine's string form adds and undoes only the classes it added itself, so it never removes one the server drew, while the object form chart_tabs binds removes a false key's classes."""
-    run_id, _ = request.getfixturevalue(seeded_run)
+    url = live_server + path_of(request.getfixturevalue(seeded_runs))
     opening_tab, *other_tabs = tab_names
-    _open_with_the_chart_tabs_recorded(page, live_server + path + run_id, opening_tab)
+    _open_with_the_chart_tabs_recorded(page, url, opening_tab)
     loaded = _chart_tab_colours(page)
     selected, unselected = loaded[opening_tab], loaded[other_tabs[0]]
     assert selected != unselected and all(loaded[name] == unselected for name in other_tabs), (
