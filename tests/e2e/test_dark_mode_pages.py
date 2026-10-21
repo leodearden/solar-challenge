@@ -8,6 +8,8 @@ The module also toggles the theme live on a results page, to check what the togg
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._chart_tabs import open_chart_tab
+
 pytestmark = pytest.mark.e2e
 
 
@@ -56,11 +58,6 @@ def _open_in_theme(page: Page, url: str, theme: str) -> None:
     """Open url in theme: base.html's inline script reads localStorage before first paint."""
     page.add_init_script(f"localStorage.setItem('theme', '{theme}')")
     page.goto(url)
-
-
-def _show_tab(page: Page, name: str) -> None:
-    """Click the tab named name."""
-    page.get_by_role("tab", name=name, exact=True).click()
 
 
 def _toggle_theme(page: Page) -> None:
@@ -176,17 +173,17 @@ def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_i
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", starting_theme)
 
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
 
-    _show_tab(page, "Overview")
+    open_chart_tab(page, "Overview")
     expect(page.locator("#chart-power-flow")).to_be_hidden()
     expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
 
     _toggle_theme(page)
     expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
 
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
 
 
@@ -203,11 +200,11 @@ def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_wa
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
 
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
     power_flow_before = _layout_features(page, "chart-power-flow")
 
-    _show_tab(page, "Overview")
+    open_chart_tab(page, "Overview")
     daily_balance_before = _layout_features(page, "chart-daily-balance")
     assert daily_balance_before["axis_titles"] and power_flow_before["range_sliders"] == 1, (
         f"the charts have no titles or range slider to keep: {daily_balance_before}, {power_flow_before}"
@@ -217,7 +214,7 @@ def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_wa
     expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["dark"])
     daily_balance_after = _layout_features(page, "chart-daily-balance")
 
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["dark"])
     power_flow_after = _layout_features(page, "chart-power-flow")
 
@@ -250,7 +247,7 @@ def test_toggling_the_theme_while_a_chart_is_still_drawing_recolours_it_once_the
     expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["light"])
     release_drawings = page.evaluate_handle(_HOLD_EVERY_DRAWING_UNTIL_RELEASED)
 
-    _show_tab(page, "Power Flow")
+    open_chart_tab(page, "Power Flow")
     expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
     _toggle_theme(page)
     release_drawings.evaluate("release => release()")
