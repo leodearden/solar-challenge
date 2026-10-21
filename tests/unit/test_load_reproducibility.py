@@ -157,6 +157,8 @@ _needs_fork = pytest.mark.skipif(
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="multiprocessing has no fork start method on this platform",
 )
+# Every fork here warns: pandas imports pyarrow, whose native thread survives the fork, and CPython
+# counts the process's OS threads.
 _ignores_the_multi_threaded_fork_warning = pytest.mark.filterwarnings(
     r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child.:DeprecationWarning"
 )
