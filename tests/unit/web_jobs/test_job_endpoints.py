@@ -369,7 +369,7 @@ class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
 
     def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
-        """Test that a submitted home job eventually completes with results."""
+        """A submitted home job completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         # Submit a minimal 1-day simulation
         submit_resp = real_simulation_client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "name": "E2E Test"})
         assert submit_resp.status_code == 201
@@ -396,10 +396,10 @@ class TestJobCompletion:
         results_data = results_resp.get_json()
         assert results_data["run_id"] == run_id
         assert "summary" in results_data
-        assert results_data["summary"].get("total_generation_kwh") is not None
+        assert results_data["summary"]["total_generation_kwh"] > 0
 
     def test_home_job_with_battery_completes(self, real_simulation_client: FlaskClient) -> None:
-        """Test that a home job with battery completes successfully."""
+        """A submitted home job with a battery completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={**A_HOME_JOB_REQUEST, "battery_kwh": 5.0, "occupants": 2, "name": "Battery Test"},
@@ -419,6 +419,10 @@ class TestJobCompletion:
             time.sleep(1)
 
         assert status == "completed", f"Job did not complete, last status: {status}"
+
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
+        assert results_resp.status_code == 200
+        assert results_resp.get_json()["summary"]["total_generation_kwh"] > 0
 
     def test_a_two_home_fleet_job_completes_with_its_results_stored(
         self, app: Flask, real_simulation_client: FlaskClient
