@@ -3,6 +3,7 @@
 import dataclasses
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner
@@ -11,9 +12,8 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import fleet_summary_rows, home_summary_rows
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 _HOME = {
     "pv": {"capacity_kw": 4.0},
@@ -98,7 +98,7 @@ def clear_june_in_tmp_path(
     weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).seed_as_bristol_tmy(weather_cache)
     monkeypatch.chdir(tmp_path)
 
 
