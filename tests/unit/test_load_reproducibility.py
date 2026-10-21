@@ -5,7 +5,9 @@ import ast
 import datetime
 import inspect
 import logging
+import multiprocessing
 import random
+import threading
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -153,6 +155,58 @@ def test_a_negative_seed_and_its_absolute_value_give_different_profiles(seed: in
     positive = generate_load_profile(_stochastic(seed), start, end)
 
     assert not negative.equals(positive)
+
+
+def _generate_the_seed_42_profile_of_21_june_2024_expecting(expected: pd.Series) -> None:
+    """A forked child's work: it fails unless its seed-42 profile of 21 June 2024 is expected."""
+    day = pd.Timestamp("2024-06-21")
+    if not generate_load_profile(_stochastic(42), day, day).equals(expected):
+        raise AssertionError("the forked child's seed-42 profile differs from its parent's")
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="multiprocessing has no fork start method on this platform",
+)
+@pytest.mark.filterwarnings(
+    r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child.:DeprecationWarning"
+)
+def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_profile() -> None:
+    day = pd.Timestamp("2024-06-21")
+    expected = generate_load_profile(_stochastic(42), day, day)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking(config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
+        entered.set()
+        release.wait(60)
+        return lambda _: np.ones(1440)
+
+    holder = threading.Thread(
+        target=generate_load_profile,
+        args=(_stochastic(7), day, day),
+        kwargs={"household_model": blocking},
+        daemon=True,
+    )
+    child = multiprocessing.get_context("fork").Process(
+        target=_generate_the_seed_42_profile_of_21_june_2024_expecting, args=(expected,)
+    )
+    holder.start()
+    try:
+        assert entered.wait(30)
+        child.start()
+        child.join(30)
+        assert child.exitcode == 0, (
+            f"the child forked while a thread held the stochastic window exited {child.exitcode}: "
+            "None if it did not finish its profile within 30 s, as when it inherits the RNG "
+            "hand-off's lock held, or 1 if its profile differed"
+        )
+    finally:
+        release.set()
+        holder.join(30)
+        if child.is_alive():
+            child.kill()
+            child.join()
+    assert not holder.is_alive()
 
 
 # The modules whose module-level functions draw from, seed or set the state of a generator the
