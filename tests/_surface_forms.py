@@ -114,11 +114,12 @@ def named_classes(obj: object) -> set[type]:
     callable as functools.wraps records one, where that callable is; and a class in the
     one sys.modules holds under the name its __module__ records. One whose module another
     of the same name has since replaced in sys.modules raises LookupError naming it and
-    the module found there. A signature that annotates nothing, as that of each routine
-    CPython defines in C such as str.join, names no class, and no module is looked up for
-    it. Met again inside its own evaluation in the same module, as each "JSON" is in
-    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
-    there: that evaluation names them all.
+    the module found there, and one whose module has since left sys.modules, LookupError
+    naming it and that module's name. A signature that annotates nothing, as that of each
+    routine CPython defines in C such as str.join, names no class, and no module is
+    looked up for it. Met again inside its own evaluation in the same module, as each
+    "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
+    no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -555,14 +556,31 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _defining_module(obj: object) -> types.ModuleType:
-    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, checked for a routine and for a class; a functools.partial's is that of the callable it wraps, and anything else records only its module's name, so that module is looked up unchecked."""
+    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, through _module_named, checked for a routine and for a class; a functools.partial's is that of the callable it wraps, and anything else records only its module's name, so that module is looked up unchecked."""
     if isinstance(obj, functools.partial):
         return _defining_module(obj.func)
     if _is_routine(obj):
         return _routine_module(obj)
     if inspect.isclass(obj):
         return _class_module(obj)
-    return sys.modules[obj.__module__]
+    return _module_named(obj.__module__, obj)
+
+
+def _module_named(name: str, obj: object) -> types.ModuleType:
+    """The module sys.modules holds under *name*, the name of the module that defined *obj*; LookupError naming both if sys.modules holds none there, as once that module has left it."""
+    module = sys.modules.get(name)
+    if module is None:
+        raise LookupError(
+            f"{_label(obj)} is defined in the module named {name!r}, but sys.modules holds "
+            "no module under that name: read each module's objects while sys.modules holds it"
+        )
+    return module
+
+
+def _label(obj: object) -> str:
+    """The name this helper's errors give *obj*: its module's name and its qualified name, dotted; its repr if it records no qualified name, as a type variable and a method bound to a callable object do not."""
+    qualified_name = getattr(obj, "__qualname__", None)
+    return repr(obj) if qualified_name is None else f"{obj.__module__}.{qualified_name}"
 
 
 def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
@@ -576,13 +594,12 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
     """
     namespace = getattr(routine, "__globals__", None)
     if namespace is None:
-        return sys.modules[routine.__module__]
+        return _module_named(routine.__module__, routine)
     spec = namespace.get("__spec__")
     name = namespace.get("__name__") if spec is None else spec.name
-    module = sys.modules[name]
+    module = _module_named(name, routine)
     if vars(module) is not namespace:
-        label = f"{routine.__module__}.{routine.__qualname__}"
-        raise _defined_elsewhere(label, namespace, module, name)
+        raise _defined_elsewhere(_label(routine), namespace, module, name)
     return module
 
 
@@ -600,19 +617,18 @@ def _class_module(cls: type) -> types.ModuleType:
     and a class inside a function whose body compiled no function carries nothing to check
     it by, so their module is looked up unchecked.
     """
-    module = sys.modules[cls.__module__]
+    module = _module_named(cls.__module__, cls)
     if not cls.__flags__ & _PY_TPFLAGS_HEAPTYPE:
         return module
     if "<locals>" in cls.__qualname__:
         function = _function_compiled_in_body(cls)
         if function is not None and function.__globals__ is not vars(module):
-            label = f"{cls.__module__}.{cls.__qualname__}"
-            raise _defined_elsewhere(label, function.__globals__, module, cls.__module__)
+            raise _defined_elsewhere(_label(cls), function.__globals__, module, cls.__module__)
         return module
     bound = _bound_under(cls.__qualname__, module)
     if bound is not cls:
         raise LookupError(
-            f"{cls.__module__}.{cls.__qualname__} is not bound under {cls.__qualname__!r} in "
+            f"{_label(cls)} is not bound under {cls.__qualname__!r} in "
             f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
             f"the name {cls.__module__!r}: that module binds "
             f"{'nothing' if bound is None else 'another object'} there. Read each module's "
