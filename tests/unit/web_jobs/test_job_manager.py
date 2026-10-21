@@ -644,7 +644,7 @@ class TestJobManagerUnrecordedFailures:
         assert [(record.levelno, record.getMessage()) for record in records] == [
             (
                 logging.ERROR,
-                "Could not record in the runs table that job id-1 of run id-2 failed with 'the simulation failed'",
+                "Could not record in the run store that job id-1 of run id-2 failed with 'the simulation failed'",
             )
         ]
         assert records[0].exc_info is not None
@@ -681,7 +681,7 @@ class TestJobManagerUnrecordedFailures:
         assert [(record.levelno, record.getMessage()) for record in records] == [
             (
                 logging.ERROR,
-                "Could not record in the runs table that job id-1 of run id-2 failed with"
+                "Could not record in the run store that job id-1 of run id-2 failed with"
                 f" {_A_MESSAGE_SQLITE_CANNOT_STORE!r}",
             )
         ]
@@ -722,7 +722,7 @@ class TestJobManagerUnrecordedFailures:
         assert [(record.levelno, record.getMessage()) for record in records] == [
             (
                 logging.ERROR,
-                "Could not record in the runs table that job id-1 of run id-2 failed with 'unable to open database file'",
+                "Could not record in the run store that job id-1 of run id-2 failed with 'unable to open database file'",
             )
         ]
         assert [type(record.exc_info[1]) for record in records if record.exc_info] == [sqlite3.OperationalError]

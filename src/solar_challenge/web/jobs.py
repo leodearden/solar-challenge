@@ -277,9 +277,9 @@ class JobManager:
         A manager tracks only the jobs submitted to it.  It tracks each one
         until the job finishes, and stops at the first submit made once the
         job has been finished for longer than _FINISHED_JOB_TTL_SECONDS.  It
-        never reads the runs table, so a job it does not track, such as one
+        never reads the RunStorage, so a job it does not track, such as one
         from before a restart, is unknown here although the job's run remains
-        in the RunStorage.
+        there.
 
         Args:
             job_id: Unique job identifier.
@@ -497,7 +497,7 @@ class JobManager:
             self._storage.mark_run_failed(state.run_id, state.message)
         except Exception:
             logger.exception(
-                "Could not record in the runs table that job %s of run %s failed with %r",
+                "Could not record in the run store that job %s of run %s failed with %r",
                 state.job_id,
                 state.run_id,
                 state.message,
