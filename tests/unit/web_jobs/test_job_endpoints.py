@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager."""
 
-import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
+from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import build_test_app
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
@@ -36,9 +36,9 @@ def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClie
     """A client of the JobManager create_app built, whose jobs run the real simulate_home.
 
     Its jobs run on the weather create_app bound, the test's own weather cache. There Bristol's TMY is a
-    clear day on 1 June 2024, the first day of every days window the API simulates.
+    clear day on DAYS_WINDOW_START, the first day of every days window the API simulates.
     """
-    ClearJuneDays(first_day=pd.Timestamp("2024-06-01"), count=1).seed_as_bristol_tmy(weather_cache)
+    ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(weather_cache)
     return app.test_client()
 
 
@@ -368,27 +368,19 @@ class TestJobResultsEndpoint:
 class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
 
-    def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
-        """Test that a submitted home job eventually completes with results."""
+    def test_home_job_completes(self, app: Flask, real_simulation_client: FlaskClient) -> None:
+        """A submitted home job completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         # Submit a minimal 1-day simulation
         submit_resp = real_simulation_client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "name": "E2E Test"})
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
         run_id = submit_resp.get_json()["run_id"]
 
-        # Poll until completed (with timeout)
-        deadline = time.monotonic() + 120  # 120 second timeout
-        status = "queued"
-        while time.monotonic() < deadline:
-            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
-            assert status_resp.status_code == 200
-            status_data = status_resp.get_json()
-            status = status_data["status"]
-            if status in ("completed", "failed"):
-                break
-            time.sleep(1)
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
 
-        assert status == "completed", f"Job did not complete in time, last status: {status}"
+        status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        assert status_resp.get_json()["status"] == "completed", status_resp.get_json()
 
         # Now fetch results
         results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
@@ -396,10 +388,10 @@ class TestJobCompletion:
         results_data = results_resp.get_json()
         assert results_data["run_id"] == run_id
         assert "summary" in results_data
-        assert results_data["summary"].get("total_generation_kwh") is not None
+        assert results_data["summary"]["total_generation_kwh"] > 0
 
-    def test_home_job_with_battery_completes(self, real_simulation_client: FlaskClient) -> None:
-        """Test that a home job with battery completes successfully."""
+    def test_home_job_with_battery_completes(self, app: Flask, real_simulation_client: FlaskClient) -> None:
+        """A submitted home job with a battery completes, and its summary shows it generated power on the clear day real_simulation_client seeds."""
         submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={**A_HOME_JOB_REQUEST, "battery_kwh": 5.0, "occupants": 2, "name": "Battery Test"},
@@ -407,18 +399,15 @@ class TestJobCompletion:
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
 
-        # Poll until completed
-        deadline = time.monotonic() + 120
-        status = "queued"
-        while time.monotonic() < deadline:
-            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
-            status_data = status_resp.get_json()
-            status = status_data["status"]
-            if status in ("completed", "failed"):
-                break
-            time.sleep(1)
+        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
 
-        assert status == "completed", f"Job did not complete, last status: {status}"
+        status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        assert status_resp.get_json()["status"] == "completed", status_resp.get_json()
+
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
+        assert results_resp.status_code == 200
+        assert results_resp.get_json()["summary"]["total_generation_kwh"] > 0
 
     def test_a_two_home_fleet_job_completes_with_its_results_stored(
         self, app: Flask, real_simulation_client: FlaskClient
