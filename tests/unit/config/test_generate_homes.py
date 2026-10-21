@@ -865,27 +865,40 @@ class TestGenerateHomesHouseholdOccupants:
             "load.household_occupants must draw samples that are finite numbers, got a sample of nan"
         )
 
-    @pytest.mark.parametrize(
-        "household_occupants",
-        [
-            pytest.param(UniformDistribution(min=2.3, max=2.45), id="uniform-within-one-unit"),
-            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-halfway-bounds"),
-            pytest.param(
-                NormalDistribution(mean=2.4, std=0.1, min=2.3, max=2.45), id="normal-within-one-unit"
-            ),
-        ],
-    )
-    def test_a_spec_with_no_whole_number_from_its_min_to_its_max_is_refused_naming_it(
+    #: Normal and uniform specs with no whole number from their min to their max, so no count can be drawn from them.
+    _SPECS_WITH_NO_WHOLE_NUMBER = [
+        pytest.param(UniformDistribution(min=2.3, max=2.45), id="uniform-within-one-unit"),
+        pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-halfway-bounds"),
+        pytest.param(NormalDistribution(mean=2.4, std=0.1, min=2.3, max=2.45), id="normal-within-one-unit"),
+    ]
+
+    @pytest.mark.parametrize("household_occupants", _SPECS_WITH_NO_WHOLE_NUMBER)
+    def test_a_spec_with_no_whole_number_from_its_min_to_its_max_is_refused_when_configured_naming_it(
         self, household_occupants: Union[NormalDistribution, UniformDistribution]
     ) -> None:
-        """No count a home could get lies from the spec's min to its max, so the fleet is refused, naming the setting, the min and the max."""
+        """No count a home could get lies from the spec's min to its max, so the load distribution is refused when it is configured, naming the setting, the min and the max."""
         with pytest.raises(ConfigurationError) as exc_info:
-            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+            LoadDistributionConfig(household_occupants=household_occupants)
 
         assert str(exc_info.value) == (
             "load.household_occupants is a count, so a whole number must lie from its min to its max, "
             f"got a min of {household_occupants.min!r} and a max of {household_occupants.max!r}"
         )
+
+    @pytest.mark.parametrize("household_occupants", _SPECS_WITH_NO_WHOLE_NUMBER)
+    def test_a_spec_with_no_whole_number_given_to_a_configured_fleet_is_refused_as_configuring_it_refuses_it(
+        self, household_occupants: Union[NormalDistribution, UniformDistribution]
+    ) -> None:
+        """A fleet built with 3 household occupants, then given a spec with no whole number from its min to its max, is refused in the words construction uses for that spec."""
+        with pytest.raises(ConfigurationError) as configuration_refusal:
+            LoadDistributionConfig(household_occupants=household_occupants)
+        fleet = self._fleet(3)
+        fleet.load.household_occupants = household_occupants
+
+        with pytest.raises(ConfigurationError) as generation_refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(generation_refusal.value) == str(configuration_refusal.value)
 
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
