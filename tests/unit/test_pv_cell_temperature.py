@@ -202,3 +202,20 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         message = str(building.value)
         assert f"{key}={value}" in message, message
         assert str(wiring.value) == message
+
+    def test_naming_a_value_it_lacks_as_the_default_modules(
+        self, default_module: dict[str, float]
+    ) -> None:
+        """One 4000 W PVWatts module for a whole 4 kW array, lacking A_c, takes the default module's: an efficiency of 4000 / 1990 = 2.0."""
+        config = PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004})
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as wiring:
+            wired_dc_capacity_kw(config)
+
+        message = str(building.value)
+        default_area = f"A_c={default_module['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
+        assert default_area in message, message
+        assert "Give the module its own A_c" in message, message
+        assert str(wiring.value) == message

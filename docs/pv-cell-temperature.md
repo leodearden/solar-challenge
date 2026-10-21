@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
 **Task:** #823
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -37,6 +37,12 @@
   pvlib's 21,535 CECMod rows lies inside the domain (NOCT 41.2–63.7 °C, efficiency
   0.036–0.227, no NaN `T_NOCT`, `A_c` or `STC`), so only hand-built module dicts are
   refused.
+
+  A value the module lacks is checked too, and the `ValueError` names it as
+  `DEFAULT_CEC_MODULE`'s and asks for the module's own (`_NoctSamInput`). So a module
+  rated at 1791 W or more without its own `A_c`, such as one PVWatts module standing
+  for a whole array, is refused: over the default's 1.99 m² its rating is an efficiency
+  of 0.9 or more (1.99 m² × 0.9 × 1000 W/m² = 1791 W).
 - **Installation takes pvlib's defaults:** one storey (`array_height=1`), and a 4 in
   standoff (`mount_standoff=4`), which adjusts NOCT by 0 °C. The transmittance–absorptance
   is pvlib's default 0.9, which `pv.py` passes explicitly as `_TRANSMITTANCE_ABSORPTANCE`,

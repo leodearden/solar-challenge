@@ -516,7 +516,11 @@ from 3977 to 4053 kWh a year, 993.1 to 1012.1 kWh per wired kWp (+1.9%;
 measured with pvlib 0.15.1 on this change). Custom module parameters lacking
 `T_NOCT` or `A_c` take the default module's value of that key, and a `T_NOCT`
 or `A_c` with which NOCT-SAM cannot heat the cells above the air raises
-`ValueError` naming it. `create_simple_module_params` writes `A_c` from its
+`ValueError` naming it, as the default module's if the module lacks it. So a
+module rated at 1791 W or more without its own `A_c`, such as one PVWatts
+module standing for a whole array, now raises: over the default's 1.99 m² its
+rating is an efficiency of 0.9 or more, and consumers give it its own `A_c`.
+`create_simple_module_params` writes `A_c` from its
 `efficiency` in place of an `"efficiency"` key nothing read, so its efficiency
 now acts on output. A run chain's `results.cell_temperature` is NaN in hours
 with no sun. The figures the lines above quote were measured under SAPM.
