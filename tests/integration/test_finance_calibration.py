@@ -260,6 +260,14 @@ class TestFinCalibrationScenarioParses:
         homes = self._load_homes()
         assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
 
+    def test_every_home_has_the_fin_install(self) -> None:
+        """Every home has the [FIN] install: FIN_GOLDEN's inp_kWp of PV and an inp_Batt_kWh kWh battery."""
+        fin_install = (FIN_GOLDEN["inp_kWp"], FIN_GOLDEN["inp_Batt_kWh"])
+        for i, home in enumerate(self._load_homes()):
+            assert home.battery_config is not None, f"Home {i}: no battery config"
+            install = (home.pv_config.capacity_kw, home.battery_config.capacity_kwh)
+            assert install == fin_install, f"Home {i}: (PV kWp, battery kWh) is not the [FIN] install"
+
     def test_fleet_is_homogeneous_5_5kwp(self) -> None:
         """All homes must have pv_kwp=5.5 ([FIN] inp_kWp=5.5)."""
         homes = self._load_homes()
