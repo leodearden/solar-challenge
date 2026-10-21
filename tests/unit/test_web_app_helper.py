@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, the shared builder of the web tests' Flask app, and for the app and client fixtures tests/unit/conftest.py builds with it."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app and finds the RunStorage it keeps its runs in, and for the app, client and storage fixtures tests/unit/conftest.py builds with it."""
 
 import subprocess
 import sys
@@ -12,7 +12,9 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
+from tests._finance_builders import make_home_config, make_sim_results
+from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, run_storage_of
+from tests._web_runs import store_home_run
 
 
 def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
@@ -36,6 +38,20 @@ def test_the_app_runs_in_testing_mode_with_its_data_under_the_given_directory(
     assert app.testing
     assert Path(app.config["DATABASE"]).is_relative_to(tmp_path)
     assert Path(app.config["DATA_DIR"]) == tmp_path
+
+
+def test_the_app_serves_a_run_saved_to_its_run_storage_after_its_store_config_names_a_missing_directory(
+    tmp_path: Path,
+) -> None:
+    """A RunStorage rebuilt from the app's store config would save the run where the app does not read it."""
+    app = build_test_app(tmp_path / "data")
+    point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+    store_home_run(run_storage_of(app), "north-roof", make_home_config(), make_sim_results(days=1), name="North Roof")
+
+    response = app.test_client().get("/api/history/runs/north-roof")
+    assert response.status_code == 200
+    assert response.get_json()["name"] == "North Roof"
 
 
 def test_the_app_fixture_keeps_its_data_under_the_tests_own_tmp_path(app: Flask, tmp_path: Path) -> None:
