@@ -477,7 +477,8 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "annual_consumption_kwh": "consumption_kwh",
 }
 
-_MAX_SWEEP_POINTS = 50
+#: The most steps a sweep may have, which the sweep page's Steps input offers.
+SWEEP_MAX_STEPS = 50
 
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
@@ -495,7 +496,7 @@ def simulate_sweep() -> tuple[Response, int]:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: finite number (default 1.0)
       - max: finite number (default 10.0)
-      - steps: whole number, 2 to _MAX_SWEEP_POINTS (default 5)
+      - steps: whole number, 2 to SWEEP_MAX_STEPS (default 5)
       - mode: "linear" | "geometric"
       - base_config: JSON object (optional, default {}), the home config
         every sweep point starts from.  A window it sends is read as
@@ -506,7 +507,7 @@ def simulate_sweep() -> tuple[Response, int]:
         JSON with parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
         ones), a min, max or steps it cannot use, or a steps outside 2 to
-        _MAX_SWEEP_POINTS (the error names the field and the value sent), an
+        SWEEP_MAX_STEPS (the error names the field and the value sent), an
         invalid range, a min and max too far apart for the sweep's points to
         be computed (the error names both), a base_config that is not a JSON
         object (the error names the type sent), or a point whose home config
@@ -524,7 +525,7 @@ def simulate_sweep() -> tuple[Response, int]:
     try:
         min_val = as_finite_float(data.get("min", 1.0), "min")
         max_val = as_finite_float(data.get("max", 10.0), "max")
-        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, _MAX_SWEEP_POINTS)
+        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, SWEEP_MAX_STEPS)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     if min_val >= max_val:
