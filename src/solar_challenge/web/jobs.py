@@ -26,7 +26,7 @@ import pandas as pd
 
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunType
+from solar_challenge.web.database import RunType
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,9 @@ HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], Si
 # Reports a running job's progress: its percentage, its step and its message.
 _ProgressReport: TypeAlias = Callable[[float, str, str], None]
 
+JobStatus = Literal["queued", "running", "completed", "failed"]  # the status of a job a JobManager reports
+
+_QUEUED_JOB_STATUS: JobStatus = "queued"
 _RUNNING_JOB_STATUS: JobStatus = "running"
 _COMPLETED_JOB_STATUS: JobStatus = "completed"
 _FAILED_JOB_STATUS: JobStatus = "failed"
@@ -353,7 +356,7 @@ class JobManager:
         queued = JobState(
             job_id=job_id,
             run_id=run_id,
-            status=DEFAULT_JOB_STATUS,
+            status=_QUEUED_JOB_STATUS,
             progress_pct=0.0,
             current_step="Queued",
             message="Waiting to start...",

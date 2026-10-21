@@ -25,7 +25,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import JobStatus, PresetType
+from solar_challenge.web.database import PresetType
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -35,7 +35,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.jobs import JobEvent, JobEventType
+from solar_challenge.web.jobs import JobEvent, JobEventType, JobStatus
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number_within
 from solar_challenge.web.presets import (
     PresetNameTaken,
