@@ -11,6 +11,7 @@ import decimal
 import enum
 import fractions
 import functools
+import inspect
 import pathlib
 import sys
 import types
@@ -548,6 +549,43 @@ def test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class() 
         TypeError, match=r"\bfunctools\.partial\b.*\bfunctools\.partial\b"
     ):
         named_classes(functools.partial(functools.partial, print))
+
+
+def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Zipper:
+        @functools.wraps(zip)
+        def zipped(self, *iterables: object) -> object: ...
+
+    zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    building = functools.wraps(Built)(lambda rate: Built(rate))
+
+    naming_zip = r"\bbuiltins\.zip\b.*\bbuiltins\.zip\b"
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(zipping)
+    with pytest.raises(TypeError, match=naming_zip):
+        named_classes(zipping)
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(functools.partial(zipping, [1]))
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(Zipper().zipped)
+    with pytest.raises(
+        TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(building)
+
+
+def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature() -> None:
+    zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    zipping.__signature__ = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    assert surface_form(zipping) == "(rate: int)"
 
 
 def test_a_constant_form_is_its_type_qualified_name() -> None:
