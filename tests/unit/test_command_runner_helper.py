@@ -147,12 +147,11 @@ def _regrouping_hang(directory: Path, pids_file: Path) -> str:
     return f"sh {shlex.quote(str(script))}"
 
 
-def _timeouts_a_regrouping_hang_started(directory: Path) -> list[int]:
-    """Hang run_command on a regrouping hang in a new *directory* until it gives up; return each timeout's pid."""
+def _timeouts_a_regrouping_hang_started(directory: Path, start: ProbeStart) -> list[int]:
+    """Hang *start*'s probe on a regrouping hang in a new *directory* until it gives up; return each timeout's pid."""
     directory.mkdir()
     pids_file = directory / "timeouts.pids"
-    with pytest.raises(CommandTimedOut):
-        run_command(ShellCommand(_regrouping_hang(directory, pids_file), directory), timeout_secs=_REGROUP_TIMEOUT_SECS)
+    start(_regrouping_hang(directory, pids_file), directory, _REGROUP_TIMEOUT_SECS)
     if not pids_file.exists():
         return []
     return [int(line) for line in pids_file.read_text(encoding="utf-8").splitlines()]
@@ -327,13 +326,20 @@ def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: Prob
     )
 
 
+@pytest.mark.parametrize(
+    "start",
+    [
+        pytest.param(_hang_in_run_command, id="run_command"),
+        pytest.param(_hang_in_run_command_under_gnu_timeout, id="run_command-under-gnu-timeout"),
+    ],
+)
 def test_no_process_outlives_a_hung_command_that_keeps_moving_processes_into_groups_of_their_own(
-    tmp_path: Path,
+    tmp_path: Path, start: ProbeStart
 ) -> None:
-    """GNU timeout moves into a group of its own just after it starts, so the session's groups must be looked for only once the shell that starts them is dead."""
+    """GNU timeout moves into a group of its own just after it starts, so one that the shell, or a process already in a group of its own, starts while the kill looks for the session's groups must not escape it."""
     started = 0
     for trial in range(_REGROUP_TRIALS):
-        timeouts = _timeouts_a_regrouping_hang_started(tmp_path / f"trial-{trial}")
+        timeouts = _timeouts_a_regrouping_hang_started(tmp_path / f"trial-{trial}", start)
         survivors = _not_gone_within(timeouts, seconds=10)
         for survivor in survivors:
             with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -341,7 +347,8 @@ def test_no_process_outlives_a_hung_command_that_keeps_moving_processes_into_gro
         assert not survivors, (
             f"in trial {trial}, the GNU timeouts {survivors}, which the hung command started, outlived the probe "
             "that gave up on it: a timeout that moved into a group of its own while the probe looked for the "
-            "session's groups escaped the kill, so a lane command's timeout could leave uv and pytest running"
+            "session's groups escaped the kill, so a lane command's timeout, or a timeout started under it, could "
+            "leave its processes running"
         )
         started += len(timeouts)
     if not started:
