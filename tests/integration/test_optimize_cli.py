@@ -39,23 +39,6 @@ from tests._finance_builders import make_fleet_results
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_distribution(
-    *,
-    min_gbp: float,
-    mean_gbp: float,
-    median_gbp: float,
-    max_gbp: float,
-) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution whose representative sits at *median_gbp*."""
-    return make_bill_distribution_from_statistics(
-        representative_outlay_gbp=median_gbp,
-        min_gbp=min_gbp,
-        mean_gbp=mean_gbp,
-        median_gbp=median_gbp,
-        max_gbp=max_gbp,
-    )
-
-
 def _make_ranked_sweep(
     results: tuple[ConfigResult, ...],
     infeasible: tuple[ConfigPoint, ...] = (),
@@ -151,13 +134,15 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
-    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header.
-
-    A section ends at the next heading of any level, so a sub-section's table is never read as *heading*'s.
-    """
+def _section(report: str, heading: str) -> str:
+    """The text under *heading* in *report*, up to the next heading of any level, so a sub-section is never read as *heading*'s."""
     assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+    return report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
+
+
+def _config_row(report: str, heading: str, config_label: str) -> dict[str, str]:
+    """The row of the table in *heading*'s own section whose Config cell starts with *config_label*, each cell keyed by its column header."""
+    section = _section(report, heading)
     header, _delimiter_row, *rows = (
         [cell.strip() for cell in line.strip("|").split("|")]
         for line in section.splitlines()
@@ -181,7 +166,10 @@ class TestGenerateConfigRankingReportTable1:
     INFEASIBLE = "6.0 kWp / 10.0 kWh / 5.0 kW"
 
     def _make_sweep_two_feasible(self) -> RankedSweep:
-        """Build a RankedSweep with two feasible configs and one infeasible."""
+        """Build a RankedSweep with two feasible configs and one infeasible.
+
+        Each feasible config's representative outlay differs from its outlay's min, mean, median and max, so a cell showing the wrong one of them fails the test that reads it.
+        """
         # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
         r1 = make_config_result(
             pv_kwp=4.0,
@@ -197,7 +185,13 @@ class TestGenerateConfigRankingReportTable1:
             payback_years=11.0,
             baseline_outlay_gbp=375.0,
             baseline_surplus_per_home_gbp=40.0,
-            outlay=_make_bill_distribution(min_gbp=300.0, mean_gbp=345.0, median_gbp=350.0, max_gbp=400.0),
+            outlay=make_bill_distribution_from_statistics(
+                representative_outlay_gbp=352.0,
+                min_gbp=300.0,
+                mean_gbp=345.0,
+                median_gbp=350.0,
+                max_gbp=400.0,
+            ),
         )
         # Config 2 (second cheapest): 5 kWp, 5 kWh battery
         r2 = make_config_result(
@@ -214,7 +208,13 @@ class TestGenerateConfigRankingReportTable1:
             payback_years=14.5,
             baseline_outlay_gbp=410.0,
             baseline_surplus_per_home_gbp=55.0,
-            outlay=_make_bill_distribution(min_gbp=325.0, mean_gbp=368.0, median_gbp=370.0, max_gbp=420.0),
+            outlay=make_bill_distribution_from_statistics(
+                representative_outlay_gbp=372.0,
+                min_gbp=325.0,
+                mean_gbp=368.0,
+                median_gbp=370.0,
+                max_gbp=420.0,
+            ),
         )
         # Infeasible: 6 kWp, 10 kWh — ConfigPoint only in RankedSweep
         infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
@@ -245,6 +245,18 @@ class TestGenerateConfigRankingReportTable1:
         }
         shown = _column(report, "## Cost-Recovery Rank", "Solved Rate (p/kWh)", expected)
         assert shown == expected, f"solved own-use rates not shown in their configs' rows:\n{report}"
+
+    def test_representative_outlay_rendered(self) -> None:
+        """Report must show each config's representative outlay, the figure Table 1 is ranked by, in its Cost-Recovery Rank row."""
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        expected = {
+            self.CHEAPEST: "£352.00",
+            self.SECOND_CHEAPEST: "£372.00",
+        }
+        shown = _column(report, "## Cost-Recovery Rank", "Rep Outlay (£)", expected)
+        assert shown == expected, f"representative outlays not shown in their configs' rows:\n{report}"
 
     def test_outlay_distribution_values(self) -> None:
         """Report must show each config's min/mean/median/max outlay in its Cost-Recovery Rank row."""
@@ -366,8 +378,9 @@ class TestGenerateConfigRankingReportTable1:
         sweep = _make_ranked_sweep(results=(r,), infeasible=())
         report = generate_config_ranking_report(sweep)
 
-        # No 'infeasible configuration' heading needed when empty
-        assert "cost-recovery rank" in report.lower()
+        assert "### Infeasible Configurations" not in report, (
+            f"Infeasible Configurations heading rendered with no infeasible configs:\n{report}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -531,10 +544,11 @@ class TestGenerateConfigRankingReportTable2:
         )
         report = generate_config_ranking_report(sweep)
 
-        # 9.9 kWp appears in Table 1's infeasible section, but not in Table 2
-        assert "9.9" in report  # present somewhere (Table 1)
-        # Table 2 heading should appear before infeasible section
-        assert "fixed-15p" in report.lower() or "trade-off" in report.lower() or "baseline" in report.lower()
+        infeasible = "9.9 kWp / 15.0 kWh / 5.0 kW"
+        infeasible_section = _section(report, "### Infeasible Configurations")
+        assert infeasible in infeasible_section, f"infeasible config {infeasible!r} not listed under '### Infeasible Configurations':\n{infeasible_section}"
+        table2 = _section(report, "## Fixed-15p Trade-Off")
+        assert infeasible not in table2, f"infeasible config {infeasible!r} listed under '## Fixed-15p Trade-Off':\n{table2}"
 
     def test_two_tables_both_present(self) -> None:
         """Both Table 1 and Table 2 headings must appear in the same report."""
