@@ -7,7 +7,7 @@ then holds it; outside every window its base strategy decides.
 
 import dataclasses
 import math
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -283,6 +283,33 @@ class TestScheduledChargeStrategyWindows:
         _decide(ScheduledChargeStrategy(base, (_NIGHTLY,), zone), timestamp)
 
         assert bool(base.calls) is base_decides
+
+    @pytest.mark.parametrize(
+        ("night", "hours"),
+        [
+            pytest.param(date(2024, 1, 15), 7, id="an-ordinary-night"),
+            pytest.param(date(2024, 3, 31), 6, id="the-clocks-go-forward"),
+            pytest.param(date(2024, 10, 27), 8, id="the-clocks-go-back"),
+        ],
+    )
+    def test_a_window_lasts_its_wall_clock_hours_so_a_clock_change_shortens_or_lengthens_it(
+        self, night: date, hours: int
+    ) -> None:
+        """The nightly window spans 00:30 to 07:30 on London's wall clock, as a GX's does.
+
+        That is 7 hours of one-minute UTC steps on an ordinary night, 6 when the clocks go forward from 01:00 to
+        02:00 on 31 March 2024, and 8 when they go back from 02:00 to 01:00 on 27 October 2024, repeating an hour
+        inside the window.
+        """
+        base = _base()
+        strategy = ScheduledChargeStrategy(base, (_NIGHTLY,), _LONDON)
+        noon_before = datetime.combine(night - timedelta(days=1), time(12, 0), tzinfo=timezone.utc)
+        steps = [noon_before + timedelta(minutes=minute) for minute in range(24 * 60)]
+
+        for step in steps:
+            _decide(strategy, step)
+
+        assert len(steps) - len(base.calls) == hours * 60
 
     def test_a_naive_timestamp_is_refused_naming_the_zone(self) -> None:
         strategy = ScheduledChargeStrategy(_base(), (_NIGHTLY,), _LONDON)
