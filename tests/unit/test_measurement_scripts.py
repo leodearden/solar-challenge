@@ -70,10 +70,10 @@ def census_rows(
     mppt_window: ModuleType,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> pd.DataFrame:
-    """The CSV measure_mppt_window.main writes for 4 kW dc, reading the day one_day_tmy holds from a weather cache seeded with it.
+    """The CSV measure_mppt_window.main writes for 4 kW dc, reading _JUNE_DAYS from a weather cache.
 
-    The cache holds Bristol's TMY, so main fetches nothing. The inverter_kw
-    column is read as the labels in the script's COLUMNS.
+    The cache holds them as Bristol's TMY, so main fetches nothing. The
+    inverter_kw column is read as the labels in the script's COLUMNS.
     """
     cache_dir = tmp_path_factory.mktemp("weather-cache")
     _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir))
