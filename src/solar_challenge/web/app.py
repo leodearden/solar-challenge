@@ -15,7 +15,7 @@ from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
 from solar_challenge.web.database import init_db
 from solar_challenge.web.history import bp as history_bp
-from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
 from solar_challenge.web.scenarios import bp as scenarios_bp
@@ -133,14 +133,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     storage = RunStorage(database, app.config["DATA_DIR"])
     app.extensions["storage"] = storage
 
-    # Initialize JobManager for background simulation execution
-    job_manager = JobManager(simulate_home=functools.partial(simulate_home, weather=default_weather()))
+    # Initialize JobManager for background simulation execution, recording its jobs' runs in the app's storage
+    job_manager = JobManager(storage, simulate_home=functools.partial(simulate_home, weather=default_weather()))
     app.extensions["job_manager"] = job_manager
 
-    # Recover jobs stuck from previous server shutdown
-    recovered = recover_stale_jobs(database)
-    if recovered:
-        logger.info("Recovered %d stale jobs on startup", recovered)
+    # Fail the runs whose jobs an earlier server left running when it stopped
+    interrupted = storage.fail_interrupted_runs()
+    if interrupted:
+        logger.info("Marked %d runs interrupted by a server restart failed on startup", interrupted)
 
     _register_blueprints(app)
 

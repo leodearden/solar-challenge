@@ -1,24 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Background job manager for running simulations asynchronously.
 
-Provides a JobManager class that uses a ThreadPoolExecutor to run
-home and fleet simulations in background threads, with progress
-tracking via SQLite and SSE event queues.
+Provides a JobManager class that uses a ThreadPoolExecutor to run home and
+fleet simulations in background threads. A job's progress is held in memory
+and streamed through SSE event queues; its run is recorded through the
+manager's RunStorage, running from its submit until the job's save completes
+it or its failure marks it failed.
 """
 
 import collections
 import functools
 import logging
-import sqlite3
 import threading
 import time
-import traceback
 import uuid
 import weakref
-from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from pathlib import Path
 from collections.abc import Callable
 from typing import Generator, Literal, TypeAlias
 
@@ -28,19 +26,20 @@ import pandas as pd
 
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.web.database import DEFAULT_JOB_STATUS, Database, JobStatus, RunStatus, RunType
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunType
+from solar_challenge.web.storage import RunRecord, RunStorage
 
 logger = logging.getLogger(__name__)
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
 
+# Reports a running job's progress: its percentage, its step and its message.
+_ProgressReport: TypeAlias = Callable[[float, str, str], None]
+
 _RUNNING_JOB_STATUS: JobStatus = "running"
 _COMPLETED_JOB_STATUS: JobStatus = "completed"
 _FAILED_JOB_STATUS: JobStatus = "failed"
 _FINISHED_JOB_TTL_SECONDS = 3600.0
-_UNFINISHED_RUN_STATUS: RunStatus = "running"
-_FAILED_RUN_STATUS: RunStatus = "failed"
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -74,16 +73,18 @@ def shutdown_all_managers(wait: bool = False) -> None:
 
 @dataclass(frozen=True)
 class _NewJob:
-    """A job just recorded: its id, its run's id, and the ISO 8601 UTC time its rows were created."""
+    """A job just recorded: its id, and the record of its run as its submit created it through the RunStorage."""
 
     job_id: str
-    run_id: str
-    created_at: str
+    run: RunRecord
 
 
 @dataclass(frozen=True)
 class JobState:
-    """What a JobManager reports about a job it tracks: its ids, status and progress, and the ISO 8601 UTC time its rows were created."""
+    """What a JobManager reports about a job it tracks: its ids, status and progress, and its run's created_at.
+
+    created_at is the ISO 8601 UTC time the job's submit created its run.
+    """
 
     job_id: str
     run_id: str
@@ -106,84 +107,6 @@ class JobEvent:
     state: JobState
 
 
-@contextmanager
-def _best_effort_failure_record(table: str, state: JobState, conn: sqlite3.Connection) -> Generator[None, None, None]:
-    """Run the block in a transaction of its own on *conn*, to record in *table* that *state*'s job failed.
-
-    An error that stops it is logged, naming the job, its run and its failure, and not raised, so the job is still
-    reported failed.
-    """
-    try:
-        with conn:
-            yield
-    except Exception:
-        logger.exception(
-            "Could not record in the %s table that job %s of run %s failed with %r",
-            table,
-            state.job_id,
-            state.run_id,
-            state.message,
-        )
-
-
-def _record_failed_job_row(state: JobState, error_traceback: str, completed_at: str, conn: sqlite3.Connection) -> None:
-    """Record in the jobs table that *state*'s job failed, with its message and *error_traceback*, at *completed_at*."""
-    with _best_effort_failure_record("jobs", state, conn):
-        conn.execute(
-            """
-            UPDATE jobs SET
-                status = :status,
-                message = :message,
-                error_traceback = :error_traceback,
-                completed_at = :completed_at
-            WHERE id = :job_id
-            """,
-            {**asdict(state), "error_traceback": error_traceback, "completed_at": completed_at},
-        )
-
-
-def _record_failed_run_row(state: JobState, completed_at: str, conn: sqlite3.Connection) -> None:
-    """Record in the runs table that the run of *state*'s job failed, with the job's message, at *completed_at*."""
-    with _best_effort_failure_record("runs", state, conn):
-        conn.execute(
-            """
-            UPDATE runs SET
-                status = :status,
-                error_message = :message,
-                completed_at = :completed_at
-            WHERE id = :run_id
-            """,
-            {"status": _FAILED_RUN_STATUS, "message": state.message, "completed_at": completed_at, "run_id": state.run_id},
-        )
-
-
-def _record_failed_rows(state: JobState, error_traceback: str, conn: sqlite3.Connection) -> None:
-    """Record in the jobs table and in the runs table that *state*'s job failed, each in a transaction of its own on *conn*."""
-    completed_at = datetime.now(timezone.utc).isoformat()
-    _record_failed_job_row(state, error_traceback, completed_at, conn)
-    _record_failed_run_row(state, completed_at, conn)
-
-
-def _record_failed_rows_on_new_connection(state: JobState, error_traceback: str, db_path: str) -> None:
-    """Record in the jobs and runs tables of the database at *db_path* that *state*'s job failed, on a new connection to it.
-
-    An error that stops it, such as the database not opening, is logged, naming the job, its run and its failure, and
-    not raised.
-    """
-    try:
-        conn = Database(Path(db_path)).connect()
-    except Exception:
-        logger.exception(
-            "Could not open the database to record that job %s of run %s failed with %r",
-            state.job_id,
-            state.run_id,
-            state.message,
-        )
-        return
-    with closing(conn):
-        _record_failed_rows(state, error_traceback, conn)
-
-
 @dataclass
 class _TrackedJob:
     """A job a JobManager tracks.
@@ -202,9 +125,11 @@ class JobManager:
 
     Uses a ThreadPoolExecutor to run simulations in background threads.
     Each job has an in-memory event queue (collections.deque) for
-    streaming progress events via SSE.
+    streaming progress events via SSE, and a run the manager records
+    through its RunStorage.
 
     Attributes:
+        _storage: The RunStorage each job's run is recorded in.
         _executor: Thread pool for background job execution.
         _jobs: Each job the manager tracks, by id.
         _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
@@ -212,6 +137,7 @@ class JobManager:
 
     def __init__(
         self,
+        storage: RunStorage,
         max_workers: int = 2,
         *,
         simulate_home: HomeSimulator,
@@ -221,6 +147,8 @@ class JobManager:
         """Initialize the job manager.
 
         Args:
+            storage: The RunStorage each job's run is recorded in, from the
+                job's submit to its outcome; create_app passes the app's.
             max_workers: Maximum number of concurrent simulation threads.
             simulate_home: Simulates one home over a date range, on the weather
                 it is bound to; create_app binds solar_challenge.home.simulate_home
@@ -231,6 +159,7 @@ class JobManager:
                 backwards, which the manager reads to age the jobs it tracks.
                 Defaults to time.monotonic.
         """
+        self._storage = storage
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
         self._new_id = new_id
@@ -272,45 +201,34 @@ class JobManager:
         config: HomeConfig,
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
-        db_path: str,
-        data_dir: str,
         name: str | None = None,
     ) -> tuple[str, str]:
         """Submit a home simulation job for background execution.
 
-        Creates run and job entries in SQLite, then submits the simulation
-        to the thread pool.
+        Records the job's run, running, through the manager's RunStorage before
+        the simulation is queued on the thread pool.
 
         Args:
             config: Home configuration for the simulation.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            db_path: Path to the SQLite database file.
-            data_dir: Root directory for storing run data.
-            name: Optional name for the simulation run.
+            name: Optional name for the simulation run; config.name, or "Web Simulation", when omitted.
 
         Returns:
             Tuple of (job_id, run_id).
 
         Raises:
-            RuntimeError: If the manager has shut down; the refused job leaves no record.
-            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
+            RuntimeError: If the manager has shut down.
+            ValueError: If the store refuses the run id.
+            sqlite3.Error: If the database refuses the run's row.
+            A refused job leaves no record.
         """
         return self._submit_job(
-            db_path,
             run_name=name or config.name or "Web Simulation",
             run_type="home",
             n_homes=1,
             run_simulation=lambda new_job: self._run_home_simulation(
-                new_job.job_id,
-                new_job.run_id,
-                config,
-                start_date,
-                end_date,
-                db_path,
-                data_dir,
-                name,
-                new_job.created_at,
+                new_job.job_id, new_job.run, config, start_date, end_date
             ),
         )
 
@@ -319,45 +237,34 @@ class JobManager:
         configs: list[HomeConfig],
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
-        db_path: str,
-        data_dir: str,
         name: str | None = None,
     ) -> tuple[str, str]:
         """Submit a fleet simulation job for background execution.
 
-        Creates run and job entries in SQLite, then submits the fleet
-        simulation to the thread pool.
+        Records the job's run, running, through the manager's RunStorage before
+        the fleet simulation is queued on the thread pool.
 
         Args:
             configs: List of home configurations for the fleet.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            db_path: Path to the SQLite database file.
-            data_dir: Root directory for storing run data.
-            name: Optional name for the fleet simulation run.
+            name: Optional name for the fleet simulation run; "Fleet Simulation" when omitted.
 
         Returns:
             Tuple of (job_id, run_id).
 
         Raises:
-            RuntimeError: If the manager has shut down; the refused job leaves no record.
-            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
+            RuntimeError: If the manager has shut down.
+            ValueError: If the store refuses the run id.
+            sqlite3.Error: If the database refuses the run's row.
+            A refused job leaves no record.
         """
         return self._submit_job(
-            db_path,
             run_name=name or "Fleet Simulation",
             run_type="fleet",
             n_homes=len(configs),
             run_simulation=lambda new_job: self._run_fleet_simulation(
-                new_job.job_id,
-                new_job.run_id,
-                configs,
-                start_date,
-                end_date,
-                db_path,
-                data_dir,
-                name,
-                new_job.created_at,
+                new_job.job_id, new_job.run, configs, start_date, end_date
             ),
         )
 
@@ -367,18 +274,17 @@ class JobManager:
         A manager tracks only the jobs submitted to it.  It tracks each one
         until the job finishes, and stops at the first submit made once the
         job has been finished for longer than _FINISHED_JOB_TTL_SECONDS.  It
-        never reads the jobs table, so a job it does not track, such as one
-        from before a restart, is unknown here although the job's rows remain
-        in the database.
+        never reads the runs table, so a job it does not track, such as one
+        from before a restart, is unknown here although the job's run remains
+        in the RunStorage.
 
         Args:
             job_id: Unique job identifier.
 
         Returns:
             The job's frozen JobState: its job_id, run_id, status,
-            progress_pct, current_step, message and created_at, the ISO 8601
-            UTC time the job's rows were created.  None if this manager does
-            not track the job.
+            progress_pct, current_step, message and created_at, its run's
+            created_at.  None if this manager does not track the job.
         """
         with self._lock:
             job = self._jobs.get(job_id)
@@ -420,7 +326,6 @@ class JobManager:
 
     def _submit_job(
         self,
-        db_path: str,
         *,
         run_name: str,
         run_type: RunType,
@@ -429,18 +334,22 @@ class JobManager:
     ) -> tuple[str, str]:
         """Record a new job, queue run_simulation(new_job) on the thread pool, and return (job_id, run_id)."""
         self._stop_tracking_jobs_finished_long_ago()
-        new_job = self._record_new_job(db_path, run_name=run_name, run_type=run_type, n_homes=n_homes)
-        self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
-        return new_job.job_id, new_job.run_id
+        new_job = self._record_new_job(run_name=run_name, run_type=run_type, n_homes=n_homes)
+        self._schedule(new_job.job_id, new_job.run.id, functools.partial(run_simulation, new_job))
+        return new_job.job_id, new_job.run.id
 
-    def _record_new_job(self, db_path: str, run_name: str, run_type: RunType, n_homes: int) -> _NewJob:
-        """Write a new queued job's run and job rows, then track the job in memory.
+    def _record_new_job(self, run_name: str, run_type: RunType, n_homes: int) -> _NewJob:
+        """Create a new queued job's run, running, through the RunStorage, then track the job in memory.
 
-        The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
+        The job is tracked only once its run is created, so a store that refuses the run leaves no record of it.
+        The job's created_at is its run's.
         """
         job_id = self._new_id()
         run_id = self._new_id()
         created_at = datetime.now(timezone.utc).isoformat()
+        run = self._storage.create_run(
+            run_id, run_type=run_type, name=run_name, n_homes=n_homes, created_at=created_at
+        )
         queued = JobState(
             job_id=job_id,
             run_id=run_id,
@@ -451,44 +360,12 @@ class JobManager:
             created_at=created_at,
         )
 
-        with Database(Path(db_path)).transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    run_name,
-                    run_type,
-                    None,  # config_json filled on completion
-                    None,  # summary_json filled on completion
-                    _UNFINISHED_RUN_STATUS,
-                    None,
-                    created_at,
-                    None,
-                    None,
-                    n_homes,
-                    None,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO jobs (id, run_id, status, progress_pct, current_step, message, created_at)
-                VALUES (:job_id, :run_id, :status, :progress_pct, :current_step, :message, :created_at)
-                """,
-                asdict(queued),
-            )
-
         with self._lock:
             self._jobs[job_id] = _TrackedJob(state=queued)
 
-        return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
+        return _NewJob(job_id=job_id, run=run)
 
-    def _schedule(self, job_id: str, run_id: str, db_path: str, job: Callable[[], None]) -> None:
+    def _schedule(self, job_id: str, run_id: str, job: Callable[[], None]) -> None:
         """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
 
         Raises:
@@ -502,30 +379,30 @@ class JobManager:
             future = self._executor.submit(job)
         except RuntimeError:
             self._stop_counting_job()
-            self._forget_job(job_id, run_id, db_path)
+            self._forget_job(job_id, run_id)
             raise
-        future.add_done_callback(functools.partial(self._on_job_done, job_id, db_path))
+        future.add_done_callback(functools.partial(self._on_job_done, job_id))
 
-    def _on_job_done(self, job_id: str, db_path: str, future: Future[None]) -> None:
-        """Fail job *job_id*, whose rows are in the database at *db_path*, if its runner raised, then finish it, even if failing it raised.
+    def _on_job_done(self, job_id: str, future: Future[None]) -> None:
+        """Fail job *job_id* if its runner raised, then finish it, even if failing it raised.
 
         The job therefore reports failed before it stops counting as unfinished. Both steps stay in this one callback:
         the executor runs a callback added after the job finished at once, in the thread that adds it, so two callbacks
         could run out of order.
         """
         try:
-            self._fail_job_if_its_runner_raised(job_id, db_path, future)
+            self._fail_job_if_its_runner_raised(job_id, future)
         finally:
             self._finish_job(job_id)
 
-    def _fail_job_if_its_runner_raised(self, job_id: str, db_path: str, future: Future[None]) -> None:
-        """Fail job *job_id*, whose rows are in the database at *db_path*, with the error its runner raised, if it raised one.
+    def _fail_job_if_its_runner_raised(self, job_id: str, future: Future[None]) -> None:
+        """Fail job *job_id* with the error its runner raised, if it raised one.
 
         A job shutdown dropped never ran, so it is not failed: it keeps the state it was queued in.
         """
         error = None if future.cancelled() else future.exception()
         if error is not None:
-            self._fail_job_whose_runner_raised(job_id, db_path, error)
+            self._fail_job_whose_runner_raised(job_id, error)
 
     def _finish_job(self, job_id: str) -> None:
         """Record the clock reading when the executor was done with a job, then stop counting it as unfinished."""
@@ -549,16 +426,14 @@ class JobManager:
             if self._unfinished_job_count == 0:
                 self._idle.notify_all()
 
-    def _forget_job(self, job_id: str, run_id: str, db_path: str) -> None:
-        """Erase every record of a job that the executor refused to schedule."""
+    def _forget_job(self, job_id: str, run_id: str) -> None:
+        """Erase every record of a job that the executor refused to schedule: stop tracking it, and delete its run."""
         with self._lock:
             self._jobs.pop(job_id, None)
-        with Database(Path(db_path)).transaction() as conn:
-            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        self._storage.delete_run(run_id)
 
-    def _update_progress(self, job_id: str, pct: float, step: str, message: str, conn: sqlite3.Connection) -> None:
-        """Write the running job's progress to its jobs row, then report the same state with its SSE progress event."""
+    def _update_progress(self, job_id: str, pct: float, step: str, message: str) -> None:
+        """Report the running job's progress with its SSE progress event."""
         state = replace(
             self._state_of_running_job(job_id),
             status=_RUNNING_JOB_STATUS,
@@ -566,18 +441,6 @@ class JobManager:
             current_step=step,
             message=message,
         )
-        conn.execute(
-            """
-            UPDATE jobs SET
-                status = :status,
-                progress_pct = :progress_pct,
-                current_step = :current_step,
-                message = :message
-            WHERE id = :job_id
-            """,
-            asdict(state),
-        )
-        conn.commit()
         self._report_state(JobEvent("progress", state))
 
     def _state_of_running_job(self, job_id: str) -> JobState:
@@ -600,8 +463,8 @@ class JobManager:
             job.state = event.state
             job.events.append(event)
 
-    def _record_completed_job(self, job_id: str, message: str, conn: sqlite3.Connection) -> None:
-        """Write the jobs row of a job that completed with *message*, then report the same state with its SSE complete event."""
+    def _report_completed_job(self, job_id: str, message: str) -> None:
+        """Report the state of a job that completed with *message* with its SSE complete event."""
         state = replace(
             self._state_of_running_job(job_id),
             status=_COMPLETED_JOB_STATUS,
@@ -609,40 +472,39 @@ class JobManager:
             current_step="Done",
             message=message,
         )
-        conn.execute(
-            """
-            UPDATE jobs SET
-                status = :status,
-                progress_pct = :progress_pct,
-                current_step = :current_step,
-                message = :message,
-                completed_at = :completed_at
-            WHERE id = :job_id
-            """,
-            {**asdict(state), "completed_at": datetime.now(timezone.utc).isoformat()},
-        )
-        conn.commit()
         self._report_state(JobEvent("complete", state))
 
-    def _record_failed_job(self, job_id: str, message: str, error_traceback: str, conn: sqlite3.Connection) -> None:
-        """Write the jobs and runs rows of a job that failed with *message*, then report the same state, at its last progress, with its SSE error event.
-
-        Each row is written in a transaction of its own, so a row that is not recorded leaves the other recorded.
-        """
+    def _record_failed_job(self, job_id: str, message: str) -> None:
+        """Record that a job failed with *message* in its run, then report its state, at its last progress, with its SSE error event."""
         state = self._failed_state_of_running_job(job_id, message)
-        _record_failed_rows(state, error_traceback, conn)
+        self._record_failed_run(state)
         self._report_state(JobEvent("error", state))
 
     def _failed_state_of_running_job(self, job_id: str, message: str) -> JobState:
         """Return the state a job this manager is running reports once it fails with *message*: its last state, failed with *message*."""
         return replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
 
-    def _fail_job_whose_runner_raised(self, job_id: str, db_path: str, error: BaseException) -> None:
+    def _record_failed_run(self, state: JobState) -> None:
+        """Mark the run of *state*'s job failed with the job's message, through the RunStorage.
+
+        An Exception that stops it is logged, naming the job, its run and its failure, and not raised, so the job is
+        still reported failed.
+        """
+        try:
+            self._storage.mark_run_failed(state.run_id, state.message)
+        except Exception:
+            logger.exception(
+                "Could not record in the runs table that job %s of run %s failed with %r",
+                state.job_id,
+                state.run_id,
+                state.message,
+            )
+
+    def _fail_job_whose_runner_raised(self, job_id: str, error: BaseException) -> None:
         """Fail job *job_id* with *error*, which its runner raised and the runner's own failure handling did not catch.
 
-        Log *error*, record the failure in the job's rows on a new connection to the database at *db_path*, then report
-        the job failed. Rows it cannot record are left to recover_stale_jobs, which marks them failed when the next
-        server starts.
+        Log *error*, record the failure in the job's run, then report the job failed. A run it cannot record failed
+        stays running, and RunStorage.fail_interrupted_runs marks it failed when the next server starts.
         """
         state = self._failed_state_of_running_job(job_id, str(error))
         logger.error(
@@ -652,121 +514,97 @@ class JobManager:
             error,
             exc_info=error,
         )
-        _record_failed_rows_on_new_connection(state, "".join(traceback.format_exception(error)), db_path)
+        self._record_failed_run(state)
         self._report_state(JobEvent("error", state))
 
     def _run_job(
         self,
         job_id: str,
-        db_path: str,
-        work_fn: Callable[[sqlite3.Connection, Callable[[float, str, str], None]], None],
+        work_fn: Callable[[_ProgressReport], None],
         success_message: str = "Simulation completed successfully",
     ) -> None:
-        """Common job lifecycle wrapper for DB, status, progress, SSE, and errors.
+        """Run a job's work, reporting its progress, then its completion or its failure.
 
-        An error that escapes it, such as one opening the job's database, reaches _fail_job_if_its_runner_raised, which fails the job.
+        An Exception the work raises fails the job, and its run is recorded failed. An error that is not an
+        Exception escapes to _fail_job_if_its_runner_raised, which fails the job.
         """
-        conn = Database(Path(db_path)).connect()
         try:
-            self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
-            conn.execute(
-                "UPDATE jobs SET started_at = :started_at WHERE id = :job_id",
-                {"started_at": datetime.now(timezone.utc).isoformat(), "job_id": job_id},
-            )
-            conn.commit()
+            self._update_progress(job_id, 5.0, "Starting", "Initializing...")
 
             def progress(pct: float, step: str, msg: str) -> None:
-                self._update_progress(job_id, pct, step, msg, conn)
+                self._update_progress(job_id, pct, step, msg)
 
-            work_fn(conn, progress)
-            self._record_completed_job(job_id, success_message, conn)
+            work_fn(progress)
+            self._report_completed_job(job_id, success_message)
         except Exception as exc:
-            self._record_failed_job(job_id, str(exc), traceback.format_exc(), conn)
-        finally:
-            conn.close()
+            self._record_failed_job(job_id, str(exc))
 
     def _run_home_simulation(
         self,
         job_id: str,
-        run_id: str,
+        run: RunRecord,
         config: HomeConfig,
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-        created_at: str | None = None,
     ) -> None:
         """Worker function that runs a home simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
         simulation-specific logic: running the simulation, then saving the
-        run from its results through RunStorage.save_home_run_from_results.
+        run from its results through RunStorage.save_home_run_from_results,
+        under the name and creation time its submit recorded.
 
         Args:
             job_id: Unique job identifier.
-            run_id: Unique run identifier.
+            run: The record of the job's run, as its submit created it.
             config: Home configuration for the simulation.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            db_path: Path to the SQLite database file.
-            data_dir: Root directory for storing run data.
-            name: Optional name for the simulation run.
-            created_at: Original creation timestamp from job submission.
         """
         start_ref = time.monotonic()
 
-        def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
+        def work(progress: _ProgressReport) -> None:
             progress(20.0, "Simulating", "Running home simulation...")
             results = self._simulate_home(config, start_date, end_date)
 
             progress(90.0, "Saving", "Persisting results to storage...")
-            storage = RunStorage(Database(Path(db_path)), data_dir)
-            duration = time.monotonic() - start_ref
-            storage.save_home_run_from_results(
-                run_id=run_id,
+            self._storage.save_home_run_from_results(
+                run_id=run.id,
                 config=config,
                 results=results,
-                name=name or config.name or "Web Simulation",
+                name=run.name,
                 status="completed",
-                duration_seconds=duration,
-                created_at=created_at,
+                duration_seconds=time.monotonic() - start_ref,
+                created_at=run.created_at,
             )
 
-        self._run_job(job_id, db_path, work, "Simulation completed successfully")
+        self._run_job(job_id, work, "Simulation completed successfully")
 
     def _run_fleet_simulation(
         self,
         job_id: str,
-        run_id: str,
+        run: RunRecord,
         configs: list[HomeConfig],
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-        created_at: str | None = None,
     ) -> None:
         """Worker function that runs a fleet simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
         fleet-specific logic: simulating each home, then saving the run from
-        the fleet's results through RunStorage.save_fleet_run_from_results.
+        the fleet's results through RunStorage.save_fleet_run_from_results,
+        under the name and creation time its submit recorded.
 
         Args:
             job_id: Unique job identifier.
-            run_id: Unique run identifier.
+            run: The record of the job's run, as its submit created it.
             configs: List of home configurations for the fleet.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            db_path: Path to the SQLite database file.
-            data_dir: Root directory for storing run data.
-            name: Optional name for the fleet simulation run.
-            created_at: Original creation timestamp from job submission.
         """
         start_ref = time.monotonic()
 
-        def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
+        def work(progress: _ProgressReport) -> None:
             total = len(configs)
             per_home_results: list[SimulationResults] = []
 
@@ -776,54 +614,13 @@ class JobManager:
                 per_home_results.append(self._simulate_home(home_config, start_date, end_date))
 
             progress(97.0, "Saving", "Persisting fleet results...")
-            storage = RunStorage(Database(Path(db_path)), data_dir)
-            duration = time.monotonic() - start_ref
-            storage.save_fleet_run_from_results(
-                run_id=run_id,
+            self._storage.save_fleet_run_from_results(
+                run_id=run.id,
                 fleet_results=FleetResults(per_home_results=per_home_results, home_configs=configs),
-                name=name or "Fleet Simulation",
+                name=run.name,
                 status="completed",
-                duration_seconds=duration,
-                created_at=created_at,
+                duration_seconds=time.monotonic() - start_ref,
+                created_at=run.created_at,
             )
 
-        self._run_job(job_id, db_path, work, "Fleet simulation completed successfully")
-
-
-def recover_stale_jobs(database: Database) -> int:
-    """Mark any jobs stuck in 'running' or 'queued' status as failed.
-
-    Called on startup to clean up jobs interrupted by a server restart.
-
-    Args:
-        database: The Database holding the jobs and runs tables.
-
-    Returns:
-        Number of jobs recovered.
-    """
-    with database.transaction() as conn:
-        cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            """
-            UPDATE jobs SET
-                status = ?,
-                message = 'Interrupted by server restart',
-                completed_at = ?
-            WHERE status IN (?, ?)
-            """,
-            (_FAILED_JOB_STATUS, now, _RUNNING_JOB_STATUS, DEFAULT_JOB_STATUS),
-        )
-        recovered_jobs = cursor.rowcount
-        # Also mark corresponding runs as failed
-        cursor.execute(
-            """
-            UPDATE runs SET
-                status = ?,
-                error_message = 'Interrupted by server restart',
-                completed_at = ?
-            WHERE status = ?
-            """,
-            (_FAILED_RUN_STATUS, now, _UNFINISHED_RUN_STATUS),
-        )
-        return recovered_jobs
+        self._run_job(job_id, work, "Fleet simulation completed successfully")

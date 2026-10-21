@@ -18,7 +18,7 @@ from typing import Any, Generator, assert_never
 
 import yaml as _yaml
 import pandas as pd
-from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
@@ -81,15 +81,11 @@ def simulate_home_api() -> tuple[Response, int]:
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_home_job(
         config=home_config,
         start_date=start_date,
         end_date=end_date,
-        db_path=db_path,
-        data_dir=data_dir,
         name=name,
     )
 
@@ -124,15 +120,11 @@ def simulate_fleet_api() -> tuple[Response, int]:
     fleet_name = data.get("name", "Fleet Simulation")
 
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_fleet_job(
         configs=configs,
         start_date=start_date,
         end_date=end_date,
-        db_path=db_path,
-        data_dir=data_dir,
         name=fleet_name,
     )
 
@@ -393,15 +385,10 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     except FLEET_FORM_REFUSALS as exc:
         return jsonify({"error": str(exc)}), 400
 
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-
     job_id, run_id = job_manager.submit_fleet_job(
         configs=list(fleet.homes),
         start_date=fleet.start_date,
         end_date=fleet.end_date,
-        db_path=db_path,
-        data_dir=data_dir,
         name=fleet.name,
     )
 
@@ -578,8 +565,6 @@ def simulate_sweep() -> tuple[Response, int]:
     # Submit one home job per sweep point
     sweep_id = str(uuid.uuid4())
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_ids: list[str] = []
     for val, home_config, start_date, end_date in point_homes:
@@ -587,8 +572,6 @@ def simulate_sweep() -> tuple[Response, int]:
             config=home_config,
             start_date=start_date,
             end_date=end_date,
-            db_path=db_path,
-            data_dir=data_dir,
             name=f"Sweep {parameter}={val}",
         )
         job_ids.append(job_id)
