@@ -80,7 +80,9 @@ conventions:
 
   - rule: >
       Fleet simulations must be reproducible from a single seed: per-home seed = fleet_seed + index,
-      and stochastic load paths must seed BOTH numpy and the stdlib `random` module.
+      and stochastic draws run only inside load.py's RNG hand-off, which seeds both generators
+      (numpy and the stdlib `random` module) from the call's seed (fresh entropy when unset) and
+      restores them.
     why: >
       Reproducibility is a project requirement — planners re-run the canonical Bristol fleet
       and expect identical homes; parallel execution order must never affect results. The
@@ -90,7 +92,11 @@ conventions:
       pins the drawn fields of every shipped fleet and of a probe set, both random orders included,
       and only a change meant to move generated fleets regenerates those goldens
       (`uv run --locked --extra dev python -m tests._fleet_generation_pins`), with an Unreleased on
-      main line in docs/domain-library-consumption.md.
+      main line in docs/domain-library-consumption.md. A profile must not depend on what ran
+      before it or beside it on another thread: tests/unit/test_load_reproducibility.py pins that,
+      and that the hand-off is the only src code calling a module-level function of random or
+      numpy.random; tests/unit/web_jobs/test_seeded_jobs_reproduce.py pins it for two seeded
+      dashboard jobs run together.
 
   - rule: "mypy --strict must pass; do not widen ignore_missing_imports or add Any-typed config fields."
     why: >
