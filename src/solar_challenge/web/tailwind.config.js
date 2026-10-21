@@ -10,9 +10,9 @@ module.exports = {
   ],
   theme: {
     extend: {
-      colors: {
-        primary: colors[tokens.tailwind.primary],
-      },
+      colors: Object.fromEntries(
+        Object.entries(tokens.tailwind).map(([role, name]) => [role, colors[name]]),
+      ),
     },
   },
   plugins: [
