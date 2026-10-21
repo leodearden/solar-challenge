@@ -33,7 +33,6 @@ from solar_challenge.config import (
     load_config,
     load_fleet_config,
     parse_fleet_config,
-    parse_location_block,
     parse_sweep_fleet_configs,
     substitute_config_variables,
 )
@@ -114,6 +113,14 @@ def _print_community_section(community_results: "CommunityResults") -> None:
     console.print(table)
 
 
+def _period_in_fleet_timezone(
+    fleet: FleetConfig, start: str, end: str
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The timestamps the --start and --end dates name in the timezone of fleet's homes, which FleetConfig requires they share."""
+    timezone = fleet.homes[0].location.timezone
+    return pd.Timestamp(start, tz=timezone), pd.Timestamp(end, tz=timezone)
+
+
 @app.command()
 @handle_errors
 def run(
@@ -177,12 +184,7 @@ def run(
     fleet_config = load_fleet_config(config)
     n_homes = len(fleet_config.homes)
 
-    # Get location from first home for timezone
-    loc = fleet_config.homes[0].location
-
-    # Parse dates
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
+    start_date, end_date = _period_in_fleet_timezone(fleet_config, start, end)
 
     days = (end_date - start_date).days + 1
     print_info(f"Simulating fleet of {n_homes} homes for {days} days")
@@ -345,17 +347,6 @@ def sweep(
     """
     raw_config = load_config(config)
 
-    # Get location
-    location = parse_location_block(raw_config.get("location"))
-
-    # Parse dates
-    start_date = pd.Timestamp(start, tz=location.timezone)
-    end_date = pd.Timestamp(end, tz=location.timezone)
-
-    # Create output directory if needed
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
     if "fleet_distribution" not in raw_config:
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
@@ -365,6 +356,12 @@ def sweep(
         param_name, sweep_configs = _param_sweep(
             raw_config, param, min_val, max_val, steps, mode
         )
+
+    start_date, end_date = _period_in_fleet_timezone(sweep_configs[0][1], start, end)
+
+    # Create output directory if needed
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)
