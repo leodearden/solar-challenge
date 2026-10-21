@@ -441,14 +441,18 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
     return timestep
 
 
-def _dispatch_path(config: HomeConfig, step_minutes: float) -> _DispatchPath:
+def _dispatch_path(
+    config: HomeConfig, step_minutes: float, strategy: Optional[DispatchStrategy] = None
+) -> _DispatchPath:
     """How the home dispatches each row, step_minutes long.
 
-    It takes the tariff-rate TOU path when it asks for tou_optimized, has a tariff and its
-    battery names no strategy of its own; otherwise its battery's strategy, self-consumption
-    by default.
+    A given strategy dispatches it, at the home's tariff. Without one, the home takes the
+    tariff-rate TOU path when it asks for tou_optimized, has a tariff and its battery names no
+    strategy of its own; otherwise its battery's strategy, self-consumption by default.
     """
     tariff = config.tariff_config
+    if strategy is not None:
+        return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
     battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
     if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
         return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
@@ -571,6 +575,7 @@ def simulate_home(
     validate_balance: bool = True,
     *,
     weather: WeatherProvider,
+    strategy: Optional[DispatchStrategy] = None,
 ) -> SimulationResults:
     """Simulate a single home for a date range.
 
@@ -585,6 +590,12 @@ def simulate_home(
             degree-minutes of the air temperature across this whole year,
             so with a heat pump configured the weather must be one year of
             hourly rows, 8760 to 8784 (365 to 366 days).
+        strategy: The dispatch strategy to run the battery under in place of
+            the one config selects; None runs config's. It is driven through
+            flow.simulate_timestep with config's tariff, so it is offered a
+            GridChargeContext exactly when a configured strategy is: with a
+            tariff and battery_config.grid_charging. The results'
+            strategy_name is its name.
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
@@ -604,7 +615,7 @@ def simulate_home(
     rows = demand.total_kw.index
     window = SimulationWindow.of_index(rows)
     generation_kw = align_tmy_to_index(minute_generation, rows)
-    dispatch = _dispatch_path(config, window.step_minutes)
+    dispatch = _dispatch_path(config, window.step_minutes, strategy)
     flows = _row_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
     import_pricing = _price_imports(config.tariff_config, flows, rows)
     export_revenue = _export_revenue(config.seg_tariff, flows, rows)

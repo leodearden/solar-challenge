@@ -2,9 +2,10 @@
 """Offline smoke tests of the measurement scripts the docs say to re-measure with.
 
 docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
-docs/pv-system-losses.md and review/briefing.yaml's key_decisions say to
-re-measure their figures with scripts/measure_mppt_window.py,
-scripts/measure_tmy_irradiation.py and scripts/measure_pv_performance_ratio.py.
+docs/pv-system-losses.md, docs/scheduled-charge-windows.md and
+review/briefing.yaml's key_decisions say to re-measure their figures with
+scripts/measure_mppt_window.py, scripts/measure_tmy_irradiation.py,
+scripts/measure_pv_performance_ratio.py and scripts/measure_charge_window_bills.py.
 """
 
 import dataclasses
@@ -17,6 +18,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import solar_challenge
+from solar_challenge.finance import BillBreakdown
+from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
@@ -28,8 +32,9 @@ from solar_challenge.pv import (
     wired_dc_capacity_kw,
 )
 from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._scripts import load_script
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 _QUIET_DIODE_SOLVER = pytest.mark.filterwarnings(
     "ignore:invalid value encountered:RuntimeWarning"
@@ -340,3 +345,81 @@ class TestMeasurePvPerformanceRatio:
         assert f"{performance_site.with_losses.performance_ratio:.3f}" in table
         assert f"{performance_site.lossless.performance_ratio:.3f}" in table
         assert "0.800" in table
+
+
+@pytest.fixture(scope="module")
+def charge_window_bills() -> ModuleType:
+    """scripts/measure_charge_window_bills.py."""
+    return load_script("measure_charge_window_bills")
+
+
+@pytest.fixture(scope="module")
+def sunless_day_bills(charge_window_bills: ModuleType) -> list[Any]:
+    """measure_charge_window_bills' bills of bristol-arbitrage's home under each arm over one sunless January day."""
+    home = bristol_arbitrage_home()
+    day = pd.Timestamp("2024-01-15")
+    weather = weather_for(home, sunless_weather("2024-01-15", temp_air=5.0))
+    return list(charge_window_bills.measure(home, day, day, weather=weather))
+
+
+class TestMeasureChargeWindowBills:
+    """measure_charge_window_bills bills bristol-arbitrage's home under each of its four arms (scripts/measure_charge_window_bills.py, docs/scheduled-charge-windows.md)."""
+
+    @_QUIET_DIODE_SOLVER
+    def test_it_bills_the_four_arms_in_order_each_with_its_summary_and_bill(
+        self, sunless_day_bills: list[Any]
+    ) -> None:
+        assert [arm.arm for arm in sunless_day_bills] == ["A", "B", "C", "D"]
+        for arm in sunless_day_bills:
+            assert isinstance(arm.summary, SummaryStatistics), arm.arm
+            assert isinstance(arm.bill, BillBreakdown), arm.arm
+
+    @_QUIET_DIODE_SOLVER
+    def test_each_bill_is_its_runs_import_cost_basis_c_own_use_and_standing_charge(
+        self, charge_window_bills: ModuleType, sunless_day_bills: list[Any]
+    ) -> None:
+        """Basis-C own-use is demand less import (docs/cost-recovery-finance-model.md)."""
+        finance = charge_window_bills.FINANCE
+
+        for arm in sunless_day_bills:
+            summary, bill = arm.summary, arm.bill
+            assert bill.import_cost_gbp == summary.total_import_cost_gbp, arm.arm
+            assert bill.own_use_payment_gbp == pytest.approx(
+                finance.own_use_rate_pence_per_kwh * (summary.total_demand_kwh - summary.total_grid_import_kwh) / 100
+            ), arm.arm
+            assert bill.standing_charge_gbp == pytest.approx(
+                finance.standing_charge_pence_per_day * summary.simulation_days / 100
+            ), arm.arm
+
+    @_QUIET_DIODE_SOLVER
+    def test_every_arm_but_c_charges_from_the_grid(self, sunless_day_bills: list[Any]) -> None:
+        grid_charge_kwh = {arm.arm: arm.summary.total_grid_charge_kwh for arm in sunless_day_bills}
+
+        assert grid_charge_kwh["C"] == 0.0
+        assert all(grid_charge_kwh[label] > 0.0 for label in "ABD"), grid_charge_kwh
+
+    @_QUIET_DIODE_SOLVER
+    def test_main_prints_each_arms_bill_and_what_it_was_measured_on_offline(
+        self,
+        charge_window_bills: ModuleType,
+        tmp_path_factory: pytest.TempPathFactory,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The cache holds one clear June day as Bristol's TMY, so main fetches nothing."""
+        home = bristol_arbitrage_home()
+        cache_dir = tmp_path_factory.mktemp("weather-cache")
+        WeatherCache(cache_dir).put(synthetic_june_weather("1990-06-21"), "tmy", home.location)
+
+        charge_window_bills.main(["--cache-dir", str(cache_dir), "--start", "2024-06-21", "--end", "2024-06-21"])
+        report = capsys.readouterr().out
+
+        assert solar_challenge.__version__ in report
+        assert home.tariff_config is not None
+        for period in home.tariff_config.periods:
+            assert f"{period.name} {period.start_time}-{period.end_time}" in report
+        for window in charge_window_bills.WINDOWS:
+            assert f"from {window.start:%H:%M}" in report
+        assert "from 00:30" in report
+        rows = report.splitlines()
+        for label in "ABCD":
+            assert sum(row.startswith(f"| {label} |") for row in rows) == 1, label

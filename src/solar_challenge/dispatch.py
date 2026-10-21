@@ -8,10 +8,12 @@ batteries based on generation, demand, tariffs, and other factors.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
+from zoneinfo import ZoneInfo
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
@@ -166,19 +168,54 @@ def compute_grid_charge_power_kw(
 
     # Gate 3: how much energy is still needed to reach the target SOC?
     target_kwh = ctx.target_soc_fraction * capacity_kwh
-    gap_kwh = max(0.0, target_kwh - battery_soc_kwh)
-    if gap_kwh <= 0.0:
+    return _grid_power_for_gap_kw(
+        ctx,
+        gap_kwh=target_kwh - battery_soc_kwh,
+        pv_charge_kw=pv_charge_power_kw,
+        timestep_minutes=timestep_minutes,
+    )
+
+
+def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
+    """The max_charge_kw a step's charge_kw of PV charge leaves for grid charging."""
+    return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
+
+
+def _grid_power_for_gap_kw(
+    ctx: GridChargeContext,
+    *,
+    gap_kwh: float,
+    pv_charge_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """The grid power that stores gap_kwh this step, within the headroom the step's pv_charge_kw of PV charge leaves, and none unless the gap is positive.
+
+    Storing gap_kwh draws gap_kwh / charge_efficiency from the grid.
+    """
+    if not gap_kwh > 0.0:
         return 0.0
-
-    # Convert SOC gap to a grid-side charge-power request for this timestep.
-    # gap_kwh / charge_efficiency: more grid energy needed than actually stored.
     dt_h = timestep_minutes * HOURS_PER_MINUTE
-    gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
+    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
 
-    # The max_charge_kw headroom PV charging leaves.
-    residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
 
-    return min(gap_power_kw, residual_kw)
+def _grid_power_to_target_kw(
+    ctx: GridChargeContext,
+    *,
+    target_kwh: float,
+    battery_soc_kwh: float,
+    pv_charge_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """The grid power that charges the battery to target_kwh this step, after its pv_charge_kw of PV charge, within the headroom that charge leaves.
+
+    It predicts the SOC after the PV charge as Battery.charge stores it, and asks for
+    nothing once that SOC reaches target_kwh.
+    """
+    dt_h = timestep_minutes * HOURS_PER_MINUTE
+    soc_after_pv_kwh = battery_soc_kwh + min(pv_charge_kw, ctx.max_charge_kw) * dt_h * ctx.charge_efficiency
+    return _grid_power_for_gap_kw(
+        ctx, gap_kwh=target_kwh - soc_after_pv_kwh, pv_charge_kw=pv_charge_kw, timestep_minutes=timestep_minutes
+    )
 
 
 class DispatchStrategy(ABC):
@@ -235,6 +272,38 @@ class DispatchStrategy(ABC):
         pass
 
 
+def _require_valid_strategy_inputs(
+    generation_kw: float,
+    demand_kw: float,
+    battery_soc_kwh: float,
+    battery_capacity_kwh: float,
+    timestep_minutes: float,
+) -> None:
+    """Refuse a decide_action input out of its range: a negative power or SOC, or a capacity or timestep that is not positive.
+
+    Raises:
+        ValueError: Naming the input and its value.
+    """
+    if generation_kw < 0:
+        raise ValueError(
+            f"Generation must be non-negative, got {generation_kw} kW"
+        )
+    if demand_kw < 0:
+        raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
+    if battery_soc_kwh < 0:
+        raise ValueError(
+            f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
+        )
+    if battery_capacity_kwh <= 0:
+        raise ValueError(
+            f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
+        )
+    if timestep_minutes <= 0:
+        raise ValueError(
+            f"Timestep must be positive, got {timestep_minutes} minutes"
+        )
+
+
 class SelfConsumptionStrategy(DispatchStrategy):
     """Self-consumption dispatch strategy.
 
@@ -282,25 +351,9 @@ class SelfConsumptionStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Calculate excess and shortfall
         excess_kw = max(0.0, generation_kw - demand_kw)
@@ -428,25 +481,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Determine current tariff period
         tariff_period = self._get_tariff_period(timestamp)
@@ -571,25 +608,9 @@ class PeakShavingStrategy(DispatchStrategy):
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
         """
-        # Validate inputs
-        if generation_kw < 0:
-            raise ValueError(
-                f"Generation must be non-negative, got {generation_kw} kW"
-            )
-        if demand_kw < 0:
-            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
-        if battery_soc_kwh < 0:
-            raise ValueError(
-                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
-            )
-        if battery_capacity_kwh <= 0:
-            raise ValueError(
-                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
-            )
-        if timestep_minutes <= 0:
-            raise ValueError(
-                f"Timestep must be positive, got {timestep_minutes} minutes"
-            )
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
 
         # Calculate excess and shortfall
         excess_kw = max(0.0, generation_kw - demand_kw)
@@ -637,3 +658,192 @@ class PeakShavingStrategy(DispatchStrategy):
             discharge_kw=discharge_kw,
             grid_charge_kw=grid_charge_kw,
         )
+
+
+_ONE_DAY = timedelta(days=1)
+
+
+def _are_opening_days(days: object) -> bool:
+    """Whether days is 'daily' or a non-empty frozenset of date.weekday() numbers, 0 to 6, none of them a bool."""
+    if days == "daily":
+        return True
+    return (
+        isinstance(days, frozenset)
+        and len(days) > 0
+        and all(isinstance(day, int) and not isinstance(day, bool) and 0 <= day <= 6 for day in days)
+    )
+
+
+@dataclass(frozen=True)
+class ChargeWindow:
+    """One scheduled-charge slot, as on a Victron GX: while it is open, the battery is charged from the grid to its target.
+
+    Attributes:
+        days: The date.weekday() numbers (Monday 0 … Sunday 6) of the days it opens on, or
+            'daily'. A window that crosses midnight stays open into the morning after.
+        start: The wall-clock time it opens at, on its strategy's zone, so it has no tzinfo.
+        duration: How long it stays open: more than nothing, and at most a day.
+        target_soc_fraction: The state of charge it charges to, in (0, 1], as a fraction of
+            the battery capacity decide_action is given.
+        allow_discharge: Whether the battery may discharge while it is open, down to the target.
+
+    Raises:
+        ConfigurationError: For a field it cannot schedule, naming the field and its value.
+    """
+
+    days: frozenset[int] | Literal["daily"]
+    start: time
+    duration: timedelta
+    target_soc_fraction: float
+    allow_discharge: bool
+
+    def __post_init__(self) -> None:
+        """Refuse a field the window cannot schedule, naming the field and its value."""
+        if not _are_opening_days(self.days):
+            raise ConfigurationError(
+                "ChargeWindow's days are 'daily' or a non-empty frozenset of date.weekday() numbers, "
+                f"0 to 6: got days={self.days!r}"
+            )
+        if self.start.tzinfo is not None:
+            raise ConfigurationError(
+                "ChargeWindow's start is a wall-clock time on its strategy's zone, so it has no tzinfo: "
+                f"got start={self.start!r}"
+            )
+        if not timedelta(0) < self.duration <= _ONE_DAY:
+            raise ConfigurationError(
+                f"ChargeWindow's duration is more than 0 and at most a day: got duration={self.duration!r}"
+            )
+        if not 0.0 < self.target_soc_fraction <= 1.0:
+            raise ConfigurationError(
+                "ChargeWindow's target_soc_fraction is in (0, 1]: "
+                f"got target_soc_fraction={self.target_soc_fraction!r}"
+            )
+
+    def covers(self, moment: datetime) -> bool:
+        """Whether the window is open at moment, a naive wall-clock time on its strategy's zone.
+
+        It is open from start for duration on each day it opens on, so at most a day: the
+        opening that covers moment is that day's or the day before's.
+        """
+        today = moment.date()
+        openings = (datetime.combine(day, self.start) for day in (today, today - _ONE_DAY) if self._opens_on(day))
+        return any(opens <= moment < opens + self.duration for opens in openings)
+
+    def _opens_on(self, day: date) -> bool:
+        """Whether the window opens on day."""
+        return self.days == "daily" or day.weekday() in self.days
+
+
+def _window_decision(
+    window: ChargeWindow,
+    *,
+    generation_kw: float,
+    demand_kw: float,
+    battery_soc_kwh: float,
+    battery_capacity_kwh: float,
+    timestep_minutes: float,
+    grid_charge_ctx: Optional[GridChargeContext],
+) -> DispatchDecision:
+    """The decision of a step inside window.
+
+    Above the window's target, a window that allows discharge covers a shortfall from the
+    battery, down to the target and no further. Otherwise the step charges its PV excess and,
+    offered a grid-charge context, the grid power that charges the battery to the target,
+    whatever the rates.
+    """
+    excess_kw = max(0.0, generation_kw - demand_kw)
+    shortfall_kw = max(0.0, demand_kw - generation_kw)
+    target_kwh = window.target_soc_fraction * battery_capacity_kwh
+    if window.allow_discharge and shortfall_kw > 0.0 and battery_soc_kwh > target_kwh:
+        down_to_target_kw = (battery_soc_kwh - target_kwh) / (timestep_minutes * HOURS_PER_MINUTE)
+        return DispatchDecision(charge_kw=0.0, discharge_kw=min(shortfall_kw, down_to_target_kw))
+    grid_charge_kw = (
+        0.0
+        if grid_charge_ctx is None
+        else _grid_power_to_target_kw(
+            grid_charge_ctx,
+            target_kwh=target_kwh,
+            battery_soc_kwh=battery_soc_kwh,
+            pv_charge_kw=excess_kw,
+            timestep_minutes=timestep_minutes,
+        )
+    )
+    return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0, grid_charge_kw=grid_charge_kw)
+
+
+class ScheduledChargeStrategy(DispatchStrategy):
+    """In each window it force-charges the battery from the grid to the window's target and then holds it, and outside every window its base decides.
+
+    docs/scheduled-charge-windows.md gives the rules and the year harness that bills them.
+    """
+
+    def __init__(self, base: DispatchStrategy, windows: tuple[ChargeWindow, ...], tz: ZoneInfo) -> None:
+        """Wrap base in windows read on tz's wall clock: the first listed window open at a step decides it.
+
+        Raises:
+            ConfigurationError: If tz is not a ZoneInfo, naming it.
+        """
+        if not isinstance(tz, ZoneInfo):
+            raise ConfigurationError(
+                "ScheduledChargeStrategy's tz is the ZoneInfo on whose wall clock its windows open: "
+                f"got tz={tz!r}"
+            )
+        self._base = base
+        self._windows = tuple(windows)
+        self._tz = tz
+
+    @property
+    def name(self) -> str:
+        """Return strategy name: its base's, wrapped."""
+        return f"scheduled_charge({self._base.name})"
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
+    ) -> DispatchDecision:
+        """Decide the step: the first listed window open at timestamp decides it, else the base does, given every argument unchanged.
+
+        Raises:
+            ValueError: If an input is out of the range the sibling strategies refuse, or
+                timestamp is naive, so it has no wall-clock time on tz.
+        """
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
+        window = self._window_at(timestamp)
+        if window is None:
+            return self._base.decide_action(
+                timestamp=timestamp,
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery_soc_kwh=battery_soc_kwh,
+                battery_capacity_kwh=battery_capacity_kwh,
+                timestep_minutes=timestep_minutes,
+                grid_charge_ctx=grid_charge_ctx,
+            )
+        return _window_decision(
+            window,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery_soc_kwh=battery_soc_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
+
+    def _window_at(self, timestamp: datetime) -> Optional[ChargeWindow]:
+        """The first listed window open at timestamp, read on tz's wall clock, or None."""
+        if timestamp.utcoffset() is None:
+            raise ValueError(
+                f"ScheduledChargeStrategy reads each timestamp on {self._tz.key}'s wall clock, "
+                f"so it refuses a naive one: got {timestamp!r}"
+            )
+        wall_clock = timestamp.astimezone(self._tz).replace(tzinfo=None)
+        return next((window for window in self._windows if window.covers(wall_clock)), None)
