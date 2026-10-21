@@ -17,7 +17,6 @@ from flask import Flask
 from jinja2 import UndefinedError
 
 from tests._html_page import chart_figures, element_count, element_ids, headings, texts
-from tests._server_drawn_badges import dashboard_macros_of
 
 _FIGURE = json.dumps(
     {
@@ -26,12 +25,6 @@ _FIGURE = json.dumps(
     }
 )
 _NOTHING_TO_DRAW = [pytest.param(None, id="none"), pytest.param("{}", id="empty-object")]
-
-
-@pytest.fixture
-def macros(app: Flask) -> Any:
-    """The public macros of components/macros.html, as callables that return their markup."""
-    return dashboard_macros_of(app)
 
 
 def test_a_chart_panel_draws_a_card_titled_with_its_title_whose_container_carries_the_figure(
