@@ -11,6 +11,7 @@ import math
 import re
 from collections.abc import Callable, Mapping
 
+import numpy as np
 import pandas as pd
 import pvlib
 import pytest
@@ -22,6 +23,7 @@ from solar_challenge.pv import (
     create_pv_system,
     create_simple_module_params,
     simulate_pv_output,
+    wired_dc_capacity_kw,
 )
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -41,6 +43,23 @@ def pdc0_module_without_gamma_pdc() -> dict[str, float]:
     return {"STC": 450.0, "pdc0": 450.0}
 
 
+@pytest.fixture
+def default_module() -> dict[str, float]:
+    return cec_module_params(DEFAULT_CEC_MODULE)
+
+
+@pytest.fixture
+def cec_module_without_alpha_sc(default_module: dict[str, float]) -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row with no short-circuit current temperature coefficient: Adjust scales only alpha_sc, so no Adjust moves the modelled coefficient."""
+    return {**default_module, "alpha_sc": 0.0}
+
+
+@pytest.fixture
+def cec_module_with_a_wide_band_gap(default_module: dict[str, float]) -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row at a 3.0 eV band gap: the Adjusts that keep its photocurrent positive from -40 to 85 °C reach a modelled coefficient only from -0.0908 to -3.1151 %/K (measured), so not -0.05 %/K."""
+    return {**default_module, "EgRef": 3.0}
+
+
 @pytest.fixture(scope="module")
 def clear_day() -> pd.DataFrame:
     return synthetic_june_weather("2024-06-21")
@@ -54,6 +73,24 @@ def default_clear_day_kwh(clear_day: pd.DataFrame) -> float:
 
 def _clear_day_kwh(config: PVConfig, clear_day: pd.DataFrame) -> float:
     return float(simulate_pv_output(config, Location.bristol(), clear_day).sum())
+
+
+def _p_mp_w(module: Mapping[str, float], cell_temperatures_c: list[float]) -> np.ndarray:
+    """The module's maximum power at 1000 W/m² at each cell temperature, from pvlib's CEC single-diode model."""
+    diode = pvlib.pvsystem.PVSystem(module_parameters=dict(module)).calcparams_cec(
+        np.full(len(cell_temperatures_c), 1000.0), np.array(cell_temperatures_c)
+    )
+    return np.asarray(pvlib.pvsystem.singlediode(*diode)["p_mp"])
+
+
+def _modelled_gamma_per_k(module: Mapping[str, float], half_width_k: float = 0.1) -> float:
+    """dP_mp/dT / P_mp at 1000 W/m² and 25 °C, a central difference over 25 ± half_width_k °C."""
+    p_cold, p_stc, p_hot = _p_mp_w(module, [25 - half_width_k, 25.0, 25 + half_width_k])
+    return float((p_hot - p_cold) / (2 * half_width_k * p_stc))
+
+
+def _p_mp_at_stc_w(module: Mapping[str, float]) -> float:
+    return float(_p_mp_w(module, [25.0])[0])
 
 
 def _assert_equal_apart_from(
@@ -199,3 +236,105 @@ class TestASetEfficiencySetsTheModulesArea:
             f"4 kW at a module efficiency of 0.10 gave {kwh:.4f} kWh, "
             f"the default {default_clear_day_kwh:.4f} kWh"
         )
+
+
+class TestASetTemperatureCoefficientOnACecModule:
+    """A set coefficient solves a CEC single-diode template's Adjust, which scales only alpha_sc's temperature term, so the STC point stays the row's, and sets its gamma_r."""
+
+    @pytest.mark.parametrize("coefficient", [-0.003, -0.005, -0.01, -1e-6])
+    @pytest.mark.parametrize(
+        "as_custom_params", [False, True], ids=["DEFAULT_CEC_MODULE", "its-row-as-custom-params"]
+    )
+    def test_the_derived_module_has_that_coefficient_at_the_rows_stc_point(
+        self, coefficient: float, as_custom_params: bool, default_module: dict[str, float]
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=4.0,
+            temperature_coefficient=coefficient,
+            custom_module_params=default_module if as_custom_params else None,
+        )
+
+        for array in create_pv_system(config).arrays:
+            module = array.module_parameters
+            modelled = _modelled_gamma_per_k(module)
+            assert abs(modelled - coefficient) <= 1e-6, f"modelled {modelled} per K"
+            assert module["gamma_r"] == pytest.approx(100 * coefficient)
+            assert _p_mp_at_stc_w(module) == pytest.approx(_p_mp_at_stc_w(default_module), rel=1e-9)
+            _assert_equal_apart_from(module, default_module, {"Adjust", "gamma_r"})
+
+    def test_the_rows_own_coefficient_gives_back_the_row(
+        self,
+        default_module: dict[str, float],
+        clear_day: pd.DataFrame,
+        default_clear_day_kwh: float,
+    ) -> None:
+        """The row's own modelled coefficient at a 0.5 K half-width is -0.34730 %/K, beside its catalogue gamma_r of -0.3448."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            temperature_coefficient=_modelled_gamma_per_k(default_module, half_width_k=0.5),
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["Adjust"] == pytest.approx(
+                default_module["Adjust"], abs=1e-6
+            )
+        assert _clear_day_kwh(config, clear_day) == pytest.approx(default_clear_day_kwh, rel=1e-9)
+
+
+class TestASetTemperatureCoefficientOnAPvwattsModule:
+    def test_sets_its_gamma_pdc(self) -> None:
+        config = PVConfig(
+            capacity_kw=4.0, temperature_coefficient=-0.005, custom_module_params=_PVWATTS_300_W_MODULE
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["gamma_pdc"] == -0.005
+            _assert_equal_apart_from(array.module_parameters, _PVWATTS_300_W_MODULE, {"gamma_pdc"})
+
+
+class TestASetTemperatureCoefficientActsOnAClearDay:
+    """The clear day's cells run above 25 °C, so a steeper coefficient yields less; over a Bristol year they run mostly below it, so no annual direction holds (docs/pv-module-settings.md)."""
+
+    def test_a_steeper_coefficient_yields_less(
+        self, clear_day: pd.DataFrame, default_clear_day_kwh: float
+    ) -> None:
+        """Measured x0.978618 of the default's 26.8194 kWh at -0.005 per K."""
+        kwh = _clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.005), clear_day)
+
+        assert kwh <= 0.985 * default_clear_day_kwh, (
+            f"-0.005 per K gave {kwh:.4f} kWh, the default {default_clear_day_kwh:.4f} kWh"
+        )
+
+    def test_a_shallower_coefficient_yields_more(
+        self, clear_day: pd.DataFrame, default_clear_day_kwh: float
+    ) -> None:
+        """Measured x1.006607 of the default's at -0.003 per K."""
+        kwh = _clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003), clear_day)
+
+        assert kwh > default_clear_day_kwh, (
+            f"-0.003 per K gave {kwh:.4f} kWh, the default {default_clear_day_kwh:.4f} kWh"
+        )
+
+
+class TestACoefficientNoAdjustReachesIsRefusedAtUse:
+    @pytest.mark.parametrize(
+        ("module", "coefficient"),
+        [("cec_module_without_alpha_sc", -0.004), ("cec_module_with_a_wide_band_gap", -0.0005)],
+    )
+    def test_naming_the_field_and_its_value(
+        self, request: pytest.FixtureRequest, module: str, coefficient: float
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=4.0,
+            temperature_coefficient=coefficient,
+            custom_module_params=request.getfixturevalue(module),
+        )
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as wiring:
+            wired_dc_capacity_kw(config)
+
+        message = str(building.value)
+        assert f"temperature_coefficient={coefficient}" in message, message
+        assert str(wiring.value) == message
