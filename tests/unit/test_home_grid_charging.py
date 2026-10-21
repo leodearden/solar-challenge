@@ -74,7 +74,8 @@ class TestSimulateHomeStrategyPathGridCharging:
         Without tariff= on the Strategy branch, grid_charge_ctx would be None and
         battery_charge.sum() would be 0.
 
-        Also verifies the §3.1 split-accounting energy balance closes on the Strategy path:
+        Also verifies the split-accounting energy balance of
+        docs/prds/tou-grid-charging-battery-arbitrage.md §3.1 closes on the Strategy path:
         generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge).
         validate_balance=True already enforces this per-timestep; the explicit series check
         below makes the guarantee visible as a reviewable assertion.
@@ -90,7 +91,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             "Expected battery_charge > 0: grid charging should engage via Strategy path "
             "when tariff=config.tariff_config is threaded into simulate_timestep"
         )
-        # §3.1 split-accounting identity (generation + grid_import == demand + grid_export +
+        # The split-accounting identity (generation + grid_import == demand + grid_export +
         # battery_net) should hold element-wise within floating-point tolerance.
         lhs = results.generation + results.grid_import
         rhs = (
