@@ -377,6 +377,51 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
     assert later.__file__ in str(raised.value)
 
 
+def test_a_routine_that_wraps_a_class_whose_module_another_module_of_the_same_name_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_the_class_and_the_replacement(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from functools import wraps\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from fractions import Fraction as Share\n"
+        "\n"
+        "class Audit:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "@wraps(Audit)\n"
+        "def audit(*args, **kwargs):\n"
+        "    return Audit(*args, **kwargs)\n",
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from functools import wraps\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from decimal import Decimal as Share\n"
+        "\n"
+        "class Audit:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "@wraps(Audit)\n"
+        "def audit(*args, **kwargs):\n"
+        "    return Audit(*args, **kwargs)\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.audit)
+
+    assert "auditing.Audit" in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
 def test_a_static_type_its_module_does_not_bind_under_its_qualified_name_names_the_classes_its_forms_name() -> None:
     assert named_classes(types.ModuleType) == set()
     assert named_classes(types.FunctionType) == set()
@@ -487,6 +532,52 @@ def test_a_partial_names_the_classes_the_callable_it_wraps_names_each_read_where
 
     assert named_classes(halving.half) == {fractions.Fraction, int}
     assert named_classes(functools.partial(Submeter)) == {fractions.Fraction}
+
+
+def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_names_each_read_where_that_callable_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "from functools import partial, wraps\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n"
+        "\n"
+        "half = partial(settle, rate=1)\n"
+        "\n"
+        "def logged(function):\n"
+        "    @wraps(function)\n"
+        "    def wrapper(*args, **kwargs):\n"
+        "        return function(*args, **kwargs)\n"
+        "    return wrapper\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from metering import Meter, half, logged\n"
+        "\n"
+        "class Submeter(Meter):\n"
+        "    pass\n"
+        "\n"
+        "submeter = logged(Submeter)\n"
+        "halved = logged(half)\n"
+        "\n"
+        "@logged\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    assert named_classes(submetering.submeter) == {fractions.Fraction}
+    assert named_classes(submetering.halved) == {fractions.Fraction, int}
+    assert named_classes(submetering.audit) == {decimal.Decimal}
 
 
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
