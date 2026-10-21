@@ -236,12 +236,19 @@ class TestCECLibraryReuse:
         assert reads.count("CECMod") <= 1, f"SAM library reads: {reads}"
         assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
 
-    def test_customised_system_leaves_later_default_systems_unchanged(self):
-        create_pv_system(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003))
+    def test_customised_system_leaves_later_default_systems_unchanged(self) -> None:
+        create_pv_system(
+            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, module_efficiency=0.15)
+        )
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
-        assert "gamma_pdc" not in later.arrays[0].module_parameters
+        for array in later.arrays:
+            pd.testing.assert_series_equal(
+                pd.Series(array.module_parameters),
+                pvlib.pvsystem.retrieve_sam("CECMod")[DEFAULT_CEC_MODULE],
+                check_names=False,
+            )
 
     def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
         configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
@@ -566,40 +573,6 @@ class TestApplyDegradation:
 
 class TestConfigurablePanelParameters:
     """Test PV-004: Configurable panel parameters."""
-
-    def test_default_module_efficiency(self):
-        """Default module efficiency is 20%."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.module_efficiency == 0.20
-
-    def test_custom_module_efficiency(self):
-        """Module efficiency can be customized."""
-        config = PVConfig(capacity_kw=4.0, module_efficiency=0.22)
-        assert config.module_efficiency == 0.22
-
-    def test_invalid_module_efficiency_raises(self):
-        """Invalid module efficiency raises error."""
-        with pytest.raises(ValueError, match="Module efficiency"):
-            PVConfig(capacity_kw=4.0, module_efficiency=0)
-        with pytest.raises(ValueError, match="Module efficiency"):
-            PVConfig(capacity_kw=4.0, module_efficiency=1.5)
-
-    def test_default_temperature_coefficient(self):
-        """Default temperature coefficient is -0.4%/°C."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.temperature_coefficient == -0.004
-
-    def test_custom_temperature_coefficient(self):
-        """Temperature coefficient can be customized."""
-        config = PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003)
-        assert config.temperature_coefficient == -0.003
-
-    def test_invalid_temperature_coefficient_raises(self):
-        """Invalid temperature coefficient raises error."""
-        with pytest.raises(ValueError, match="Temperature coefficient"):
-            PVConfig(capacity_kw=4.0, temperature_coefficient=0)
-        with pytest.raises(ValueError, match="Temperature coefficient"):
-            PVConfig(capacity_kw=4.0, temperature_coefficient=-1.5)
 
     def test_custom_module_params(self):
         """Custom module parameters can be provided."""

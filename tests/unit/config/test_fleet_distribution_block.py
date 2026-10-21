@@ -448,6 +448,18 @@ class TestPVDistributionDegradationParsing:
         assert pv_dist.degradation_rate_per_year == 0.005
 
 
+class TestPVDistributionModuleEfficiencyDefault:
+    """A pv section that sets no module_efficiency draws none, so each home's module keeps its own."""
+
+    def test_the_declared_default_is_none(self) -> None:
+        assert PVDistributionConfig(capacity_kw=4.0).module_efficiency is None
+
+    def test_an_omitted_key_parses_as_none(self) -> None:
+        parsed = parse_fleet_distribution_config({"n_homes": 2, "pv": {"capacity_kw": 4.0}})
+
+        assert parsed.pv.module_efficiency is None
+
+
 class TestEVChargerTypeValuesAreChargerTypes:
     """An ev block's charger_type lists EVChargerType values and nulls, and is read when the block is read, not when homes are generated."""
 

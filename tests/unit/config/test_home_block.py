@@ -436,6 +436,14 @@ class TestOmittedAndNullKeys:
         """Known gap: a null name or use_stochastic is held as None, not replaced by the declared default."""
         assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
 
+    @pytest.mark.parametrize("key", ["module_efficiency", "temperature_coefficient"])
+    def test_a_null_module_setting_is_the_modules_own_as_an_omitted_one_is(self, key: str) -> None:
+        """PVConfig declares None, the module's own value, for both, so a null handed on is the declared default."""
+        pv_config = _parsed_home(pv={key: None}).pv_config
+
+        assert pv_config == PVConfig(capacity_kw=4.0)
+        assert getattr(pv_config, key) is None
+
     @pytest.mark.parametrize("key", ["name", "dispatch_strategy"])
     def test_a_null_home_scalar_is_held_as_none(self, key: str) -> None:
         """Known gap: HomeConfig checks no value, so a null name or dispatch_strategy is held as None, not defaulted."""

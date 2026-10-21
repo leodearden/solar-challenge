@@ -28,7 +28,9 @@ from solar_challenge.config import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
+from solar_challenge.pv import simulate_pv_output
 from solar_challenge.tariff import TariffConfig
+from tests._synthetic_weather import synthetic_june_weather
 
 
 #: A uniform whose max - min overflows a float, so every draw from it is inf whatever the seed.
@@ -757,6 +759,51 @@ class TestGenerateHomesFromDistributionInverterEfficiency:
         homes = generate_homes_from_distribution(config, Location.bristol())
 
         assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
+
+
+class TestGenerateHomesFromDistributionModuleEfficiency:
+    """Each home's PVConfig takes the module efficiency drawn for it; a fleet that draws none, or draws a null, leaves the module its own (None)."""
+
+    @staticmethod
+    def _fleet(n_homes: int, **pv: DistributionSpec) -> FleetDistributionConfig:
+        """A seeded fleet of *n_homes* 4 kW homes whose other PV settings are drawn from *pv*."""
+        return FleetDistributionConfig(
+            n_homes=n_homes,
+            pv=PVDistributionConfig(capacity_kw=4.0, **pv),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+    def test_a_fleet_drawing_no_module_efficiency_leaves_each_home_the_modules_own(self) -> None:
+        homes = generate_homes_from_distribution(self._fleet(2), Location.bristol())
+
+        assert [home.pv_config.module_efficiency for home in homes] == [None, None]
+
+    def test_each_home_takes_its_drawn_module_efficiency_a_null_the_modules_own(self) -> None:
+        fleet = self._fleet(
+            3,
+            module_efficiency=ShuffledPoolDistribution(values=(None, 0.15, 0.22), counts=(1, 1, 1)),
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert {home.pv_config.module_efficiency for home in homes} == {None, 0.15, 0.22}
+
+    def test_homes_drawing_different_efficiencies_generate_differently(self) -> None:
+        """On the tests' synthetic clear June day the 0.15 home's cells run hotter, so it yields less (measured x0.994987 and x1.001836 of the default's 26.8194 kWh)."""
+        fleet = self._fleet(
+            2, module_efficiency=ShuffledPoolDistribution(values=(0.15, 0.22), counts=(1, 1))
+        )
+        clear_day = synthetic_june_weather("2024-06-21")
+
+        kwh_by_efficiency = {
+            home.pv_config.module_efficiency: float(
+                simulate_pv_output(home.pv_config, Location.bristol(), clear_day).sum()
+            )
+            for home in generate_homes_from_distribution(fleet, Location.bristol())
+        }
+
+        assert kwh_by_efficiency[0.15] < kwh_by_efficiency[0.22], kwh_by_efficiency
 
 
 class TestGenerateHomesHouseholdOccupants:

@@ -118,6 +118,18 @@ def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -
     assert loaded == home
 
 
+def test_an_unset_module_setting_is_written_as_null_and_loads_back_unset(tmp_path: Path) -> None:
+    """The pv: block carries every key, an unset one as null, which loads back as None: the module's own."""
+    home = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+    document = home_scenario(home, name="Module's own settings")
+
+    pv_block = document["home"]["pv"]
+    assert pv_block["module_efficiency"] is None
+    assert pv_block["temperature_coefficient"] is None
+    assert _load_through_home_run(document, tmp_path) == home
+
+
 def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
     home = HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),

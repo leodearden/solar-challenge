@@ -527,6 +527,36 @@ with no sun. The figures the lines above quote were measured under SAPM.
 Consumers re-baseline every figure that depends on PV generation when they
 re-pin, bills and the cost-recovery rate included.
 
+**Unreleased on main** (task 825): `PVConfig`'s `module_efficiency` and
+`temperature_coefficient` widen from `float = 0.2` and `float = -0.004` to
+`float | None = None`, and act on output. The 0.5.0 tag reads neither: a
+`temperature_coefficient` other than `-0.004` lands on the default module's
+`gamma_pdc`, which its CEC model never reads. `None` keeps the module's own
+values: its rating over `A_c` × 1000, and its modelled temperature coefficient
+of maximum power (0.2012 and −0.347 %/K for the default module). A set
+`module_efficiency` sets the module's `A_c` to its rating over the efficiency ×
+1000, so it acts through NOCT-SAM's cell temperature. A set
+`temperature_coefficient` solves a CEC single-diode module's `Adjust`, keeping
+its STC point, and sets its `gamma_r`, or sets a PVWatts module's `gamma_pdc`
+([pv-module-settings.md](pv-module-settings.md)). `module_efficiency` must lie
+above 0 and below 0.9, and `temperature_coefficient` from −0.01 per K to below
+0, where the tag admits (0, 1] and (−1, 0). A set `temperature_coefficient` is
+refused when the `PVConfig` is built if its `custom_module_params` are in
+neither form, such as a row of pvlib's `SandiaMod` library, and when its system
+is built if no `Adjust` reaches it for a custom CEC module. Each refusal is a
+`ValueError` naming the field. On Bristol's scaled TMY, with the default system
+losses, the default 4 kW's 4053 kWh a year changes by ×0.9951 at a
+`module_efficiency` of 0.10 and ×1.0009 at 0.22, and by ×0.9983 at a
+`temperature_coefficient` of −0.003 and ×1.0055 at −0.005: a steeper
+coefficient gains over the year, because the cells spend most of it below
+25 °C (measured with pvlib 0.15.1 on this change). A fleet whose
+`module_efficiency` is a distribution now gives its homes different generation,
+and `PVDistributionConfig.module_efficiency` defaults to `None`. A stored run,
+scenario YAML or fleet distribution carrying the old inert 0.2 or −0.004 now
+sets the field, against the default module's own 0.2012 and −0.347 %/K, so
+consumers drop those values, or re-baseline the figures they move, when they
+re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
