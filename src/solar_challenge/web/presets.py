@@ -143,16 +143,15 @@ def _saved_preset_row(database: Database, name: str, preset_type: PresetType) ->
 
 
 def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
-    """The preset home_presets lists under *name*, or None when it lists none.
+    """The home preset named *name*, as home_presets lists it when *database* can be read, or None when there is none.
 
     A built-in preset's name is answered without reading *database*.
 
     Raises:
         SavedPresetUnreadable: When *name* is not a built-in preset's and *database* cannot be read.
     """
-    builtin = next((preset for preset in _builtin_home_presets() if preset["name"] == name), None)
-    if builtin is not None:
-        return builtin
+    if name in _BUILTIN_HOME_PRESET_NAMES:
+        return next(preset for preset in _builtin_home_presets() if preset["name"] == name)
     row = _saved_preset_row(database, name, "home")
     return None if row is None else _saved_home_preset(row)
 

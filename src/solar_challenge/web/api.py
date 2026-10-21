@@ -331,10 +331,10 @@ def save_preset() -> tuple[Response, int]:
 
 @api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
-    """Get the home preset GET /api/presets lists under *name*.
+    """Get the home preset named *name*, as GET /api/presets lists it when the database can be read.
 
-    A built-in preset's name therefore answers the built-in preset, even when the database
-    cannot be read, and a name only a saved fleet preset holds is not found.
+    A built-in preset's name answers the built-in preset, even when the database cannot be
+    read, and a name only a saved fleet preset holds is not found.
 
     Args:
         name: The preset name to look up.
