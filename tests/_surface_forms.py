@@ -63,10 +63,10 @@ def surface_form(obj: object) -> str:
     a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor, and so does a functools.partial
-    of such a class. Such a constructor is either a functools.partial held as __init__,
-    unless the class holding it also holds a __new__ not defined in C, which inspect
-    reads first; or one held by a class defined in C other than object.
+    it and the class in its MRO holding that constructor; so does a routine that wraps
+    such a class, through a functools.partial, a bound method or a functools.wraps
+    wrapper, unless one of them carries a __signature__, which inspect reads as given.
+    _refuse_minor_dependent_constructor lists the constructors it refuses.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -133,9 +133,9 @@ def named_classes(obj: object) -> set[type]:
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class whose constructor surface_form refuses, or a
-    functools.partial of such a class, raises the TypeError surface_form raises for it,
-    and a class with a member member_forms refuses, the TypeError member_forms raises
-    for it.
+    routine surface_form reads as such a class, raises the TypeError surface_form raises
+    for it, and a class with a member member_forms refuses, the TypeError member_forms
+    raises for it.
     A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
@@ -506,40 +506,71 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class a functools.partial wraps, as a partial's form is the one it leaves of that class."""
-    wrapped = obj
-    while isinstance(wrapped, functools.partial):
-        wrapped = wrapped.func
-    if inspect.isclass(wrapped):
-        _refuse_minor_dependent_constructor(wrapped)
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one."""
+    end = _chain_end(obj, stop=_carries_signature)
+    if inspect.isclass(end):
+        _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
 
 
-_C_CONSTRUCTOR_KINDS: tuple[type, ...] = (types.BuiltinFunctionType, types.WrapperDescriptorType)
+def _chain_end(
+    obj: Callable[..., object], stop: Callable[[object], bool] | None = None
+) -> Callable[..., object]:
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of."""
+    if isinstance(obj, types.MethodType):
+        return _chain_end(obj.__func__, stop)
+    unwrapped: Callable[..., object] = inspect.unwrap(obj, stop=stop)
+    if unwrapped is not obj:
+        return _chain_end(unwrapped, stop)
+    if isinstance(obj, functools.partial) and (stop is None or not stop(obj)):
+        return _chain_end(obj.func, stop)
+    return obj
+
+
+def _carries_signature(obj: object) -> bool:
+    """Whether *obj* carries a signature in its __signature__, which inspect.signature reads as given, whatever *obj* wraps; a __signature__ of None is none."""
+    return getattr(obj, "__signature__", None) is not None
+
+
+_C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 
 
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    Such a constructor is either a functools.partial the holder's own namespace holds as
-    __init__, unless that namespace also holds a __new__ not defined in C, which inspect
-    reads first; or the constructor of a holder defined in C other than object, each
-    __new__ and __init__ its own namespace holds being of a kind in _C_CONSTRUCTOR_KINDS.
+    The constructors it refuses, in the order it checks them:
+
+    - the __call__ *cls*'s metaclass resolves, which inspect looks up before any __new__
+      or __init__, if it wraps a callable defined in C;
+    - the constructor inspect reads first of those the holder's own namespace holds, if
+      it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
+      class wraps object.__new__;
+    - a functools.partial the holder's own namespace holds as __init__, unless that
+      namespace also holds a __new__ not defined in C, which inspect reads first;
+    - the constructor of a holder defined in C other than object: each __new__ and
+      __init__ its own namespace holds is of a kind in _C_CONSTRUCTOR_KINDS.
     """
-    holder = _constructor_holder(cls)
-    namespace = vars(holder)
-    new_read_first = "__new__" in namespace and not isinstance(
-        getattr(holder, "__new__"), _C_CONSTRUCTOR_KINDS
+    metaclass = type(cls)
+    _refuse_wrapper_of_c_callable(
+        cls, metaclass, "__call__", inspect.getattr_static(metaclass, "__call__")
     )
-    if isinstance(namespace.get("__init__"), functools.partial) and not new_read_first:
+    holder = _constructor_holder(cls)
+    name, constructor = _first_read_constructor(holder)
+    _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
+    if name == "__init__" and isinstance(constructor, functools.partial):
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
             "functools.partial, which Python 3.14 binds to the instance as a method and "
             "earlier minors call without it: define __init__ with def"
         )
-    constructors = [namespace[name] for name in ("__new__", "__init__") if name in namespace]
+    namespace = vars(holder)
+    own_constructors = [
+        namespace[constructor_name]
+        for constructor_name in ("__new__", "__init__")
+        if constructor_name in namespace
+    ]
     if holder is not object and all(
-        isinstance(constructor, _C_CONSTRUCTOR_KINDS) for constructor in constructors
+        isinstance(own, _C_CONSTRUCTOR_KINDS) for own in own_constructors
     ):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
@@ -547,6 +578,37 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
             "signature, which a release of its package can add or rewrite, as CPython's "
             "minors do: make the name private, or give the class an __init__ or __new__ "
             "defined with def"
+        )
+
+
+def _first_read_constructor(holder: type) -> tuple[str, object]:
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), unless that is defined in C beside an __init__; else its __init__."""
+    namespace = vars(holder)
+    if "__new__" in namespace:
+        new = getattr(holder, "__new__")
+        if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and "__init__" in namespace):
+            return "__new__", new
+    return "__init__", namespace["__init__"]
+
+
+def _refuse_wrapper_of_c_callable(
+    cls: type, owner: type, name: str, constructor: object
+) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps one.
+
+    inspect reads such a wrapper through that callable on some Python releases, and skips
+    it as defined in C on others, reading the next constructor instead.
+    """
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+        return
+    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    if isinstance(wrapped, _C_CONSTRUCTOR_KINDS):
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(owner)}.{name}, which wraps "
+            f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
+            "that callable on some Python releases and skips it as defined in C on "
+            f"others: make the name private, or define {name} with def, wrapping no "
+            "callable defined in C"
         )
 
 
@@ -567,28 +629,21 @@ def _spelling_modules(
 ) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
 
-    A routine's is that of the last callable in its chain of functools.partial funcs,
-    bound methods' __func__s and wrapped callables, where inspect.get_annotations finds
-    the namespace of a wrapper's annotations. If that callable is an object its class
-    makes callable, it is read as the __call__ its class resolves, from which inspect
-    derives its signature. A __signature__ a wrapper carries does not change that: it
-    records no module. A class's is that of the class holding its constructor; but for
-    a generated __init__, that of the nearest class in the holder's MRO that the
-    dataclass decorator processed and whose own body annotates the name, or the
-    holder's if none does.
+    A routine's is that of the end of its chain, which _chain_end follows through to
+    where inspect.get_annotations finds the namespace of a wrapper's annotations. If
+    that end is an object its class makes callable, it is read as the __call__ its
+    class resolves, from which inspect derives its signature. A __signature__ a wrapper
+    carries does not change that: it records no module. A class's is that of the class
+    holding its constructor; but for a generated __init__, that of the nearest class in
+    the holder's MRO that the dataclass decorator processed and whose own body
+    annotates the name, or the holder's if none does.
     """
-    if isinstance(obj, functools.partial):
-        return _spelling_modules(obj.func, names)
-    if isinstance(obj, types.MethodType):
-        return _spelling_modules(obj.__func__, names)
-    if not inspect.isclass(obj):
-        unwrapped = inspect.unwrap(obj)
-        if unwrapped is not obj:
-            return _spelling_modules(unwrapped, names)
-        if not _is_routine(obj):
-            return _spelling_modules(type(obj).__call__, names)
-        return dict.fromkeys(names, _defining_module(obj))
-    holder = _constructor_holder(obj)
+    end = _chain_end(obj)
+    if not inspect.isclass(end):
+        if not _is_routine(end):
+            return _spelling_modules(type(end).__call__, names)
+        return dict.fromkeys(names, _defining_module(end))
+    holder = _constructor_holder(end)
     if not _holds_generated_init(holder):
         return dict.fromkeys(names, _defining_module(holder))
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
