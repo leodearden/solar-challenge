@@ -19,10 +19,9 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
-from tests._synthetic_weather import synthetic_june_weather
+from tests._seeded_tmy import ClearJuneDays
 
 
 class TestParameterSweepConfig:
@@ -102,7 +101,7 @@ class TestPVParameterSweepPreservesDegradation:
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so the sweep and the reference simulation need no PVGIS call."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        ClearJuneDays(first_day=pd.Timestamp(self._DAY), count=1).seed_as_bristol_tmy(weather_cache)
 
     @pytest.mark.usefixtures("synthetic_tmy")
     @pytest.mark.parametrize(
@@ -150,7 +149,7 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so a sweep that simulates a value as no battery fails its assertion instead of reaching PVGIS."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        ClearJuneDays(first_day=pd.Timestamp(self._DAY), count=1).seed_as_bristol_tmy(weather_cache)
 
     @pytest.mark.usefixtures("synthetic_tmy")
     @pytest.mark.parametrize(
@@ -192,7 +191,7 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
     @pytest.fixture
     def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so a sweep that simulates a truncated count fails its assertion instead of reaching PVGIS."""
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        ClearJuneDays(first_day=pd.Timestamp(self._DAY), count=1).seed_as_bristol_tmy(weather_cache)
 
     @staticmethod
     def _home(household_occupants: int) -> HomeConfig:
