@@ -98,7 +98,9 @@ def member_forms(cls: type) -> dict[str, str]:
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
     module does not bind raises NameError, and a module another of the same name has
-    replaced in sys.modules raises LookupError.
+    replaced in sys.modules raises LookupError. A public member of a kind no member rule
+    spells, a functools.partialmethod, raises TypeError naming *cls*, the member and its
+    kind.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -129,7 +131,9 @@ def named_classes(obj: object) -> set[type]:
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class whose constructor surface_form refuses, or a
-    functools.partial of such a class, raises the TypeError surface_form raises for it.
+    functools.partial of such a class, raises the TypeError surface_form raises for it,
+    and a class with a member member_forms refuses, the TypeError member_forms raises
+    for it.
     A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
@@ -834,13 +838,33 @@ class _AnnotatedAttribute:
 
 
 def _public_members(cls: type) -> dict[str, object]:
-    """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins."""
+    """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
+
+    A member of a kind no member rule spells raises TypeError, through
+    _refuse_unspelled_member.
+    """
     pinned = _pinned_by_class_form(cls)
-    return {
+    members = {
         name: member
         for name, member in _own_members(cls).items()
         if not name.startswith("_") and name not in pinned
     }
+    for name, member in members.items():
+        _refuse_unspelled_member(cls, name, member)
+    return members
+
+
+_UNSPELLED_MEMBER_KINDS: tuple[type, ...] = (functools.partialmethod,)
+
+
+def _refuse_unspelled_member(cls: type, name: str, member: object) -> None:
+    """Raise TypeError naming *cls*'s member *name*, its kind and the rule if that kind is one of _UNSPELLED_MEMBER_KINDS, which no member rule spells."""
+    if isinstance(member, _UNSPELLED_MEMBER_KINDS):
+        kind = _label(type(member))
+        raise TypeError(
+            f"{_label(cls)}.{name} is a {kind}, which member_forms has no rule for: define "
+            f"{name} with def, or give {kind} a rule in _spelled_function"
+        )
 
 
 def _own_members(cls: type) -> dict[str, object]:
