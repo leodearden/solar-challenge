@@ -520,20 +520,20 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
 
 
 def _signature_chain_end(obj: Callable[..., object]) -> Callable[..., object]:
-    """The callable whose own signature inspect.signature(*obj*) reads: the end of the chain it follows through a bound method's __func__, the callables a wrapper records as __wrapped__ up to one that carries a __signature__, and a functools.partial's func."""
+    """The callable whose own signature inspect.signature(*obj*) reads: the end of the chain it follows through a bound method's __func__, the callables a wrapper records as __wrapped__ and a functools.partial's func, each followed only while it carries no __signature__."""
     if isinstance(obj, types.MethodType):
         return _signature_chain_end(obj.__func__)
     unwrapped: Callable[..., object] = inspect.unwrap(obj, stop=_carries_signature)
     if unwrapped is not obj:
         return _signature_chain_end(unwrapped)
-    if isinstance(obj, functools.partial):
+    if isinstance(obj, functools.partial) and not _carries_signature(obj):
         return _signature_chain_end(obj.func)
     return obj
 
 
 def _carries_signature(obj: object) -> bool:
-    """Whether *obj* carries a __signature__, the stop inspect.signature gives inspect.unwrap: inspect reads that signature as given, whatever *obj* wraps."""
-    return hasattr(obj, "__signature__")
+    """Whether *obj* carries a signature in its __signature__, which inspect.signature reads as given, whatever *obj* wraps; a __signature__ of None is none."""
+    return getattr(obj, "__signature__", None) is not None
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)

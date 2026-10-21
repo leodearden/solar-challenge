@@ -564,6 +564,8 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
 
     zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
     building = functools.wraps(Built)(lambda rate: Built(rate))
+    unsigned = functools.partial(zip, [1])
+    unsigned.__signature__ = None
 
     naming_zip = r"\bbuiltins\.zip\b.*\bbuiltins\.zip\b"
     with pytest.raises(TypeError, match=naming_zip):
@@ -574,6 +576,8 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
         surface_form(functools.partial(zipping, [1]))
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(Zipper().zipped)
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(unsigned)
     with pytest.raises(
         TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
     ):
@@ -581,12 +585,18 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
 
 
 def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature() -> None:
-    zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
-    zipping.__signature__ = inspect.Signature(
+    signature = inspect.Signature(
         [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
     )
+    zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    zipping.__signature__ = signature
+    zipped = functools.partial(zip, [1])
+    zipped.__signature__ = signature
 
     assert surface_form(zipping) == "(rate: int)"
+    assert named_classes(zipping) == {int}
+    assert surface_form(zipped) == "(rate: int)"
+    assert named_classes(zipped) == {int}
 
 
 def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable() -> None:
