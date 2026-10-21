@@ -367,9 +367,9 @@ def _try_richardsonpy_profile(
     request 7.
 
     Normalization is performed by scaling the raw stochastic shape, with
-    scale_profile_to_energy, to the same seasonal daily energy target used by
-    the Elexon path:
-    target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[month]).
+    scale_profile_to_energy, to the seasonal energy of those calendar days,
+    each at the Elexon path's daily energy for its own month:
+    target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[day's month]).
 
     The Elexon path is a defensive fallback: any exception returns None,
     including an error from the household model, a day that is not 1,440
@@ -424,17 +424,11 @@ def _try_richardsonpy_profile(
 
         profile = pd.Series(power_kw, index=minute_index, name="demand_kw")
 
-        # Scale to the seasonal daily energy target so stochastic energy is
-        # consistent with the Elexon path.  target = Σ annual/365 × SEASONAL_FACTORS[month].
         # Do NOT use ElectricLoad's do_normalization — on a 1-day window it
         # would force the full annual demand (~3400 kWh) into a single day.
         annual_kwh = config.get_annual_consumption()
         target_window_kwh = sum(
-            annual_kwh / 365.0
-            * SEASONAL_FACTORS.get(
-                int((start_norm + pd.Timedelta(days=j)).month), 1.0
-            )
-            for j in range(len(days))
+            annual_kwh / 365.0 * SEASONAL_FACTORS.get(day.month, 1.0) for day in days
         )
         return scale_profile_to_energy(profile, target_window_kwh)
 

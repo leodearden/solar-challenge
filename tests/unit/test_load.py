@@ -16,6 +16,7 @@ from solar_challenge.load import (
     HouseholdModel,
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
+    SEASONAL_FACTORS,
     energy_kwh,
     generate_load_profile,
     household_occupant_count,
@@ -582,6 +583,24 @@ class TestWindowedStochasticGeneration:
         ]
         assert profile.index.tz is not None, "Index must be tz-aware"
         assert (profile >= 0).all(), "No negative power values"
+
+    def test_a_window_across_the_autumn_clock_change_is_scaled_to_the_seasonal_energy_of_its_calendar_days(
+        self,
+    ) -> None:
+        """The window holds six October days and two November days: the clocks go back on 2024-10-27, so 1 November begins 145 hours after the window, not 6 × 24, and still counts at November's factor."""
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+
+        profile = generate_load_profile(
+            config,
+            pd.Timestamp("2024-10-26"),
+            pd.Timestamp("2024-11-02"),
+            timezone="Europe/London",
+            household_model=_household_of_days(lambda day: np.ones(1440)),
+        )
+
+        assert energy_kwh(profile) == pytest.approx(
+            3400.0 / 365.0 * (6 * SEASONAL_FACTORS[10] + 2 * SEASONAL_FACTORS[11]), rel=1e-9
+        )
 
     @pytest.mark.parametrize(
         "household_model",

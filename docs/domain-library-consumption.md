@@ -577,9 +577,12 @@ past the change that sets the clocks back (October in Europe/London), each day
 from the one after the change through the day the clocks next go forward is now
 simulated as its own weekday and day of the year, where the tag simulates it as
 the day before's. Such a window's profile differs from the tag's on every day,
-since a window is scaled to its seasonal energy as a whole. Consumers need no
-change when they re-pin; those with such windows re-baseline the figures built
-on them.
+since a window is scaled to its seasonal energy as a whole, and that energy now
+counts each of those days at its own month's factor, where the tag counts the
+first of a month at the month before's: at 3,400 kWh a year, 2024-10-26 to
+2024-11-02 has 73.59 kWh, where the tag gives 72.19. Consumers need no change
+when they re-pin; those with such windows re-baseline the figures built on
+them.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
