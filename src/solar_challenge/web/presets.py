@@ -95,7 +95,7 @@ def home_presets(database: Database) -> list[dict[str, Any]]:
     object, with a logged warning naming it. When the database cannot be read, the fault is
     logged and the built-in presets are listed alone.
     """
-    builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
+    builtin = _builtin_home_presets()
     try:
         with database.transaction() as conn:
             rows = conn.execute(
@@ -106,6 +106,11 @@ def home_presets(database: Database) -> list[dict[str, Any]]:
         return builtin
     saved = (_saved_home_preset(row) for row in rows if row["name"] not in _BUILTIN_HOME_PRESET_NAMES)
     return builtin + [preset for preset in saved if preset is not None]
+
+
+def _builtin_home_presets() -> list[dict[str, Any]]:
+    """The built-in home presets, each with the ``source`` 'builtin'."""
+    return [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
 
 
 def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
@@ -120,9 +125,36 @@ def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
     return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
 
 
+def _saved_preset_row(database: Database, name: str, preset_type: PresetType) -> sqlite3.Row | None:
+    """The config_presets row of the saved *preset_type* preset *name*, or None when there is none.
+
+    Raises:
+        SavedPresetUnreadable: When *database* cannot be read.
+    """
+    try:
+        with database.transaction() as conn:
+            row: sqlite3.Row | None = conn.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = ?",
+                (name, preset_type),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise SavedPresetUnreadable(name, str(exc)) from exc
+    return row
+
+
 def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
-    """The preset home_presets lists under *name*, or None when it lists none."""
-    return next((preset for preset in home_presets(database) if preset["name"] == name), None)
+    """The preset home_presets lists under *name*, or None when it lists none.
+
+    A built-in preset's name is answered without reading *database*.
+
+    Raises:
+        SavedPresetUnreadable: When *name* is not a built-in preset's and *database* cannot be read.
+    """
+    builtin = next((preset for preset in _builtin_home_presets() if preset["name"] == name), None)
+    if builtin is not None:
+        return builtin
+    row = _saved_preset_row(database, name, "home")
+    return None if row is None else _saved_home_preset(row)
 
 
 def saved_fleet_presets(database: Database) -> list[dict[str, Any]]:
@@ -151,14 +183,7 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
         SavedPresetUnreadable: When the database cannot be read, or the preset's config is not
             JSON, or is JSON but not an object.
     """
-    try:
-        with database.transaction() as conn:
-            row = conn.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = 'fleet'",
-                (name,),
-            ).fetchone()
-    except sqlite3.Error as exc:
-        raise SavedPresetUnreadable(name, str(exc)) from exc
+    row = _saved_preset_row(database, name, "fleet")
     if row is None:
         return None
     try:
