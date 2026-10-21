@@ -557,6 +557,33 @@ sets the field, against the default module's own 0.2012 and −0.347 %/K, so
 consumers drop those values, or re-baseline the figures they move, when they
 re-pin.
 
+**Unreleased on main** (task 906): `generate_load_profile` gains a last,
+keyword-only parameter, `household_model`, which defaults to the new
+`solar_challenge.load.richardsonpy_household`, so a call without it runs
+richardsonpy as on the 0.5.0 tag. Its type is `HouseholdModel`: it is called
+once per stochastic window with the `LoadConfig` and the window's dates, and
+returns a `DaySimulator`, called once per date for that day's 1,440 one-minute
+values in W. A model that raises, or gives a day of another length, gives the
+Elexon profile with the fallback warning. A call now leaves the caller's
+`random` and `numpy.random` states as it found them, and stochastic windows run
+one at a time across threads, so seeded profiles generated concurrently equal
+their serial ones. An unseeded profile draws fresh entropy, where on the tag
+one generated right after a seeded profile continues that profile's generators,
+and so repeats on every run. A seed outside 0 to `2**32 - 1` now gives a
+reproducible stochastic profile, distinct for s and −s, where the tag gives the
+Elexon profile with a warning. A seed from 0 to `2**32 - 1` gives the tag's
+profile, with one exception: in a window that starts in summer time and runs
+past the change that sets the clocks back (October in Europe/London), each day
+from the one after the change through the day the clocks next go forward is now
+simulated as its own weekday and day of the year, where the tag simulates it as
+the day before's. Such a window's profile differs from the tag's on every day,
+since a window is scaled to its seasonal energy as a whole, and that energy now
+counts each of those days at its own month's factor, where the tag counts the
+first of a month at the month before's: at 3,400 kWh a year, 2024-10-26 to
+2024-11-02 has 73.59 kWh, where the tag gives 72.19. Consumers need no change
+when they re-pin; those with such windows re-baseline the figures built on
+them.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
