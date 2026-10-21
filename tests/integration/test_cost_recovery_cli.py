@@ -14,6 +14,7 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
+from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
@@ -26,19 +27,14 @@ from tests._finance_builders import make_fleet_results
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_distribution(
-    min_gbp: float = 300.0,
-    mean_gbp: float = 367.5,
-    median_gbp: float = 367.5,
-    max_gbp: float = 420.0,
-) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution whose representative sits at *mean_gbp*."""
+def _make_bill_distribution() -> BillDistribution:
+    """The physics bill these tests pass to generate_finance_report."""
     return make_bill_distribution_from_statistics(
-        representative_outlay_gbp=mean_gbp,
-        min_gbp=min_gbp,
-        mean_gbp=mean_gbp,
-        median_gbp=median_gbp,
-        max_gbp=max_gbp,
+        representative_outlay_gbp=367.5,
+        min_gbp=300.0,
+        mean_gbp=367.5,
+        median_gbp=367.5,
+        max_gbp=420.0,
     )
 
 
@@ -180,28 +176,14 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
-        # Use distinct cr_outlay values from the main-bill defaults (min=300, mean=367.5,
-        # median=367.5, max=420) so each assertion is unambiguously pinned to the CR section.
-        cr_outlay = _make_bill_distribution(
-            min_gbp=289.0, mean_gbp=341.0, median_gbp=335.0, max_gbp=393.0
-        )
-        bill = _make_bill_distribution()  # defaults
-        sol = make_cost_recovery_solution(
-            own_use_rate_pence_per_kwh=15.0, net_surplus_per_home_per_year_gbp=27.0,
-            feasible=True, binding="floor",
-            outlay=cr_outlay,
-        )
+        report = self._report_with_distinct_outlay_figures()
 
-        report = generate_finance_report(bill, cost_recovery=sol)
-        cr_idx = report.find("## Cost-Recovery Analysis")
-        assert cr_idx >= 0, "Cost-Recovery section not found"
-        cr_section = report[cr_idx:]
-
-        # All four distribution stats must appear in the CR section with exact £-formatting
-        assert "£289.00" in cr_section, f"min_gbp not in CR section:\n{cr_section}"
-        assert "£341.00" in cr_section, f"mean_gbp not in CR section:\n{cr_section}"
-        assert "£335.00" in cr_section, f"median_gbp not in CR section:\n{cr_section}"
-        assert "£393.00" in cr_section, f"max_gbp not in CR section:\n{cr_section}"
+        expected = {"Min": "£289.00", "Mean": "£341.00", "Median": "£335.00", "Max": "£393.00"}
+        shown = {
+            label: _value_cell(report, "## Per-Home Total Outlay at Solved Rate (£)", label)
+            for label in expected
+        }
+        assert shown == expected, f"outlay statistics not shown in their rows:\n{report}"
 
     def test_representative_outlay_renders(self) -> None:
         """Cost-recovery block must render the representative_outlay_gbp."""
