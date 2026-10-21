@@ -782,7 +782,7 @@ def bill(
       self_consumption_saving_gbp = sc × (eff_rate − own_use_rate) × (1 + vat_rate) / 100
       saving_vs_baseline_gbp = baseline_bill − total_outlay
       saving_pct            = 100 × saving / baseline  (0.0 when baseline==0)
-      self_consumption_fraction = sc / generation  (0.0 when generation==0)
+      self_consumption_fraction = sc / generation  (0.0 when generation==0; model doc §3)
 
     Args:
         period_days: Duration of the billing period in days.
