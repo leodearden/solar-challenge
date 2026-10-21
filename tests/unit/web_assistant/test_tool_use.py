@@ -759,7 +759,7 @@ class TestSimulationToolSurface:
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        direct = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        direct = run_home_simulation(params, jm)
 
         jm2 = autospecced_job_manager()
         jm2.submit_home_job.return_value = ("job-h", "run-h")
@@ -779,9 +779,7 @@ class TestSimulationToolSurface:
 
         jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
-        direct = run_fleet_simulation(
-            2, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, str(tmp_path / "t.db"), str(tmp_path)
-        )
+        direct = run_fleet_simulation(2, {"pv_kw": 4, "location": "bristol", "days": 7}, jm)
 
         jm2 = autospecced_job_manager()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
@@ -823,8 +821,8 @@ class TestSimulationToolUseSignal:
         app: Flask,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config
-        against the app's DATABASE and DATA_DIR; tool_result contains /results/home/<run_id>."""
+        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
+        tool_result contains /results/home/<run_id>."""
         RUN_ID = "run-home-001"
         JOB_ID = "job-home-001"
         TOOL_ID = "toolu_rhs_e2e_001"
@@ -869,8 +867,6 @@ class TestSimulationToolUseSignal:
         assert config.battery_config.capacity_kwh == 5.0, (
             f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
         )
-        assert call_kwargs.kwargs["db_path"] == app.config["DATABASE"]
-        assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 3. 2nd stream() call's messages[-1] tool_result content must contain results_url
         call_kwargs_list = anthropic_api.calls
@@ -901,8 +897,8 @@ class TestSimulationToolUseSignal:
         app: Flask,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """run_fleet_simulation: submit_fleet_job receives 3-home configs list against the app's
-        DATABASE and DATA_DIR; tool_result contains /results/fleet/<run_id>."""
+        """run_fleet_simulation: submit_fleet_job receives 3-home configs list; tool_result contains
+        /results/fleet/<run_id>."""
         RUN_ID = "run-fleet-001"
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
@@ -935,8 +931,6 @@ class TestSimulationToolUseSignal:
         assert len(configs) == 3, (
             f"Expected submit_fleet_job configs list of length 3; got {len(configs)}"
         )
-        assert call_kwargs.kwargs["db_path"] == app.config["DATABASE"]
-        assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 2nd stream's tool_result content must contain the fleet results_url
         call_kwargs_list = anthropic_api.calls
@@ -960,16 +954,15 @@ class TestSimulationToolUseSignal:
             f"Content: {result_content!r}"
         )
 
-    def test_a_trigger_tool_submits_its_job_to_the_apps_store_after_its_store_config_names_a_missing_directory(
+    def test_a_trigger_tool_submits_its_job_to_the_apps_job_manager_after_its_store_config_names_a_missing_directory(
         self,
         client: FlaskClient,
         app: Flask,
         anthropic_api: FakeAnthropic,
         tmp_path: Path,
     ) -> None:
-        """A trigger tool submits its job against the database and run directory create_app built,
-        whatever the app's store config names afterwards."""
-        apps_store = (app.config["DATABASE"], app.config["DATA_DIR"])
+        """A trigger tool submits its job to the app's JobManager, which records its run in the store create_app
+        built, whatever the app's store config names afterwards: the submit carries no store location."""
         jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
         app.extensions["job_manager"] = jm
@@ -982,8 +975,8 @@ class TestSimulationToolUseSignal:
         client.post("/assistant/chat", json={"message": "run a 4 kW home for 7 days"}).get_data(as_text=True)
 
         jm.submit_home_job.assert_called_once()
-        submitted = jm.submit_home_job.call_args.kwargs
-        assert (submitted["db_path"], submitted["data_dir"]) == apps_store
+        assert jm.submit_home_job.call_args.args == ()
+        assert sorted(jm.submit_home_job.call_args.kwargs) == ["config", "end_date", "name", "start_date"]
 
     @pytest.mark.parametrize(
         ("tool_name", "tool_input"),

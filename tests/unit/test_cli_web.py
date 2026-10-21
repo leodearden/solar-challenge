@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("flask")
 
 SERVER_WITH_BLOCKING_SIMULATIONS = """
+import functools
 import sys
 import threading
 from pathlib import Path
@@ -35,11 +36,13 @@ def blocking_simulation(config, start_date, end_date):
     raise RuntimeError("stub simulation")
 
 
-blocking_jobs = JobManager(max_workers=2, simulate_home=blocking_simulation)
+@functools.cache
+def blocking_jobs_of(dashboard):
+    return JobManager(dashboard.extensions["storage"], max_workers=2, simulate_home=blocking_simulation)
 
 
 def submit_to_blocking_jobs(dashboard, **extra):
-    dashboard.extensions["job_manager"] = blocking_jobs
+    dashboard.extensions["job_manager"] = blocking_jobs_of(dashboard)
 
 
 request_started.connect(submit_to_blocking_jobs)

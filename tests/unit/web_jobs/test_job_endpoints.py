@@ -18,12 +18,11 @@ from tests._synthetic_weather import synthetic_june_weather
 from tests._web_app import build_test_app
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
-from tests.unit.web_jobs._jobs_table import job_row, job_rows
 
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
     """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    return client_using(app, JobManager(simulate_home=simulation))
+    return client_using(app, JobManager(app.extensions["storage"], simulate_home=simulation))
 
 
 @pytest.fixture
@@ -89,7 +88,7 @@ def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskCli
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(simulate_home=simulation, new_id=CountingIds())
+    manager = JobManager(app.extensions["storage"], simulate_home=simulation, new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
     assert manager.wait_until_idle(timeout=30)
@@ -101,7 +100,7 @@ def _client_of_a_finished_fleet_job(app: Flask) -> FlaskClient:
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(simulate_home=RecordingSimulation(), new_id=CountingIds())
+    manager = JobManager(app.extensions["storage"], simulate_home=RecordingSimulation(), new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
     assert manager.wait_until_idle(timeout=30)
@@ -137,7 +136,7 @@ _FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
-    def test_after_a_restart_an_earlier_job_is_not_found_although_its_rows_remain(self, tmp_path: Path) -> None:
+    def test_after_a_restart_an_earlier_job_is_not_found_although_its_run_remains(self, tmp_path: Path) -> None:
         before_restart = build_test_app(tmp_path)
         submitted = (
             _client_whose_jobs_run(before_restart, RecordingSimulation())
@@ -146,11 +145,12 @@ class TestGetJobStatusEndpoint:
         )
         assert before_restart.extensions["job_manager"].wait_until_idle(timeout=30)
 
-        after_restart = build_test_app(tmp_path)
+        after_restart = build_test_app(tmp_path).test_client()
 
-        response = after_restart.test_client().get(f"/api/jobs/{submitted['job_id']}")
-        assert response.status_code == 404
-        assert job_rows(after_restart.extensions["storage"]) == [(submitted["job_id"], submitted["run_id"])]
+        assert after_restart.get(f"/api/jobs/{submitted['job_id']}").status_code == 404
+        run = after_restart.get(f"/api/history/runs/{submitted['run_id']}")
+        assert run.status_code == 200
+        assert run.get_json()["status"] == "completed"
 
     @pytest.mark.parametrize(
         ("simulation", "last_state"),
@@ -176,7 +176,7 @@ class TestGetJobStatusEndpoint:
         ],
         ids=["completed", "failed"],
     )
-    def test_a_finished_jobs_status_answers_its_ids_its_last_state_and_its_rows_creation_time(
+    def test_a_finished_jobs_status_answers_its_ids_its_last_state_and_its_runs_creation_time(
         self, app: Flask, simulation: HomeSimulator, last_state: dict[str, Any]
     ) -> None:
         client = _client_of_a_finished_job(app, simulation)
@@ -188,8 +188,73 @@ class TestGetJobStatusEndpoint:
             "job_id": "id-1",
             "run_id": "id-2",
             **last_state,
-            "created_at": job_row(app.extensions["storage"], "id-1")["created_at"],
+            "created_at": client.get("/api/history/runs/id-2").get_json()["created_at"],
         }
+
+
+class TestASubmittedJobsRunInRunHistory:
+    """A submitted job's run shows in Run History from its submit on: running, then completed or failed.
+
+    A run its job left running reads failed once the app is rebuilt on the same store.
+    """
+
+    @pytest.mark.parametrize(
+        ("endpoint", "request_body"),
+        [
+            ("/api/simulate/home", {**A_HOME_JOB_REQUEST, "name": "North Roof"}),
+            ("/api/simulate/fleet", {"name": "Street", "homes": [A_HOME_JOB_REQUEST]}),
+        ],
+        ids=["home", "fleet"],
+    )
+    def test_a_submitted_jobs_run_reads_running_then_completed_under_the_submits_name(
+        self,
+        app: Flask,
+        blocking_simulation: BlockingSimulation,
+        endpoint: str,
+        request_body: dict[str, Any],
+    ) -> None:
+        manager = JobManager(app.extensions["storage"], simulate_home=blocking_simulation)
+        client = client_using(app, manager)
+
+        response = client.post(endpoint, json=request_body)
+        assert response.status_code == 201
+        run_id = response.get_json()["run_id"]
+        blocking_simulation.wait_until_started()
+        running = client.get(f"/api/history/runs/{run_id}").get_json()
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        completed = client.get(f"/api/history/runs/{run_id}").get_json()
+
+        assert (running["status"], running["name"]) == ("running", request_body["name"])
+        assert (completed["status"], completed["name"]) == ("completed", request_body["name"])
+
+    def test_a_failed_jobs_run_reads_failed_with_the_jobs_message(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, a_failing_simulation)
+
+        run = client.get("/api/history/runs/id-2").get_json()
+
+        assert (run["status"], run["error_message"]) == ("failed", "the simulation failed")
+
+    def test_a_run_its_job_left_running_reads_failed_as_interrupted_once_the_app_is_rebuilt_on_its_store(
+        self, tmp_path: Path, blocking_simulation: BlockingSimulation
+    ) -> None:
+        before_restart = build_test_app(tmp_path)
+        manager = JobManager(before_restart.extensions["storage"], max_workers=1, simulate_home=blocking_simulation)
+        client = client_using(before_restart, manager)
+        first_run_id, second_run_id = [
+            client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["run_id"] for _ in range(2)
+        ]
+        blocking_simulation.wait_until_started()
+        manager.shutdown()
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        after_restart = build_test_app(tmp_path).test_client()
+
+        interrupted = after_restart.get(f"/api/history/runs/{second_run_id}").get_json()
+        assert (interrupted["status"], interrupted["error_message"]) == ("failed", "Interrupted by server restart")
+        assert interrupted["completed_at"] is not None
+        assert after_restart.get(f"/api/history/runs/{first_run_id}").get_json()["status"] == "completed"
 
 
 class TestJobProgressEndpoint:

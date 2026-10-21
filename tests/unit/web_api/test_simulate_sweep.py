@@ -34,8 +34,6 @@ class _RecordingJobManager:
         config: HomeConfig,
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
-        db_path: str,
-        data_dir: str,
         name: str | None = None,
     ) -> tuple[str, str]:
         """Record the home config and the window it runs, and return a fresh (job_id, run_id) pair."""

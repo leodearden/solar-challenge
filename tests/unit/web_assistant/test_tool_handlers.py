@@ -525,7 +525,7 @@ class TestListRecentRuns:
 
 
 class TestRunHomeSimulation:
-    """Tests for run_home_simulation(params, job_manager, db_path, data_dir) -> dict."""
+    """Tests for run_home_simulation(params, job_manager) -> dict."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_home_job stubbed."""
@@ -533,11 +533,11 @@ class TestRunHomeSimulation:
         jm.submit_home_job.return_value = ("job-h", "run-h")
         return jm
 
-    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+    def test_returns_run_id_and_results_url(self) -> None:
         """run_home_simulation returns {run_id, results_url} with correct values."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        result = run_home_simulation(params, jm)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-h", (
@@ -547,11 +547,11 @@ class TestRunHomeSimulation:
             f"Expected results_url='/results/home/run-h'; got {result.get('results_url')!r}"
         )
 
-    def test_submit_home_job_called_with_correct_config(self, tmp_path: Path) -> None:
+    def test_submit_home_job_called_with_correct_config(self) -> None:
         """submit_home_job called once; config has correct pv_kw and battery_kwh."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -569,13 +569,13 @@ class TestRunHomeSimulation:
             f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
         )
 
-    def test_days_drives_start_end_window(self, tmp_path: Path) -> None:
+    def test_days_drives_start_end_window(self) -> None:
         """days parameter is reflected in the start/end dates passed to submit_home_job."""
         jm = self._make_jm()
         params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
         params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
 
-        run_home_simulation(params_7, jm, str(tmp_path / "t7.db"), str(tmp_path))
+        run_home_simulation(params_7, jm)
         call_7 = jm.submit_home_job.call_args
         start_7 = call_7.kwargs.get("start_date") or call_7.args[1]
         end_7 = call_7.kwargs.get("end_date") or call_7.args[2]
@@ -584,7 +584,7 @@ class TestRunHomeSimulation:
         jm.reset_mock()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
-        run_home_simulation(params_30, jm, str(tmp_path / "t30.db"), str(tmp_path))
+        run_home_simulation(params_30, jm)
         call_30 = jm.submit_home_job.call_args
         start_30 = call_30.kwargs.get("start_date") or call_30.args[1]
         end_30 = call_30.kwargs.get("end_date") or call_30.args[2]
@@ -594,13 +594,13 @@ class TestRunHomeSimulation:
             f"Expected 30-day span ({span_30}) > 7-day span ({span_7})"
         )
 
-    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+    def test_invalid_pv_kw_returns_graceful_error(self) -> None:
         """Invalid pv_kw (out of 0.5-20 range) returns error dict; submit not called; no raise."""
         jm = self._make_jm()
         params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
 
         try:
-            result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+            result = run_home_simulation(params, jm)
         except Exception as exc:
             raise AssertionError(
                 f"run_home_simulation should not raise on invalid params; got: {exc!r}"
@@ -610,7 +610,7 @@ class TestRunHomeSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_home_job.assert_not_called()
 
-    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+    def test_submit_failure_returns_error_naming_it(self) -> None:
         """A submit_home_job that raises yields an error dict naming the failure, and no run link."""
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
@@ -619,19 +619,17 @@ class TestRunHomeSimulation:
         result = run_home_simulation(
             {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         assert submit_failure in result["error"]
         assert "run_id" not in result
 
-    def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+    def test_days_defaults_to_7_when_omitted(self) -> None:
         """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -647,12 +645,12 @@ class TestRunHomeSimulation:
             "Handler is using the full-year fallback instead of the documented 7-day default"
         )
 
-    def test_explicit_days_honored_over_default(self, tmp_path: Path) -> None:
+    def test_explicit_days_honored_over_default(self) -> None:
         """A caller-supplied 'days' value is not overwritten by the default."""
         jm = self._make_jm()
         # Explicit days=30 must produce a 30-day window (span=29)
         params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -665,12 +663,12 @@ class TestRunHomeSimulation:
             "Caller-supplied 'days' must not be clobbered by the default."
         )
 
-    def test_home_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+    def test_home_days_none_defaults_to_7(self) -> None:
         """Explicit days=None is treated as absent — handler falls back to 7-day window."""
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -686,14 +684,12 @@ class TestRunHomeSimulation:
             "Handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
-    def test_start_and_end_sent_run_that_window_not_the_7_day_default(self, tmp_path: Path) -> None:
+    def test_start_and_end_sent_run_that_window_not_the_7_day_default(self) -> None:
         """A start and end the model sends are run as POST /api/simulate/home runs them, not overridden by the 7-day default."""
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "location": "bristol", "start": "2024-03-01", "end": "2024-03-05"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         assert result == {"run_id": "run-h", "results_url": "/results/home/run-h"}
@@ -703,9 +699,7 @@ class TestRunHomeSimulation:
             date(2024, 3, 5),
         )
 
-    def test_days_sent_with_start_and_end_returns_the_refusal_naming_what_was_sent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_days_sent_with_start_and_end_returns_the_refusal_naming_what_was_sent(self) -> None:
         """A days the model sends with a start and end is refused naming those values, never replaced by the default; nothing is submitted."""
         jm = self._make_jm()
         result = run_home_simulation(
@@ -717,8 +711,6 @@ class TestRunHomeSimulation:
                 "end": "2024-03-05",
             },
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         assert result == {
@@ -727,16 +719,12 @@ class TestRunHomeSimulation:
         }
         jm.submit_home_job.assert_not_called()
 
-    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
         """A location the model sends that resolve_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         jm.submit_home_job.assert_not_called()
@@ -746,7 +734,7 @@ class TestRunHomeSimulation:
 
 
 class TestRunFleetSimulation:
-    """Tests for run_fleet_simulation(n_homes, params, job_manager, db_path, data_dir) -> dict, *params* being the per-home fields."""
+    """Tests for run_fleet_simulation(n_homes, params, job_manager) -> dict, *params* being the per-home fields."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_fleet_job stubbed."""
@@ -754,11 +742,11 @@ class TestRunFleetSimulation:
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
         return jm
 
-    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+    def test_returns_run_id_and_results_url(self) -> None:
         """run_fleet_simulation returns {run_id, results_url} for fleet."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        result = run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        result = run_fleet_simulation(3, params, jm)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-f", (
@@ -768,11 +756,11 @@ class TestRunFleetSimulation:
             f"Expected results_url='/results/fleet/run-f'; got {result.get('results_url')!r}"
         )
 
-    def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
+    def test_submit_fleet_job_called_with_correct_configs_list(self) -> None:
         """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_fleet_simulation(3, params, jm)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -788,11 +776,11 @@ class TestRunFleetSimulation:
                 f"configs[{i}].pv_config.capacity_kw expected 4.0; got {cfg.pv_config.capacity_kw}"
             )
 
-    def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
+    def test_n_homes_clamped_to_max_100(self) -> None:
         """n_homes=9999 results in configs list clamped to <= 100."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(9999, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_fleet_simulation(9999, params, jm)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -801,11 +789,11 @@ class TestRunFleetSimulation:
             f"Expected n_homes clamped to <= 100; got {len(configs)}"
         )
 
-    def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
+    def test_n_homes_zero_clamped_to_at_least_1(self) -> None:
         """n_homes=0 is clamped to at least 1 (no empty fleet)."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(0, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_fleet_simulation(0, params, jm)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -814,13 +802,13 @@ class TestRunFleetSimulation:
             f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
         )
 
-    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+    def test_invalid_pv_kw_returns_graceful_error(self) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
         jm = self._make_jm()
         params = {"pv_kw": 999, "location": "bristol", "days": 7}
 
         try:
-            result = run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+            result = run_fleet_simulation(3, params, jm)
         except Exception as exc:
             raise AssertionError(
                 f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
@@ -830,7 +818,7 @@ class TestRunFleetSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_fleet_job.assert_not_called()
 
-    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+    def test_submit_failure_returns_error_naming_it(self) -> None:
         """A submit_fleet_job that raises yields an error dict naming the failure, and no run link."""
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
@@ -840,19 +828,17 @@ class TestRunFleetSimulation:
             3,
             {"pv_kw": 4, "location": "bristol", "days": 7},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         assert submit_failure in result["error"]
         assert "run_id" not in result
 
-    def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+    def test_fleet_days_defaults_to_7_when_omitted(self) -> None:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
-        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_fleet_simulation(3, params, jm)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -868,12 +854,12 @@ class TestRunFleetSimulation:
             "Fleet handler is using the full-year fallback instead of the documented 7-day default"
         )
 
-    def test_fleet_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+    def test_fleet_days_none_defaults_to_7(self) -> None:
         """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
-        run_fleet_simulation(3, params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_fleet_simulation(3, params, jm)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -889,9 +875,7 @@ class TestRunFleetSimulation:
             "Fleet handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
-    def test_fleet_start_and_end_sent_run_that_window_not_the_7_day_default(
-        self, tmp_path: Path
-    ) -> None:
+    def test_fleet_start_and_end_sent_run_that_window_not_the_7_day_default(self) -> None:
         """A start and end the model sends are the window the fleet runs, not overridden by the 7-day default."""
         jm = self._make_jm()
         result = run_fleet_simulation(
@@ -903,8 +887,6 @@ class TestRunFleetSimulation:
                 "end": "2024-03-05",
             },
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
@@ -914,17 +896,13 @@ class TestRunFleetSimulation:
             date(2024, 3, 5),
         )
 
-    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
         """A location the model sends that resolve_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_fleet_simulation(
             3,
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
         )
 
         jm.submit_fleet_job.assert_not_called()
@@ -941,14 +919,10 @@ class TestRunHomeSimulationWithRealJobManager:
     ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
     """
 
-    def test_run_home_simulation_real_job_lands_in_runs(
-        self, app: Flask, tmp_path: Path
-    ) -> None:
-        """run_home_simulation() with the real JobManager creates a completed run."""
-        db_path: str = app.config["DATABASE"]
-        data_dir: str = app.config["DATA_DIR"]
+    def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
+        """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
         job_manager = app.extensions["job_manager"]
-        storage = RunStorage(Database(Path(db_path)), data_dir)
+        storage = app.extensions["storage"]
 
         result = run_home_simulation(
             {
@@ -959,8 +933,6 @@ class TestRunHomeSimulationWithRealJobManager:
                 "days": 1,
             },
             job_manager,
-            db_path,
-            data_dir,
         )
 
         assert "error" not in result, (

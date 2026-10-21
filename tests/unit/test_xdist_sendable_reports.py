@@ -35,7 +35,7 @@ JOB_MANAGER_TESTS = Path("tests/unit/web_jobs/test_job_manager.py")
 
 LONE_SURROGATE_TEST = (
     "TestJobManagerUnrecordedFailures"
-    "::test_a_failure_whose_message_sqlite_cannot_store_is_logged_for_each_table_and_still_reported"
+    "::test_a_failure_whose_message_sqlite_cannot_store_is_logged_and_still_reported"
 )
 
 
