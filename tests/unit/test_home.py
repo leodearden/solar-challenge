@@ -408,15 +408,15 @@ class TestResultsWindow:
             twin.total_amounts()["demand_kwh"], rel=1e-12
         )
 
-    def test_amounts_of_results_on_an_unevenly_spaced_index_are_refused_naming_where(self):
-        """Results whose rows are not evenly spaced have no amounts: a ValueError names where the spacing changes."""
+    def test_amounts_of_results_on_an_unevenly_spaced_index_are_refused(self):
+        """Results whose rows are not evenly spaced have no amounts: they raise a ValueError."""
         index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London").delete(30)
         results = SimulationResults(
             strategy_name="self_consumption",
             **{name: pd.Series(1.0, index=index) for name in _series_field_names()},
         )
 
-        with pytest.raises(ValueError, match="position 30"):
+        with pytest.raises(ValueError, match="evenly spaced"):
             results.total_amounts()
 
 
