@@ -204,3 +204,48 @@ def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
 
     assert pointers == []
     assert _dangling(project, pointers) == []
+
+
+_NAMED_WITHOUT_ITS_NODE_ID = (
+    "names a test without its file: point at it by its node-id from the project root,"
+    " tests/<file>.py::[<Class>::]<name>"
+)
+
+
+def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -> None:
+    source = _write_source(
+        project,
+        "src/pkg/script.js",
+        "// pinned by test_top\n"
+        "// TestGroup covers the rest.\n"
+        "// test_member in tests/unit/test_pointed_at.py says why.\n"
+        "// tests/unit/test_pointed_at.py's test_top shows it.\n"
+        "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
+        "// Not a test name: src/tests/test_gone.py\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        f"src/pkg/script.js:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        f"src/pkg/script.js:2: TestGroup: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        f"src/pkg/script.js:3: test_member: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        f"src/pkg/script.js:4: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
+    ]
+
+
+def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: Path) -> None:
+    using = _write_source(
+        project,
+        "src/pkg/app.py",
+        "def build(test_config=None):\n"
+        '    """Build the app.\n'
+        "\n"
+        "    test_config: overrides.\n"
+        '    """\n'
+        "    return test_config\n",
+    )
+    naming = _write_source(project, "src/pkg/other.py", "# Set test_config first.\ndef build():\n    return None\n")
+
+    assert _pointers(project, [using]) == []
+    assert _dangling(project, _pointers(project, [naming])) == [
+        f"src/pkg/other.py:1: test_config: {_NAMED_WITHOUT_ITS_NODE_ID}"
+    ]
