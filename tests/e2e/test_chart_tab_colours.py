@@ -12,24 +12,39 @@ from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
+
+def _results_home_path(run: tuple[str, str]) -> str:
+    run_id, _ = run
+    return f"/results/home/{run_id}"
+
+
+def _results_fleet_path(run: tuple[str, str]) -> str:
+    run_id, _ = run
+    return f"/results/fleet/{run_id}"
+
+
+def _history_compare_path(runs: list[tuple[str, str]]) -> str:
+    return "/history/compare?ids=" + ",".join(run_id for run_id, _ in runs)
+
+
 # Each page with chart tabs: the fixture seeding the runs it shows, its path given that fixture's value, and its tabs'
 # names, the opening tab first.
 _PAGES_WITH_CHART_TABS = [
     pytest.param(
         "seeded_home_run",
-        lambda run: f"/results/home/{run[0]}",
+        _results_home_path,
         ("Overview", "Power Flow", "Battery & Finance", "Analysis"),
         id="results-home",
     ),
     pytest.param(
         "seeded_fleet_run",
-        lambda run: f"/results/fleet/{run[0]}",
+        _results_fleet_path,
         ("Aggregate", "Per-Home", "Distributions"),
         id="results-fleet",
     ),
     pytest.param(
         "seeded_home_runs_pair",
-        lambda runs: "/history/compare?ids=" + ",".join(run_id for run_id, _ in runs),
+        _history_compare_path,
         ("Energy Totals", "Efficiency Ratios"),
         id="history-compare",
     ),
