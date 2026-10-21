@@ -10,7 +10,6 @@ import json
 import logging
 import math
 import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
 from types import MappingProxyType
@@ -489,8 +488,8 @@ def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
     Generates a set of sweep points (linear or geometric) and submits one
-    background home-simulation job per point.  Returns the sweep id, the
-    rounded sweep values and the ids of the submitted jobs.
+    background home-simulation job per point.  Returns the rounded sweep
+    values and the ids of the submitted jobs.
 
     Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
@@ -504,7 +503,7 @@ def simulate_sweep() -> tuple[Response, int]:
         with_default_days reads a body, runs _SWEEP_DEFAULT_DAYS days.
 
     Returns:
-        JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+        JSON with parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
         ones), a min, max or steps it cannot use, or a steps outside 2 to
         _MAX_SWEEP_POINTS (the error names the field and the value sent), an
@@ -563,7 +562,6 @@ def simulate_sweep() -> tuple[Response, int]:
         point_homes.append((val, home_config, start_date, end_date))
 
     # Submit one home job per sweep point
-    sweep_id = str(uuid.uuid4())
     job_manager = get_job_manager()
 
     job_ids: list[str] = []
@@ -577,7 +575,6 @@ def simulate_sweep() -> tuple[Response, int]:
         job_ids.append(job_id)
 
     return jsonify({
-        "sweep_id": sweep_id,
         "parameter": parameter,
         "values": rounded_values,
         "job_ids": job_ids,

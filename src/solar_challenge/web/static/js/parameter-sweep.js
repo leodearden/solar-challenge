@@ -17,7 +17,6 @@ document.addEventListener('alpine:init', () => {
         },
 
         // Results
-        sweepId: null,
         sweepValues: [],
         sweepResults: [],
         submitting: false,
@@ -96,7 +95,6 @@ document.addEventListener('alpine:init', () => {
                 if (!resp.ok) {
                     this.errorMsg = data.error || 'Sweep submission failed';
                 } else {
-                    this.sweepId = data.sweep_id;
                     this.sweepValues = data.values || [];
                     // A row shows 'pending' until _followSweep starts following its point, whose job may be running or done by then
                     this.sweepResults = this.sweepValues.map((v, i) => ({
