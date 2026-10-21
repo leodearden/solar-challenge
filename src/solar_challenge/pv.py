@@ -30,6 +30,68 @@ def _require_valid_degradation_inputs(
         raise ValueError(f"Degradation rate must be 0-1, got {degradation_rate_per_year}")
 
 
+_TRANSMITTANCE_ABSORPTANCE = 0.9
+"""NOCT-SAM's transmittance-absorptance, pvlib's noct_sam default, passed in each array's parameters so that the model and the bound on a module's efficiency read one value."""
+
+_STEEPEST_TEMPERATURE_COEFFICIENT_PER_K = -0.01
+"""The steepest temperature coefficient of maximum power a PVConfig sets: -1 %/K, steeper than every CECMod row's modelled one (docs/pv-module-settings.md)."""
+
+_PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
+
+_CEC_SINGLE_DIODE_MODULE_KEYS = frozenset(
+    {"alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref", "R_s", "Adjust"}
+)
+"""calcparams_cec's module parameters, which pvlib's CEC single-diode model reads."""
+
+
+def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
+    """Whether the module has the parameters pvlib infers its PVWatts DC model from."""
+    return _PVWATTS_MODULE_KEYS <= module_params.keys()
+
+
+def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
+    """Whether the module has every parameter pvlib's CEC single-diode model reads."""
+    return _CEC_SINGLE_DIODE_MODULE_KEYS <= module_params.keys()
+
+
+def _require_settable_module_efficiency(efficiency: Optional[float]) -> None:
+    """Refuse a set module efficiency outside (0, _TRANSMITTANCE_ABSORPTANCE), at which NOCT-SAM no longer heats a cell."""
+    if efficiency is not None and not 0 < efficiency < _TRANSMITTANCE_ABSORPTANCE:
+        raise ValueError(
+            "module_efficiency must be above 0 and below NOCT-SAM's "
+            f"{_TRANSMITTANCE_ABSORPTANCE} transmittance-absorptance, at which a cell no "
+            f"longer heats; got {efficiency}"
+        )
+
+
+def _require_module_form_taking_temperature_coefficient(
+    module_params: Mapping[str, float], coefficient: float
+) -> None:
+    """Refuse a module in neither form a temperature coefficient derives: CEC single-diode, whose Adjust it solves, or PVWatts, whose gamma_pdc it sets."""
+    if not (_is_cec_single_diode_module(module_params) or _is_pvwatts_module(module_params)):
+        raise ValueError(
+            f"temperature_coefficient={coefficient} needs module parameters in CEC "
+            f"single-diode form ({', '.join(sorted(_CEC_SINGLE_DIODE_MODULE_KEYS))}), whose "
+            f"Adjust it solves, or in PVWatts form ({', '.join(sorted(_PVWATTS_MODULE_KEYS))}), "
+            "whose gamma_pdc it sets; the module is in neither"
+        )
+
+
+def _require_settable_temperature_coefficient(
+    coefficient: Optional[float], custom_module_params: Optional[Mapping[str, float]]
+) -> None:
+    """Refuse a set temperature coefficient outside [_STEEPEST_TEMPERATURE_COEFFICIENT_PER_K, 0) per K, or on custom module parameters in a form that cannot take it."""
+    if coefficient is None:
+        return
+    if not _STEEPEST_TEMPERATURE_COEFFICIENT_PER_K <= coefficient < 0:
+        raise ValueError(
+            "temperature_coefficient must be from "
+            f"{_STEEPEST_TEMPERATURE_COEFFICIENT_PER_K} per K to below 0; got {coefficient}"
+        )
+    if custom_module_params is not None:
+        _require_module_form_taking_temperature_coefficient(custom_module_params, coefficient)
+
+
 _PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
 
 
@@ -43,13 +105,20 @@ class PVConfig:
         tilt: Panel tilt angle from horizontal in degrees (0=flat, 90=vertical)
         name: Optional identifier for the system
 
-        # Panel parameters (PV-004)
-        module_efficiency: Panel efficiency as fraction (default 0.20 = 20%)
-        temperature_coefficient: Power temp coefficient per °C (default -0.004 = -0.4%/°C)
-        custom_module_params: Optional custom pvlib module parameters dict; None wires
-            DEFAULT_CEC_MODULE (cec_module_params reads any other CEC row). The cells take
-            NOCT-SAM's temperature from the module's T_NOCT and its rating / (A_c × 1000),
-            with DEFAULT_CEC_MODULE's value for either key the module lacks
+        # Panel parameters (PV-004; docs/pv-module-settings.md)
+        module_efficiency: The module's efficiency at STC, its rating over A_c × 1000 W/m².
+            None keeps the template module's own; a set value, above 0 and below 0.9, sets
+            the template's A_c, so it acts through NOCT-SAM's cell temperature
+        temperature_coefficient: The module's temperature coefficient of maximum power at
+            STC, per K. None keeps the template module's own modelled one; a set value,
+            from -0.01 to below 0, solves a CEC single-diode template's Adjust, keeping its
+            STC point, and sets its gamma_r, or sets a PVWatts template's gamma_pdc. A
+            template in neither form is refused
+        custom_module_params: Optional custom pvlib module parameters dict, the template
+            the two fields above derive from; None takes DEFAULT_CEC_MODULE's row
+            (cec_module_params reads any other CEC row). The cells take NOCT-SAM's
+            temperature from the module's T_NOCT and its rating / (A_c × 1000), with
+            DEFAULT_CEC_MODULE's value for either key the module lacks
             (docs/pv-cell-temperature.md)
 
         # Inverter parameters (PV-005)
@@ -76,8 +145,8 @@ class PVConfig:
     name: str = ""
 
     # Panel parameters (PV-004)
-    module_efficiency: float = 0.20  # 20% efficiency
-    temperature_coefficient: float = -0.004  # -0.4%/°C
+    module_efficiency: Optional[float] = None
+    temperature_coefficient: Optional[float] = None
     custom_module_params: Optional[dict[str, float]] = None
 
     # Inverter parameters (PV-005)
@@ -100,14 +169,10 @@ class PVConfig:
             raise ValueError(f"Azimuth must be 0-360 degrees, got {self.azimuth}")
         if not 0 <= self.tilt <= 90:
             raise ValueError(f"Tilt must be 0-90 degrees, got {self.tilt}")
-        if not 0 < self.module_efficiency <= 1:
-            raise ValueError(
-                f"Module efficiency must be (0, 1], got {self.module_efficiency}"
-            )
-        if not -1 < self.temperature_coefficient < 0:
-            raise ValueError(
-                f"Temperature coefficient must be (-1, 0), got {self.temperature_coefficient}"
-            )
+        _require_settable_module_efficiency(self.module_efficiency)
+        _require_settable_temperature_coefficient(
+            self.temperature_coefficient, self.custom_module_params
+        )
         if not 0 < self.inverter_efficiency <= 1:
             raise ValueError(
                 f"Inverter efficiency must be (0, 1], got {self.inverter_efficiency}"
@@ -455,14 +520,6 @@ def _cec_library_inverter(name: str, efficiency: float) -> _Inverter:
     return _Inverter(name, parameters)
 
 
-_PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
-
-
-def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
-    """Whether the module has the parameters pvlib infers its PVWatts DC model from."""
-    return _PVWATTS_MODULE_KEYS <= module_params.keys()
-
-
 def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
     """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency."""
     return create_pvwatts_inverter_params(
@@ -472,13 +529,10 @@ def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
 
 
 def _module_parameters(config: PVConfig) -> dict[str, float]:
-    """The custom module parameters, or DEFAULT_CEC_MODULE's with the configured temperature coefficient."""
+    """The module's parameters, of the caller's own: a copy of the custom module parameters, or DEFAULT_CEC_MODULE's row."""
     if config.custom_module_params is not None:
-        return config.custom_module_params
-    module_params = cec_module_params(DEFAULT_CEC_MODULE)
-    if config.temperature_coefficient != -0.004:
-        module_params["gamma_pdc"] = config.temperature_coefficient
-    return module_params
+        return dict(config.custom_module_params)
+    return cec_module_params(DEFAULT_CEC_MODULE)
 
 
 def _inverter_and_wiring(
@@ -544,9 +598,6 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
         "module's DC power in W at standard test conditions"
     )
 
-
-_TRANSMITTANCE_ABSORPTANCE = 0.9
-"""NOCT-SAM's transmittance-absorptance, pvlib's noct_sam default, passed in each array's parameters so that the model and the bound on a module's efficiency read one value."""
 
 _NOCT_TEST_AIR_C = 20.0
 """The air temperature, in °C, at which a module's NOCT is measured."""
