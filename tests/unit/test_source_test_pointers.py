@@ -1,9 +1,120 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every pointer from a file git lists under src/solar_challenge into tests/ resolves, and names a test only by its node-id."""
+"""Every pointer from a file git lists under src/solar_challenge into tests/ resolves, and names a test only by its node-id.
 
+A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
+tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
+file that is not UTF-8 text holds none.
+"""
+
+import ast
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
+
+_POINTER = re.compile(
+    r"""
+    (?<![\w./-])
+    (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
+    (?P<names>(?:::\w+)*)
+    """,
+    re.VERBOSE,
+)
+
+
+@dataclass(frozen=True)
+class _Pointer:
+    """A pointer into tests/: the file holding it, relative to the project root, its line, and the path and names it gives."""
+
+    source: PurePosixPath
+    line: int
+    path: PurePosixPath
+    names: tuple[str, ...]
+
+    def __str__(self) -> str:
+        return f"{self.source}:{self.line}: {'::'.join([str(self.path), *self.names])}"
+
+
+def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
+    """Return every pointer in the *sources*, POSIX paths relative to *root*, file by file and in text order."""
+    pointers: list[_Pointer] = []
+    for source in sources:
+        text = _utf8_text(root / source)
+        if text is not None:
+            pointers.extend(_pointers_in(source, text))
+    return pointers
+
+
+def _utf8_text(path: Path) -> str | None:
+    """Return the text of the file at *path*, or None if it is not UTF-8."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
+    """Return the pointers in *text*, the text of the file *source*, in text order."""
+    return [
+        _Pointer(
+            source=source,
+            line=text.count("\n", 0, match.start()) + 1,
+            path=PurePosixPath(match["path"]),
+            names=tuple(match["names"].split("::")[1:]),
+        )
+        for match in _POINTER.finditer(text)
+    ]
+
+
+def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve under *root*, in their order."""
+    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(root, pointer)) is not None]
+
+
+def _unresolved(root: Path, pointer: _Pointer) -> str | None:
+    """Return why *pointer* leads to no file, directory or test under *root*, or None if it leads to one.
+
+    Its path must exist. Its names are read from the Python file's syntax tree, and the file is never imported.
+    """
+    target = root / pointer.path
+    if not target.exists():
+        return f"{pointer.path} does not exist"
+    if not pointer.names:
+        return None
+    if target.suffix != ".py" or not target.is_file():
+        return f"{pointer.path} is not a Python file, so it defines no {pointer.names[0]}"
+    return _undefined(pointer.path, pointer.names, ast.parse(target.read_text(encoding="utf-8")))
+
+
+def _undefined(path: PurePosixPath, names: tuple[str, ...], module: ast.Module) -> str | None:
+    """Return why *names* lead to no definition in *module*, the syntax tree of *path*, or None if they lead to one.
+
+    The first name must be a def or class written at the module's top level, and each later name one written directly
+    in the previous class's body: a pointer names where its test is written. So a test inherited, generated or defined
+    under a condition does not count, though pytest may collect it.
+    """
+    definition = _definitions(module.body).get(names[0])
+    if definition is None:
+        return f"{path} defines no {names[0]} at its top level"
+    for name in names[1:]:
+        if not isinstance(definition, ast.ClassDef):
+            return f"{definition.name} is a function, so it defines no {name}"
+        member = _definitions(definition.body).get(name)
+        if member is None:
+            return f"{definition.name} defines no {name}"
+        definition = member
+    return None
+
+
+def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]:
+    """Map the name of each def, async def and class written directly in *body* to its node."""
+    return {
+        statement.name: statement
+        for statement in body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
 
 
 @pytest.fixture
