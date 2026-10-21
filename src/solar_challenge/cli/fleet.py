@@ -347,10 +347,6 @@ def sweep(
     """
     raw_config = load_config(config)
 
-    # Create output directory if needed
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
     if "fleet_distribution" not in raw_config:
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
@@ -362,6 +358,10 @@ def sweep(
         )
 
     start_date, end_date = _period_in_fleet_timezone(sweep_configs[0][1], start, end)
+
+    # Create output directory if needed
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)

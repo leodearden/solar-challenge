@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet sweep`, on either sweep path, exports one CSV per point named after the swept parameter, and a summary of every point; on the --param path, each point simulates where its substituted location: block puts it."""
+"""`fleet sweep`, on either sweep path, exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it."""
 
 from pathlib import Path
 
@@ -72,24 +72,26 @@ def _fleet_distribution(**blocks: object) -> dict[str, object]:
     }
 
 
-def _sweep_document(document: dict[str, object], *options: str) -> Result:
-    """Write document as fleet.yaml in the working directory. Run `fleet sweep` on it for _DAY into out, with options, simulating one home after another."""
+def _sweep_document(document: dict[str, object], *options: str, start: str = _DAY) -> Result:
+    """Write document as fleet.yaml in the working directory. Run `fleet sweep` on it from start to _DAY into out, with options, simulating one home after another."""
     Path("fleet.yaml").write_text(yaml.safe_dump(document))
 
     return runner.invoke(
         app,
         [
             "fleet", "sweep", "fleet.yaml", "--output-dir", "out",
-            "--start", _DAY, "--end", _DAY, "--sequential", *options,
+            "--start", start, "--end", _DAY, "--sequential", *options,
         ],
         catch_exceptions=False,
     )
 
 
-def _sweep(capacity_kwh: object, *options: str) -> Result:
-    """Run `fleet sweep`, with options, on two homes with 4 kW of PV, a deterministic 3400 kWh a year of load and a battery of capacity_kwh."""
+def _sweep(capacity_kwh: object, *options: str, start: str = _DAY) -> Result:
+    """Run `fleet sweep`, with options, from start to _DAY, on two homes with 4 kW of PV, a deterministic 3400 kWh a year of load and a battery of capacity_kwh."""
     return _sweep_document(
-        {"fleet_distribution": _fleet_distribution(battery={"capacity_kwh": capacity_kwh})}, *options
+        {"fleet_distribution": _fleet_distribution(battery={"capacity_kwh": capacity_kwh})},
+        *options,
+        start=start,
     )
 
 
@@ -131,6 +133,18 @@ def test_a_param_sweep_without_both_bounds_is_refused_before_it_simulates(
     assert result.exit_code == 1
     assert "CLI sweep requires --min and --max values" in " ".join(result.stderr.split())
     assert list(Path("out").glob("*.csv")) == []
+
+
+@pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
+def test_a_start_date_it_cannot_read_is_refused_without_creating_the_output_directory(
+    capacity_kwh: object, options: tuple[str, ...], param_name: str, values: tuple[float, ...]
+) -> None:
+    """The period is read in the timezone of the first point's fleet, so only once the points are built; the output directory is created after that."""
+    result = _sweep(capacity_kwh, *options, start="not-a-date")
+
+    assert result.exit_code == 1
+    assert "Invalid value" in " ".join(result.stderr.split())
+    assert not Path("out").exists()
 
 
 @pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
