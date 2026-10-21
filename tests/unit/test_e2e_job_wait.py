@@ -21,6 +21,7 @@ SCENARIOS = """
     import pytest
 
     from solar_challenge.weather import WeatherCache, set_weather_cache
+    from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 
     from tests._seeded_tmy import ClearJuneDays
 
@@ -31,12 +32,12 @@ SCENARIOS = """
     jobs_submitted_by_earlier_tests = []
 
 
-    # HOME_JOB simulates 1 June 2024, so Bristol's TMY is a clear day on that date.
+    # HOME_JOB's days window starts on DAYS_WINDOW_START, so Bristol's TMY is a clear day on that date.
     # It overrides the e2e conftest's live_server_weather_in_place, which the live server's app is built after.
     @pytest.fixture(scope="session")
     def live_server_weather_in_place(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
-        ClearJuneDays(first_day=pd.Timestamp("2024-06-01"), count=1).seed_as_bristol_tmy(cache)
+        ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(cache)
         set_weather_cache(cache)
         yield
         set_weather_cache(None)
