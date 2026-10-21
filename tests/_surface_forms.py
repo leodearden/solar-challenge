@@ -863,7 +863,7 @@ def _refuse_unspelled_member(cls: type, name: str, member: object) -> None:
         kind = _label(type(member))
         raise TypeError(
             f"{_label(cls)}.{name} is a {kind}, which member_forms has no rule for: define "
-            f"{name} with def, or give {kind} a rule in _spelled_function"
+            f"{name} with def"
         )
 
 
