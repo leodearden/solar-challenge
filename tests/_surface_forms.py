@@ -118,14 +118,16 @@ def named_classes(obj: object) -> set[type]:
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
     NameError. A routine is spelled in the module whose globals it carries, whatever
-    module its __module__ names; a functools.partial, or a routine that wraps another
-    callable as functools.wraps records one, where that callable is, whatever
-    __signature__ the wrapper carries; and a class in the one sys.modules holds under
-    the name its __module__ records. One whose module another of the same name has since
-    replaced in sys.modules raises LookupError naming it and the module found there, and
-    one whose module has since left sys.modules, LookupError naming it and that module's
-    name. A signature that annotates nothing, as that of each routine CPython defines in
-    C such as str.join, names no class, and no module is looked up for it. Met again
+    module its __module__ names; a functools.partial, a bound method, or a routine that
+    wraps another callable as functools.wraps records one, where that callable is,
+    whatever __signature__ the wrapper carries; an object its class makes callable,
+    where the __call__ that class resolves is, which may be a base's in another module;
+    and a class in the one sys.modules holds under the name its __module__ records. One
+    whose module another of the same name has since replaced in sys.modules raises
+    LookupError naming it and the module found there, and one whose module has since
+    left sys.modules, LookupError naming it and that module's name. A signature that
+    annotates nothing, as that of each routine CPython defines in C such as str.join,
+    names no class, and no module is looked up for it. Met again
     inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
@@ -565,19 +567,26 @@ def _spelling_modules(
 ) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
 
-    A routine's is that of the last callable in its chain of functools.partial funcs and
-    wrapped callables, where inspect.get_annotations finds the namespace of a wrapper's
-    annotations. A __signature__ a wrapper carries does not change that: it records no
-    module. A class's is that of the class holding its constructor; but for a generated
-    __init__, that of the nearest class in the holder's MRO that the dataclass decorator
-    processed and whose own body annotates the name, or the holder's if none does.
+    A routine's is that of the last callable in its chain of functools.partial funcs,
+    bound methods' __func__s and wrapped callables, where inspect.get_annotations finds
+    the namespace of a wrapper's annotations. If that callable is an object its class
+    makes callable, it is read as the __call__ its class resolves, from which inspect
+    derives its signature. A __signature__ a wrapper carries does not change that: it
+    records no module. A class's is that of the class holding its constructor; but for
+    a generated __init__, that of the nearest class in the holder's MRO that the
+    dataclass decorator processed and whose own body annotates the name, or the
+    holder's if none does.
     """
     if isinstance(obj, functools.partial):
         return _spelling_modules(obj.func, names)
+    if isinstance(obj, types.MethodType):
+        return _spelling_modules(obj.__func__, names)
     if not inspect.isclass(obj):
         unwrapped = inspect.unwrap(obj)
         if unwrapped is not obj:
             return _spelling_modules(unwrapped, names)
+        if not _is_routine(obj):
+            return _spelling_modules(type(obj).__call__, names)
         return dict.fromkeys(names, _defining_module(obj))
     holder = _constructor_holder(obj)
     if not _holds_generated_init(holder):
@@ -644,7 +653,7 @@ def _module_named(name: str, obj: object) -> types.ModuleType:
 
 
 def _label(obj: object) -> str:
-    """The name this helper's errors give *obj*: its module's name and its qualified name, dotted; its repr if it records no qualified name, as a type variable and a method bound to a callable object do not."""
+    """The name this helper's errors give *obj*: its module's name and its qualified name, dotted; its repr if it records no qualified name, as a type variable does not."""
     qualified_name = getattr(obj, "__qualname__", None)
     return repr(obj) if qualified_name is None else f"{obj.__module__}.{qualified_name}"
 
@@ -654,7 +663,7 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
 
     If sys.modules holds another module under that name, as once another module of the
     same name has replaced it there, LookupError names *routine* and both modules. A
-    routine that carries no globals, as a method bound to a callable object carries none,
+    routine that carries no globals, as a routine CPython defines in C carries none,
     records nothing to check its module by, so the one its __module__ names is looked up
     unchecked.
     """
