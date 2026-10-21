@@ -61,12 +61,17 @@ def surface_form(obj: object) -> str:
     order, unsafe_hash and frozen that are on, whether set on the class or on the base it
     inherits them from. An annotation in that signature which it has no rule for, such as
     a type alias, raises TypeError naming it and its type.
+
+    A class whose constructor is a functools.partial held as __init__ raises TypeError
+    naming it and the class in its MRO whose own body holds that partial, since 3.14
+    binds the partial to the instance as a method and earlier minors do not; a partial
+    held as __new__ is read alike on every minor, and spelled.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
     if not _is_class_or_routine(obj):
         return type(obj).__qualname__
-    signature = inspect.signature(obj)
+    signature = _signature(obj)
     text = str(
         signature.replace(
             parameters=[
@@ -122,7 +127,9 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type. A class's constructor is spelled in the module of the class
+    naming it and its type; a class whose constructor surface_form refuses raises the
+    TypeError surface_form raises for it.
+    A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
     module of the nearest class in that MRO the decorator processed whose own body
@@ -469,7 +476,7 @@ def _form_classes(obj: object) -> set[type]:
         return set()
     if not _is_class_or_routine(obj):
         return {type(obj)}
-    annotations = _signature_annotations(inspect.signature(obj))
+    annotations = _signature_annotations(_signature(obj))
     if not annotations:
         return set()
     modules = _spelling_modules(obj, annotations)
@@ -489,6 +496,28 @@ def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]
 def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
     """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
     return inspect.isroutine(obj) or isinstance(obj, functools.partial)
+
+
+def _signature(obj: Callable[..., object]) -> inspect.Signature:
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads."""
+    if inspect.isclass(obj):
+        _refuse_minor_dependent_constructor(obj)
+    return inspect.signature(obj)
+
+
+def _refuse_minor_dependent_constructor(cls: type) -> None:
+    """Raise TypeError naming *cls* and the class holding its constructor if that class's own __init__ is a functools.partial, which inspect reads with self before Python 3.14 and without it from 3.14, as 3.14 binds a partial to the instance as a method.
+
+    The holder's namespace is read through vars(), never by attribute, since reading a
+    partial as an attribute of a class emits a FutureWarning on 3.13.
+    """
+    holder = _constructor_holder(cls)
+    if isinstance(vars(holder).get("__init__"), functools.partial):
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
+            "functools.partial, which Python 3.14 binds to the instance as a method and "
+            "earlier minors call without it: define __init__ with def"
+        )
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
@@ -743,7 +772,7 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
 
 def _constructor_parameters(cls: type) -> set[str]:
     """The names of the parameters of *cls*'s constructor that surface_form(cls) spells, self excluded."""
-    return set(inspect.signature(cls).parameters)
+    return set(_signature(cls).parameters)
 
 
 def _defaulted_fields(cls: type) -> set[str]:
