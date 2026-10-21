@@ -212,8 +212,7 @@ class TestFinCalibrationScenarioParses:
     The fleet (fleet_distribution format, parsed with load_fleet_config as the
     finance CLI parses it) is 100 homes, each with FIN_GOLDEN's install.
     The finance block is parsed with load_config and parse_finance_config, as the
-    finance CLI parses it (src/solar_challenge/cli/finance.py,
-    _required_finance_block), and checked as one equality with θ's [FIN] finance,
+    finance CLI parses it, and checked as one equality with θ's [FIN] finance,
     _make_finance_fin().
     """
 
