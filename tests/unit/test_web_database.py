@@ -231,10 +231,7 @@ class TestDatabaseInitialization:
         with closing(sqlite3.connect(db_path)) as conn:
             tables = {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {table for table in tables if not table.startswith("sqlite_")} == {"idx_chat_messages_session_id"}, (
-            f"init_db failed and left the tables {sorted(tables)}: it must create its schema in one transaction, "
-            "or a failed statement leaves a partly created schema behind; each CREATE committed alone is also a "
-            "durable commit of its own, 16 fdatasync per fresh database in WAL mode against 9 in one transaction "
-            "(measured), and the verify initialises ~1,100 databases"
+            f"init_db failed and left the tables {sorted(tables)}: it must create its schema in one transaction"
         )
 
     @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
