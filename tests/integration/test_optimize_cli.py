@@ -248,6 +248,18 @@ class TestGenerateConfigRankingReportTable1:
         shown = _column(report, "## Cost-Recovery Rank", "Solved Rate (p/kWh)", expected)
         assert shown == expected, f"solved own-use rates not shown in their configs' rows:\n{report}"
 
+    def test_representative_outlay_rendered(self) -> None:
+        """Report must show each config's representative outlay, the figure Table 1 is ranked by, in its Cost-Recovery Rank row."""
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        expected = {
+            self.CHEAPEST: "£350.00",
+            self.SECOND_CHEAPEST: "£370.00",
+        }
+        shown = _column(report, "## Cost-Recovery Rank", "Rep Outlay (£)", expected)
+        assert shown == expected, f"representative outlays not shown in their configs' rows:\n{report}"
+
     def test_outlay_distribution_values(self) -> None:
         """Report must show each config's min/mean/median/max outlay in its Cost-Recovery Rank row."""
         ranked = self._make_sweep_two_feasible()
