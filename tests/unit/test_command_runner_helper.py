@@ -23,8 +23,8 @@ import pytest
 import yaml
 
 from tests._collect_only import collect
-from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
-from tests._orchestrator_config import OrchestratorCommand, VerifyRole, lane_command, verify_command
+from tests._command_runner import CommandTimedOut, ShellCommand, VerifyRole, describe_outcome, run_command
+from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
 from tests._verify_suite import run_verify_suite
 
 _PROBE_VARIABLE = "COMMAND_RUNNER_PROBE"

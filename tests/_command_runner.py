@@ -2,9 +2,10 @@
 """The one runner through which the orchestrator contract tests start a command, and the one description of how it ended.
 
 run_command starts a command as the orchestrator does: verbatim through `sh -c`,
-in the command's directory, with the DF_VERIFY_ROLE dark-factory sets for an
-OrchestratorCommand. The command runs in a session of its own, and no process in
-that session outlives a hang: at its timeout, every one of them is killed.
+in the command's directory, and, for a command with a role, such as an
+OrchestratorCommand, with DF_VERIFY_ROLE set to that role. The command runs in a
+session of its own, and no process in that session outlives a hang: at its
+timeout, every one of them is killed.
 
 Usage::
 
@@ -23,13 +24,26 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
-
-from tests._orchestrator_config import OrchestratorCommand
+from typing import Literal, Protocol
 
 _STREAM_TAIL_CHARS = 5000
 
 _DRAIN_AFTER_KILL_SECS = 5
+
+VerifyRole = Literal["task", "offline"]
+
+
+class Command(Protocol):
+    """What run_command starts: the shell text, the directory it runs in, and the DF_VERIFY_ROLE it runs in, None for none of its own."""
+
+    @property
+    def command(self) -> str: ...
+
+    @property
+    def directory(self) -> Path: ...
+
+    @property
+    def role(self) -> VerifyRole | None: ...
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,10 @@ class ShellCommand:
             f"the shell command {self.command!r} runs in {self.directory}, which is not a directory, so it cannot "
             "start there"
         )
+
+    @property
+    def role(self) -> None:
+        return None
 
 
 class Outcome(Protocol):
@@ -89,22 +107,24 @@ class CommandTimedOut(Exception):
 
 
 def run_command(
-    command: OrchestratorCommand | ShellCommand, env: Mapping[str, str] | None = None, *, timeout_secs: float
+    command: Command, env: Mapping[str, str] | None = None, *, timeout_secs: float
 ) -> subprocess.CompletedProcess[str]:
     """Run *command* verbatim through `sh -c` in its directory, in *env* (default: this process's environment).
 
-    An OrchestratorCommand runs with DF_VERIFY_ROLE set to its role over whatever
-    *env* holds, as dark-factory's verify (verify.py::_resolve_verify_env) and
-    offline lane (offline_lane_runs.py::_lane_env) set it. The command runs in a
-    session of its own, which no signal sent to this process reaches. If it is
-    still running after *timeout_secs*, it is killed with every process in its
-    session and CommandTimedOut is raised; if the call ends any other way before
-    the command does, an interrupt or an error, they are killed too. A process
-    that left the session, as a daemonizing tool's does, is beyond that kill, and
-    the output it holds open is read for at most _DRAIN_AFTER_KILL_SECS more.
+    A command with a role, such as an OrchestratorCommand, runs with DF_VERIFY_ROLE
+    set to that role over whatever *env* holds, as dark-factory's verify
+    (verify.py::_resolve_verify_env) and offline lane
+    (offline_lane_runs.py::_lane_env) set it; a command without one, such as a
+    ShellCommand, runs in whatever role *env* holds. The command runs in a session
+    of its own, which no signal sent to this process reaches. If it is still
+    running after *timeout_secs*, it is killed with every process in its session
+    and CommandTimedOut is raised; if the call ends any other way before the
+    command does, an interrupt or an error, they are killed too. A process that
+    left the session, as a daemonizing tool's does, is beyond that kill, and the
+    output it holds open is read for at most _DRAIN_AFTER_KILL_SECS more.
     """
     command_env = dict(os.environ if env is None else env)
-    if isinstance(command, OrchestratorCommand):
+    if command.role is not None:
         command_env["DF_VERIFY_ROLE"] = command.role
     shell = subprocess.Popen(
         command.command,

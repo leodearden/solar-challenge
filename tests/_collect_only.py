@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run a pytest command verbatim in collect-only mode, for the orchestrator contract tests.
 
-The command is an OrchestratorCommand, or a ShellCommand for one no
-dark-factory-orchestrator.yaml names, and it starts through
-tests/_command_runner.run_command. collect() reads what the command collected
-from the collection-report plugin, never from the command's output. It loads
-the plugin by its name, COLLECTION_REPORT_PLUGIN, given to -p, from
+The command is a tests/_command_runner.Command, such as an OrchestratorCommand,
+or a ShellCommand for one no dark-factory-orchestrator.yaml names, and it starts
+through tests/_command_runner.run_command. collect() reads what the command
+collected from the collection-report plugin, never from the command's output.
+It loads the plugin by its name, COLLECTION_REPORT_PLUGIN, given to -p, from
 COLLECTION_REPORT_PLUGIN_DIRECTORY (tests/_pytest_plugins) on PYTHONPATH. The
 plugin's module docstring defines the report. run_collect_only, which collect()
 runs through, returns only the finished process, for a probe that reads just a
@@ -41,8 +41,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from tests._command_runner import ShellCommand, describe_outcome, run_command
-from tests._orchestrator_config import OrchestratorCommand
+from tests._command_runner import Command, describe_outcome, run_command
 
 requires_uv = pytest.mark.skipif(
     shutil.which("uv") is None, reason="uv is not installed; the orchestrator command under test runs through it"
@@ -110,7 +109,7 @@ class Collection:
 
 
 def collect(
-    command: OrchestratorCommand | ShellCommand,
+    command: Command,
     *pytest_args: str,
     env: Mapping[str, str] | None = None,
     timeout_secs: float = _COLLECT_TIMEOUT_SECS,
@@ -160,7 +159,7 @@ def _read_report(path: Path) -> CollectionReport:
 
 
 def run_collect_only(
-    command: OrchestratorCommand | ShellCommand,
+    command: Command,
     *pytest_args: str,
     env: Mapping[str, str] | None = None,
     timeout_secs: float = _COLLECT_TIMEOUT_SECS,

@@ -29,11 +29,11 @@ from typing import Any, Literal, get_args
 
 import yaml
 
+from tests._command_runner import VerifyRole
+
 VerifySlot = Literal["lint_command", "type_check_command", "test_command"]
 
 VERIFY_SLOTS: tuple[VerifySlot, ...] = get_args(VerifySlot)
-
-VerifyRole = Literal["task", "offline"]
 
 
 @dataclass(frozen=True)
