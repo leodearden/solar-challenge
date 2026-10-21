@@ -34,6 +34,10 @@ _ECHO_ROLE = 'echo "${DF_VERIFY_ROLE-unset}"'
 # child before the kill.
 _HANG_TIMEOUTS_SECS = (0.5, 2.0, 8.0)
 
+_REGROUP_TRIALS = 10
+
+_REGROUP_TIMEOUT_SECS = 0.5
+
 # How a probe starts a hang command in a directory, with a timeout; it asserts the probe gave up on the hang.
 ProbeStart = Callable[[str, Path, float], None]
 
@@ -113,6 +117,35 @@ def _pid_of_a_background_child_killed_in_a_hang(directory: Path, start: ProbeSta
         if pid_file.exists():
             return int(pid_file.read_text(encoding="utf-8"))
     pytest.fail(f"the hang started no background child in hangs of {_HANG_TIMEOUTS_SECS} s")
+
+
+def _regrouping_hang(directory: Path, pids_file: Path) -> str:
+    """Write a regrouping hang script into *directory* and return the command that runs it.
+
+    Until it is killed, the script starts a GNU timeout in the background every few
+    milliseconds and appends its pid to *pids_file* in one write, so every line is
+    whole. Each timeout moves itself and its sleep into a process group of their own
+    inside the probe's session, as a lane command's timeout does. They write to
+    /dev/null rather than to the probe's output, as _hang's child does, so a timeout
+    the kill misses shows up as a survivor, not as a drain of the probe's output.
+    """
+    pids = shlex.quote(str(pids_file))
+    script = directory / "regroup.sh"
+    script.write_text(
+        f"while :; do timeout 120 sleep 120 >/dev/null 2>&1 & echo $! >> {pids}; sleep 0.005; done\n", encoding="utf-8"
+    )
+    return f"sh {shlex.quote(str(script))}"
+
+
+def _timeouts_a_regrouping_hang_started(directory: Path) -> list[int]:
+    """Hang run_command on a regrouping hang in a new *directory* until it gives up; return each timeout's pid."""
+    directory.mkdir()
+    pids_file = directory / "timeouts.pids"
+    with pytest.raises(CommandTimedOut):
+        run_command(ShellCommand(_regrouping_hang(directory, pids_file), directory), timeout_secs=_REGROUP_TIMEOUT_SECS)
+    if not pids_file.exists():
+        return []
+    return [int(line) for line in pids_file.read_text(encoding="utf-8").splitlines()]
 
 
 def _holder_leaving_the_session(directory: Path, pid_file: Path, released_file: Path) -> str:
@@ -263,6 +296,30 @@ def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: Prob
         f"process {background_pid}, which the hung command started in the background, outlived the probe that "
         "gave up on it, so a hung probe would leave its processes running after the test that started it ends"
     )
+
+
+def test_no_process_outlives_a_hung_command_that_keeps_moving_processes_into_groups_of_their_own(
+    tmp_path: Path,
+) -> None:
+    """GNU timeout moves into a group of its own just after it starts, so the session's groups must be looked for only once the shell that starts them is dead."""
+    started = 0
+    for trial in range(_REGROUP_TRIALS):
+        timeouts = _timeouts_a_regrouping_hang_started(tmp_path / f"trial-{trial}")
+        survivors = [pid for pid in timeouts if not _gone_within(pid, seconds=10)]
+        for survivor in survivors:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(survivor, signal.SIGKILL)
+        assert not survivors, (
+            f"in trial {trial}, the GNU timeouts {survivors}, which the hung command started, outlived the probe "
+            "that gave up on it: a timeout that moved into a group of its own while the probe looked for the "
+            "session's groups escaped the kill, so a lane command's timeout could leave uv and pytest running"
+        )
+        started += len(timeouts)
+    if not started:
+        pytest.fail(
+            f"the hang started no timeout in {_REGROUP_TRIALS} trials of {_REGROUP_TIMEOUT_SECS} s, so the test "
+            "proved nothing"
+        )
 
 
 def test_a_process_that_left_the_session_cannot_keep_a_timed_out_command_running_by_holding_its_output(
