@@ -224,25 +224,37 @@ RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 _COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
+_UNFINISHED_RUN_STATUS: RunStatus = "running"
+_FAILED_RUN_STATUS: RunStatus = "failed"
+_INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
+
+
+def _run_row_insert() -> str:
+    """The statement inserting a RunRecord, bound by field name, as a new runs row; an id a run already has fails it."""
+    columns = [field.name for field in fields(RunRecord)]
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(f":{column}" for column in columns)
+    return f"INSERT INTO runs ({column_list}) VALUES ({placeholders})"
+
 
 def _run_row_upsert() -> str:
     """The statement writing a RunRecord, bound by field name, as the runs row under its id.
 
-    A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes
-    every other column from the record.
+    It inserts as _run_row_insert's statement does, except that a row already under that id
+    keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes every other column from the record.
     """
-    columns = [field.name for field in fields(RunRecord)]
-    rewritten = [column for column in columns if column not in _COLUMNS_A_RESAVE_KEEPS]
-    column_list = ", ".join(columns)
-    placeholders = ", ".join(f":{column}" for column in columns)
+    rewritten = [field.name for field in fields(RunRecord) if field.name not in _COLUMNS_A_RESAVE_KEEPS]
     assignments = ", ".join(f"{column} = excluded.{column}" for column in rewritten)
-    return (
-        f"INSERT INTO runs ({column_list}) VALUES ({placeholders}) "
-        f"ON CONFLICT(id) DO UPDATE SET {assignments}"
-    )
+    return f"{_run_row_insert()} ON CONFLICT(id) DO UPDATE SET {assignments}"
 
 
+_RUN_ROW_INSERT = _run_row_insert()
 _RUN_ROW_UPSERT = _run_row_upsert()
+
+
+def _now() -> str:
+    """The time now, as the ISO 8601 UTC text a runs row records its times in."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _saved_run_row(
@@ -267,7 +279,7 @@ def _saved_run_row(
     Raises:
         ValueError: *status* is not one of RUN_STATUSES, as RunRecord refuses it.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = _now()
     return RunRecord(
         id=run_id,
         name=name,
@@ -366,6 +378,76 @@ class RunStorage:
         """
         with self.database.transaction() as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
+
+    def create_run(self, run_id: str, *, run_type: RunType, name: str, n_homes: int, created_at: str) -> RunRecord:
+        """Record a new run under *run_id*, running, as a job's submit records it before its simulation is queued.
+
+        The run has the *run_type*, *name*, *n_homes* and *created_at* given and no other column:
+        no config, summary, error, completion time, duration or notes. It writes no file; the save
+        of the job's results writes the run's files and completes its row.
+
+        Returns:
+            The run's record as written.
+
+        Raises:
+            ValueError: The store refuses *run_id*, or *run_type* is not one of RUN_TYPES.
+            sqlite3.Error: The database refuses the row, e.g. for an id a run already has.
+            Neither leaves anything written.
+        """
+        self._validate_run_id(run_id)
+        record = RunRecord(
+            id=run_id,
+            name=name,
+            type=run_type,
+            config_json=None,
+            summary_json=None,
+            status=_UNFINISHED_RUN_STATUS,
+            error_message=None,
+            created_at=created_at,
+            completed_at=None,
+            duration_seconds=None,
+            n_homes=n_homes,
+            notes=None,
+        )
+        with self.database.transaction() as conn:
+            conn.execute(_RUN_ROW_INSERT, asdict(record))
+        return record
+
+    def mark_run_failed(self, run_id: str, message: str) -> None:
+        """Record that run *run_id* failed with *message*: failed, with *message* as its error, completed now.
+
+        The run is marked failed whatever its status. When no run has that id, nothing is written.
+        """
+        self._fail_runs("id = :run_id", {"run_id": run_id}, message)
+
+    def fail_interrupted_runs(self) -> int:
+        """Mark every running run failed, as mark_run_failed marks one, with the message "Interrupted by server restart".
+
+        A server calls it when it starts, before it runs any job, so each running run is one whose
+        job an earlier server was running when it stopped.
+
+        Returns:
+            The number of runs it marked failed.
+        """
+        return self._fail_runs(
+            "status = :unfinished_status", {"unfinished_status": _UNFINISHED_RUN_STATUS}, _INTERRUPTED_BY_RESTART_MESSAGE
+        )
+
+    def _fail_runs(self, condition: str, condition_values: Mapping[str, str], message: str) -> int:
+        """Mark failed, with *message* as its error and completed now, each run whose row matches the SQL *condition*.
+
+        *condition* binds by name the values *condition_values* holds.
+
+        Returns:
+            The number of runs it marked failed.
+        """
+        with self.database.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE runs SET status = :failed_status, error_message = :message, completed_at = :completed_at "
+                f"WHERE {condition}",
+                {**condition_values, "failed_status": _FAILED_RUN_STATUS, "message": message, "completed_at": _now()},
+            )
+            return cursor.rowcount
 
     def save_home_run(
         self,
