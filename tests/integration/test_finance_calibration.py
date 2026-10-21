@@ -33,6 +33,7 @@ from solar_challenge.config import (
     load_config,
     load_fleet_config,
     parse_finance_config,
+    parse_seg_rate,
 )
 from solar_challenge.finance import (
     FinanceConfig,
@@ -214,6 +215,8 @@ class TestFinCalibrationScenarioParses:
     The finance block is parsed with load_config and parse_finance_config, as the
     finance CLI parses it, and checked as one equality with θ's [FIN] finance,
     _make_finance_fin().
+    The seg block is parsed with load_config and parse_seg_rate, as the finance
+    CLI parses it, and its rate is FIN_GOLDEN's [FIN] export rate.
     """
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
@@ -252,6 +255,13 @@ class TestFinCalibrationScenarioParses:
         """The finance block is θ's [FIN] finance: make_fin_finance at the spreadsheet's FIN_SCF override."""
         assert self._load_finance() == _make_finance_fin(), (
             f"{self._SCENARIO_PATH}'s finance block is not the [FIN] finance at FIN_SCF"
+        )
+
+    def test_seg_rate_is_the_fin_export_rate(self) -> None:
+        """The seg block's rate is the [FIN] export price: FIN_GOLDEN's export_rate_pence_per_kwh."""
+        seg_rate = parse_seg_rate(load_config(self._SCENARIO_PATH).get("seg"))
+        assert seg_rate == FIN_GOLDEN["export_rate_pence_per_kwh"], (
+            f"{self._SCENARIO_PATH}'s seg rate is not FIN_GOLDEN's [FIN] export rate"
         )
 
     def test_fleet_is_100_homes(self) -> None:
