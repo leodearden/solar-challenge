@@ -2,6 +2,7 @@
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
 import json
+import logging
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -329,6 +330,35 @@ class TestGetPreset:
         resp = client.get(f"/api/presets/{name}")
 
         assert (resp.status_code, resp.get_json()["source"]) == (200, "builtin")
+
+    def test_a_saved_home_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database fault in the lookup of a saved home preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/presets/Mine")
+
+        message = "Saved preset 'Mine' could not be read: file is not a database"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Mine'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, sqlite3.DatabaseError)
+
+    def test_each_builtin_presets_name_answers_the_entry_the_list_holds_under_it_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A database that cannot be read leaves the list holding the built-in presets alone, and each of their names still answers the entry the list holds under it."""
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        listed = client.get("/api/presets").get_json()
+        assert [(p["name"], p["source"]) for p in listed] == [(name, "builtin") for name in _BUILTIN_PRESET_NAMES]
+
+        for entry in listed:
+            resp = client.get(f"/api/presets/{entry['name']}")
+            assert (resp.status_code, resp.get_json()) == (200, entry)
 
 
 class TestPresetsAnswerFromTheAppsDatabase:
