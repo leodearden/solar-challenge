@@ -15,14 +15,15 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
 
 from tests._collect_only import collect
-from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
+from tests._command_runner import CommandTimedOut, ShellCommand, VerifyRole, describe_outcome, run_command
 from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
 from tests._verify_suite import run_verify_suite
 
@@ -33,6 +34,10 @@ _ECHO_ROLE = 'echo "${DF_VERIFY_ROLE-unset}"'
 # Each hang outlasts the one before, so a shell that the host's load starts slowly still starts its background
 # child before the kill.
 _HANG_TIMEOUTS_SECS = (0.5, 2.0, 8.0)
+
+_REGROUP_TRIALS = 10
+
+_REGROUP_TIMEOUT_SECS = 0.5
 
 # How a probe starts a hang command in a directory, with a timeout; it asserts the probe gave up on the hang.
 ProbeStart = Callable[[str, Path, float], None]
@@ -54,6 +59,15 @@ part.rename(pid_file)
 time.sleep(lifetime_secs)
 released_file.touch()
 """
+
+
+@dataclass(frozen=True)
+class _CommandOfAnotherType:
+    """A command value that is neither a ShellCommand nor an OrchestratorCommand."""
+
+    command: str
+    directory: Path
+    role: VerifyRole | None
 
 
 def _project_with_a_lane_job_and_a_test_command(project_root: Path, command: str) -> Path:
@@ -115,6 +129,34 @@ def _pid_of_a_background_child_killed_in_a_hang(directory: Path, start: ProbeSta
     pytest.fail(f"the hang started no background child in hangs of {_HANG_TIMEOUTS_SECS} s")
 
 
+def _regrouping_hang(directory: Path, pids_file: Path) -> str:
+    """Write a regrouping hang script into *directory* and return the command that runs it.
+
+    Until it is killed, the script starts a GNU timeout in the background every few
+    milliseconds and appends its pid to *pids_file* in one write, so every line is
+    whole. Each timeout moves itself and its sleep into a process group of their own
+    inside the probe's session, as a lane command's timeout does. They write to
+    /dev/null rather than to the probe's output, as _hang's child does, so a timeout
+    the kill misses shows up as a survivor, not as a drain of the probe's output.
+    """
+    pids = shlex.quote(str(pids_file))
+    script = directory / "regroup.sh"
+    script.write_text(
+        f"while :; do timeout 120 sleep 120 >/dev/null 2>&1 & echo $! >> {pids}; sleep 0.005; done\n", encoding="utf-8"
+    )
+    return f"sh {shlex.quote(str(script))}"
+
+
+def _timeouts_a_regrouping_hang_started(directory: Path, start: ProbeStart) -> list[int]:
+    """Hang *start*'s probe on a regrouping hang in a new *directory* until it gives up; return each timeout's pid."""
+    directory.mkdir()
+    pids_file = directory / "timeouts.pids"
+    start(_regrouping_hang(directory, pids_file), directory, _REGROUP_TIMEOUT_SECS)
+    if not pids_file.exists():
+        return []
+    return [int(line) for line in pids_file.read_text(encoding="utf-8").splitlines()]
+
+
 def _holder_leaving_the_session(directory: Path, pid_file: Path, released_file: Path) -> str:
     """Write a holder script into *directory* and return the command that runs it.
 
@@ -147,14 +189,14 @@ def _process_exists(pid: int) -> bool:
     return True
 
 
-def _gone_within(pid: int, seconds: float) -> bool:
-    """Return whether the process *pid* is gone, ended and reaped, within *seconds*."""
+def _not_gone_within(pids: Iterable[int], seconds: float) -> list[int]:
+    """Return those of *pids* whose process is not gone, ended and reaped, within *seconds* of this call."""
     deadline = time.monotonic() + seconds
-    while _process_exists(pid):
-        if time.monotonic() >= deadline:
-            return False
+    existing = [pid for pid in pids if _process_exists(pid)]
+    while existing and time.monotonic() < deadline:
         time.sleep(0.01)
-    return True
+        existing = [pid for pid in existing if _process_exists(pid)]
+    return existing
 
 
 def test_runs_the_command_verbatim_through_sh_in_its_directory_and_the_given_environment(tmp_path: Path) -> None:
@@ -215,6 +257,25 @@ def test_a_shell_command_runs_in_the_given_environments_role_and_gets_none_of_it
     assert result.stdout == f"{printed}\n", describe_outcome(result)
 
 
+@pytest.mark.parametrize(
+    ("role", "printed"),
+    [
+        pytest.param("task", "task", id="task"),
+        pytest.param("offline", "offline", id="offline"),
+        pytest.param(None, "merge", id="no-role"),
+    ],
+)
+def test_a_command_of_any_type_runs_in_the_role_it_carries_and_with_none_in_the_inherited_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: VerifyRole | None, printed: str
+) -> None:
+    """Whether and how run_command sets DF_VERIFY_ROLE is the command's role field, never which type the command is."""
+    monkeypatch.setenv("DF_VERIFY_ROLE", "merge")
+
+    result = run_command(_CommandOfAnotherType(_ECHO_ROLE, tmp_path, role), timeout_secs=60)
+
+    assert result.stdout == f"{printed}\n", describe_outcome(result)
+
+
 def test_a_shell_command_whose_directory_is_not_a_directory_fails_naming_it_and_the_directory(tmp_path: Path) -> None:
     """As an OrchestratorCommand does, so no command reaches Popen's FileNotFoundError, which names neither."""
     absent = tmp_path / "absent"
@@ -255,7 +316,7 @@ def test_a_command_still_running_at_its_timeout_fails_naming_it_its_directory_it
 def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: ProbeStart) -> None:
     background_pid = _pid_of_a_background_child_killed_in_a_hang(tmp_path, start)
 
-    outlived = not _gone_within(background_pid, seconds=10)
+    outlived = _not_gone_within([background_pid], seconds=10)
     if outlived:
         os.kill(background_pid, signal.SIGKILL)
 
@@ -263,6 +324,38 @@ def test_no_process_a_hung_probe_started_outlives_it(tmp_path: Path, start: Prob
         f"process {background_pid}, which the hung command started in the background, outlived the probe that "
         "gave up on it, so a hung probe would leave its processes running after the test that started it ends"
     )
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        pytest.param(_hang_in_run_command, id="run_command"),
+        pytest.param(_hang_in_run_command_under_gnu_timeout, id="run_command-under-gnu-timeout"),
+    ],
+)
+def test_no_process_outlives_a_hung_command_that_keeps_moving_processes_into_groups_of_their_own(
+    tmp_path: Path, start: ProbeStart
+) -> None:
+    """GNU timeout moves into a group of its own just after it starts, so one that the shell, or a process already in a group of its own, starts while the kill looks for the session's groups must not escape it."""
+    started = 0
+    for trial in range(_REGROUP_TRIALS):
+        timeouts = _timeouts_a_regrouping_hang_started(tmp_path / f"trial-{trial}", start)
+        survivors = _not_gone_within(timeouts, seconds=10)
+        for survivor in survivors:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(survivor, signal.SIGKILL)
+        assert not survivors, (
+            f"in trial {trial}, the GNU timeouts {survivors}, which the hung command started, outlived the probe "
+            "that gave up on it: a timeout that moved into a group of its own while the probe looked for the "
+            "session's groups escaped the kill, so a lane command's timeout, or a timeout started under it, could "
+            "leave its processes running"
+        )
+        started += len(timeouts)
+    if not started:
+        pytest.fail(
+            f"the hang started no timeout in {_REGROUP_TRIALS} trials of {_REGROUP_TIMEOUT_SECS} s, so the test "
+            "proved nothing"
+        )
 
 
 def test_a_process_that_left_the_session_cannot_keep_a_timed_out_command_running_by_holding_its_output(
