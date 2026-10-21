@@ -1,18 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guards two invariants of the chart colours, whose one home is the chart section of the
 theme token file, static/src/theme-tokens.json, which charts.py loads into COLOUR_PALETTE:
-a token edit reaches every copy of a chart colour, and the palette holds only colours a
-chart draws, so it reads as the list of them.
+a token edit reaches every chart colour a chart draws, and the palette holds only colours a
+chart draws, so it reads as the list of them. That no other web source writes out a chart
+colour is test_web_theme_tokens.py's to guard.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Three
 checks enforce the invariants:
 
-* No dashboard source writes out a chart colour, one of the token file's chart hues: not
-  tailwind.config.js, not a template, not the hand-written stylesheet and not a script. A
-  colour counts as written where its hex literal appears in a source, matched
-  case-insensitively anywhere, comments included, so an eight-digit #rrggbbaa copy counts
-  through its prefix. Not read: the compiled dist/style.css, which derives from the
-  templates and the theme, and rgb() or rgba() forms in those sources.
 * Every chart colour a chart builder draws follows a palette edit: with each palette role
   recoloured, no builder's figure still draws a chart hue as #rrggbb, rgb() or rgba(), so
   a translucent fill or a reused hue that charts.py writes out by hand fails. A colour that
@@ -45,51 +40,9 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
-from tests._dashboard_sources import (
-    HAND_WRITTEN_STYLESHEET_KEY,
-    TAILWIND_CONFIG_KEY,
-    THEME_TOKENS_KEY,
-    dashboard_script_sources,
-    dashboard_template_sources,
-    hand_written_stylesheet_source,
-    tailwind_config_source,
-    theme_tokens,
-)
+from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
 from tests._finance_builders import make_fleet_results, make_sim_results
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours
-
-_CHART_COLOURS = frozenset(colour.lower() for colour in theme_tokens()["chart"]["hues"].values())
-
-
-def _written_chart_colours(source: str) -> list[str]:
-    """The chart colours *source* writes out, sorted."""
-    lowered = source.lower()
-    return sorted(colour for colour in _CHART_COLOURS if colour in lowered)
-
-
-def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
-    assert _CHART_COLOURS, f"{THEME_TOKENS_KEY}'s chart section defines no hue, so this guard would pass vacuously"
-    sources = {
-        TAILWIND_CONFIG_KEY: tailwind_config_source(),
-        **dashboard_template_sources(),
-        HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
-        **dashboard_script_sources(),
-    }
-
-    written = {
-        path: colours
-        for path, source in sources.items()
-        if (colours := _written_chart_colours(source))
-    }
-
-    listing = "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
-    assert written == {}, (
-        f"These dashboard sources write out chart colours, whose one home is {THEME_TOKENS_KEY}'s "
-        f"chart section, so a token edit does not reach them:{listing}\n"
-        "The charts take their colours from COLOUR_PALETTE, which charts.py loads from that "
-        "section, because Plotly needs colour strings rather than Tailwind classes. Delete the "
-        "copy. If a page must show a chart colour, pass it from COLOUR_PALETTE to the page."
-    )
 
 
 @dataclasses.dataclass(frozen=True)
