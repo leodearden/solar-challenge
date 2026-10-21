@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_scenario_session.py, which runs several scenario modules in one pytester session.
 
-The scenarios of every test but the work count's share one session, as the
-scenarios of the helper's users do.
+The session counts each module's outcomes through tests/_scenario_outcomes_plugin.py,
+so these tests cover that plugin too. The scenarios of every test but the work
+count's share one session, as the scenarios of the helper's users do.
 """
 
 from collections import Counter

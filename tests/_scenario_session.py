@@ -20,12 +20,8 @@ Usage::
         run = offline_scenarios.run_in(suite)
 
         assert run.outcomes("test_fetches_a_tmy") == {"failed": 1, "errors": 1}
-
-The module is also the plugin the session loads to record the category the
-summary counts each report under.
 """
 
-import json
 import tempfile
 from collections import Counter
 from collections.abc import Mapping
@@ -34,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-_OUTCOMES_LOG_OPTION = "--scenario-outcomes-log"
+from tests._scenario_outcomes_plugin import read_outcomes_log, recording_arguments
 
 _PARSEOUTCOMES_NOUNS = {"error": "errors"}
 
@@ -86,58 +82,7 @@ def _run_scenarios(pytester: pytest.Pytester, modules: Mapping[str, str], pytest
     with tempfile.TemporaryDirectory(prefix="scenario-outcomes-") as log_dir:
         log = Path(log_dir) / "outcomes.jsonl"
         result = pytester.runpytest_subprocess(
-            "-p",
-            __name__,
-            f"{_OUTCOMES_LOG_OPTION}={log}",
-            "--continue-on-collection-errors",
-            *pytest_args,
-            pytester.path,
+            *recording_arguments(log), "--continue-on-collection-errors", *pytest_args, pytester.path
         )
-        report_categories = _read_outcomes_log(log)
+        report_categories = read_outcomes_log(log)
     return ScenarioRun(result, pytester.path, report_categories)
-
-
-def _read_outcomes_log(log: Path) -> tuple[tuple[str, str], ...]:
-    """Return the (module file, category) pairs *log* holds, in report order; none when the session wrote no log."""
-    if not log.exists():
-        return ()
-    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    return tuple((record["module"], record["category"]) for record in records)
-
-
-def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        _OUTCOMES_LOG_OPTION,
-        help="append each report's module file and the category the summary counts it under to this JSON-lines file",
-    )
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    log = config.getoption(_OUTCOMES_LOG_OPTION)
-    if log is not None:
-        config.pluginmanager.register(_OutcomesRecorder(config, Path(log)))
-
-
-class _OutcomesRecorder:
-    """Appends each report's module file, and the category the terminal summary counts it under, to a JSON-lines log."""
-
-    def __init__(self, config: pytest.Config, log: Path) -> None:
-        self._config = config
-        self._log = log
-
-    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
-        """Record a test report under the category pytest_report_teststatus gives it, as the summary does; plugins' own included."""
-        category = self._config.hook.pytest_report_teststatus(report=report, config=self._config)[0]
-        if category:
-            self._record(report, category)
-
-    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
-        """Record a collect report that failed as an error and one that skipped as skipped, as the summary does."""
-        if report.failed:
-            self._record(report, "error")
-        elif report.skipped:
-            self._record(report, "skipped")
-
-    def _record(self, report: pytest.TestReport | pytest.CollectReport, category: str) -> None:
-        with self._log.open("a", encoding="utf-8") as log:
-            log.write(json.dumps({"module": report.nodeid.partition("::")[0], "category": category}) + "\n")
