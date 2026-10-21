@@ -237,11 +237,6 @@ def configs(
         f"over {n_homes} homes for {days} days…"
     )
 
-    # Warn when the estimated work is large. Each config may require up to 3
-    # fleet simulations (age-0 baseline + two cost-recovery solves), so a
-    # full-year default run of 72 configs × 100 homes can take tens of minutes.
-    # Threshold: 100,000 home-days ≈ 10 configs × 100 homes × 100 days.
-    # The default sweep (72 × 100 × 365 ≈ 2.6M) well exceeds this.
     _LARGE_SWEEP_THRESHOLD = 100_000
     if n_configs * n_homes * days > _LARGE_SWEEP_THRESHOLD:
         print_info(
