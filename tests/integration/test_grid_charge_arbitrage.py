@@ -8,7 +8,7 @@ These tests:
 - Assert that enabling grid-charging reduces net cost on a single winter day
   using a deterministic zero-PV synthetic weather frame (PVGIS-free, fast)
 
-Marked integration (NOT slow): injected weather bypasses PVGIS entirely.
+Every simulation is given a sunless winter day as its weather, so these tests run offline.
 """
 
 from __future__ import annotations
@@ -17,15 +17,12 @@ import dataclasses
 from pathlib import Path
 
 import pandas as pd
-import pytest
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.home import calculate_summary, simulate_home
 from tests._synthetic_weather import sunless_weather, weather_for
-
-pytestmark = pytest.mark.integration
 
 runner = CliRunner()
 

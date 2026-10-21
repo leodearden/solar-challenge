@@ -49,7 +49,6 @@ _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
 START, END = _JUNE_DAYS.window(_JUNE_DAYS.count)
 
 
-@pytest.mark.integration
 class TestSelfConsumptionStrategy:
     """Integration tests for self-consumption dispatch strategy."""
 
@@ -92,7 +91,6 @@ class TestSelfConsumptionStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.integration
 class TestTOUOptimizedStrategy:
     """Integration tests for TOU-optimized dispatch strategy."""
 
@@ -137,7 +135,6 @@ class TestTOUOptimizedStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.integration
 class TestPeakShavingStrategy:
     """Integration tests for peak-shaving dispatch strategy."""
 
@@ -181,7 +178,6 @@ class TestPeakShavingStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.integration
 class TestStrategyComparison:
     """Compare results across different dispatch strategies."""
 
@@ -310,7 +306,6 @@ class TestStrategyComparison:
             assert 0 <= summary.export_ratio <= 1
 
 
-@pytest.mark.integration
 class TestDefaultStrategyBackwardCompatibility:
     """Verify that no strategy config gives same results as explicit self-consumption."""
 

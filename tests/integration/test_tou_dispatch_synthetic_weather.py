@@ -22,10 +22,7 @@ from solar_challenge.tariff import TariffConfig
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning"),
-]
+pytestmark = pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning")
 
 SUNNY_DAY = pd.Timestamp("2024-06-21")
 SUNLESS_DAY = SUNNY_DAY + pd.Timedelta(days=1)

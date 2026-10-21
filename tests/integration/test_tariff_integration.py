@@ -24,7 +24,6 @@ from tests._synthetic_weather import synthetic_june_weather, weather_for
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
-@pytest.mark.integration
 class TestEconomy7TariffIntegration:
     """Test comprehensive Economy 7 tariff integration."""
 

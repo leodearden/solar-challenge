@@ -9,7 +9,7 @@ Proves:
 (c) Finance report: generate_finance_report gains optional flex_band block; default None
     reproduces bit-identical output.
 
-Marked integration (NOT slow): injected zero-PV weather bypasses PVGIS entirely.
+Every simulation is given a sunless winter day as its weather, so these tests run offline.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ import warnings
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
@@ -27,8 +26,6 @@ from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather, weather_for
-
-pytestmark = pytest.mark.integration
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 

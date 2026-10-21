@@ -7,9 +7,6 @@ Layout:
     debt service, per-year surplus/DSCR, IRR/payback/determinism, report
     rendering, CLI help/error paths.
   - One @pytest.mark.slow class for the real-PVGIS end-to-end path.
-
-NOTE: This file intentionally mixes fast and slow tests; it must NOT be
-added to test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 

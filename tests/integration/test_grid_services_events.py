@@ -46,8 +46,6 @@ from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import make_fleet_results_of
 from tests.integration._helpers import board_econ_scenario
 
-pytestmark = pytest.mark.integration
-
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
 

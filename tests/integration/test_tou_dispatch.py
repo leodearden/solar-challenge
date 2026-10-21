@@ -26,7 +26,6 @@ _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=7)
 
 
 @pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning")
-@pytest.mark.integration
 class TestTOUOptimizedDispatch:
     """An Economy 7 home with a 5 kWh battery under TOU-optimized dispatch, over clear June days."""
 

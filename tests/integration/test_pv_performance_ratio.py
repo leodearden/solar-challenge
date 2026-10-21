@@ -26,7 +26,6 @@ def pv_performance_ratio() -> ModuleType:
 
 
 @pytest.mark.slow
-@pytest.mark.integration
 class TestBristolPerformanceRatio:
     """The band is MCS's performance ratio of 0.8, +/- 5%."""
 

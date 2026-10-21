@@ -6,9 +6,6 @@ Layout:
   - Fast (no-network) classes: H1 invariants, H2 override, annualisation,
     bill_distribution, report rendering, CLI help/error paths.
   - One @pytest.mark.slow class for the real-PVGIS end-to-end path.
-
-NOTE: This file intentionally mixes fast and slow tests; it must NOT be
-added to test_marker_registration.py's INTEGRATION_FILES list.
 """
 import dataclasses
 import warnings

@@ -42,7 +42,6 @@ def june_fleet_run() -> ComputedOnce[FleetResults]:
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
-@pytest.mark.integration
 class TestFleetWithEVs:
     """Test fleet simulation with EV charging integration."""
 

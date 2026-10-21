@@ -17,9 +17,6 @@ Layout:
       TestCalibrationG6Guards — G6 premise guards
   - @pytest.mark.slow class:
       TestCalibrationPhysicsColumn — real-PVGIS physics column (reported, not asserted ==)
-
-NOTE: This file mixes fast and slow tests; it must NOT be added to
-test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 

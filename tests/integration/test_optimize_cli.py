@@ -2,10 +2,8 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests for W3 sweep E: generate_config_ranking_report + optimize CLI.
 
-This file MIXES fast and slow tests and must NOT be added to
-tests/unit/test_marker_registration.py's INTEGRATION_FILES allow-list.
-The slow class carries @pytest.mark.slow directly; the fast classes run
-in the offline verify loop.
+This file mixes fast and slow tests: the slow class carries @pytest.mark.slow
+directly, and the fast classes run in the offline verify loop.
 """
 from __future__ import annotations
 
