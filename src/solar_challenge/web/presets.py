@@ -95,7 +95,7 @@ def home_presets(database: Database) -> list[dict[str, Any]]:
     object, with a logged warning naming it. When the database cannot be read, the fault is
     logged and the built-in presets are listed alone.
     """
-    builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
+    builtin = _builtin_home_presets()
     try:
         with database.transaction() as conn:
             rows = conn.execute(
@@ -108,21 +108,65 @@ def home_presets(database: Database) -> list[dict[str, Any]]:
     return builtin + [preset for preset in saved if preset is not None]
 
 
+def _builtin_home_presets() -> list[dict[str, Any]]:
+    """The built-in home presets, each with the ``source`` 'builtin'."""
+    return [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
+
+
 def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
-    """The preset a saved home preset's row holds; None, with a logged warning, when its config is not a JSON object."""
+    """The preset a saved home preset's row holds; None, with a logged warning naming it, when its config cannot be read."""
     try:
-        config = json.loads(row["config_json"]) if row["config_json"] else {}
-    except ValueError:
-        config = None
-    if not isinstance(config, dict):
-        logger.warning("Saved home preset %r is not listed: its config is not a JSON object", row["name"])
+        config = _saved_preset_config(row)
+    except SavedPresetUnreadable as unreadable:
+        logger.warning("%s, so it is not listed", unreadable)
         return None
     return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
 
 
+def _saved_preset_row(database: Database, name: str, preset_type: PresetType) -> sqlite3.Row | None:
+    """The config_presets row of the saved *preset_type* preset *name*, or None when there is none.
+
+    Raises:
+        SavedPresetUnreadable: When *database* cannot be read.
+    """
+    try:
+        with database.transaction() as conn:
+            row: sqlite3.Row | None = conn.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = ?",
+                (name, preset_type),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise SavedPresetUnreadable(name, str(exc)) from exc
+    return row
+
+
+def _saved_preset_config(row: sqlite3.Row) -> dict[str, Any]:
+    """The config a saved preset's row holds, a JSON object; a config stored as NULL or empty text reads as {}.
+
+    Raises:
+        SavedPresetUnreadable: When the config is not JSON, or is JSON but not an object.
+    """
+    try:
+        config = json.loads(row["config_json"]) if row["config_json"] else {}
+    except ValueError as exc:
+        raise SavedPresetUnreadable(row["name"], "its config is not JSON") from exc
+    if not isinstance(config, dict):
+        raise SavedPresetUnreadable(row["name"], "its config is not a JSON object")
+    return config
+
+
 def home_preset_named(database: Database, name: str) -> dict[str, Any] | None:
-    """The preset home_presets lists under *name*, or None when it lists none."""
-    return next((preset for preset in home_presets(database) if preset["name"] == name), None)
+    """The home preset named *name*, as home_presets lists it when *database* can be read, or None when there is none.
+
+    A built-in preset's name is answered without reading *database*.
+
+    Raises:
+        SavedPresetUnreadable: When *name* is not a built-in preset's and *database* cannot be read.
+    """
+    if name in _BUILTIN_HOME_PRESET_NAMES:
+        return next(preset for preset in _builtin_home_presets() if preset["name"] == name)
+    row = _saved_preset_row(database, name, "home")
+    return None if row is None else _saved_home_preset(row)
 
 
 def saved_fleet_presets(database: Database) -> list[dict[str, Any]]:
@@ -151,23 +195,8 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
         SavedPresetUnreadable: When the database cannot be read, or the preset's config is not
             JSON, or is JSON but not an object.
     """
-    try:
-        with database.transaction() as conn:
-            row = conn.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE name = ? AND type = 'fleet'",
-                (name,),
-            ).fetchone()
-    except sqlite3.Error as exc:
-        raise SavedPresetUnreadable(name, str(exc)) from exc
-    if row is None:
-        return None
-    try:
-        config = json.loads(row["config_json"]) if row["config_json"] else {}
-    except ValueError as exc:
-        raise SavedPresetUnreadable(name, "its config is not JSON") from exc
-    if not isinstance(config, dict):
-        raise SavedPresetUnreadable(name, "its config is not a JSON object")
-    return {**_listed_saved_fleet_preset(row), "config": config}
+    row = _saved_preset_row(database, name, "fleet")
+    return None if row is None else {**_listed_saved_fleet_preset(row), "config": _saved_preset_config(row)}
 
 
 def _listed_saved_fleet_preset(row: sqlite3.Row) -> dict[str, Any]:

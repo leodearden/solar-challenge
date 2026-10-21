@@ -65,6 +65,16 @@ def _refuse_a_value_that_is_not_a_json_object(refusal: NotAJsonObject) -> tuple[
     return jsonify({"error": str(refusal)}), 400
 
 
+@api_bp.errorhandler(SavedPresetUnreadable)
+def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable) -> tuple[Response, int]:
+    """Answer HTTP 500 with the error naming a saved preset that cannot be read, logged at ERROR with its traceback.
+
+    Any endpoint of this blueprint that looks a saved preset up is answered this way.
+    """
+    logger.error("%s", unreadable, exc_info=unreadable)
+    return jsonify({"error": str(unreadable)}), 500
+
+
 @api_bp.route("/simulate/home", methods=["POST"])
 def simulate_home_api() -> tuple[Response, int]:
     """Submit a home simulation job for background execution.
@@ -321,16 +331,18 @@ def save_preset() -> tuple[Response, int]:
 
 @api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
-    """Get the home preset GET /api/presets lists under *name*.
+    """Get the home preset named *name*, as GET /api/presets lists it when the database can be read.
 
-    A built-in preset's name therefore answers the built-in preset, and a name only a
-    saved fleet preset holds is not found.
+    A built-in preset's name answers the built-in preset, even when the database cannot be
+    read, and a name only a saved fleet preset holds is not found.
 
     Args:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
+        JSON preset object, HTTP 200; or the ``error``: HTTP 404 when the database was read
+        and GET /api/presets lists none under the name; HTTP 500, with the fault logged, when
+        the name is not a built-in preset's and the database cannot be read.
     """
     preset = home_preset_named(get_database(), name)
     if preset is None:
@@ -960,11 +972,7 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
             }), 200
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
-    try:
-        preset = saved_fleet_preset_named(get_database(), name)
-    except SavedPresetUnreadable as unreadable:
-        logger.exception("%s", unreadable)
-        return jsonify({"error": str(unreadable)}), 500
+    preset = saved_fleet_preset_named(get_database(), name)
     if preset is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return jsonify(preset), 200
