@@ -544,7 +544,7 @@ def test_a_type_variable_whose_module_has_since_left_sys_modules_raises_a_lookup
     assert "'auditing'" in str(raised.value)
 
 
-def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
+def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_its_call_method_and_that_modules_name(
     removed_auditing: types.ModuleType,
 ) -> None:
     called = types.MethodType(removed_auditing.Caller(), object())
@@ -552,7 +552,7 @@ def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_mod
     with pytest.raises(LookupError) as raised:
         named_classes(called)
 
-    assert repr(called) in str(raised.value)
+    assert "auditing.Caller.__call__" in str(raised.value)
     assert "'auditing'" in str(raised.value)
 
 
@@ -805,6 +805,35 @@ def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_metho
     assert named_classes(recalling.called) == {fractions.Fraction}
     assert named_classes(recalling.settled) == {fractions.Fraction}
     assert named_classes(recalling.halved) == {fractions.Fraction}
+
+
+def test_a_method_bound_to_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "calling",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, owner, share: 'Share') -> None: ...\n",
+    )
+    recalling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "recalling",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from calling import Caller\n"
+        "\n"
+        "class Subcaller(Caller):\n"
+        "    pass\n",
+    )
+
+    classes = named_classes(types.MethodType(recalling.Subcaller(), object()))
+
+    assert classes == {fractions.Fraction}
 
 
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
