@@ -66,11 +66,13 @@ def surface_form(obj: object) -> str:
     it and the class in its MRO holding that constructor, and so does a routine inspect
     reads as such a class, through functools.partial funcs, bound methods' __func__s and
     the callables a wrapper records as __wrapped__, short of one that carries a
-    __signature__. Such a constructor is the one inspect reads first of those its holder
-    holds, when that wraps a callable defined in C, as the __new__ warnings.deprecated
-    writes for a class wraps object.__new__; or a functools.partial held as __init__,
-    unless the class holding it also holds a __new__ not defined in C, which inspect
-    reads first; or one held by a class defined in C other than object.
+    __signature__. Such a constructor is the __call__ the class's metaclass resolves,
+    which inspect looks up before any __new__ or __init__, or else the one inspect reads
+    first of those its holder holds, when it wraps a callable defined in C, as the
+    __new__ warnings.deprecated writes for a class wraps object.__new__; or a
+    functools.partial held as __init__, unless the class holding it also holds a __new__
+    not defined in C, which inspect reads first; or one held by a class defined in C
+    other than object.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -540,14 +542,19 @@ _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    Such a constructor is the one inspect reads first of those the holder's own namespace
-    holds, when it wraps a callable defined in C, as the __new__ warnings.deprecated
-    writes for a class wraps object.__new__; or a functools.partial the holder's own
-    namespace holds as __init__, unless that namespace also holds a __new__ not defined
-    in C, which inspect reads first; or the constructor of a holder defined in C other
-    than object, each __new__ and __init__ its own namespace holds being of a kind in
-    _C_CONSTRUCTOR_KINDS.
+    Such a constructor is the __call__ *cls*'s metaclass resolves, which inspect looks up
+    before any __new__ or __init__, or else the one inspect reads first of those the
+    holder's own namespace holds, when it wraps a callable defined in C, as the __new__
+    warnings.deprecated writes for a class wraps object.__new__; or a functools.partial
+    the holder's own namespace holds as __init__, unless that namespace also holds a
+    __new__ not defined in C, which inspect reads first; or the constructor of a holder
+    defined in C other than object, each __new__ and __init__ its own namespace holds
+    being of a kind in _C_CONSTRUCTOR_KINDS.
     """
+    metaclass = type(cls)
+    _refuse_wrapper_of_c_callable(
+        cls, metaclass, "__call__", inspect.getattr_static(metaclass, "__call__")
+    )
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
