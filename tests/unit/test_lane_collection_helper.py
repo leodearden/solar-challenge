@@ -10,6 +10,7 @@ import os
 import shlex
 import sys
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -32,6 +33,11 @@ _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 _SUITE = "tests/suite"
 
 _SUITE_NODE_ID = f"{_SUITE}/test_in_suite.py::test_case"
+
+
+def _this_process_environment(command: str) -> Mapping[str, str]:
+    """env_for for the probe jobs here, which run this interpreter's pytest and no uv: this process's environment, whatever the command."""
+    return os.environ
 
 
 def _project_with_lane_job(project_root: Path, command: str, **job_fields: str) -> Path:
@@ -67,7 +73,7 @@ def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path
         "def test_alpha():\n    pass\n\n\ndef test_beta():\n    pass\n", encoding="utf-8"
     )
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.command == command
     assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
@@ -79,7 +85,7 @@ def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
     (project_root / "suite").mkdir()
     (project_root / "suite" / "test_in_suite.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
@@ -129,7 +135,7 @@ def test_a_job_whose_command_fails_to_collect_fails_naming_the_job_its_command_a
     (project_root / "test_broken.py").write_text(f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env=os.environ)
+        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert "'probe'" in str(failure.value)
     assert repr(command) in str(failure.value)
@@ -143,7 +149,7 @@ def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_comma
     (project_root / "test_empty.py").write_text("", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env=os.environ)
+        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert "'probe'" in str(failure.value)
     assert repr(command) in str(failure.value)
@@ -157,7 +163,7 @@ def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path:
     command = shlex.join([sys.executable, "-c", "print('this command never ran', 'pytest')"])
     project_root = _project_with_lane_job(tmp_path, command)
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     with pytest.raises(AssertionError) as failure:
         collection.node_ids()
@@ -172,7 +178,7 @@ def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_i
         (project_root / directory).mkdir()
         (project_root / directory / module).write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids_outside("suite") == ("suite_extra/test_beside_suite.py::test_case",), (
         collection.describe()
@@ -202,7 +208,7 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
     )
     (project_root / "test_contract_extra.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids_outside("test_contract.py") == ("test_contract_extra.py::test_case",), (
         collection.describe()
