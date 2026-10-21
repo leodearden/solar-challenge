@@ -356,7 +356,9 @@ class EVDistributionConfig:
     Values can include None to represent homes without EVs.
 
     Attributes:
-        charger_type: Distribution for EV charger type (can include None)
+        charger_type: null, or a weighted_discrete or shuffled_pool of EVChargerType values
+            and nulls (a null is a home without an EV); parse_fleet_distribution_config
+            refuses any other
         arrival_hour: Distribution for EV arrival hour (0-23), or fixed value
         departure_hour: Distribution for EV departure hour (0-23), default 7am
         required_charge_kwh: Distribution for daily charging requirement, default 35kWh
@@ -1510,14 +1512,20 @@ _EV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 def _parse_charger_type_spec(data: Any, key_path: str) -> DistributionSpec:
     """Read an ev block's charger_type: null, or a weighted_discrete or shuffled_pool of charger types and nulls.
 
-    Each listed value is read through EVChargerType and refused naming *key_path*; a null is
-    a home without an EV.
+    Any other spec, and a listed value that names no EVChargerType, is refused naming
+    *key_path*; a null is a home without an EV.
     """
     spec = _parse_distribution_spec(data, key_path)
-    if isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
-        for value in spec.values:
-            if value is not None:
-                _require_charger_type(value, key_path)
+    if spec is None:
+        return None
+    if not isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
+        raise ConfigurationError(
+            f"Invalid {key_path} {data!r}; valid specs: null, or a weighted_discrete or "
+            "shuffled_pool of charger types and nulls"
+        )
+    for value in spec.values:
+        if value is not None:
+            _require_charger_type(value, key_path)
     return spec
 
 
