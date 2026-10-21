@@ -324,18 +324,9 @@ class TestErrorHandling:
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            pytest.param(("finance", "run"), id="finance-run"),
-            pytest.param(("optimize", "configs"), id="optimize-configs"),
-        ],
-    )
-    def test_a_finance_command_reports_an_infinite_loan_term_as_one_configuration_error_line(
-        self, command: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A finance command on a scenario whose loan term is YAML .inf exits 1, printing nothing on stdout and one configuration-error line on stderr. It raises nothing."""
-        monkeypatch.chdir(tmp_path)
+    @staticmethod
+    def _write_one_home_scenario(**blocks: object) -> None:
+        """Write scenario.yaml in the working directory: a scenario named Bristol whose one home has 4 kW of PV and a deterministic 3400 kWh a year of load, with blocks as its other top-level blocks."""
         Path("scenario.yaml").write_text(
             yaml.safe_dump(
                 {
@@ -346,21 +337,84 @@ class TestErrorHandling:
                             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
                         }
                     ],
-                    "finance": {
-                        "standing_charge_pence_per_day": 28.0,
-                        "loan_term_years": float("inf"),
-                    },
+                    **blocks,
                 }
             )
         )
+
+    @pytest.mark.parametrize(
+        ("finance", "refusal"),
+        [
+            pytest.param(
+                {"loan_term_years": float("inf")},
+                "loan_term_years must be a finite whole number, got inf",
+                id="infinite-loan-term",
+            ),
+            pytest.param(
+                {
+                    "grid_services_events": {
+                        "event_windows": [
+                            {"months": [13], "weekdays": [0], "hours": [17], "events_per_year": 1, "event_hours": 1.0}
+                        ]
+                    }
+                },
+                "EventWindow.months values must be in 1..12, got (13,)",
+                id="event-window-month-13",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(("finance", "run"), id="finance-run"),
+            pytest.param(("optimize", "configs"), id="optimize-configs"),
+        ],
+    )
+    def test_a_finance_command_reports_a_refused_finance_block_as_one_configuration_error_line(
+        self,
+        command: tuple[str, str],
+        finance: dict[str, object],
+        refusal: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A finance command on a scenario whose finance block a type refuses exits 1, printing nothing on stdout and one configuration-error line on stderr: the refusal as the refusing type words it. It raises nothing."""
+        monkeypatch.chdir(tmp_path)
+        self._write_one_home_scenario(finance={"standing_charge_pence_per_day": 28.0, **finance})
 
         result = runner.invoke(app, [*command, "scenario.yaml"], catch_exceptions=False)
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert " ".join(result.stderr.split()) == (
-            "Configuration error: loan_term_years must be a finite whole number, got inf"
-        )
+        assert " ".join(result.stderr.split()) == f"Configuration error: {refusal}"
+
+    @pytest.mark.parametrize(
+        ("argv", "error_line_start"),
+        [
+            pytest.param(
+                ("optimize", "configs", "scenario.yaml"),
+                "Configuration error: No 'finance:' block found in the scenario file.",
+                id="configuration-error",
+            ),
+            pytest.param(
+                ("home", "run", "--location", "51.0,abc"),
+                "Invalid value: Invalid coordinates in '51.0,abc'",
+                id="other-value-error",
+            ),
+        ],
+    )
+    def test_a_refusal_and_any_other_value_error_print_different_labels(
+        self, argv: tuple[str, ...], error_line_start: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`optimize configs` on a one-home scenario with no finance block raises a ConfigurationError, and `home run` at a location whose longitude is not a number raises a plain ValueError. Each exits 1, printing nothing on stdout, and its stderr starts with its own label. It raises nothing."""
+        monkeypatch.chdir(tmp_path)
+        self._write_one_home_scenario()
+
+        result = runner.invoke(app, list(argv), catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()).startswith(error_line_start)
 
     @pytest.mark.parametrize(
         ("error_type", "label"),

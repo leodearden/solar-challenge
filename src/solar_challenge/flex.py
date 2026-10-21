@@ -24,6 +24,8 @@ the low band (100 + 4 = 104 ≠ 120); central and high happen to sum exactly.
 
 from dataclasses import dataclass
 
+from solar_challenge.errors import ConfigurationError
+
 
 @dataclass(frozen=True)
 class FlexibilityValueBand:
@@ -66,27 +68,27 @@ class FlexibilityValueBand:
     provenance: str
 
     def __post_init__(self) -> None:
-        """Validate domain constraints."""
+        """Validate domain constraints, raising ConfigurationError on violation."""
         if not self.name:
-            raise ValueError("name must be a non-empty string")
+            raise ConfigurationError("name must be a non-empty string")
         if not self.provenance:
-            raise ValueError("provenance must be a non-empty string")
+            raise ConfigurationError("provenance must be a non-empty string")
         if self.time_shift_gbp < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 f"time_shift_gbp must be non-negative, got {self.time_shift_gbp}"
             )
         if self.grid_services_per_home_gbp < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 f"grid_services_per_home_gbp must be non-negative, "
                 f"got {self.grid_services_per_home_gbp}"
             )
         if self.grid_services_per_kw_gbp < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 f"grid_services_per_kw_gbp must be non-negative, "
                 f"got {self.grid_services_per_kw_gbp}"
             )
         if self.total_gbp < 0:
-            raise ValueError(
+            raise ConfigurationError(
                 f"total_gbp must be non-negative, got {self.total_gbp}"
             )
 

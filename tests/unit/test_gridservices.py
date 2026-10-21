@@ -246,13 +246,13 @@ class TestGridServicesRateBands:
             resolve_grid_services_rate_band("extreme")
 
     def test_rate_band_rejects_negative_availability(self) -> None:
-        """GridServicesRateBand raises ValueError for negative availability."""
-        with pytest.raises(ValueError):
+        """GridServicesRateBand raises ConfigurationError for negative availability, naming the field."""
+        with pytest.raises(ConfigurationError, match="availability_gbp_per_kw_per_event"):
             GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=5.0)
 
     def test_rate_band_rejects_negative_utilisation(self) -> None:
-        """GridServicesRateBand raises ValueError for negative utilisation."""
-        with pytest.raises(ValueError):
+        """GridServicesRateBand raises ConfigurationError for negative utilisation, naming the field."""
+        with pytest.raises(ConfigurationError, match="utilisation_gbp_per_mwh"):
             GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=-5.0)
 
     def test_rate_band_is_frozen(self) -> None:
