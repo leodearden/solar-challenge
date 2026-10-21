@@ -759,6 +759,35 @@ class TestGenerateHomesFromDistributionInverterEfficiency:
         assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
 
 
+class TestGenerateHomesFromDistributionModuleEfficiency:
+    """Each home's PVConfig takes the module efficiency drawn for it; a fleet that draws none, or draws a null, leaves the module its own (None)."""
+
+    @staticmethod
+    def _fleet(n_homes: int, **pv: DistributionSpec) -> FleetDistributionConfig:
+        """A seeded fleet of *n_homes* 4 kW homes whose other PV settings are drawn from *pv*."""
+        return FleetDistributionConfig(
+            n_homes=n_homes,
+            pv=PVDistributionConfig(capacity_kw=4.0, **pv),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+    def test_a_fleet_drawing_no_module_efficiency_leaves_each_home_the_modules_own(self) -> None:
+        homes = generate_homes_from_distribution(self._fleet(2), Location.bristol())
+
+        assert [home.pv_config.module_efficiency for home in homes] == [None, None]
+
+    def test_each_home_takes_its_drawn_module_efficiency_a_null_the_modules_own(self) -> None:
+        fleet = self._fleet(
+            3,
+            module_efficiency=ShuffledPoolDistribution(values=(None, 0.15, 0.22), counts=(1, 1, 1)),
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert {home.pv_config.module_efficiency for home in homes} == {None, 0.15, 0.22}
+
+
 class TestGenerateHomesHouseholdOccupants:
     """How generate_homes_from_distribution draws each home's household occupants for LoadConfig's rule to read."""
 
