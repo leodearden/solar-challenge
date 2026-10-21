@@ -63,8 +63,10 @@ def surface_form(obj: object) -> str:
     a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor, and so does a functools.partial
-    of such a class. Such a constructor is either a functools.partial held as __init__,
+    it and the class in its MRO holding that constructor, and so does a routine inspect
+    reads as such a class, through functools.partial funcs, bound methods' __func__s and
+    the callables a wrapper records as __wrapped__, short of one that carries a
+    __signature__. Such a constructor is either a functools.partial held as __init__,
     unless the class holding it also holds a __new__ not defined in C, which inspect
     reads first; or one held by a class defined in C other than object.
     """
@@ -133,9 +135,9 @@ def named_classes(obj: object) -> set[type]:
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class whose constructor surface_form refuses, or a
-    functools.partial of such a class, raises the TypeError surface_form raises for it,
-    and a class with a member member_forms refuses, the TypeError member_forms raises
-    for it.
+    routine surface_form reads as such a class, raises the TypeError surface_form raises
+    for it, and a class with a member member_forms refuses, the TypeError member_forms
+    raises for it.
     A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
@@ -506,13 +508,28 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class a functools.partial wraps, as a partial's form is the one it leaves of that class."""
-    wrapped = obj
-    while isinstance(wrapped, functools.partial):
-        wrapped = wrapped.func
-    if inspect.isclass(wrapped):
-        _refuse_minor_dependent_constructor(wrapped)
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class whose constructor it reads: *obj*, or the class at the end of the chain inspect follows from it, as a partial's form is the one it leaves of the class it wraps and a wrapper's the one inspect reads of the callable it wraps."""
+    end = _signature_chain_end(obj)
+    if inspect.isclass(end):
+        _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
+
+
+def _signature_chain_end(obj: Callable[..., object]) -> Callable[..., object]:
+    """The callable whose own signature inspect.signature(*obj*) reads: the end of the chain it follows through a bound method's __func__, the callables a wrapper records as __wrapped__ up to one that carries a __signature__, and a functools.partial's func."""
+    if isinstance(obj, types.MethodType):
+        return _signature_chain_end(obj.__func__)
+    unwrapped: Callable[..., object] = inspect.unwrap(obj, stop=_carries_signature)
+    if unwrapped is not obj:
+        return _signature_chain_end(unwrapped)
+    if isinstance(obj, functools.partial):
+        return _signature_chain_end(obj.func)
+    return obj
+
+
+def _carries_signature(obj: object) -> bool:
+    """Whether *obj* carries a __signature__, the stop inspect.signature gives inspect.unwrap: inspect reads that signature as given, whatever *obj* wraps."""
+    return hasattr(obj, "__signature__")
 
 
 _C_CONSTRUCTOR_KINDS: tuple[type, ...] = (types.BuiltinFunctionType, types.WrapperDescriptorType)
