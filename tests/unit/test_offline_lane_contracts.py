@@ -149,8 +149,7 @@ def test_the_job_collects_its_suite_and_nothing_else(
     shared only with probes whose uv run options are the same, so it holds only
     the extras the job names.
     """
-    command = lane_command(project_root, job.name).command
-    collection = collect_lane_job(project_root, job.name, env=shared_uv_probe_environments.for_command(command))
+    collection = collect_lane_job(project_root, job.name, env_for=shared_uv_probe_environments.for_command)
 
     node_ids = collection.node_ids()
     assert node_ids, (

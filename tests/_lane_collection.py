@@ -13,7 +13,7 @@ Usage::
         suite_tests_matching,
     )
 
-    collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
+    collection = collect_lane_job(project_root, "e2e", env_for=shared_uv_probe_environments.for_command)
     assert collection.node_ids(), f"{collection.command!r} collected no tests\n{collection.describe()}"
     assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 
@@ -29,7 +29,7 @@ Usage::
 
 import shlex
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -39,14 +39,17 @@ from tests._command_runner import ShellCommand
 from tests._orchestrator_config import lane_command
 
 
-def collect_lane_job(project_root: Path, name: str, *, env: Mapping[str, str]) -> Collection:
-    """Run the offline-lane job *name* of *project_root* as the lane runs it, in *env*, collecting only.
+def collect_lane_job(project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]) -> Collection:
+    """Run the offline-lane job *name* of *project_root* as the lane runs it, collecting only, in env_for(its command).
+
+    env_for is given the very command that runs, so an environment keyed on it,
+    as SharedUvEnvironments.for_command keys one, fits what runs.
 
     It asserts the command collected, naming the job, its command and how the run
     ended. Whether what it collected is right is the calling lane test's own assertion.
     """
     lane_job = lane_command(project_root, name)
-    collection = collect(lane_job, env=env)
+    collection = collect(lane_job, env=env_for(lane_job.command))
     assert collection.returncode == pytest.ExitCode.OK, (
         f"the {lane_job.label} {lane_job.command!r} failed to collect\n{collection.describe()}"
     )

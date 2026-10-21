@@ -17,7 +17,6 @@ import pytest
 from tests._collect_only import CollectedTest, requires_uv
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._lane_collection import collect_lane_job, suite_tests_matching
-from tests._orchestrator_config import lane_command
 from tests._uv_env import SharedUvEnvironments
 
 _MATRIX_JOB = "interpreter-matrix"
@@ -44,8 +43,7 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
     """
-    command = lane_command(project_root, _MATRIX_JOB).command
-    collection = collect_lane_job(project_root, _MATRIX_JOB, env=shared_uv_probe_environments.for_command(command))
+    collection = collect_lane_job(project_root, _MATRIX_JOB, env_for=shared_uv_probe_environments.for_command)
 
     outside = collection.node_ids_outside(_MATRIX_SUITE)
     expected = _off_pin_interpreters(project_root)

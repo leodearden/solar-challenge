@@ -10,6 +10,7 @@ import os
 import shlex
 import sys
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -32,6 +33,11 @@ _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 _SUITE = "tests/suite"
 
 _SUITE_NODE_ID = f"{_SUITE}/test_in_suite.py::test_case"
+
+
+def _this_process_environment(command: str) -> Mapping[str, str]:
+    """env_for for the probe jobs here, which run this interpreter's pytest and no uv: this process's environment, whatever the command."""
+    return os.environ
 
 
 def _project_with_lane_job(project_root: Path, command: str, **job_fields: str) -> Path:
@@ -67,7 +73,7 @@ def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path
         "def test_alpha():\n    pass\n\n\ndef test_beta():\n    pass\n", encoding="utf-8"
     )
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.command == command
     assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
@@ -79,15 +85,19 @@ def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
     (project_root / "suite").mkdir()
     (project_root / "suite" / "test_in_suite.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
 
-def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
+def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_this_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """As an inherited UV_FROZEN must not reach a lane job's `uv run --locked`."""
+    """The command runs in the environment env_for returns when given that very command, not in this process's.
+
+    So an environment keyed on the command, as a shared uv environment is, fits
+    what runs, and an inherited UV_FROZEN never reaches a lane job's `uv run --locked`.
+    """
     project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_environment.py")
     (project_root / "test_environment.py").write_text(
         textwrap.dedent(
@@ -105,10 +115,15 @@ def test_the_jobs_command_runs_in_the_given_environment_not_this_process(
         encoding="utf-8",
     )
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
-    environment = {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
+    asked_for: list[str] = []
 
-    collection = collect_lane_job(project_root, "probe", env=environment)
+    def env_for(command: str) -> dict[str, str]:
+        asked_for.append(command)
+        return {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 
+    collection = collect_lane_job(project_root, "probe", env_for=env_for)
+
+    assert asked_for == [collection.command]
     assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
 
 
@@ -120,7 +135,7 @@ def test_a_job_whose_command_fails_to_collect_fails_naming_the_job_its_command_a
     (project_root / "test_broken.py").write_text(f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env=os.environ)
+        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert "'probe'" in str(failure.value)
     assert repr(command) in str(failure.value)
@@ -134,7 +149,7 @@ def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_comma
     (project_root / "test_empty.py").write_text("", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env=os.environ)
+        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert "'probe'" in str(failure.value)
     assert repr(command) in str(failure.value)
@@ -148,7 +163,7 @@ def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path:
     command = shlex.join([sys.executable, "-c", "print('this command never ran', 'pytest')"])
     project_root = _project_with_lane_job(tmp_path, command)
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     with pytest.raises(AssertionError) as failure:
         collection.node_ids()
@@ -163,7 +178,7 @@ def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_i
         (project_root / directory).mkdir()
         (project_root / directory / module).write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids_outside("suite") == ("suite_extra/test_beside_suite.py::test_case",), (
         collection.describe()
@@ -193,7 +208,7 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
     )
     (project_root / "test_contract_extra.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env=os.environ)
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
 
     assert collection.node_ids_outside("test_contract.py") == ("test_contract_extra.py::test_case",), (
         collection.describe()
