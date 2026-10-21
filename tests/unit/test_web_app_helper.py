@@ -12,6 +12,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, run_storage_of
 from tests._web_runs import store_home_run
@@ -60,6 +61,12 @@ def test_the_app_fixture_keeps_its_data_under_the_tests_own_tmp_path(app: Flask,
 
 def test_the_client_fixture_is_a_client_of_the_app_fixture(app: Flask, client: FlaskClient) -> None:
     assert client.application is app
+
+
+def test_the_storage_fixture_is_the_run_storage_the_app_fixture_keeps_its_runs_in(
+    app: Flask, storage: RunStorage
+) -> None:
+    assert storage is run_storage_of(app)
 
 
 @pytest.fixture
