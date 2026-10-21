@@ -80,12 +80,18 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
     them out, and γ adds dashboard_script_sources() here. The compiled dist/style.css,
     static/vendor and favicon.svg are not sources.
     """
+    python_sources = dashboard_python_sources()
+    assert {"charts.py", "theme_tokens.py"} <= python_sources.keys(), (
+        f"read the web Python modules {sorted(python_sources)}, without charts.py or "
+        "theme_tokens.py, the modules that read and draw the chart colours, so this scan would "
+        "pass without reading them: fix tests/_dashboard_sources.py's dashboard_python_sources"
+    )
     sources = {
         THEME_TOKENS_KEY: theme_tokens_source(),
         TAILWIND_CONFIG_KEY: tailwind_config_source(),
         HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
         **dashboard_template_sources(),
-        **dashboard_python_sources(),
+        **python_sources,
     }
 
     written = {
