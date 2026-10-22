@@ -108,13 +108,10 @@ _DEFAULT_CONSUMPTION_BY_HOUSEHOLD_SIZE = (
 )
 
 
-def _default_household_consumption() -> str:
-    """The annual consumption of LoadConfig(), the simulator's default household, and that household's size."""
-    household = LoadConfig()
-    return (
-        f"{_KWH.value(household.get_annual_consumption())}, which the simulator assumes "
-        f"for its default household of {_occupants(household.household_occupants)}"
-    )
+_DEFAULT_HOUSEHOLD_CONSUMPTION = (
+    f"{_KWH.value(LoadConfig().get_annual_consumption())}, which the simulator assumes "
+    f"for its default household of {_occupants(LoadConfig().household_occupants)}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +726,7 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "description": (
                             "Household annual electricity consumption in kWh "
                             "({:g}–{:g}; ".format(*FLEET_COMPONENTS["load"].fixed_range)
-                            + f"e.g. {_default_household_consumption()})."
+                            + f"e.g. {_DEFAULT_HOUSEHOLD_CONSUMPTION})."
                         ),
                     },
                     "goal": {
