@@ -59,7 +59,7 @@ clear_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 def _clear_june_in_tmp_path(
     clear_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Work in tmp_path, where each test writes its config and the sweep its output, on the clear _DAY that clear_june_tmy serves as the TMY of Bristol, where a config with no location simulates."""
+    """Work in tmp_path, where each test writes its config and the sweep its output."""
     monkeypatch.chdir(tmp_path)
 
 

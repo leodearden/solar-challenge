@@ -27,7 +27,7 @@ bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).bristol_
 def _bristol_june_tmy_in_tmp_path(
     bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Work in tmp_path on the clear _DAY, the day `home quick` starts on, that bristol_june_tmy serves as Bristol's TMY.
+    """Work in tmp_path.
 
     Before the fix, a command reads the capacity as no battery and simulates,
     so it fails its assertion instead of reaching PVGIS.

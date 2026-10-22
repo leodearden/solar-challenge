@@ -99,7 +99,7 @@ clear_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).br
 def clear_june_in_tmp_path(
     clear_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Work in tmp_path, where each test writes its config, on the clear 21 June that clear_june_tmy serves as the TMY of Bristol, where a config with no location simulates."""
+    """Work in tmp_path, where each test writes its config."""
     monkeypatch.chdir(tmp_path)
 
 
