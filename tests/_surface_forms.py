@@ -676,9 +676,7 @@ def _spelling_modules(
 
 def _constructor_holder(cls: type) -> type:
     """The class in *cls*'s MRO whose own namespace holds __init__ or __new__, the constructor inspect.signature(*cls*) reads."""
-    return next(
-        base for base in cls.__mro__ if "__init__" in vars(base) or "__new__" in vars(base)
-    )
+    return next(_namespace_holders(cls.__mro__, "__init__", "__new__"))
 
 
 def _signature_holder(cls: type) -> type:
@@ -693,14 +691,13 @@ def _signature_holder(cls: type) -> type:
     __getattr__ or a descriptor provides it.
     """
     metaclass_mro = inspect.getmro(type(cls))
-    metaclass_holder = _namespace_holder(metaclass_mro, "__signature__")
-    holder = _namespace_holder(cls.__mro__, "__signature__")
+    metaclass_holder = next(_namespace_holders(metaclass_mro, "__signature__"), None)
+    holder = next(_namespace_holders(cls.__mro__, "__signature__"), None)
+    lookups = _namespace_holders(
+        (meta for meta in metaclass_mro if meta not in (type, object)), "__getattribute__"
+    )
     if (
-        _namespace_holder(
-            tuple(meta for meta in metaclass_mro if meta not in (type, object)),
-            "__getattribute__",
-        )
-        is not None
+        next(lookups, None) is not None
         or (
             metaclass_holder is not None
             and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
@@ -718,9 +715,9 @@ def _signature_holder(cls: type) -> type:
     return holder
 
 
-def _namespace_holder(mro: tuple[type, ...], name: str) -> type | None:
-    """The first class in *mro* whose own namespace holds *name*, or None if none does."""
-    return next((base for base in mro if name in vars(base)), None)
+def _namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
+    """The classes among *classes*, in their order, whose own namespace holds one of *names*."""
+    return (cls for cls in classes if any(name in vars(cls) for name in names))
 
 
 def _holds_generated_init(cls: type) -> bool:
