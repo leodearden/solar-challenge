@@ -212,20 +212,24 @@ class StoredHomeRun:
         """The run's summary.json document: its SummaryStatistics' field tree."""
         return _serialize_dataclass(self.summary)
 
-    def write(self, run_dir: Path) -> None:
-        """Write the run's documents into *run_dir*, creating it if need be: config.json, summary.json and data.parquet."""
+    def write(self, run_dir: Path, config_document: dict[str, Any], summary_document: dict[str, Any]) -> None:
+        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, and data.parquet.
+
+        The two documents are the run's config_document() and summary_document(), which its
+        save builds once for these files and its runs row alike.
+        """
         # Create run directory
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Write config to JSON
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
-            json.dump(self.config_document(), f, indent=2)
+            json.dump(config_document, f, indent=2)
 
         # Write summary to JSON
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
-            json.dump(self.summary_document(), f, indent=2)
+            json.dump(summary_document, f, indent=2)
 
         # Save time series DataFrame to parquet
         df = self.results.to_dataframe()
@@ -274,8 +278,12 @@ class StoredFleetRun:
         """The run's summary.json document: its FleetSummary's field tree."""
         return _serialize_dataclass(self.summary)
 
-    def write(self, run_dir: Path) -> None:
-        """Write the run's documents into *run_dir*, creating it if need be: config.json, summary.json, and in homes/ each home's time series and summary."""
+    def write(self, run_dir: Path, config_document: dict[str, Any], summary_document: dict[str, Any]) -> None:
+        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, and in homes/ each home's time series and summary.
+
+        The two documents are the run's config_document() and summary_document(), which its
+        save builds once for these files and its runs row alike.
+        """
         # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
         homes_dir = run_dir / "homes"
@@ -284,12 +292,12 @@ class StoredFleetRun:
         # Save fleet config (list of HomeConfigs) to JSON
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
-            json.dump(self.config_document(), f, indent=2)
+            json.dump(config_document, f, indent=2)
 
         # Save fleet summary to JSON
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
-            json.dump(self.summary_document(), f, indent=2)
+            json.dump(summary_document, f, indent=2)
 
         # Save per-home results to parquet files in homes/ subdirectory
         for i, (home_result, home_summary) in enumerate(zip(self.fleet_results.per_home_results, self.home_summaries, strict=True)):

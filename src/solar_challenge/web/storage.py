@@ -359,20 +359,22 @@ class RunStorage:
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
+        config_document = stored.config_document()
+        summary_document = stored.summary_document()
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
             name=name or config.name or "Unnamed Run",
             run_type="home",
-            config=stored.config_document(),
-            summary=stored.summary_document(),
+            config=config_document,
+            summary=summary_document,
             status=status,
             error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=1,
         )
-        stored.write(run_dir)
+        stored.write(run_dir, config_document, summary_document)
         self._upsert_run_row(row)
 
     def save_home_run_from_results(
@@ -444,20 +446,22 @@ class RunStorage:
             summary=fleet_summary,
             home_summaries=tuple(per_home_summaries),
         )
+        config_document = stored.config_document()
+        summary_document = stored.summary_document()
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
             name=name or "Unnamed Fleet Run",
             run_type="fleet",
-            config=stored.config_document(),
-            summary=stored.summary_document(),
+            config=config_document,
+            summary=summary_document,
             status=status,
             error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=len(fleet_results.home_configs),
         )
-        stored.write(run_dir)
+        stored.write(run_dir, config_document, summary_document)
         self._upsert_run_row(row)
 
     def save_fleet_run_from_results(
