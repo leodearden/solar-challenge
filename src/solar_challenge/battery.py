@@ -6,10 +6,11 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
 
+from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 if TYPE_CHECKING:
-    from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+    from solar_challenge.config import DispatchStrategyConfig
 
 
 def _validate_soc_and_efficiency(
@@ -165,7 +166,7 @@ class BatteryConfig:
     max_discharge_kw: float = 2.5
     name: str = ""
     dispatch_strategy: Optional["DispatchStrategyConfig"] = None
-    grid_charging: Optional["GridChargeConfig"] = None
+    grid_charging: Optional[GridChargeConfig] = None
     min_soc_fraction: float = 0.1
     max_soc_fraction: float = 0.9
     charge_efficiency: float = 0.975

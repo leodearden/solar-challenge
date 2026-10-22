@@ -625,6 +625,22 @@ null, a battery's unset `efficiency` included. Consumers whose scenario files
 rely on a null meaning `None`, or on those conversions, re-check them when they
 re-pin.
 
+**Unreleased on main** (task 786): `GridChargeConfig` is defined in
+`solar_challenge.dispatch`, with the same constructor; import it as
+`from solar_challenge.dispatch import GridChargeConfig`.
+`solar_challenge.config` still binds the name at runtime, so code that imports
+it from there keeps running, but config does not export it, so `mypy --strict`
+refuses that import ("does not explicitly export attribute").
+`TOUOptimizedStrategy` and `PeakShavingStrategy` refuse a value with
+`ConfigurationError`, a `ValueError`, where the 0.5.0 tag raises a plain
+`ValueError`. Their messages name `peak_hours`, with the rule
+`0 <= start < end <= 24` and the period that breaks it, or `import_limit_kw`
+and its value. `TOUOptimizedStrategy` also refuses an empty `peak_hours`,
+which the tag accepts and runs as a strategy that never discharges. The
+platform changes `optimiser/planner.py`'s import of `GridChargeConfig` when it
+re-pins; consumers that catch `ValueError`, and pass at least one peak period,
+need no other change.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

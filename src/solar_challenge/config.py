@@ -32,6 +32,7 @@ import yaml
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.dataclass_instance import DataclassInstance
+from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
@@ -277,25 +278,6 @@ class PVDistributionConfig:
     inverter_efficiency: DistributionSpec = 0.96
     system_age_years: DistributionSpec = 0.0
     degradation_rate_per_year: DistributionSpec = 0.005
-
-
-@dataclass(frozen=True)
-class GridChargeConfig:
-    """Configuration for grid-charging (battery arbitrage) mode.
-
-    Attributes:
-        target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
-    """
-
-    target_soc_fraction: float = 0.9
-
-    def __post_init__(self) -> None:
-        """Validate grid-charge configuration."""
-        if not (0 < self.target_soc_fraction <= 1):
-            raise ConfigurationError(
-                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
-            )
 
 
 @dataclass
