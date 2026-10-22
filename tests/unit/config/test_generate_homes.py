@@ -5,6 +5,7 @@ import json
 import math
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional, Union
 
@@ -399,6 +400,41 @@ class TestGenerateHomesRefusesADrawThatIsNotFinite:
 
         assert len(capacities) == 20
         assert all(1.0 <= capacity <= 10.0 for capacity in capacities)
+
+
+class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
+    """generate_homes_from_distribution refuses an EV hour that is an infinity or a NaN, whichever spec gives it, naming its setting and the hour."""
+
+    @pytest.mark.parametrize("hour", [math.inf, -math.inf, math.nan], ids=repr)
+    @pytest.mark.parametrize(
+        "spec_holding",
+        [
+            pytest.param(lambda hour: hour, id="scalar"),
+            pytest.param(lambda hour: {"type": "fixed", "value": hour}, id="fixed"),
+            pytest.param(
+                lambda hour: {"type": "weighted_discrete", "values": [hour], "weights": [1]},
+                id="weighted_discrete",
+            ),
+            pytest.param(
+                lambda hour: {
+                    "type": "shuffled_pool",
+                    "values": [hour],
+                    "counts": [_EVERY_SETTING_DRAWN["n_homes"]],
+                },
+                id="shuffled_pool",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
+    def test_an_hour_that_is_not_finite_is_refused_naming_its_setting_and_the_hour(
+        self, field: str, spec_holding: Callable[[float], object], hour: float
+    ) -> None:
+        """An infinite or NaN hour given as a number, a fixed value, or a weighted_discrete or shuffled_pool outcome is refused naming its setting and the hour, never escaping as an OverflowError."""
+        block = {**_EVERY_SETTING_DRAWN, "ev": {**_EVERY_SETTING_DRAWN["ev"], field: spec_holding(hour)}}
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(parse_fleet_distribution_config(block), Location.bristol())
+        assert str(exc_info.value) == f"ev.{field} must be a finite number, got {hour!r}"
 
 
 class TestHeatPumpDistribution:

@@ -1846,6 +1846,24 @@ class _DistributionSampler:
             return _nearest_count(value, spec, setting)
         return value
 
+    def sample_finite(self, spec: DistributionSpec, setting: str) -> Optional[float]:
+        """Sample *setting* from *spec*, refusing an infinity or a NaN whichever spec gives it.
+
+        Any other value is returned as sample gives it.
+
+        Args:
+            spec: The setting's distribution specification
+            setting: The setting's path in the fleet distribution, e.g. 'ev.arrival_hour'
+
+        Raises:
+            ConfigurationError: As sample does; or if the value is an infinity or a
+                NaN, naming *setting* and the value.
+        """
+        value = self.sample(spec, setting)
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ConfigurationError(f"{setting} must be a finite number, got {value!r}")
+        return value
+
     def sample_with_context(
         self, spec: DistributionSpec, context: dict[str, Optional[float]], setting: str
     ) -> Optional[float]:
@@ -1908,8 +1926,10 @@ def generate_homes_from_distribution(
             setting; if a normal or uniform draw is not a finite number, naming the
             setting and the draw; if load.household_occupants is a normal or uniform
             with no whole number from its min to its max, naming it, the min and the
-            max; if a sampled PV capacity is not positive; or if a sampled heat pump
-            type is not one of heat_pump.HEAT_PUMP_TYPES.
+            max; if a sampled PV capacity is not positive; if a sampled heat pump
+            type is not one of heat_pump.HEAT_PUMP_TYPES; or if an EV hour is an
+            infinity or a NaN, whichever spec gives it, naming its setting and the
+            hour.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
@@ -2033,8 +2053,10 @@ def generate_homes_from_distribution(
         if config.ev is not None:
             charger_type = sampler.sample(config.ev.charger_type, "ev.charger_type")
             if charger_type is not None:
-                arrival_hour_val = sampler.sample(config.ev.arrival_hour, "ev.arrival_hour")
-                departure_hour_val = sampler.sample(config.ev.departure_hour, "ev.departure_hour")
+                arrival_hour_val = sampler.sample_finite(config.ev.arrival_hour, "ev.arrival_hour")
+                departure_hour_val = sampler.sample_finite(
+                    config.ev.departure_hour, "ev.departure_hour"
+                )
                 required_charge_val = sampler.sample(
                     config.ev.required_charge_kwh, "ev.required_charge_kwh"
                 )
