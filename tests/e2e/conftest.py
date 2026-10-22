@@ -57,13 +57,13 @@ from werkzeug.serving import make_server
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import get_job_manager, get_storage
+from solar_challenge.web.shared import get_job_manager
 from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
-from tests._web_app import build_test_app
+from tests._web_app import build_test_app, run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
 
 if TYPE_CHECKING:
@@ -104,8 +104,7 @@ def _e2e_storage(_e2e_app: Flask) -> RunStorage:
 
     create_app built its database schema, so a fixture can seed it before the server starts.
     """
-    with _e2e_app.app_context():
-        return get_storage()
+    return run_storage_of(_e2e_app)
 
 
 @pytest.fixture(scope="session")

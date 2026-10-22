@@ -39,12 +39,6 @@ from tests._web_runs import store_fleet_run, store_home_run
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
 
 
-@pytest.fixture
-def storage(app: Flask) -> RunStorage:
-    """Create a RunStorage instance using the test app config."""
-    return RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"])
-
-
 def _insert_test_run(
     app: Flask,
     run_id: str = "test-run-001",

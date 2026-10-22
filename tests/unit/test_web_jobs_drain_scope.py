@@ -13,7 +13,7 @@ SCENARIOS = """
     from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.shared import get_job_manager
 
-    from tests._web_app import build_test_app
+    from tests._web_app import build_test_app, run_storage_of
 
     HOME_JOB = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
 
@@ -28,7 +28,7 @@ SCENARIOS = """
     def module_app(tmp_path_factory):
         app = build_test_app(tmp_path_factory.mktemp("module_app"))
         app.extensions["job_manager"].shutdown(wait=True)
-        app.extensions["job_manager"] = JobManager(app.extensions["storage"], simulate_home=no_simulation)
+        app.extensions["job_manager"] = JobManager(run_storage_of(app), simulate_home=no_simulation)
         yield app
         with app.app_context():
             get_job_manager().shutdown(wait=True)

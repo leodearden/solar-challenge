@@ -28,15 +28,10 @@ from tests._plotly_figure import traces, traces_by_name
 from tests._web_runs import store_fleet_run
 
 
-def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:
-    """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
+def _save_fleet_run(storage: RunStorage, fleet: FleetResults, name: str | None = None) -> str:
+    """Save *fleet* to *storage* as a completed fleet run named *name*, as a finished job saves it; return its run id."""
     run_id = str(uuid.uuid4())
-    store_fleet_run(
-        RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"]),
-        run_id,
-        fleet,
-        name=name,
-    )
+    store_fleet_run(storage, run_id, fleet, name=name)
     return run_id
 
 
@@ -192,14 +187,14 @@ class TestFleetResultsRoute:
         assert response.status_code == 302
 
     def test_fleet_results_page_shows_the_saved_fleet_summary_in_nine_stat_cards(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A saved two-home fleet run's results page shows nine stat cards, each reading the saved fleet summary.
 
         Each home self-consumes 18 kWh, exports 54 kWh and imports 27 kWh in its one day.
         """
         run_id = _save_fleet_run(
-            app,
+            storage,
             make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
         )
         response = client.get(f"/results/fleet/{run_id}")
@@ -222,7 +217,7 @@ class TestFleetResultsRoute:
         } == expected_cards
 
     def test_fleet_results_stat_cards_round_each_saved_total_and_ratio_once(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Each stat card rounds the saved fleet summary's value once, to the card's own precision.
 
@@ -231,7 +226,7 @@ class TestFleetResultsRoute:
         to 4 dp) would move the card's last digit: the fleet's 9.046 kWh export would show 9.1.
         """
         run_id = _save_fleet_run(
-            app,
+            storage,
             make_fleet_results(n_homes=2, self_kwh=5.0, export_kwh=4.523, import_kwh=2.8745, days=1),
         )
         response = client.get(f"/results/fleet/{run_id}")
@@ -251,10 +246,10 @@ class TestFleetResultsRoute:
         } == expected_cards
 
     def test_fleet_results_page_header_reads_the_saved_fleets_home_count_and_days(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """The header under the title reads the saved fleet's number of homes and simulated days."""
-        run_id = _save_fleet_run(app, make_fleet_results(n_homes=3, days=2))
+        run_id = _save_fleet_run(storage, make_fleet_results(n_homes=3, days=2))
 
         response = client.get(f"/results/fleet/{run_id}")
 
@@ -263,14 +258,14 @@ class TestFleetResultsRoute:
         assert f"3 homes — 2-day simulation — Run ID: {run_id[:8]}…" in texts(page)
 
     def test_fleet_results_page_is_titled_with_the_name_its_run_was_saved_under(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """The page's h1 and its document title name the run as Run History lists it.
 
         The name's markup characters show as text.
         """
         run_id = _save_fleet_run(
-            app, make_fleet_results(n_homes=2, days=1), name="Phase 1 <South> & Co"
+            storage, make_fleet_results(n_homes=2, days=1), name="Phase 1 <South> & Co"
         )
 
         response = client.get(f"/results/fleet/{run_id}")
@@ -281,11 +276,11 @@ class TestFleetResultsRoute:
         assert "Results: Phase 1 <South> & Co - Solar Challenge" in texts(page)
 
     def test_fleet_results_page_title_follows_a_run_history_rename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Renaming a run in Run History retitles its results page."""
         run_id = _save_fleet_run(
-            app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
+            storage, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "Renamed Fleet"})
         assert rename.status_code == 200
@@ -296,11 +291,11 @@ class TestFleetResultsRoute:
         assert headings(response.get_data(as_text=True))[0] == "Renamed Fleet"
 
     def test_fleet_results_page_of_a_run_with_no_database_row_is_titled_fleet_simulation(
-        self, app: Flask, client: FlaskClient
+        self, app: Flask, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A run whose files outlived its database row, as after the database is recreated, still has a title: the page's own."""
         run_id = _save_fleet_run(
-            app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
+            storage, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
         with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))

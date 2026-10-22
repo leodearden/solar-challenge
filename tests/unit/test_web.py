@@ -32,12 +32,6 @@ from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_runs import store_fleet_run, store_home_run
 
 
-def _run_storage(app: Flask) -> RunStorage:
-    """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
-    storage: RunStorage = app.extensions["storage"]
-    return storage
-
-
 def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> HomeConfig:
     """The 4 kW PV, 3500 kWh home named *name* that the page tests save, with *battery_config*'s battery, none by default."""
     return HomeConfig(
@@ -49,7 +43,7 @@ def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> H
 
 
 def _save_home_run(
-    app: Flask,
+    storage: RunStorage,
     name: str,
     results: SimulationResults,
     *,
@@ -57,7 +51,7 @@ def _save_home_run(
     status: RunStatus = "completed",
     battery_config: BatteryConfig | None = None,
 ) -> str:
-    """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
+    """Save *results* to *storage* as a home run named *name*, as a finished job saves its run; return its run id.
 
     The run's home is _home_config's, with *battery_config*'s battery, none by default.
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
@@ -65,7 +59,7 @@ def _save_home_run(
     """
     run_id = str(uuid.uuid4())
     store_home_run(
-        _run_storage(app),
+        storage,
         run_id,
         _home_config(name, battery_config=battery_config),
         results,
@@ -77,19 +71,19 @@ def _save_home_run(
 
 
 def _save_fleet_run(
-    app: Flask,
+    storage: RunStorage,
     name: str,
     per_home_results: list[SimulationResults],
     *,
     created_at: str | None = None,
 ) -> str:
-    """Save a completed fleet run named *name* to *app*'s store, one home per item of *per_home_results*, as a finished job does; return its run id.
+    """Save a completed fleet run named *name* to *storage*, one home per item of *per_home_results*, as a finished job does; return its run id.
 
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
     store_fleet_run(
-        _run_storage(app),
+        storage,
         run_id,
         FleetResults(
             per_home_results=per_home_results,
@@ -163,12 +157,12 @@ class TestDashboardRoute:
         assert texts(page).count("No simulation runs yet.") == 1
 
     def test_dashboard_lists_saved_runs_in_recent_runs_table(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
         run_names = ("North Roof", "South Roof")
         for run_name in run_names:
-            _save_home_run(app, run_name, make_sinusoidal_sim_results(days=1))
+            _save_home_run(storage, run_name, make_sinusoidal_sim_results(days=1))
         response = client.get("/")
         page = response.get_data(as_text=True)
         page_texts = texts(page)
@@ -177,17 +171,17 @@ class TestDashboardRoute:
         assert "No simulation runs yet." not in page_texts
 
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
         results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
-            app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
+            storage, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
         )
         failed_run_id = _save_home_run(
-            app, "South Roof", results, created_at="2024-06-03T09:00:00+00:00", status="failed"
+            storage, "South Roof", results, created_at="2024-06-03T09:00:00+00:00", status="failed"
         )
-        home_run_id = _save_home_run(app, "North Roof", results, created_at="2024-06-01T09:00:00+00:00")
+        home_run_id = _save_home_run(storage, "North Roof", results, created_at="2024-06-01T09:00:00+00:00")
         response = client.get("/")
         page = response.get_data(as_text=True)
         assert texts_after(page, "Status", 12) == [
@@ -204,13 +198,13 @@ class TestDashboardRoute:
             assert element_count(page, "a", {"href": link}) == 1, name
 
     def test_dashboard_stats_count_and_total_only_the_completed_runs(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
         results = make_sinusoidal_sim_results(days=1)
-        _save_home_run(app, "North Roof", results)
-        _save_fleet_run(app, "Community Fleet", [results, results])
-        _save_home_run(app, "South Roof", results, status="failed")
+        _save_home_run(storage, "North Roof", results)
+        _save_fleet_run(storage, "Community Fleet", [results, results])
+        _save_home_run(storage, "South Roof", results, status="failed")
         response = client.get("/")
         page = response.get_data(as_text=True)
         completed_homes = 3
@@ -270,20 +264,20 @@ class TestSidebarCurrentPage:
         assert current_page_links(response.get_data(as_text=True)) == ["/", "/"]
 
     def test_the_home_results_page_marks_no_link_current(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A saved home run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
         response = client.get(f"/results/home/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
 
     def test_the_fleet_results_page_marks_no_link_current(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A saved fleet run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
         results = make_sinusoidal_sim_results(days=1)
-        run_id = _save_fleet_run(app, "Community Fleet", [results, results])
+        run_id = _save_fleet_run(storage, "Community Fleet", [results, results])
         response = client.get(f"/results/fleet/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
@@ -309,14 +303,14 @@ class TestHomeResultsRoute:
         assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
         assert "Run not found." in texts(response.get_data(as_text=True))
 
-    def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
+    def test_home_results_after_simulation(self, storage: RunStorage, client: FlaskClient) -> None:
         """A saved run's results page renders its Overview charts and energy totals.
 
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
         results = make_sinusoidal_sim_results(days=1)
-        run_id = _save_home_run(app, "Test Run", results)
+        run_id = _save_home_run(storage, "Test Run", results)
         summary = calculate_summary(results)
 
         response = client.get(f"/results/home/{run_id}")
@@ -330,7 +324,7 @@ class TestHomeResultsRoute:
             assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
 
     def test_home_results_stat_cards_round_each_saved_total_and_ratio_once(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Each stat card rounds its saved value once, to the card's own precision.
 
@@ -339,7 +333,7 @@ class TestHomeResultsRoute:
         move the card's last digit: 9.046 kWh would show 9.1.
         """
         run_id = _save_home_run(
-            app,
+            storage,
             "North Roof",
             make_sim_results(self_kwh=10.0, export_kwh=9.046, import_kwh=5.749, days=1),
         )
@@ -361,13 +355,13 @@ class TestHomeResultsRoute:
         } == expected_cards
 
     def test_home_results_page_title_follows_a_run_history_rename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Renaming a run in Run History retitles its results page.
 
         The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
         """
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
@@ -379,10 +373,10 @@ class TestHomeResultsRoute:
         assert "Results: South Roof - Solar Challenge" in texts(page)
 
     def test_home_results_page_of_a_run_with_no_database_row_is_titled_home_simulation(
-        self, app: Flask, client: FlaskClient
+        self, app: Flask, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
         with Database(Path(app.config["DATABASE"])).transaction() as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
@@ -392,11 +386,11 @@ class TestHomeResultsRoute:
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
 
     def test_home_results_battery_soc_chart_marks_the_saved_batterys_soc_limits(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """10% and 95% of an 8 kWh battery at 90% SoH are 0.72 and 6.84 kWh, where 10% and 90% of its nameplate would be 0.8 and 7.2."""
         run_id = _save_home_run(
-            app,
+            storage,
             "North Roof",
             make_sinusoidal_sim_results(days=1),
             battery_config=BatteryConfig(

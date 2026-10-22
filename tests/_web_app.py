@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Build the web dashboard's Flask app for tests, with its database and run files under one directory.
+"""The web dashboard's Flask app for tests, its database and run files under one directory, and the RunStorage it keeps its runs in.
 
-The application factory is imported when build_test_app is called, not when this
-module loads. So importing this module needs no web extra, and a call made after a
-test drops solar_challenge.web.app from sys.modules imports the factory anew.
+build_test_app and run_storage_of import the web package when they are called, not
+when this module loads. So importing this module needs no web extra, and a call made
+after a test drops solar_challenge.web.app from sys.modules imports the factory anew.
 
 Usage::
 
-    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory
+    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, run_storage_of
 
     app = build_test_app(tmp_path)
+    storage = run_storage_of(app)
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 """
 
@@ -20,6 +21,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from flask import Flask
+
+    from solar_challenge.web.storage import RunStorage
 
 
 def build_test_app(
@@ -43,6 +46,14 @@ def build_test_app(
             **secret_key_config,
         }
     )
+
+
+def run_storage_of(app: Flask) -> RunStorage:
+    """Return the RunStorage *app* keeps its runs in: the one its pages read, through the accessor they read it with."""
+    from solar_challenge.web.shared import get_storage
+
+    with app.app_context():
+        return get_storage()
 
 
 def point_store_config_at_a_missing_directory(app: Flask, directory: Path) -> None:
