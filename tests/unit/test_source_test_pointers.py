@@ -9,7 +9,8 @@ so a file git ignores is not there to point at.
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
 pytest runs as written and this gate resolves. A name the Python module's own code uses, such as a parameter called
-test_config, is no pointer.
+test_config, is no pointer. Nor, outside a node-id, is a name written straight after a dot, so a third-party name that
+reads as a test, such as Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
 """
 
 import ast
@@ -299,7 +300,8 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
     )
 
     assert _dangling(project, _pointers(project, [source])) == [
-        "src/pkg/module.py:1: tests/unit/test_absent.py: tests/unit/test_absent.py does not exist, or git ignores it",
+        "src/pkg/module.py:1: tests/unit/test_absent.py:"
+        " tests/unit/test_absent.py does not exist, or git ignores it",
         "src/pkg/module.py:2: tests/unit/test_pointed_at.py::test_member:"
         " tests/unit/test_pointed_at.py defines no test_member at its top level",
         "src/pkg/module.py:3: tests/unit/test_pointed_at.py::TestGroup::test_absent: TestGroup defines no test_absent",
@@ -349,6 +351,7 @@ def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -
         "// test_member in tests/unit/test_pointed_at.py says why.\n"
         "// tests/unit/test_pointed_at.py's test_top shows it.\n"
         "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
+        "// Its response is a werkzeug.test.TestResponse.\n"
         "// Not a test name: src/tests/test_gone.py\n",
     )
 
