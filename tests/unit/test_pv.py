@@ -377,20 +377,10 @@ def overcast_january_daytime() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
-def sapm_module() -> dict[str, float]:
-    return sapm_library_module()
-
-
-@pytest.fixture
-def rated_sapm_module(sapm_module: dict[str, float]) -> dict[str, float]:
-    """sapm_module rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
-    return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
-
-
-@pytest.fixture
-def module_beyond_every_mppt_window() -> dict[str, float]:
-    return default_module_beyond_every_mppt_window()
+def rated_sapm_module() -> dict[str, float]:
+    """sapm_library_module() rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
+    module = sapm_library_module()
+    return {**module, "STC": module["Impo"] * module["Vmpo"]}
 
 
 class TestInverterMatchesStringVoltage:
