@@ -20,23 +20,18 @@ from solar_challenge.web.charts import (
     power_flow_timeline,
 )
 from solar_challenge.web.database import Database
-from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._html_page import headings, texts, texts_after
 from tests._plotly_figure import traces, traces_by_name
+from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run
 
 
 def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:
     """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
     run_id = str(uuid.uuid4())
-    store_fleet_run(
-        RunStorage(Database(Path(app.config["DATABASE"])), app.config["DATA_DIR"]),
-        run_id,
-        fleet,
-        name=name,
-    )
+    store_fleet_run(run_storage_of(app), run_id, fleet, name=name)
     return run_id
 
 
