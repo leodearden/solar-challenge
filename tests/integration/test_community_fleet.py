@@ -142,7 +142,7 @@ def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
     return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
 
 
-clear_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
+bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
 
 
 # ---------------------------------------------------------------------------
@@ -272,12 +272,9 @@ class TestDemoScenario:
         assert cfg.community_battery.capacity_kwh > 0
 
 
-@pytest.mark.usefixtures("clear_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestFleetRunCommunityCLI:
-    """CLI integration tests for `fleet run` with community wiring.
-
-    They run on the clear June day clear_june_tmy serves as Bristol's TMY.
-    """
+    """CLI integration tests for `fleet run` with community wiring."""
 
     def test_community_run_exits_zero(self, tmp_path: Path) -> None:
         """fleet run with community block: exit code 0."""
@@ -346,7 +343,7 @@ class TestFleetRunCommunityCLI:
         )
 
 
-@pytest.mark.usefixtures("clear_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestFleetRunNoCommunityPath:
     """Tests for the community-LESS path and guard against report-without-block.
 
@@ -723,12 +720,12 @@ class TestCommunityBillingAB:
         assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
 
 
-@pytest.mark.usefixtures("clear_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
-    Weather comes from clear_june_tmy.  Covers the _print_community_section
-    billing rows and the --community-report billing section.
+    Covers the _print_community_section billing rows and the
+    --community-report billing section.
     """
 
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
