@@ -25,6 +25,8 @@ from solar_challenge.pv import (
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
+from tests._pv_modules import pvwatts_300_w_module, sapm_library_module
+from tests._pv_runs import per_array
 
 
 class TestCreatePVSystem:
@@ -322,12 +324,6 @@ def _wiring(system: pvlib.pvsystem.PVSystem) -> list[tuple[int, int]]:
     return [(array.modules_per_string, array.strings) for array in system.arrays]
 
 
-def _dc_per_array(chain: pvlib.modelchain.ModelChain) -> tuple[pd.DataFrame, ...]:
-    """The run's DC results, one frame per array: pvlib gives a bare frame for one array."""
-    dc = chain.results.dc
-    return dc if isinstance(dc, tuple) else (dc,)
-
-
 def _usable_cec_inverter_numbers() -> pd.DataFrame:
     """The CEC catalogue's inverters with a positive finite rating, start-up power, nominal voltage and MPPT window, as numbers."""
     catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
@@ -366,8 +362,7 @@ def overcast_january_daytime() -> pd.DataFrame:
 
 @pytest.fixture
 def sapm_module() -> dict[str, float]:
-    """The first row of pvlib's SAPM module library (SandiaMod), which rates its module by neither a pdc0 nor an STC."""
-    return dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
+    return sapm_library_module()
 
 
 @pytest.fixture
@@ -520,7 +515,7 @@ class TestBatteryInverterChargersAreNotPicked:
         chain.run_model(clear_june_daytime)
         floor_v = chain.system.inverter_parameters["Mppt_low"]
 
-        arrays = _dc_per_array(chain)
+        arrays = per_array(chain.results.dc)
         dc_wh = sum(array["p_mp"].sum() for array in arrays)
         below_floor_wh = sum(array["p_mp"][array["v_mp"] < floor_v].sum() for array in arrays)
         share = below_floor_wh / dc_wh
@@ -798,9 +793,6 @@ class TestInverterModelMatchesModuleModel:
         )
 
 
-_PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
-
-
 def _wired_module_count(system: pvlib.pvsystem.PVSystem) -> int:
     """The modules wired across all of the system's arrays."""
     return sum(array.modules_per_string * array.strings for array in system.arrays)
@@ -816,7 +808,7 @@ def _dc_power_at_stc_w(config: PVConfig) -> float:
     chain.run_model_from_effective_irradiance((at_stc,) * len(chain.system.arrays))
     return sum(
         float((dc["p_mp"] if isinstance(dc, pd.DataFrame) else dc).iloc[0])
-        for dc in _dc_per_array(chain)
+        for dc in per_array(chain.results.dc)
     )
 
 
@@ -829,7 +821,7 @@ class TestWiredDcCapacity:
             PVConfig(capacity_kw=0.3),
             *SYSTEM_SIZE_CONFIGS,
             pytest.param(
-                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
                 id="pvwatts-module-without-STC",
             ),
             pytest.param(
@@ -855,7 +847,7 @@ class TestWiredDcCapacity:
         ("config", "modules", "module_w"),
         [
             pytest.param(
-                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
                 13,
                 300.0,
                 id="4kW-of-300W-pvwatts-modules-without-STC",
@@ -997,7 +989,9 @@ class TestSystemLossesReachTheInverterAsDCPower:
         lossless.run_model(clear_june_daytime)
 
         kept = 1 - config.system_losses
-        for lossy_dc, lossless_dc in zip(_dc_per_array(lossy), _dc_per_array(lossless), strict=True):
+        for lossy_dc, lossless_dc in zip(
+            per_array(lossy.results.dc), per_array(lossless.results.dc), strict=True
+        ):
             np.testing.assert_allclose(lossy_dc["p_mp"], lossless_dc["p_mp"] * kept)
             np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
             pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
