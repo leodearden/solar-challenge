@@ -17,11 +17,14 @@ from tests._orchestrator_config import (
     git_config,
     lane_command,
     lane_commands,
+    lane_outage_probe,
     offline_lane_jobs,
     verify_command,
 )
 
 _COMMAND = "uv run --locked --extra dev pytest -m 'not slow' -p no:cacheprovider"
+
+_OUTAGE_PROBE = "uv run --locked --extra dev python scripts/check.py"
 
 _SLOT_COMMANDS = {
     "lint_command": "true",
@@ -274,3 +277,37 @@ def test_the_lane_commands_of_a_lane_with_a_disabled_job_fail_naming_that_job(tm
         lane_commands(tmp_path)
 
     assert "'dormant'" in str(failure.value)
+
+
+def test_a_lane_jobs_outage_probe_is_its_yaml_string_verbatim_run_in_the_jobs_directory_offline(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "tests" / "e2e").mkdir(parents=True)
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs({"name": "probe", "command": _COMMAND, "cwd": "tests/e2e", "outage_probe": _OUTAGE_PROBE}),
+    )
+
+    assert lane_outage_probe(tmp_path, "probe") == OrchestratorCommand(
+        label="outage probe of the lane job 'probe'",
+        command=_OUTAGE_PROBE,
+        directory=tmp_path / "tests" / "e2e",
+        role="offline",
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [{}, {"outage_probe": None}, {"outage_probe": ""}, {"outage_probe": ["python", "scripts/check.py"]}],
+    ids=["no-outage-probe-key", "bare-outage-probe-key", "empty-string", "list"],
+)
+def test_a_lane_job_declaring_no_outage_probe_fails_naming_the_job(
+    tmp_path: Path, declared: Mapping[str, object]
+) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND, **declared}))
+
+    with pytest.raises(AssertionError) as failure:
+        lane_outage_probe(tmp_path, "probe")
+
+    assert "'probe'" in str(failure.value)
+    assert repr(declared.get("outage_probe")) in str(failure.value)

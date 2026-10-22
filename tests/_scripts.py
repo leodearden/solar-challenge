@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The measurement scripts under scripts/, loaded as modules for the tests that run them.
+"""The scripts under scripts/, loaded as modules for the tests that run them.
 
 scripts/ is not a package, so each script is loaded from its file.
 
