@@ -283,12 +283,3 @@ class TestConfigurableInverterParameters:
         config = PVConfig(capacity_kw=4.0, custom_inverter_params=custom_params)
         system = create_pv_system(config)
         assert system.inverter_parameters["Paco"] == 3500.0
-
-    def test_undersized_inverter_causes_clipping(self):
-        """Undersized inverter causes output clipping."""
-        # Create system with 4 kW DC but only 3 kW inverter
-        config_undersized = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.0)
-        system = create_pv_system(config_undersized)
-        # Inverter should be sized to approximately 3 kW
-        # (CEC database finds closest match)
-        assert system.inverter_parameters["Paco"] < 4000

@@ -214,6 +214,19 @@ class TestSimulatePVOutput:
         # Peak should not exceed system capacity by much
         assert output.max() < config.capacity_kw * 1.2  # Allow some tolerance
 
+    def test_an_undersized_inverter_clips_the_ac_at_its_rating(
+        self, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        config = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.0)
+        rating_kw = create_pv_system(config).inverter_parameters["Paco"] / 1000
+
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+
+        assert peak_kw == pytest.approx(rating_kw), (
+            f"{config.capacity_kw} kW of modules on a {rating_kw:.3f} kW inverter peaked at "
+            f"{peak_kw:.3f} kW on the clear June day"
+        )
+
     def test_no_negative_values(self, sample_weather_data):
         """AC power output has no negative values."""
         config = PVConfig(capacity_kw=4.0)
