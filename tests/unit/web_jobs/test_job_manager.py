@@ -30,6 +30,7 @@ from solar_challenge.web.jobs import (
     shutdown_all_managers,
 )
 from solar_challenge.web.storage import RunRecord, RunStorage
+from tests._web_app import run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
 
@@ -503,7 +504,7 @@ class TestJobManagerAgeLimit:
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = _ManualClock()
-        manager = JobManager(app.extensions["storage"], simulate_home=blocking_simulation, clock=clock)
+        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
         client = client_using(app, manager)
         job_id = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
         blocking_simulation.wait_until_started()
@@ -520,7 +521,7 @@ class TestJobManagerAgeLimit:
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = _ManualClock()
-        manager = JobManager(app.extensions["storage"], simulate_home=blocking_simulation, clock=clock)
+        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
         client = client_using(app, manager)
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         blocking_simulation.wait_until_started()

@@ -15,14 +15,14 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
 from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._seeded_tmy import ClearJuneDays
-from tests._web_app import build_test_app
+from tests._web_app import build_test_app, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
 
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
     """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    return client_using(app, JobManager(app.extensions["storage"], simulate_home=simulation))
+    return client_using(app, JobManager(run_storage_of(app), simulate_home=simulation))
 
 
 @pytest.fixture
@@ -88,7 +88,7 @@ def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskCli
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(app.extensions["storage"], simulate_home=simulation, new_id=CountingIds())
+    manager = JobManager(run_storage_of(app), simulate_home=simulation, new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
     assert manager.wait_until_idle(timeout=30)
@@ -100,7 +100,7 @@ def _client_of_a_finished_fleet_job(app: Flask) -> FlaskClient:
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(app.extensions["storage"], simulate_home=RecordingSimulation(), new_id=CountingIds())
+    manager = JobManager(run_storage_of(app), simulate_home=RecordingSimulation(), new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
     assert manager.wait_until_idle(timeout=30)
@@ -213,7 +213,7 @@ class TestASubmittedJobsRunInRunHistory:
         endpoint: str,
         request_body: dict[str, Any],
     ) -> None:
-        manager = JobManager(app.extensions["storage"], simulate_home=blocking_simulation)
+        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
         client = client_using(app, manager)
 
         response = client.post(endpoint, json=request_body)
@@ -239,7 +239,7 @@ class TestASubmittedJobsRunInRunHistory:
         self, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         before_restart = build_test_app(tmp_path)
-        manager = JobManager(before_restart.extensions["storage"], max_workers=1, simulate_home=blocking_simulation)
+        manager = JobManager(run_storage_of(before_restart), max_workers=1, simulate_home=blocking_simulation)
         client = client_using(before_restart, manager)
         first_run_id, second_run_id = [
             client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["run_id"] for _ in range(2)
