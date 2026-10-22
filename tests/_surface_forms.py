@@ -146,21 +146,10 @@ def named_classes(obj: object) -> set[type]:
     surface_form reads as such a class, or a routine whose signature inspect cannot read
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
-    A class's constructor, the __new__ or __init__ inspect reads first of those the
-    nearest class in its MRO that holds one has in its own body, which may be a base
-    defined in another module, is spelled where a routine is, so one that body assigns
-    from another module, or that wraps one there as functools.wraps records one, is
-    spelled there. An __init__ is read once bound to the class as inspect binds it, so a
-    functools.partialmethod is spelled where the callable it wraps is. One compiled
-    outside that body and renamed into the class, as collections.namedtuple compiles a
-    __new__, is spelled in that class's module; a parameter of an __init__ the dataclass
-    decorator generated, in the module of the nearest class in that MRO the decorator
-    processed whose own body annotates it, so an inherited field in the base that
-    declares it, however a mixin annotates it. A signature a class carries in its
-    constructor's place is spelled where that constructor is, or where the class holding
-    the signature is if the constructor is defined in C or wraps a callable defined in
-    C, as object's is; one its metaclass or a descriptor gives raises TypeError. What a
-    type variable or a NewType carries is spelled in the module that declares it;
+    A class's signature is spelled where its constructor is, as
+    _constructor_spelling_modules describes, whether or not the class carries a signature
+    in the constructor's place; one its metaclass or a descriptor gives raises TypeError.
+    What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
     it carries is spelled in the module that spells the signature holding it. That
@@ -547,7 +536,7 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] | None = None) -> object:
-    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of, and at an object that is not callable."""
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of."""
     if not callable(obj):
         return obj
     if isinstance(obj, types.MethodType):
@@ -722,14 +711,16 @@ def _constructor_spelling_modules(
     """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled.
 
     That constructor is the one _constructor_as_read gives for the nearest class in
-    *cls*'s MRO that holds one. It is spelled where _spelling_modules spells the end of
-    its chain, so a function the class body assigns from another module, or that wraps
-    one there as functools.wraps records one, is spelled in that other module. One
-    compiled outside the class body and renamed into the class, as the dataclass
-    decorator generates an __init__ and collections.namedtuple a __new__, is spelled as
-    _generated_constructor_modules spells it. A constructor defined in C, or one that
-    wraps a callable defined in C, spells no annotation, so the class's is that of the
-    class _signature_holder gives if *cls* carries a signature, else the holder's;
+    *cls*'s MRO that holds one, which may be a base defined in another module. It is
+    spelled where _spelling_modules spells the end of its chain, so a function the class
+    body assigns from another module, or that wraps one there as functools.wraps records
+    one, is spelled in that other module. One compiled outside the class body and
+    renamed into it, as the dataclass decorator generates an __init__ and
+    collections.namedtuple a __new__, is spelled as _generated_constructor_modules
+    spells it; one renamed into another class and assigned here raises TypeError naming
+    *cls* and the function. A constructor defined in C, or one that wraps a callable
+    defined in C, spells no annotation, so the class's is that of the class
+    _signature_holder gives if *cls* carries a signature, else the holder's;
     _signature_holder checks every class that carries a signature before the
     constructor is read.
     """
@@ -740,8 +731,32 @@ def _constructor_spelling_modules(
         spelling_class = holder if signature_holder is None else signature_holder
         return dict.fromkeys(names, _defining_module(spelling_class))
     if _is_generated(end):
+        _refuse_constructor_generated_for_another_class(cls, holder, end)
         return _generated_constructor_modules(holder, names)
     return _spelling_modules(end, names)
+
+
+def _refuse_constructor_generated_for_another_class(
+    cls: type, holder: type, generated: types.FunctionType
+) -> None:
+    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds at the end of the constructor *holder* holds, unless it was renamed into *holder*.
+
+    The dataclass decorator renames a function into a class by the class's qualified
+    name, collections.namedtuple by its name. A function renamed into another class and
+    assigned in *holder*'s body keeps that class's name, and no module is known to spell
+    the fields that class declares.
+    """
+    renamed_into_holder = (
+        f"{holder.__qualname__}.{generated.__name__}",
+        f"{holder.__name__}.{generated.__name__}",
+    )
+    if generated.__qualname__ not in renamed_into_holder:
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(generated)}, a function generated "
+            f"for another class and assigned in the body of {_label(holder)}, so no module is "
+            "known to spell the fields of the class it was generated for: make the name "
+            f"private, or define {generated.__name__} with def"
+        )
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
@@ -821,8 +836,8 @@ def _namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
     return (cls for cls in classes if any(name in vars(cls) for name in names))
 
 
-def _is_generated(routine: object) -> bool:
-    """Whether *routine* is a function compiled outside a class body and renamed into the class, as the dataclass decorator generates __init__ and collections.namedtuple __new__.
+def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
+    """Whether *routine* is a function compiled outside a class body and renamed into a class, as the dataclass decorator generates __init__ and collections.namedtuple __new__.
 
     The code of such a function keeps another qualified name than the function; one the
     body defines, or one assigned from elsewhere, keeps its own.

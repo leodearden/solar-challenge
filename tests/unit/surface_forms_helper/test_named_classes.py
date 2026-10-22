@@ -1314,8 +1314,17 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Assigned", id="assigned-function"),
+        pytest.param("Called", id="assigned-callable-object"),
+        pytest.param("Made", id="assigned-new"),
+        pytest.param("Wrapping", id="functools-wraps-wrapper"),
+    ],
+)
 def test_a_constructor_spelled_in_another_module_than_its_class_body_names_the_classes_that_module_binds_the_names_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     imported_module(
         tmp_path,
@@ -1353,14 +1362,26 @@ def test_a_constructor_spelled_in_another_module_than_its_class_body_names_the_c
         "    def __init__(self, *args, **kwargs) -> None: ...\n",
     )
 
-    assert named_classes(rebuilding.Assigned) == {fractions.Fraction}
-    assert named_classes(rebuilding.Called) == {fractions.Fraction}
-    assert named_classes(rebuilding.Made) == {fractions.Fraction}
-    assert named_classes(rebuilding.Wrapping) == {fractions.Fraction}
+    assert named_classes(getattr(rebuilding, name)) == {fractions.Fraction}
 
 
+@pytest.mark.parametrize(
+    "definition",
+    [
+        pytest.param("class Point(NamedTuple):\n    share: 'Share'\n", id="at-module-level"),
+        pytest.param(
+            "def define():\n"
+            "    class Point(NamedTuple):\n"
+            "        share: 'Share'\n"
+            "    return Point\n"
+            "\n"
+            "Point = define()\n",
+            id="inside-a-function",
+        ),
+    ],
+)
 def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_module_of_that_class_binds_the_names_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, definition: str
 ) -> None:
     pointing = imported_module(
         tmp_path,
@@ -1368,9 +1389,7 @@ def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_mod
         "pointing",
         "from decimal import Decimal as Share\n"
         "from typing import NamedTuple\n"
-        "\n"
-        "class Point(NamedTuple):\n"
-        "    share: 'Share'\n",
+        "\n" + definition,
     )
 
     class Subpoint(pointing.Point):
@@ -1379,8 +1398,15 @@ def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_mod
     assert named_classes(Subpoint) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Recreated", id="new"),
+        pytest.param("Reinitialised", id="init"),
+    ],
+)
 def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_class_holding_it_is_spelled(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     imported_module(
         tmp_path,
@@ -1418,12 +1444,18 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
         "    __signature__ = signature\n",
     )
 
-    assert named_classes(signing.Recreated) == {decimal.Decimal}
-    assert named_classes(signing.Reinitialised) == {decimal.Decimal}
+    assert named_classes(getattr(signing, name)) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Halved", id="partialmethod"),
+        pytest.param("Dispatched", id="singledispatchmethod"),
+    ],
+)
 def test_a_constructor_assigned_as_a_descriptor_is_read_once_bound_to_its_class_and_names_the_classes_the_module_of_the_function_it_wraps_binds_the_names_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     imported_module(
         tmp_path,
@@ -1449,8 +1481,90 @@ def test_a_constructor_assigned_as_a_descriptor_is_read_once_bound_to_its_class_
         "    __init__ = singledispatchmethod(settle)\n",
     )
 
-    assert named_classes(resettling.Halved) == {fractions.Fraction, int}
-    assert named_classes(resettling.Dispatched) == {fractions.Fraction, int}
+    assert named_classes(getattr(resettling, name)) == {fractions.Fraction, int}
+
+
+def test_a_new_is_read_as_getattr_gives_it_not_bound_to_the_class_again_so_names_the_classes_the_module_spelling_that_object_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reader is a callable data descriptor: inspect reads it through its __call__, and binding it again would give rebound, which the module of Gated spells."""
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "gating",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Reader:\n"
+        "    def __init__(self, rebound):\n"
+        "        self.rebound = rebound\n"
+        "\n"
+        "    def __call__(self, cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    def __get__(self, instance, owner):\n"
+        "        return self.rebound\n"
+        "\n"
+        "    def __set__(self, instance, value): ...\n",
+    )
+    regating = imported_module(
+        tmp_path,
+        monkeypatch,
+        "regating",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from gating import Reader\n"
+        "\n"
+        "def rebound(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Gated:\n"
+        "    __new__ = staticmethod(Reader(rebound))\n",
+    )
+
+    assert named_classes(regating.Gated) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Assigned", id="assigned"),
+        pytest.param("Wrapping", id="functools-wraps-wrapper"),
+    ],
+)
+def test_a_constructor_generated_for_another_class_than_the_one_assigning_it_raises_type_error_naming_that_class_and_the_function(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "sourcing",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "@dataclass\n"
+        "class Source:\n"
+        "    share: 'Share'\n",
+    )
+    borrowing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "borrowing",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from sourcing import Source\n"
+        "\n"
+        "class Assigned:\n"
+        "    __init__ = Source.__init__\n"
+        "\n"
+        "class Wrapping:\n"
+        "    @wraps(Source.__init__)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n",
+    )
+
+    with pytest.raises(TypeError) as raised:
+        named_classes(getattr(borrowing, name))
+
+    assert f"borrowing.{name}" in str(raised.value)
+    assert "sourcing.Source.__init__" in str(raised.value)
 
 
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
