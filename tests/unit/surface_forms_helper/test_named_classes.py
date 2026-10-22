@@ -786,6 +786,48 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     assert named_classes(submetering.settled) == {fractions.Fraction}
 
 
+def test_a_class_names_the_classes_its_signature_names_read_where_its_constructor_is_spelled_though_the_class_carries_one(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, share: 'Share', rate: int) -> None: ...\n",
+    )
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "decorating",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def without_rate(cls):\n"
+        "    signature = inspect.signature(cls)\n"
+        "    parameters = list(signature.parameters.values())[:1]\n"
+        "    cls.__signature__ = signature.replace(parameters=parameters)\n"
+        "    return cls\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from decorating import without_rate\n"
+        "from metering import Meter\n"
+        "\n"
+        "@without_rate\n"
+        "class Submeter(Meter):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(submetering.Submeter) == {fractions.Fraction}
+
+
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

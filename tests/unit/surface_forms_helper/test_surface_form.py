@@ -611,6 +611,49 @@ def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that
     assert named_classes(zipped) == {int}
 
 
+def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Rated(dict):
+        __signature__ = signature
+
+    class Rerated(Rated):
+        pass
+
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    class Counted(metaclass=Counting):
+        __signature__ = signature
+
+    assert surface_form(Rated) == "(rate: int)"
+    assert named_classes(Rated) == {int}
+    assert surface_form(Rerated) == "(rate: int)"
+    assert surface_form(Counted) == "(rate: int)"
+    assert surface_form(functools.partial(Rated)) == "(rate: int)"
+
+
+def test_a_class_whose_signature_attribute_is_no_inspect_signature_is_refused_as_its_constructor_is() -> None:
+    class Texted(dict):
+        __signature__ = "(rate)"
+
+    class Called(dict):
+        @classmethod
+        def __signature__(cls) -> inspect.Signature:
+            return inspect.Signature(
+                [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+            )
+
+    with pytest.raises(TypeError, match=r"\.Texted\b.*\bbuiltins\.dict\b"):
+        surface_form(Texted)
+    with pytest.raises(TypeError, match=r"\.Called\b.*\bbuiltins\.dict\b"):
+        surface_form(Called)
+
+
 def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable() -> None:
     class Created:
         @functools.wraps(object.__new__)
