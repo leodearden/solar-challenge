@@ -2033,6 +2033,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-rerunfailures" },
+    { name = "requests" },
     { name = "ruff" },
 ]
 e2e = [
@@ -2064,6 +2065,7 @@ requires-dist = [
     { name = "pytest-playwright", marker = "extra == 'e2e'", specifier = ">=0.8.0" },
     { name = "pytest-rerunfailures", marker = "extra == 'dev'", specifier = ">=16.7" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "requests", marker = "extra == 'dev'", specifier = ">=2.34.2" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "richardsonpy", specifier = ">=0.2.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.10" },
