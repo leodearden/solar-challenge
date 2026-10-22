@@ -14,7 +14,7 @@ from solar_challenge.battery import (
     has_battery,
     require_valid_capacity_setting,
 )
-from solar_challenge.config import GridChargeConfig
+from solar_challenge.dispatch import GridChargeConfig
 
 
 class TestBatteryConfigBasics:

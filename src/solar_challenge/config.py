@@ -32,7 +32,7 @@ import yaml
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.dataclass_instance import DataclassInstance
-from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
@@ -302,7 +302,7 @@ class BatteryDistributionConfig:
     max_charge_kw: DistributionSpec = 2.5
     max_discharge_kw: DistributionSpec = 2.5
     grid_charging: Optional[GridChargeConfig] = None
-    dispatch_strategy: Optional["DispatchStrategyConfig"] = None
+    dispatch_strategy: Optional[DispatchStrategyConfig] = None
 
     def __post_init__(self) -> None:
         """Refuse a fixed capacity_kwh that is not a valid battery capacity setting; samples are checked as drawn."""
@@ -372,59 +372,6 @@ class EVDistributionConfig:
     departure_hour: DistributionSpec = 7.0
     required_charge_kwh: DistributionSpec = 35.0
     smart_charging_mode: str = "none"
-
-
-@dataclass
-class DispatchStrategyConfig:
-    """Configuration for battery dispatch strategy.
-
-    Attributes:
-        strategy_type: Type of dispatch strategy (self_consumption, tou_optimized, peak_shaving)
-        peak_hours: List of (start_hour, end_hour) tuples for TOU strategy (optional)
-        import_limit_kw: Grid import limit in kW for peak-shaving strategy (optional)
-    """
-
-    strategy_type: str
-    peak_hours: Optional[list[tuple[int, int]]] = None
-    import_limit_kw: Optional[float] = None
-
-    def __post_init__(self) -> None:
-        """Validate dispatch strategy configuration."""
-        valid_strategies = ("self_consumption", "tou_optimized", "peak_shaving")
-        if self.strategy_type not in valid_strategies:
-            raise ConfigurationError(
-                f"Invalid strategy_type '{self.strategy_type}'. "
-                f"Must be one of: {', '.join(valid_strategies)}"
-            )
-
-        # Validate TOU strategy parameters
-        if self.strategy_type == "tou_optimized":
-            if not self.peak_hours:
-                raise ConfigurationError(
-                    "tou_optimized strategy requires 'peak_hours' parameter"
-                )
-            for start_hour, end_hour in self.peak_hours:
-                if not (0 <= start_hour < 24 and 0 <= end_hour <= 24):
-                    raise ConfigurationError(
-                        f"Invalid peak hours ({start_hour}, {end_hour}). "
-                        "Hours must be in range [0, 24)"
-                    )
-                if start_hour >= end_hour:
-                    raise ConfigurationError(
-                        f"Invalid peak hours ({start_hour}, {end_hour}). "
-                        "start_hour must be less than end_hour"
-                    )
-
-        # Validate peak-shaving strategy parameters
-        if self.strategy_type == "peak_shaving":
-            if self.import_limit_kw is None:
-                raise ConfigurationError(
-                    "peak_shaving strategy requires 'import_limit_kw' parameter"
-                )
-            if self.import_limit_kw <= 0:
-                raise ConfigurationError(
-                    f"import_limit_kw must be positive, got {self.import_limit_kw}"
-                )
 
 
 @dataclass
@@ -817,6 +764,26 @@ def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict
     }
 
 
+def _refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
+    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each by its path."""
+    if missing_keys:
+        missing = ", ".join(_child_path(block_path, key) for key in missing_keys)
+        raise ConfigurationError(f"Missing required keys in {_block_label(block_path)}: {missing}")
+
+
+def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
+    """The config *config_type* builds from *values*, the block at *block_path*'s.
+
+    Raises:
+        ConfigurationError: naming the block, for a value of a type *config_type* cannot use,
+            which building it refuses with a TypeError.
+    """
+    try:
+        return config_type(**values)
+    except TypeError as refusal:
+        raise ConfigurationError(f"{_block_label(block_path)}: {refusal}") from refusal
+
+
 def _built_component(
     block: ComponentBlock[_Component], set_keys: Mapping[str, Any], block_path: str
 ) -> _Component:
@@ -830,24 +797,16 @@ def _built_component(
             declared default nor a when-omitted value; or naming the block, for a value of a
             type its dataclass cannot use, which building it refuses with a TypeError.
     """
-    missing = [
-        _child_path(block_path, key)
-        for key in block.keys
-        if key not in set_keys and block.value_when_omitted(key) is MISSING
-    ]
-    if missing:
-        raise ConfigurationError(
-            f"Missing required keys in {_block_label(block_path)}: {', '.join(missing)}"
-        )
+    _refuse_missing_keys(
+        block_path,
+        [key for key in block.keys if key not in set_keys and block.value_when_omitted(key) is MISSING],
+    )
     sub_block_configs = {
         key: sub_block.read(set_keys[key], block_path=_child_path(block_path, key))
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    try:
-        return block.config_type(**{**block.when_omitted, **set_keys, **sub_block_configs})
-    except TypeError as refusal:
-        raise ConfigurationError(f"{_block_label(block_path)}: {refusal}") from refusal
+    return _built_from(block.config_type, {**block.when_omitted, **set_keys, **sub_block_configs}, block_path)
 
 
 def _read_component_block(
@@ -946,44 +905,86 @@ def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
     return _read_component_block(LOAD_BLOCK, data, block_path=block_path)
 
 
-_DISPATCH_STRATEGY_BLOCK_KEYS: frozenset[str] = frozenset({
-    "strategy_type", "peak_hours", "import_limit_kw",
-})
+_KEYS_A_STRATEGY_READS: frozenset[str] = frozenset(
+    each.name for variant in STRATEGY_CONFIG_BY_TYPE.values() for each in fields(variant) if each.init
+)
+"""Each key a dispatch_strategy: block reads beside strategy_type, for one strategy or another."""
+
+
+def _tuples(value: Any) -> Any:
+    """*value* with each list in it, at any depth, read as a tuple."""
+    if isinstance(value, (list, tuple)):
+        return tuple(_tuples(item) for item in value)
+    return value
+
+
+def _lists(value: Any) -> Any:
+    """*value* with each tuple in it, at any depth, written as a list, which _tuples reads back as it."""
+    if isinstance(value, (list, tuple)):
+        return [_lists(item) for item in value]
+    return value
+
+
+def _strategy_variant(block: Mapping[str, Any], block_path: str) -> type[DispatchStrategyConfig]:
+    """The variant of DispatchStrategyConfig the strategy_type of the dispatch_strategy: block at *block_path* names.
+
+    Raises:
+        ConfigurationError: for a strategy_type that is missing or names no variant, naming its
+            path, its value and the variants' tags.
+    """
+    tag = block.get("strategy_type")
+    variant = STRATEGY_CONFIG_BY_TYPE.get(tag) if isinstance(tag, str) else None
+    if variant is None:
+        raise ConfigurationError(
+            f"Invalid {_child_path(block_path, 'strategy_type')} {tag!r}; "
+            f"valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}"
+        )
+    return variant
 
 
 def parse_dispatch_strategy_config(
     data: Optional[dict[str, Any]], *, block_path: str = "dispatch_strategy"
 ) -> Optional[DispatchStrategyConfig]:
-    """Parse dispatch strategy configuration from config data."""
+    """Parse a dispatch_strategy: block into the variant of DispatchStrategyConfig its strategy_type names; a null block is no strategy.
+
+    The block's other keys are the variant's fields, each list in them read as a tuple. A null
+    key that some strategy reads reads as absent, so a block written before the strategies were
+    variants, every key present and those its strategy does not read null, reads as its variant.
+
+    Raises:
+        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
+            or names no variant, naming its path, its value and the variants' tags; a key the
+            variant does not read, unless it is null and another strategy reads it; a key the
+            variant needs, left out or null, naming its path; a value of a type the variant
+            cannot use, naming the block; and a value the variant refuses, as it refuses it.
+    """
     if data is None:
         return None
-    _refuse_unrecognised_keys(block_path, data, _DISPATCH_STRATEGY_BLOCK_KEYS)
-
-    strategy_type = data.get("strategy_type")
-    if not strategy_type:
-        raise ConfigurationError("Dispatch strategy config requires 'strategy_type'")
-
-    # Parse peak_hours if present (convert from list of lists to list of tuples)
-    peak_hours = None
-    if "peak_hours" in data:
-        peak_hours_raw = data["peak_hours"]
-        if peak_hours_raw is not None:
-            peak_hours = [tuple(hours) for hours in peak_hours_raw]
-
-    return DispatchStrategyConfig(
-        strategy_type=strategy_type,
-        peak_hours=peak_hours,
-        import_limit_kw=data.get("import_limit_kw"),
+    block = _require_mapping(block_path, data)
+    variant = _strategy_variant(block, block_path)
+    variant_fields = [each for each in fields(variant) if each.init]
+    set_keys = _refuse_unrecognised_keys(
+        block_path,
+        {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
+        {"strategy_type", *(each.name for each in variant_fields)},
     )
+    _refuse_missing_keys(
+        block_path,
+        [
+            each.name
+            for each in variant_fields
+            if each.name not in set_keys and each.default is MISSING and each.default_factory is MISSING
+        ],
+    )
+    values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
+    return _built_from(variant, values, block_path)
 
 
 def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]:
-    """The dispatch_strategy: block parse_dispatch_strategy_config reads back as *strategy*."""
-    peak_hours = strategy.peak_hours
+    """The dispatch_strategy: block parse_dispatch_strategy_config reads back as *strategy*: its tag, then its fields."""
     return {
         "strategy_type": strategy.strategy_type,
-        "peak_hours": None if peak_hours is None else [[start, end] for start, end in peak_hours],
-        "import_limit_kw": strategy.import_limit_kw,
+        **{each.name: _lists(getattr(strategy, each.name)) for each in fields(strategy) if each.init},
     }
 
 

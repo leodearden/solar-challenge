@@ -14,7 +14,6 @@ from solar_challenge.config import (
     BatteryDistributionConfig,
     DistributionSpec,
     FleetDistributionConfig,
-    GridChargeConfig,
     HeatPumpDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -26,6 +25,7 @@ from solar_challenge.config import (
     load_fleet_config,
     parse_fleet_distribution_config,
 )
+from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.pv import simulate_pv_output

@@ -24,7 +24,7 @@ from solar_challenge.web.number_fields import (
 )
 
 if TYPE_CHECKING:
-    from solar_challenge.config import DispatchStrategyConfig
+    from solar_challenge.dispatch import DispatchStrategyConfig
     from solar_challenge.seg import SEGTariff
     from solar_challenge.tariff import TariffConfig
 

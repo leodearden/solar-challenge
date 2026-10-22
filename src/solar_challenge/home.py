@@ -9,12 +9,7 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import (
-    DispatchStrategy,
-    PeakShavingStrategy,
-    SelfConsumptionStrategy,
-    TOUOptimizedStrategy,
-)
+from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
 from solar_challenge.ev import EVConfig
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
@@ -359,36 +354,6 @@ def _demand(config: HomeConfig, weather: pd.DataFrame, start_date: pd.Timestamp,
     return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
 
 
-def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
-    """Create dispatch strategy from battery config.
-
-    Args:
-        config: Home configuration with optional battery and dispatch strategy
-
-    Returns:
-        DispatchStrategy instance (defaults to SelfConsumptionStrategy if not configured)
-    """
-    # If no battery or no strategy config, use self-consumption
-    if config.battery_config is None or config.battery_config.dispatch_strategy is None:
-        return SelfConsumptionStrategy()
-
-    strategy_config = config.battery_config.dispatch_strategy
-    strategy_type = strategy_config.strategy_type
-
-    if strategy_type == "self_consumption":
-        return SelfConsumptionStrategy()
-    elif strategy_type == "tou_optimized":
-        if strategy_config.peak_hours is None:
-            raise ValueError("TOU strategy requires peak_hours configuration")
-        return TOUOptimizedStrategy(peak_hours=strategy_config.peak_hours)
-    elif strategy_type == "peak_shaving":
-        if strategy_config.import_limit_kw is None:
-            raise ValueError("Peak shaving strategy requires import_limit_kw configuration")
-        return PeakShavingStrategy(import_limit_kw=strategy_config.import_limit_kw)
-    else:
-        raise ValueError(f"Unknown strategy type: {strategy_type}")
-
-
 _Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
 """One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
@@ -453,10 +418,15 @@ def _dispatch_path(
     tariff = config.tariff_config
     if strategy is not None:
         return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
-    battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
-    if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
+    battery = config.battery_config
+    battery_strategy = None if battery is None else battery.dispatch_strategy
+    if config.dispatch_strategy == "tou_optimized" and tariff is not None and battery_strategy is None:
         return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
-    strategy = _create_dispatch_strategy(config)
+    strategy = build_dispatch_strategy(
+        battery_strategy or SelfConsumptionStrategyConfig(),
+        grid_charging=None if battery is None else battery.grid_charging,
+        tariff=tariff,
+    )
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
 
 

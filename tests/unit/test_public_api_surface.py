@@ -94,7 +94,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "DispatchTariffPeriod": "PEAK='peak', OFF_PEAK='off_peak'",
     # --- battery (battery.py) ---
     "Battery": "(config: BatteryConfig, initial_soc_kwh: float | None = None, min_soc_fraction: float | None = None, max_soc_fraction: float | None = None, charge_efficiency: float | None = None, discharge_efficiency: float | None = None) -> None",
-    "BatteryConfig": "dataclass[eq, frozen] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: DispatchStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
+    "BatteryConfig": "dataclass[eq, frozen] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
     "EnergyFlowResult": "dataclass[eq] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
@@ -259,10 +259,12 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # __all__.
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
-    "config.DispatchStrategyConfig": "dataclass[eq] (strategy_type: str, peak_hours: list[tuple[int, int]] | None = None, import_limit_kw: float | None = None) -> None",
     "config.OutputConfig": "dataclass[eq] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
     "config.SimulationPeriod": "dataclass[eq] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
     "dispatch.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9) -> None",
+    "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen] (import_limit_kw: float) -> None",
+    "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
+    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen] (peak_hours: tuple[tuple[int, int], ...]) -> None",
     "ev.EVConfig": "dataclass[eq, frozen] (charger_type: str, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
@@ -434,6 +436,15 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "config.SimulationPeriod": {
         "get_start_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
         "get_end_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
+    },
+    "dispatch.PeakShavingStrategyConfig": {
+        "strategy_type": "attribute Literal['peak_shaving']",
+    },
+    "dispatch.SelfConsumptionStrategyConfig": {
+        "strategy_type": "attribute Literal['self_consumption']",
+    },
+    "dispatch.TOUOptimizedStrategyConfig": {
+        "strategy_type": "attribute Literal['tou_optimized']",
     },
     "ev.EVConfig": {
         "get_charger_power_kw": "(self) -> float",

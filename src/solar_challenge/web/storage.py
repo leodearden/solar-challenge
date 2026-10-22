@@ -18,8 +18,7 @@ import json
 import re
 import shutil
 import sqlite3
-import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +27,6 @@ from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get
 
 import pandas as pd
 
-import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
@@ -77,8 +75,10 @@ def _serialize_value(value: Any) -> Any:
 def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
     """Recursively deserialize a dict to a dataclass instance.
 
-    Each field is rebuilt as its annotation declares: nested dataclasses,
-    lists and tuples of them, pd.Timestamp values and optional members.
+    Each field its constructor takes that the dict holds is rebuilt as its annotation
+    declares: nested dataclasses, lists and tuples of them, pd.Timestamp values and
+    optional members. Any other key, a field no constructor takes or one the class does
+    not have, is skipped.
 
     Args:
         cls: The dataclass type to instantiate
@@ -91,16 +91,11 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
         raise TypeError(f"Expected dataclass type, got {cls}")
 
     field_types = _field_types(cls)
-
-    kwargs: dict[str, Any] = {}
-    for field_name, value in data.items():
-        field_type = field_types.get(field_name)
-        if field_type is None:
-            # Field not in dataclass definition, skip
-            continue
-
-        kwargs[field_name] = None if value is None else _deserialize_value(value, field_type)
-
+    kwargs = {
+        each.name: None if data[each.name] is None else _deserialize_value(data[each.name], field_types[each.name])
+        for each in fields(cls)
+        if each.init and each.name in data
+    }
     return cls(**kwargs)
 
 
@@ -110,28 +105,22 @@ def _field_types(cls: type) -> Mapping[str, Any]:
 
     Resolved once per class and shared by every later call, so the mapping is read-only.
 
-    Names resolve in cls's module first, then in solar_challenge.config. config.py
-    defines DispatchStrategyConfig and GridChargeConfig, which battery.py can name
-    only under TYPE_CHECKING because config.py imports battery.py.
-
     Raises:
-        NameError: An annotation names a type neither module binds.
+        NameError: An annotation names a type cls's module does not bind.
     """
-    namespace = {**vars(solar_challenge.config), **vars(sys.modules[cls.__module__])}
-    return MappingProxyType(get_type_hints(cls, globalns=namespace))
+    return MappingProxyType(get_type_hints(cls))
 
 
 def _deserialize_value(value: Any, annotation: Any) -> Any:
     """Rebuild one JSON-decoded value as its annotation declares.
 
-    A union is read as its first non-None member. A dict becomes a dataclass.
+    A union is read as the member _union_member picks. A dict becomes a dataclass.
     An array becomes a list or a tuple, with every item rebuilt the same way.
     An ISO string becomes a pd.Timestamp. Anything else is returned unchanged.
     """
     origin = get_origin(annotation)
     if origin in (Union, UnionType):
-        member = next((arg for arg in get_args(annotation) if arg is not type(None)), Any)
-        return _deserialize_value(value, member)
+        return _deserialize_value(value, _union_member(annotation, value))
     if isinstance(value, dict) and isinstance(annotation, type) and is_dataclass(annotation):
         return _deserialize_dataclass(annotation, value)
     if isinstance(value, list) and origin in (list, tuple):
@@ -141,6 +130,51 @@ def _deserialize_value(value: Any, annotation: Any) -> Any:
     if isinstance(value, str) and isinstance(annotation, type) and issubclass(annotation, pd.Timestamp):
         return pd.Timestamp(value)
     return value
+
+
+def _union_member(annotation: Any, value: Any) -> Any:
+    """The member of union *annotation* a stored, non-null *value* is rebuilt as.
+
+    When the union's non-None members are dataclasses that each tag themselves with the
+    same field, the member is the one whose tag is *value*'s; otherwise it is the first
+    non-None member.
+
+    Raises:
+        ValueError: For members tagged with a field when no member's tag is *value*'s,
+            naming the field, *value*'s value of it and the members' tags.
+    """
+    members = [arg for arg in get_args(annotation) if arg is not type(None)]
+    tag_field = _shared_tag_field(members)
+    if tag_field is None:
+        return next(iter(members), Any)
+    tags = [_tags(member)[tag_field] for member in members]
+    stored = value.get(tag_field) if isinstance(value, dict) else None
+    if stored not in tags:
+        raise ValueError(f"{tag_field} {stored!r} is not one of {tags}")
+    return members[tags.index(stored)]
+
+
+def _shared_tag_field(members: Sequence[Any]) -> str | None:
+    """The one field each of *members* tags itself with; None when they share no such field, or more than one."""
+    shared = set.intersection(*(set(_tags(member)) for member in members)) if members else set()
+    return shared.pop() if len(shared) == 1 else None
+
+
+def _tags(cls: Any) -> dict[str, Any]:
+    """Each field of *cls*, a dataclass, that tags it: no constructor takes it and it is annotated with a one-value Literal, with that value.
+
+    Empty for anything other than a dataclass.
+    """
+    if not (isinstance(cls, type) and is_dataclass(cls)):
+        return {}
+    field_types = _field_types(cls)
+    return {
+        each.name: get_args(field_types[each.name])[0]
+        for each in fields(cls)
+        if not each.init
+        and get_origin(field_types[each.name]) is Literal
+        and len(get_args(field_types[each.name])) == 1
+    }
 
 
 def _item_annotation(sequence_annotation: Any) -> Any:

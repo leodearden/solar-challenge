@@ -636,10 +636,31 @@ refuses that import ("does not explicitly export attribute").
 `ValueError`. Their messages name `peak_hours`, with the rule
 `0 <= start < end <= 24` and the period that breaks it, or `import_limit_kw`
 and its value. `TOUOptimizedStrategy` also refuses an empty `peak_hours`,
-which the tag accepts and runs as a strategy that never discharges. The
-platform changes `optimiser/planner.py`'s import of `GridChargeConfig` when it
-re-pins; consumers that catch `ValueError`, and pass at least one peak period,
-need no other change.
+which the tag accepts and runs as a strategy that never discharges.
+The mutable `config.DispatchStrategyConfig`, whose `strategy_type` is a
+string, is gone. Each strategy it configured is a frozen dataclass in
+`solar_challenge.dispatch`: `SelfConsumptionStrategyConfig()`,
+`TOUOptimizedStrategyConfig(peak_hours)`, its `peak_hours` a tuple of
+`(start, end)` tuples, and `PeakShavingStrategyConfig(import_limit_kw)`. Each
+holds only its own strategy's fields, and carries the strategy's name as
+`strategy_type`, which its constructor does not take.
+`dispatch.DispatchStrategyConfig` is their union, the type
+`BatteryConfig.dispatch_strategy` takes, so a `BatteryConfig` with a strategy
+is hashable. A `dispatch_strategy:` block naming a battery's strategy, in a
+scenario file or a dashboard request, reads as the variant its `strategy_type`
+names. It refuses a `strategy_type` no strategy has, naming its key path, e.g.
+`home.battery.dispatch_strategy.strategy_type`, and the strategies; and a key
+its strategy does not read, unless the key is null and another strategy reads
+it, as exports before this change write it. So a `tou_optimized` block that
+sets `import_limit_kw`, which the tag ignores, is refused. Exports write only
+the strategy's own keys, and runs stored before this change load, each
+strategy as its variant. These lines supersede the mentions of
+`config.DispatchStrategyConfig` and `config.GridChargeConfig` in the task 505
+and 567 lines. The platform changes `optimiser/planner.py`'s import of
+`GridChargeConfig` when it re-pins, and needs no other change; other consumers
+that catch `ValueError`, and pass at least one peak period, change only code
+that builds or reads `config.DispatchStrategyConfig`, which builds or reads its
+strategy's variant instead.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

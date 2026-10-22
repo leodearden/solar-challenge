@@ -10,11 +10,10 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.config import (
-    DispatchStrategyConfig,
-    GridChargeConfig,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
+from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import (
@@ -638,7 +637,7 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)
         configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
-        fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
+        fleet_dispatch = PeakShavingStrategyConfig(import_limit_kw=4.5)
         assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
 
     @pytest.mark.parametrize("key", OPTIONAL_BLOCKS)
