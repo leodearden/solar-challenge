@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for TOUOptimizedStrategy, which discharges the battery only in its peak hours and grid-charges it in cheap periods."""
 
+import re
 from datetime import datetime
 
 import pytest
@@ -12,6 +13,12 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
     compute_grid_charge_power_kw,
 )
+from solar_challenge.errors import ConfigurationError
+
+
+def _breaks_the_window_rule(window: tuple[int, int]) -> str:
+    """A pattern matching the refusal of a peak_hours window that breaks 0 <= start < end <= 24, naming the window."""
+    return f"{re.escape('0 <= start < end <= 24')}.*{re.escape(str(window))}"
 
 
 @pytest.fixture
@@ -63,23 +70,23 @@ class TestTOUOptimizedStrategyValidation:
     """Test TOUOptimizedStrategy input validation."""
 
     def test_invalid_peak_hour_range_raises(self):
-        """Peak hours outside 0-23 range raises error."""
-        with pytest.raises(ValueError, match="must be in range 0-23"):
+        """A peak period past midnight is refused, naming the rule and the period."""
+        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((25, 28))):
             TOUOptimizedStrategy(peak_hours=[(25, 28)])
 
     def test_negative_peak_hour_raises(self):
-        """Negative peak hours raise error."""
-        with pytest.raises(ValueError, match="must be in range 0-23"):
+        """A peak period starting at a negative hour is refused, naming the rule and the period."""
+        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((-1, 5))):
             TOUOptimizedStrategy(peak_hours=[(-1, 5)])
 
     def test_peak_start_after_end_raises(self):
-        """Peak period with start >= end raises error."""
-        with pytest.raises(ValueError, match="start must be before end"):
+        """A peak period starting after its end is refused, naming the rule and the period."""
+        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((20, 17))):
             TOUOptimizedStrategy(peak_hours=[(20, 17)])
 
     def test_peak_start_equals_end_raises(self):
-        """Peak period with start == end raises error."""
-        with pytest.raises(ValueError, match="start must be before end"):
+        """A peak period starting at its end is refused, naming the rule and the period."""
+        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((17, 17))):
             TOUOptimizedStrategy(peak_hours=[(17, 17)])
 
     def test_off_peak_hours_is_refused(self):

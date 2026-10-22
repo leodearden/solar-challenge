@@ -12,6 +12,7 @@ from solar_challenge.dispatch import (
     PeakShavingStrategy,
     compute_grid_charge_power_kw,
 )
+from solar_challenge.errors import ConfigurationError
 
 
 @pytest.fixture
@@ -63,12 +64,12 @@ class TestPeakShavingStrategyValidation:
 
     def test_zero_import_limit_raises(self):
         """Zero import limit raises error."""
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ConfigurationError, match="must be positive"):
             PeakShavingStrategy(import_limit_kw=0.0)
 
     def test_negative_import_limit_raises(self):
         """Negative import limit raises error."""
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ConfigurationError, match="must be positive"):
             PeakShavingStrategy(import_limit_kw=-1.0)
 
     def test_negative_generation_raises(self, standard_peak_shaving_strategy):

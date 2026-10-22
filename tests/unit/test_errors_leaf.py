@@ -4,9 +4,9 @@
 ConfigurationError is a ValueError, so code that catches ValueError catches every refusal.
 
 Importing solar_challenge.errors loads no other module of the package. Constructing
-the finance, grid-services and flexibility input types, valid or refused, loads
-neither the scenario grammar (solar_challenge.config) nor pvlib, and each refuses
-with a ConfigurationError.
+the finance, grid-services, flexibility and dispatch-configuration input types, valid
+or refused, loads neither the scenario grammar (solar_challenge.config) nor pvlib, and
+each refuses with a ConfigurationError, as the TOU and peak-shaving strategies do.
 
 Each import case runs in a fresh ``python -I`` interpreter, so the modules that
 earlier tests imported cannot hide what the case loads.
@@ -92,6 +92,20 @@ def test_importing_the_errors_module_loads_no_other_package_module() -> None:
             "grid_services_per_kw_gbp=1.0, total_gbp=3.0, provenance='test')",
             id="FlexibilityValueBand",
         ),
+        pytest.param(
+            "from solar_challenge.dispatch import GridChargeConfig; GridChargeConfig()",
+            id="GridChargeConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import TOUOptimizedStrategyConfig; "
+            "TOUOptimizedStrategyConfig(peak_hours=((16, 19),))",
+            id="TOUOptimizedStrategyConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import PeakShavingStrategyConfig; "
+            "PeakShavingStrategyConfig(import_limit_kw=3.0)",
+            id="PeakShavingStrategyConfig",
+        ),
     ],
 )
 def test_a_valid_construction_loads_neither_the_scenario_grammar_nor_pvlib(construction: str) -> None:
@@ -126,6 +140,22 @@ def test_a_valid_construction_loads_neither_the_scenario_grammar_nor_pvlib(const
             "grid_services_per_kw_gbp=1.0, total_gbp=3.0, provenance='test')",
             id="FlexibilityValueBand",
         ),
+        pytest.param(
+            "from solar_challenge.dispatch import GridChargeConfig; GridChargeConfig(1.5)",
+            id="GridChargeConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import TOUOptimizedStrategyConfig; "
+            "TOUOptimizedStrategyConfig(peak_hours=((20, 17),))",
+            id="TOUOptimizedStrategyConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import PeakShavingStrategyConfig; "
+            "PeakShavingStrategyConfig(import_limit_kw=0.0)",
+            id="PeakShavingStrategyConfig",
+        ),
+        pytest.param("solar_challenge.TOUOptimizedStrategy([(25, 28)])", id="TOUOptimizedStrategy"),
+        pytest.param("solar_challenge.PeakShavingStrategy(0.0)", id="PeakShavingStrategy"),
     ],
 )
 def test_a_refusal_is_a_configuration_error_and_loads_neither_the_scenario_grammar_nor_pvlib(
