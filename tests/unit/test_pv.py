@@ -53,6 +53,15 @@ class TestCreatePVSystem:
         assert "Paco" in system.inverter_parameters
 
 
+def _assert_wires_the_default_cec_row(system: pvlib.pvsystem.PVSystem) -> None:
+    """Each array of the system carries exactly the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names, as a fresh read of that library gives it."""
+    expected_row = pvlib.pvsystem.retrieve_sam("CECMod")[DEFAULT_CEC_MODULE]
+    for array in system.arrays:
+        pd.testing.assert_series_equal(
+            pd.Series(array.module_parameters), expected_row, check_names=False
+        )
+
+
 class TestCECLibraryReuse:
     """The CEC module and inverter libraries are parsed once, and each system gets its own parameters."""
 
@@ -79,12 +88,26 @@ class TestCECLibraryReuse:
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
-        for array in later.arrays:
-            pd.testing.assert_series_equal(
-                pd.Series(array.module_parameters),
-                pvlib.pvsystem.retrieve_sam("CECMod")[DEFAULT_CEC_MODULE],
-                check_names=False,
-            )
+        _assert_wires_the_default_cec_row(later)
+
+    @pytest.mark.parametrize(
+        "default_module",
+        [
+            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
+            pytest.param(
+                lambda: create_pv_system(PVConfig(capacity_kw=4.0)).arrays[0].module_parameters,
+                id="an-earlier-default-system",
+            ),
+        ],
+    )
+    def test_an_edited_default_module_leaves_later_default_systems_unchanged(
+        self, default_module: Callable[[], dict[str, float]]
+    ) -> None:
+        default_module()["A_c"] = 99.0
+
+        later = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        _assert_wires_the_default_cec_row(later)
 
     def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
         configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
