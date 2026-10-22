@@ -1846,27 +1846,23 @@ class _DistributionSampler:
             return _nearest_count(value, spec, setting)
         return value
 
-    def sample_hour(self, spec: DistributionSpec, setting: str) -> Optional[float]:
-        """Sample an hour of the day for *setting* from *spec*, as sample does, refusing an infinity or a NaN whichever spec gives it.
+    def sample_finite(self, spec: DistributionSpec, setting: str) -> Optional[float]:
+        """Sample *setting* from *spec*, refusing an infinity or a NaN whichever spec gives it.
 
-        A home's EVConfig holds its hours as whole numbers, which neither can be
-        made into. sample refuses one only when a normal or uniform spec draws it,
-        so this also refuses a fixed value, and a weighted discrete or shuffled
-        pool outcome. A value that is not a float, as a listed int, bool or string
-        outcome can be, is returned as sample gives it.
+        Any other value is returned as sample gives it.
 
         Args:
             spec: The setting's distribution specification
             setting: The setting's path in the fleet distribution, e.g. 'ev.arrival_hour'
 
         Raises:
-            ConfigurationError: As sample does, or for an infinite or NaN hour,
-                naming *setting* and the hour.
+            ConfigurationError: As sample does; or if the value is an infinity or a
+                NaN, naming *setting* and the value.
         """
-        hour = self.sample(spec, setting)
-        if isinstance(hour, float) and not math.isfinite(hour):
-            raise ConfigurationError(f"{setting} must be a finite number, got {hour!r}")
-        return hour
+        value = self.sample(spec, setting)
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ConfigurationError(f"{setting} must be a finite number, got {value!r}")
+        return value
 
     def sample_with_context(
         self, spec: DistributionSpec, context: dict[str, Optional[float]], setting: str
@@ -2057,8 +2053,8 @@ def generate_homes_from_distribution(
         if config.ev is not None:
             charger_type = sampler.sample(config.ev.charger_type, "ev.charger_type")
             if charger_type is not None:
-                arrival_hour_val = sampler.sample_hour(config.ev.arrival_hour, "ev.arrival_hour")
-                departure_hour_val = sampler.sample_hour(
+                arrival_hour_val = sampler.sample_finite(config.ev.arrival_hour, "ev.arrival_hour")
+                departure_hour_val = sampler.sample_finite(
                     config.ev.departure_hour, "ev.departure_hour"
                 )
                 required_charge_val = sampler.sample(
