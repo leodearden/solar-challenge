@@ -190,7 +190,9 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
-    An immutable type raises TypeError naming it before anything else is read.
+    An immutable type raises TypeError naming it before anything else is read, and a
+    class with no class statement inspect can read, such as ast.AST, raises TypeError
+    naming it when its source is read.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
@@ -212,10 +214,12 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
 
     As in undeclared_attributes, an immutable type raises TypeError naming it before
-    anything else is read, a write to self whose attribute name the scan cannot read
-    raises TypeError unless *reviewed* holds its text, a text in *reviewed* that is no
-    such write's raises ValueError, and one string given as *reviewed* raises TypeError.
-    A reviewed write sets none of the declared attributes, since its names are unknown.
+    anything else is read, a class with no class statement inspect can read raises
+    TypeError naming it when its source is read, a write to self whose attribute name the
+    scan cannot read raises TypeError unless *reviewed* holds its text, a text in
+    *reviewed* that is no such write's raises ValueError, and one string given as
+    *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
+    since its names are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
@@ -1172,9 +1176,17 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
 
 
 def _class_source(cls: type) -> str:
-    """*cls*'s source, dedented, read only once _defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records."""
+    """*cls*'s source, dedented, read only once _defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; TypeError naming *cls* if inspect can read no class statement for it."""
     _defining_module(cls)
-    return textwrap.dedent(inspect.getsource(cls))
+    try:
+        source = inspect.getsource(cls)
+    except (OSError, TypeError) as unread:
+        raise TypeError(
+            f"{_label(cls)} has no class statement inspect can read, so the scan has no "
+            "__init__ or __post_init__ to read: pass a class that a class statement in a "
+            "source file defines"
+        ) from unread
+    return textwrap.dedent(source)
 
 
 @dataclasses.dataclass(frozen=True)
