@@ -30,12 +30,11 @@ from tests.e2e._job_requests import (
 
 @dataclass(frozen=True)
 class _SimulatePage:
-    """A page that shows the tracker: its path, its Run button's name, the route glob of the POST its Run sends, and the path prefix of a completed run's results."""
+    """A page that shows the tracker: its path, its Run button's name, and the route glob of the POST its Run sends."""
 
     path: str
     run_button: str
     submission: str
-    results: str
 
 
 @pytest.fixture(
@@ -45,7 +44,6 @@ class _SimulatePage:
                 "/simulate/home",
                 "Run Simulation",
                 "**/api/simulate/home",
-                "/results/home/",
             ),
             id="home",
         ),
@@ -54,7 +52,6 @@ class _SimulatePage:
                 "/simulate/fleet",
                 "Run Fleet Simulation",
                 "**/api/simulate/fleet-from-distribution",
-                "/results/fleet/",
             ),
             id="fleet",
         ),
@@ -67,13 +64,16 @@ def simulate_page(request: pytest.FixtureRequest) -> _SimulatePage:
 
 @pytest.fixture
 def running_jobs(page: Page, simulate_page: _SimulatePage) -> Iterator[HeldJobRequests]:
-    """Accept the page's Nth run as job-N of run-N, so no run reaches the live server's JobManager, and hold each job's progress stream open until the test answers it with the job's end; abort the streams still held at teardown."""
+    """Accept the page's Nth run as job-N of run-N, whose results_url is /results/run-N as the server answers it, so no run reaches the live server's JobManager, and hold each job's progress stream open until the test answers it with the job's end; abort the streams still held at teardown."""
     jobs = HeldJobRequests("text/event-stream")
     run_numbers = itertools.count(1)
 
     def _accept(route: Route) -> None:
         n = next(run_numbers)
-        route.fulfill(status=201, json={"job_id": f"job-{n}", "run_id": f"run-{n}"})
+        route.fulfill(
+            status=201,
+            json={"job_id": f"job-{n}", "run_id": f"run-{n}", "results_url": f"/results/run-{n}"},
+        )
 
     page.route(simulate_page.submission, _accept)
     page.route("**/api/jobs/*/progress", jobs.handle)
@@ -128,7 +128,7 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
         "job-2", sse_event("complete", {"status": "completed", "run_id": "run-2"})
     )
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_attribute(
-        "href", simulate_page.results + "run-2"
+        "href", "/results/run-2"
     )
     assert page_errors == [], f"Errors on {simulate_page.path}: {page_errors}"
 
@@ -158,7 +158,7 @@ def test_a_run_after_a_completed_run_starts_its_tracker_afresh(
     run = page.get_by_role("button", name=simulate_page.run_button, exact=True)
     results_link = page.get_by_role("link", name="View Results", exact=True)
     run.click()
-    expect(results_link).to_have_attribute("href", simulate_page.results + "run-1")
+    expect(results_link).to_have_attribute("href", "/results/run-1")
 
     with page.expect_request("**/api/jobs/job-2/progress"):
         run.click()
@@ -191,7 +191,7 @@ def test_a_run_whose_progress_stream_disconnects_shows_it_reconnecting_then_comp
         "job-1", sse_event("complete", {"status": "completed", "run_id": "run-1"})
     )
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_attribute(
-        "href", simulate_page.results + "run-1"
+        "href", "/results/run-1"
     )
     expect(reconnecting).to_be_hidden()
     assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (

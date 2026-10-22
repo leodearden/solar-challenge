@@ -158,7 +158,7 @@ def test_mobile_history_lists_runs_as_cards(
 
     view_links = page.get_by_role("link", name="View", exact=True)
     expect(view_links).to_have_count(1)
-    expect(view_links).to_have_attribute("href", f"/results/home/{run_id}")
+    expect(view_links).to_have_attribute("href", f"/results/{run_id}")
     expect(page.locator("table")).to_be_hidden()
 
 

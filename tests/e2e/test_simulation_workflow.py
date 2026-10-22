@@ -89,7 +89,7 @@ def test_view_results_link_navigates_to_results_page(
     page: Page,
     live_server: str,
 ) -> None:
-    """Click 'View Results' -> URL contains /results/home/."""
+    """Click 'View Results' -> the URL is the run's results page, /results/<run_id>."""
     page.goto(live_server + "/simulate/home")
     response = submit_two_day_run(page)
     assert response.status == 201, response.text()
@@ -101,9 +101,7 @@ def test_view_results_link_navigates_to_results_page(
     view_results.click()
     page.wait_for_load_state("domcontentloaded")
 
-    assert "/results/home/" in page.url, (
-        f"Expected URL to contain '/results/home/', got '{page.url}'"
-    )
+    assert page.url == f"{live_server}/results/{response.json()['run_id']}"
 
 
 # -- Results page has stat cards (seeded) -----------------------------------
