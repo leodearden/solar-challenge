@@ -148,8 +148,9 @@ def named_classes(obj: object) -> set[type]:
     in the base that declares it, however a mixin annotates it. If object or a class
     defined in C holds that constructor, neither of which spells an annotation, a
     signature the class carries is spelled in the module of the class in its MRO whose
-    own namespace holds it. What a type variable or a NewType carries is spelled in the
-    module that declares it; inside its own declaration, as in
+    own namespace holds it, and one whose metaclass provides it raises TypeError naming
+    the class and that metaclass. What a type variable or a NewType carries is spelled
+    in the module that declares it; inside its own declaration, as in
     TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
     def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
     the module that spells the signature holding it. That module binds no type
@@ -681,8 +682,23 @@ def _constructor_holder(cls: type) -> type:
 
 
 def _signature_holder(cls: type) -> type:
-    """The class in *cls*'s MRO whose own namespace holds the __signature__ *cls* carries; *cls* itself if none does, as when its metaclass provides it."""
-    return next((base for base in cls.__mro__ if "__signature__" in vars(base)), cls)
+    """The class in *cls*'s MRO whose own namespace holds the __signature__ *cls* carries.
+
+    If its metaclass provides that signature, or may, raises TypeError naming *cls* and
+    the metaclass: a class in the metaclass's MRO that holds a __signature__ provides it
+    unless *cls*'s MRO holds one and it is no data descriptor, and a metaclass's
+    __getattr__ may provide it when neither MRO holds one.
+    """
+    holder = next((base for base in cls.__mro__ if "__signature__" in vars(base)), None)
+    metaclass_holds = any("__signature__" in vars(meta) for meta in inspect.getmro(type(cls)))
+    if holder is None or metaclass_holds:
+        raise TypeError(
+            f"{_label(cls)} is constructed in C and carries a signature its metaclass "
+            f"{_label(type(cls))} provides or may provide, so no module is known to spell "
+            "it: give the class a constructor defined with def, or a metaclass that "
+            "provides no __signature__"
+        )
+    return holder
 
 
 def _holds_generated_init(cls: type) -> bool:
