@@ -566,6 +566,10 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
     building = functools.wraps(Built)(lambda rate: Built(rate))
     unsigned = functools.partial(zip, [1])
     unsigned.__signature__ = None
+    texted = functools.partial(zip, [1])
+    texted.__signature__ = "(rate)"
+    texted_zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    texted_zipping.__signature__ = "(rate)"
     wrapping = functools.partial(build, 1)
     wrapping.__wrapped__ = zip
 
@@ -580,6 +584,10 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
         surface_form(Zipper().zipped)
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(unsigned)
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(texted)
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(texted_zipping)
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(wrapping)
     with pytest.raises(
@@ -625,6 +633,15 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
 
         def __init__(self, rate: int) -> None: ...
 
+    class Texted:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
     naming_created_and_its_new = r"\.Created\b.*\.Created\.__new__\b.*\bobject\.__new__\b"
     with pytest.raises(TypeError, match=naming_created_and_its_new):
         surface_form(Created)
@@ -643,6 +660,10 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
         TypeError, match=r"\.Keyed\b.*\.Keyed\.__new__\b.*\bdict\.__new__\b"
     ):
         surface_form(Keyed)
+    with pytest.raises(
+        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*\bobject\.__new__\b"
+    ):
+        surface_form(Texted)
 
 
 @pytest.mark.skipif(
