@@ -57,14 +57,16 @@ def surface_form(obj: object) -> str:
     functools.partial is a routine on every admitted minor, as inspect counts one from
     3.14. Any other class's or routine's is its signature, a class's being its
     constructor's without self and a partial's the one it leaves of the callable it wraps.
-    A dataclass's signature follows its kind: dataclass, then in brackets those of eq,
-    order, unsafe_hash and frozen that are on, whether set on the class or on the base it
-    inherits them from. An annotation in that signature which it has no rule for, such as
-    a type alias, raises TypeError naming it and its type.
+    A class's constructor is the __call__ its metaclass resolves if that is not defined
+    in C, which inspect reads before any __new__ or __init__, else the __new__ or
+    __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
+    brackets those of eq, order, unsafe_hash and frozen that are on, whether set on the
+    class or on the base it inherits them from. An annotation in that signature which it
+    has no rule for, such as a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor, unless it carries a signature,
-    which inspect reads in that constructor's place; so does a routine that wraps such a
+    it and the class holding that constructor, unless it carries a signature, which
+    inspect reads in that constructor's place; so does a routine that wraps such a
     class, through a functools.partial, a bound method or a functools.wraps wrapper,
     unless the class or one of the routine's links carries one. A signature is an
     inspect.Signature as __signature__, which inspect reads as given. Any other
@@ -603,7 +605,9 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     The constructors it refuses, in the order it checks them:
 
     - the __call__ *cls*'s metaclass resolves, which inspect looks up before any __new__
-      or __init__, if it wraps a callable defined in C;
+      or __init__, if it wraps a callable defined in C. inspect reads any other __call__
+      _metaclass_call_as_read gives in their place, so none of the constructors below is
+      then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -616,6 +620,8 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     _refuse_wrapper_of_c_callable(
         cls, metaclass, "__call__", inspect.getattr_static(metaclass, "__call__")
     )
+    if _metaclass_call_as_read(cls) is not None:
+        return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
