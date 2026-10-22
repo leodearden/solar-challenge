@@ -9,6 +9,7 @@
   - The synthesis ruling that the e2e mark is added in the existing `pytest_collection_modifyitems` hook of tests/e2e/conftest.py.
 - **Premise correction to a synthesis ruling** (§3 decision 1): the synthesis made the `--junitxml` report "the one typed collection source". A collect-only JUnit report holds no collected test, so it cannot be. Leo ruled in this session to replace it with an in-repo collection-report plugin. That plugin also takes over the skipped-module question JUnit answers today, so the repo keeps exactly one typed collection source.
 - **Status:** authored 2026-10-15 by an author-only /prd session; not yet committed.
+- **Amendment (2026-10-22, task 875):** the default-collection lane contract is **derived from the suite path**, not listed per row. `LaneContract` has no `NEVER_IN_A_DEFAULT_COLLECTION` member, no `LANE_JOBS` row lists it, and the L2 structural test (`test_every_row_whose_suite_lies_directly_under_tests_lists_never_in_a_default_collection`) is deleted. `test_a_default_collection_never_reaches_the_suite` is parametrised over `_whose_suite_lies_directly_under_tests()`, which selects every row whose `PurePosixPath(suite).parent` is `tests/` (interpreter-matrix, e2e, css-build and newest-releases; pvgis lies outside it). A new `LANE_JOBS` row whose suite is a directory directly under tests/ therefore gets the default-collection check without listing anything, and the check fails until `tests/conftest.py`'s `collect_ignore` names the directory. **B8 is met by construction**: a scratch row `LaneJob("scratch", "tests/integration", checked={COLLECTS_ONLY_ITS_SUITE})`, never committed, made `test_a_default_collection_never_reaches_the_suite[scratch]` fail with "a default collection with addopts cleared reached tests/integration". Do not re-add the flag or the structural test: that would restate the suite path as a second source (SPOT). §3 decision 4's first sub-bullet, §4.2 L2, §5 B8 and §7 γ's Modules and Signal are read as amended; passages marked **[Superseded 2026-10-22, task 875 — see header amendment.]** are kept for the record.
 - **Approach:** B, with a contract (§4) and a boundary-test sketch (§5) for the two seams the program gives this stream: the collection report and the lane-only suite list.
 - **Code anchors** verified against main `962552956508` (2026-10-15). Main moves fast: anchors cite symbols, so re-locate lines at implementation time. Since the review's pin `7dfea36e`, only `tests/unit/test_marker_registration.py` has changed among this stream's files: five unit classes moved from its networked list to its offline list.
 
@@ -105,7 +106,7 @@ Both conclusions hold for the in-repo half. The upstream half of fk-a0b751097301
    - One runner starts each command with `sh -c` in the value's directory, in its own session, and kills the process group on timeout. Collect mode only adds `PYTEST_ADDOPTS` and the report option.
    - The probe environment stays a denylist of the caller's venv and uv lock-mode switches, matching how the lane really runs (§2), and adds `DF_VERIFY_ROLE` from the command's role.
 4. **"Lane-only" means a directory in `tests/conftest.py::collect_ignore`, now including `e2e`.**
-   - The rows read it behaviourally: every `LANE_JOBS` row whose suite is a directory directly under tests/ lists `NEVER_IN_A_DEFAULT_COLLECTION`, and a structural test keeps it so.
+   - **[Superseded 2026-10-22, task 875 — see header amendment.]** The rows read it behaviourally: every `LANE_JOBS` row whose suite is a directory directly under tests/ lists `NEVER_IN_A_DEFAULT_COLLECTION`, and a structural test keeps it so.
    - pyproject addopts' `--ignore=tests/e2e` and the interpreter matrix's `PYTEST_ADDOPTS` ignore are deleted as restatements.
    - The newest-releases `PYTEST_ADDOPTS` stays, but only to carry the floor-test deselect (decision 7).
    - **test_command stays byte-identical.** dark-factory reads it from main's yaml but runs it on each task's tree. A branch cut before γ has no `e2e` in its collect_ignore, and without `--ignore=tests/e2e` its verify would try to import playwright.
@@ -169,7 +170,7 @@ Invariants:
 ### 4.2 Lane-only suite list (owner: tests/conftest.py::collect_ignore)
 
 - **L1.** `collect_ignore` lists every lane-only directory directly under tests/: `e2e`, `interpreter_matrix`, `css_build` and `newest_releases`. An explicit path argument still collects the directory, as each lane job's command does.
-- **L2.** Every `LANE_JOBS` row whose `suite` is a directory directly under tests/ lists `NEVER_IN_A_DEFAULT_COLLECTION`. A structural test over `LANE_JOBS` fails naming a row that does not. The behavioural test (a collection of tests/ with addopts cleared reaches none of the suite) is the reader that keeps L1 honest.
+- **L2.** **[Superseded 2026-10-22, task 875 — see header amendment.]** Every `LANE_JOBS` row whose `suite` is a directory directly under tests/ lists `NEVER_IN_A_DEFAULT_COLLECTION`. A structural test over `LANE_JOBS` fails naming a row that does not. The behavioural test (a collection of tests/ with addopts cleared reaches none of the suite) is the reader that keeps L1 honest.
 - **L3.** No lane suite restates its own exclusion (`PYTEST_ADDOPTS=--ignore=<suite>`). test_command's `--ignore=tests/e2e` is the one deliberate exception, for config/tree skew (§3 decision 4).
 
 ### 4.3 Orchestrator command (owner: tests/_orchestrator_config.py; it is not a program seam, but β's value)
@@ -198,7 +199,7 @@ def lane_commands(project_root: Path) -> tuple[OrchestratorCommand, ...]  # ever
 | B5 | consumer | The interpreter-matrix lane contract reads parametrise ids | Real yaml and real tests/interpreter_matrix | `test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor` passes on `CollectedTest.parametrize_id` |
 | B6 | producer | A hung collect probe leaves no process behind | A command that starts a child and sleeps past a short timeout | After the timeout, no process of the probe's group is alive (the pattern of `test_no_process_the_suite_started_outlives_a_hang`). **RED today:** `subprocess.run` kills only the shell |
 | B7 | consumer | The lane-only list covers e2e | Real tree | `test_a_default_collection_never_reaches_the_suite[e2e]` passes. **RED before γ:** with addopts cleared, collecting tests/ reaches tests/e2e and fails importing playwright in the verify environment (the failure fix 3d7474f recorded) |
-| B8 | consumer | A new lane directory without the contract is caught | LANE_JOBS gains a directory row lacking `NEVER_IN_A_DEFAULT_COLLECTION`, in a scratch edit | The structural test fails, naming the row |
+| B8 | consumer | **[Superseded 2026-10-22, task 875 — see header amendment.]** A new lane directory without the contract is caught | LANE_JOBS gains a directory row lacking `NEVER_IN_A_DEFAULT_COLLECTION`, in a scratch edit | The structural test fails, naming the row |
 | B9 | producer | The e2e mark comes from the directory | pytester, under copies of the root and e2e conftests, with a module under the e2e copy that has no pytestmark | The module's test carries `e2e` (`get_closest_marker`) and runs outside the offline window (until 366) |
 
 ## 6. Existing tasks this PRD meets
@@ -265,10 +266,10 @@ Leaves are labelled α–θ; real ids come at decompose. Priority follows each l
 - **Modules:**
   - tests/conftest.py (`collect_ignore`), tests/e2e/conftest.py (the hook) and the 23 tests/e2e/test_*.py modules (delete `pytestmark`);
   - pyproject.toml (addopts drops `--ignore=tests/e2e`) and tests/interpreter_matrix/test_verify_suite.py (`_suite_env` drops `PYTEST_ADDOPTS`);
-  - tests/unit/test_offline_lane_contracts.py (the e2e row lists `NEVER_IN_A_DEFAULT_COLLECTION`; the L2 structural test);
+  - tests/unit/test_offline_lane_contracts.py (**[Superseded 2026-10-22, task 875 — see header amendment.]** the e2e row lists `NEVER_IN_A_DEFAULT_COLLECTION`; the L2 structural test);
   - one pytester test for the hook (suggested: beside tests/unit/test_e2e_network_change_reruns.py, which already runs copies of the e2e conftest).
 - **Work:** §3 decisions 4 and 5, and §4.2. test_command is not edited.
-- **Signal:** B7 (RED before), B8 and B9. `grep` finds no `pytestmark = pytest.mark.e2e` under tests/e2e, no `--ignore=tests/e2e` in pyproject.toml and no `PYTEST_ADDOPTS` in tests/interpreter_matrix. The lane's e2e job still collects only tests/e2e (`test_the_job_collects_its_suite_and_nothing_else[e2e]` passes).
+- **Signal:** **[Superseded 2026-10-22, task 875 — see header amendment.]** (B8 only) B7 (RED before), B8 and B9. `grep` finds no `pytestmark = pytest.mark.e2e` under tests/e2e, no `--ignore=tests/e2e` in pyproject.toml and no `PYTEST_ADDOPTS` in tests/interpreter_matrix. The lane's e2e job still collects only tests/e2e (`test_the_job_collects_its_suite_and_nothing_else[e2e]` passes).
 - **Consumer:** plain `pytest`, dark-factory's serial and confirm reruns (`-o addopts=`), and tests/conftest.py's offline exemption (until 366).
 - **Prereqs:** β (serialises the shared lane helpers and call sites).
 
