@@ -86,6 +86,30 @@ class TestCECLibraryReuse:
                 check_names=False,
             )
 
+    @pytest.mark.parametrize(
+        "default_module",
+        [
+            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
+            pytest.param(
+                lambda: create_pv_system(PVConfig(capacity_kw=4.0)).arrays[0].module_parameters,
+                id="an-earlier-default-system",
+            ),
+        ],
+    )
+    def test_an_edited_default_module_leaves_later_default_systems_unchanged(
+        self, default_module: Callable[[], dict[str, float]]
+    ) -> None:
+        default_module()["A_c"] = 99.0
+
+        later = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        for array in later.arrays:
+            pd.testing.assert_series_equal(
+                pd.Series(array.module_parameters),
+                pvlib.pvsystem.retrieve_sam("CECMod")[DEFAULT_CEC_MODULE],
+                check_names=False,
+            )
+
     def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
         configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
         systems = [create_pv_system(config) for config in configs]
