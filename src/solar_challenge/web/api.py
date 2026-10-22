@@ -17,7 +17,7 @@ from typing import Any, Generator, assert_never
 
 import yaml as _yaml
 import pandas as pd
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context, url_for
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
@@ -75,6 +75,15 @@ def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable
     return jsonify({"error": str(unreadable)}), 500
 
 
+def _submitted_job_answer(job_id: str, run_id: str) -> tuple[Response, int]:
+    """Answer HTTP 201 with a submitted job's job_id and run_id, and as results_url the path of its run's results page."""
+    return jsonify({
+        "job_id": job_id,
+        "run_id": run_id,
+        "results_url": url_for("main.run_results", run_id=run_id),
+    }), 201
+
+
 @api_bp.route("/simulate/home", methods=["POST"])
 def simulate_home_api() -> tuple[Response, int]:
     """Submit a home simulation job for background execution.
@@ -82,7 +91,7 @@ def simulate_home_api() -> tuple[Response, int]:
     Expects a JSON body with simulation parameters.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
     try:
@@ -98,7 +107,7 @@ def simulate_home_api() -> tuple[Response, int]:
         name=name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/simulate/fleet", methods=["POST"])
 def simulate_fleet_api() -> tuple[Response, int]:
@@ -107,7 +116,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
     Expects a JSON body with a non-empty array of home configs under the 'homes' key.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
     homes_data = data.get("homes", [])
@@ -137,7 +146,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         name=fleet_name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str) -> tuple[Response, int]:
@@ -384,7 +393,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``job_id`` and ``run_id``, HTTP 201 on success; or the ``error``,
+        JSON with ``job_id``, ``run_id`` and ``results_url``, HTTP 201 on success; or the ``error``,
         HTTP 400, for a form parse_fleet_form refuses.
     """
     data = request_json_object()
@@ -403,7 +412,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         name=fleet.name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response | tuple[Response, int]:
@@ -614,7 +623,8 @@ def history_list_runs() -> Response:
         date_to: Filter runs created on or before this date
 
     Returns:
-        JSON response with ``runs`` list and ``pagination`` metadata.
+        JSON response with ``runs`` list, each row carrying the path of its run's results
+        page as ``results_url``, and ``pagination`` metadata.
     """
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
@@ -692,6 +702,7 @@ def history_list_runs() -> Response:
                 pass
         run_dict["total_generation_kwh"] = summary.get("total_generation_kwh")
         run_dict["self_consumption_ratio"] = summary.get("self_consumption_ratio")
+        run_dict["results_url"] = url_for("main.run_results", run_id=run_dict["id"])
         # Remove the full JSON from the list response to save bandwidth
         run_dict.pop("summary_json", None)
         runs_list.append(run_dict)

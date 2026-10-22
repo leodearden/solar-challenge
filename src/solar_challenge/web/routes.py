@@ -160,8 +160,8 @@ def run_results(run_id: str) -> Any:
     )
 
 
-@bp.route("/results/home/<run_id>", methods=["GET"], endpoint="home_results")
-@bp.route("/results/fleet/<run_id>", methods=["GET"], endpoint="fleet_results")
+@bp.route("/results/home/<run_id>", methods=["GET"])
+@bp.route("/results/fleet/<run_id>", methods=["GET"])
 def results_page_moved(run_id: str) -> Any:
     """Answer 301 to the run's one results page, /results/<run_id>, whatever kind of run the old URL named."""
     return redirect(url_for("main.run_results", run_id=run_id), code=301)
