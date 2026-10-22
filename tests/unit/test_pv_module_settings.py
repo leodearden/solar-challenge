@@ -191,16 +191,19 @@ class TestASetEfficiencySetsTheModulesArea:
     @pytest.mark.parametrize(
         "template",
         [
-            pytest.param(None, id="DEFAULT_CEC_MODULE"),
-            pytest.param(pvwatts_300_w_module(), id="a-300-W-PVWatts-module"),
+            pytest.param(lambda: None, id="DEFAULT_CEC_MODULE"),
+            pytest.param(pvwatts_300_w_module, id="a-300-W-PVWatts-module"),
         ],
     )
     def test_every_array_takes_the_area_at_which_its_rating_is_that_efficiency(
-        self, template: dict[str, float] | None, efficiency: float
+        self, template: Callable[[], dict[str, float] | None], efficiency: float
     ) -> None:
-        module = default_module() if template is None else template
-        rating_w = module["STC"] if template is None else module["pdc0"]
-        config = PVConfig(capacity_kw=4.0, module_efficiency=efficiency, custom_module_params=template)
+        custom_module_params = template()
+        module = default_module() if custom_module_params is None else custom_module_params
+        rating_w = module["STC"] if custom_module_params is None else module["pdc0"]
+        config = PVConfig(
+            capacity_kw=4.0, module_efficiency=efficiency, custom_module_params=custom_module_params
+        )
 
         for array in create_pv_system(config).arrays:
             assert array.module_parameters["A_c"] == pytest.approx(rating_w / (efficiency * 1000))
