@@ -3,7 +3,8 @@
 
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
-file that is not UTF-8 text holds none.
+file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
+so a file git ignores is not there to point at.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
@@ -13,6 +14,7 @@ test_config, is no pointer.
 
 import ast
 import re
+import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -129,29 +131,55 @@ def _code_name(node: ast.AST) -> str | None:
 
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
-    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve under *root*, in their order."""
-    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(root, pointer)) is not None]
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
+    tree = _WorkingTree(root)
+    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(tree, pointer)) is not None]
 
 
-def _unresolved(root: Path, pointer: _Pointer) -> str | None:
-    """Return why *pointer* leads to no file, directory or test under *root*, or None if it leads to one.
+class _WorkingTree:
+    """The files of a checkout's working tree, as tests/_working_tree.py lists them, and the directories holding them.
 
-    It must give a path, with its names joined by ::, and that path must exist. Its names are read from the Python
-    file's syntax tree, and the file is never imported.
+    Each of its Python files is parsed when first asked for, and at most once.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._files = frozenset(working_tree_files(root))
+        self._directories = frozenset(directory for file in self._files for directory in file.parents)
+        self._modules: dict[PurePosixPath, ast.Module] = {}
+
+    def holds(self, path: PurePosixPath) -> bool:
+        """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
+        return path in self._files or path in self._directories
+
+    def module(self, path: PurePosixPath) -> ast.Module | None:
+        """Return the syntax tree of the Python file at *path*, or None if the tree holds no Python file there."""
+        if path.suffix != ".py" or path not in self._files:
+            return None
+        if path not in self._modules:
+            self._modules[path] = ast.parse((self._root / path).read_text(encoding="utf-8"))
+        return self._modules[path]
+
+
+def _unresolved(tree: _WorkingTree, pointer: _Pointer) -> str | None:
+    """Return why *pointer* leads to no file, directory or test in the working *tree*, or None if it leads to one.
+
+    It must give a path, with its names joined by ::, and the tree must hold that path. Its names are read from the
+    Python file's syntax tree, and the file is never imported.
     """
     if pointer.path is None:
         return _NAMED_WITHOUT_ITS_NODE_ID
     if pointer.dotted_names:
         node_id = "::".join((str(pointer.path), *pointer.names, *pointer.dotted_names))
         return f"a node-id joins its names with ::, so write {node_id}"
-    target = root / pointer.path
-    if not target.exists():
-        return f"{pointer.path} does not exist"
+    if not tree.holds(pointer.path):
+        return f"{pointer.path} does not exist, or git ignores it"
     if not pointer.names:
         return None
-    if target.suffix != ".py" or not target.is_file():
+    module = tree.module(pointer.path)
+    if module is None:
         return f"{pointer.path} is not a Python file, so it defines no {pointer.names[0]}"
-    return _undefined(pointer.path, pointer.names, ast.parse(target.read_text(encoding="utf-8")))
+    return _undefined(pointer.path, pointer.names, module)
 
 
 def _undefined(path: PurePosixPath, names: tuple[str, ...], module: ast.Module) -> str | None:
@@ -205,7 +233,8 @@ def test_every_pointer_from_the_package_into_tests_resolves(project_root: Path) 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """Return a project root whose tests/unit holds notes.txt and test_pointed_at.py, defining tests, a class and a nested one."""
+    """Return a git checkout whose tests/unit holds notes.txt and test_pointed_at.py, defining tests, a class and a nested one."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     tests = tmp_path / "tests" / "unit"
     tests.mkdir(parents=True)
     (tests / "test_pointed_at.py").write_text(
@@ -270,7 +299,7 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
     )
 
     assert _dangling(project, _pointers(project, [source])) == [
-        "src/pkg/module.py:1: tests/unit/test_absent.py: tests/unit/test_absent.py does not exist",
+        "src/pkg/module.py:1: tests/unit/test_absent.py: tests/unit/test_absent.py does not exist, or git ignores it",
         "src/pkg/module.py:2: tests/unit/test_pointed_at.py::test_member:"
         " tests/unit/test_pointed_at.py defines no test_member at its top level",
         "src/pkg/module.py:3: tests/unit/test_pointed_at.py::TestGroup::test_absent: TestGroup defines no test_absent",
@@ -281,6 +310,22 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "src/pkg/module.py:6: tests/unit/notes.txt::test_top:"
         " tests/unit/notes.txt is not a Python file, so it defines no test_top",
         "src/pkg/module.py:7: tests/unit::test_top: tests/unit is not a Python file, so it defines no test_top",
+    ]
+
+
+def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
+    (project / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    generated = project / "tests" / "unit" / "generated"
+    generated.mkdir()
+    (generated / "test_made.py").write_text("def test_made(): pass\n", encoding="utf-8")
+    source = _write_source(
+        project, "src/pkg/module.py", "# tests/unit/generated/test_made.py::test_made\n# tests/unit/generated\n"
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:1: tests/unit/generated/test_made.py::test_made:"
+        " tests/unit/generated/test_made.py does not exist, or git ignores it",
+        "src/pkg/module.py:2: tests/unit/generated: tests/unit/generated does not exist, or git ignores it",
     ]
 
 
