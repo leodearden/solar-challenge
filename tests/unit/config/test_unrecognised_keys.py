@@ -15,10 +15,8 @@ from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_T
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
-    DispatchStrategyConfig,
     EVDistributionConfig,
     FleetDistributionConfig,
-    GridChargeConfig,
     HeatPumpDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -44,6 +42,7 @@ from solar_challenge.config import (
     parse_sweep_fleet_configs,
     parse_tariff_config,
 )
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
@@ -342,11 +341,7 @@ class TestHomeBlockKeys:
             "system_losses": 0.05,
         }
         grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8}
-        dispatch_strategy: dict[str, Any] = {
-            "strategy_type": "tou_optimized",
-            "peak_hours": [[16, 19]],
-            "import_limit_kw": 3.5,
-        }
+        dispatch_strategy: dict[str, Any] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
         battery: dict[str, Any] = {
             "capacity_kwh": 9.5,
             "max_charge_kw": 3.0,
@@ -402,9 +397,7 @@ class TestHomeBlockKeys:
             battery_config=BatteryConfig(
                 **{
                     **battery,
-                    "dispatch_strategy": DispatchStrategyConfig(
-                        **{**dispatch_strategy, "peak_hours": [(16, 19)]}
-                    ),
+                    "dispatch_strategy": TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
                     "grid_charging": GridChargeConfig(**grid_charging),
                 }
             ),
@@ -740,11 +733,7 @@ class TestFleetDistributionBlockKeys:
                 "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
                 "max_discharge_kw": 3.0,
                 "grid_charging": {"target_soc_fraction": 0.8},
-                "dispatch_strategy": {
-                    "strategy_type": "tou_optimized",
-                    "peak_hours": [[16, 19]],
-                    "import_limit_kw": 3.5,
-                },
+                "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
             },
             "load": {"annual_consumption_kwh": 3400.0, "household_occupants": 2, "use_stochastic": False},
             "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.0, "annual_heat_demand_kwh": 9000.0},
@@ -780,9 +769,7 @@ class TestFleetDistributionBlockKeys:
                 max_charge_kw=ShuffledPoolDistribution(values=(2.5, 3.0), counts=(1, 1)),
                 max_discharge_kw=3.0,
                 grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-                dispatch_strategy=DispatchStrategyConfig(
-                    strategy_type="tou_optimized", peak_hours=[(16, 19)], import_limit_kw=3.5
-                ),
+                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
             ),
             heat_pump=HeatPumpDistributionConfig(
                 heat_pump_type="GSHP", thermal_capacity_kw=6.0, annual_heat_demand_kwh=9000.0

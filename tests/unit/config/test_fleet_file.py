@@ -11,14 +11,13 @@ import pytest
 import yaml
 
 from solar_challenge.config import (
-    DispatchStrategyConfig,
-    GridChargeConfig,
     SweepSpec,
     detect_fleet_sweep_spec,
     load_fleet_config,
     parse_fleet_config,
     parse_sweep_fleet_configs,
 )
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.pv import calculate_degradation_factor
@@ -573,9 +572,7 @@ fleet_distribution:
         assert len(with_battery) == 2, "premise: the pool gives two homes a battery"
         assert batteries.count(None) == 2, "premise: the pool leaves two homes without a battery"
         for battery in with_battery:
-            assert battery.dispatch_strategy == DispatchStrategyConfig(
-                "tou_optimized", peak_hours=[(16, 21)]
-            )
+            assert battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
 
     def test_a_fleet_battery_tou_dispatch_strategy_needs_no_tariff_so_loads_without_warning(
         self, tmp_path: Path

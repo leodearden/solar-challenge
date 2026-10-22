@@ -15,7 +15,13 @@ from flask.testing import FlaskClient
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
-from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
+from solar_challenge.config import load_fleet_config
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -37,6 +43,19 @@ from tests._web_runs import store_fleet_run, store_home_run
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+_PRE_DISPATCH_UNION_HOME_CONFIGS = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "stored_runs" / "pre_dispatch_union_home_configs.json"
+)
+"""A home run's stored config per dispatch strategy, as runs stored it before the strategies were
+variants of one union: all three strategy keys, the ones the strategy does not read null."""
+
+_STRATEGIES = (
+    SelfConsumptionStrategyConfig(),
+    TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+    PeakShavingStrategyConfig(import_limit_kw=3.0),
+)
+"""One example of each dispatch strategy, those of the stored configs above."""
 
 
 def _insert_test_run(
@@ -562,16 +581,17 @@ class TestExportAPI:
         path.write_bytes(response.data)
         assert load_fleet_config(path).homes == home_configs
 
+    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_home_run_with_battery_dispatch_and_grid_charging_loads_back(
-        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path, strategy: object
     ) -> None:
-        """A battery's TOU dispatch strategy and grid charging survive the export."""
+        """A battery's dispatch strategy, whichever it is, and its grid charging survive the export."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3500.0),
             battery_config=BatteryConfig(
                 capacity_kwh=5.0,
-                dispatch_strategy=DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+                dispatch_strategy=strategy,
                 grid_charging=GridChargeConfig(target_soc_fraction=0.8),
             ),
             tariff_config=TariffConfig.economy_7(),
@@ -596,7 +616,7 @@ class TestExportAPI:
                 load_config=LoadConfig(annual_consumption_kwh=2900.0),
                 battery_config=BatteryConfig(
                     capacity_kwh=5.0,
-                    dispatch_strategy=DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+                    dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
                     grid_charging=GridChargeConfig(target_soc_fraction=0.8),
                 ),
                 tariff_config=TariffConfig.economy_7(),
@@ -607,7 +627,7 @@ class TestExportAPI:
                 load_config=LoadConfig(annual_consumption_kwh=4100.0),
                 battery_config=BatteryConfig(
                     capacity_kwh=10.0,
-                    dispatch_strategy=DispatchStrategyConfig("peak_shaving", import_limit_kw=3.0),
+                    dispatch_strategy=PeakShavingStrategyConfig(import_limit_kw=3.0),
                 ),
                 name="Home 2",
             ),
@@ -620,6 +640,24 @@ class TestExportAPI:
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
         assert load_fleet_config(path).homes == home_configs
+
+    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
+    def test_export_of_a_run_stored_before_the_dispatch_union_loads_back_with_its_variant(
+        self, app: Flask, client: FlaskClient, tmp_path: Path, strategy: object
+    ) -> None:
+        """Such a run stores all three strategy keys, the ones its strategy does not read null."""
+        stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
+        _insert_test_run(app, run_id="pre-union", config=stored)
+
+        response = client.get("/api/history/runs/pre-union/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        battery_config = home_config_for_run(path).battery_config
+        assert battery_config is not None
+        assert battery_config.dispatch_strategy == strategy
+        assert battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
 
     def test_export_refuses_a_run_config_the_scenario_grammar_cannot_express(
         self, storage: RunStorage, client: FlaskClient
@@ -636,9 +674,9 @@ class TestExportAPI:
         assert "custom_module_params" in response.get_json()["error"]
 
     @pytest.mark.parametrize(
-        "config",
+        ("config", "named"),
         [
-            pytest.param({"pv_config": {"capacity_kw": 4.0}}, id="no load_config"),
+            pytest.param({"pv_config": {"capacity_kw": 4.0}}, (), id="no load_config"),
             pytest.param(
                 {
                     "pv_config": {"capacity_kw": 4.0},
@@ -648,20 +686,36 @@ class TestExportAPI:
                         "dispatch_strategy": {"strategy_type": "tou_optimized"},
                     },
                 },
+                (),
                 id="TOU dispatch strategy without peak hours",
+            ),
+            pytest.param(
+                {
+                    "pv_config": {"capacity_kw": 4.0},
+                    "load_config": {},
+                    "battery_config": {
+                        "capacity_kwh": 5.0,
+                        "dispatch_strategy": {"strategy_type": "turbo"},
+                    },
+                },
+                ("strategy_type", "'turbo'"),
+                id="dispatch strategy no strategy is tagged with",
             ),
         ],
     )
     def test_export_of_an_undecodable_stored_config_is_a_server_error(
-        self, app: Flask, client: FlaskClient, config: dict
+        self, app: Flask, client: FlaskClient, config: dict, named: tuple[str, ...]
     ) -> None:
-        """A stored config that a HomeConfig-tree constructor refuses is a JSON server error."""
+        """A stored config that a HomeConfig-tree constructor refuses, or whose strategy no variant is tagged with, is a JSON server error."""
         _insert_test_run(app, run_id="undecodable", config=config)
 
         response = client.get("/api/history/runs/undecodable/export/yaml")
 
         assert response.status_code == 500
-        assert response.get_json()["error"].startswith("Invalid config data")
+        error = response.get_json()["error"]
+        assert error.startswith("Invalid config data")
+        for text in named:
+            assert text in error
 
 
 # ---------------------------------------------------------------------------

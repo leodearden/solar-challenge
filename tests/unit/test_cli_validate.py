@@ -382,6 +382,25 @@ home:
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
 
+    def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
+        self, tmp_path: Path
+    ) -> None:
+        """scenarios/dispatch-comparison.yaml with its first home's battery strategy_type misspelt."""
+        scenario = Path(__file__).resolve().parents[2] / "scenarios" / "dispatch-comparison.yaml"
+        committed = scenario.read_text()
+        misspelt = committed.replace("strategy_type: self_consumption", "strategy_type: tou_optimised", 1)
+        assert misspelt != committed
+
+        result = self._validate_config(tmp_path, misspelt, file_name=scenario.name)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert "homes[0].battery.dispatch_strategy.strategy_type 'tou_optimised'" in error_row
+        for strategy in ("peak_shaving", "self_consumption", "tou_optimized"):
+            assert strategy in error_row
+
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -12,6 +12,9 @@ Tests cover:
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
+- A home run with each dispatch strategy loads equal to the one saved, with an
+  equal hash, and one stored before the strategies were variants of one union
+  loads its strategy as the variant its strategy_type names
 - Every saved config and summary is written as its dataclass field tree in JSON
 - Each column of a stored data.parquet, under the names runs on disk use, loads
   into its field
@@ -36,7 +39,12 @@ pytest.importorskip("flask")
 from flask import Flask
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
@@ -158,9 +166,10 @@ def _make_fleet_summary(n_homes: int = 2) -> FleetSummary:
 def _make_home_config_with_every_field_shape(name: str = "Every Shape") -> HomeConfig:
     """Create a HomeConfig whose stored form holds every field shape a save reaches.
 
-    Those are nested dataclasses, a tuple of dataclasses (the tariff periods), a list
-    of tuples (the battery peak hours), a dict (the PV custom module params), and None
-    (the heat pump and the unset optionals).
+    Those are nested dataclasses, a tuple of dataclasses (the tariff periods), a tuple
+    of tuples (the battery's peak hours), a field no constructor takes (the dispatch
+    strategy's tag), a dict (the PV custom module params), and None (the heat pump and
+    the unset optionals).
     """
     return HomeConfig(
         pv_config=PVConfig(
@@ -170,9 +179,7 @@ def _make_home_config_with_every_field_shape(name: str = "Every Shape") -> HomeC
         load_config=LoadConfig(annual_consumption_kwh=3200.0),
         battery_config=BatteryConfig(
             capacity_kwh=5.0,
-            dispatch_strategy=DispatchStrategyConfig(
-                "tou_optimized", peak_hours=[(16, 19), (20, 22)]
-            ),
+            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))),
             grid_charging=GridChargeConfig(target_soc_fraction=0.8),
         ),
         ev_config=EVConfig(charger_type="7kW", arrival_hour=18),
@@ -628,8 +635,8 @@ class TestTupleFieldRoundtrip:
 class TestEveryFieldShapeRoundtrip:
     """A config holding every field shape a save writes loads equal to the one saved.
 
-    Its battery has a dispatch strategy and grid charging, whose types BatteryConfig's
-    module names only for type checking.
+    Its battery has a dispatch strategy, a variant of a union whose tag no constructor
+    takes, and grid charging.
     """
 
     def test_home_config_loads_equal(self, storage: RunStorage) -> None:
@@ -855,6 +862,70 @@ class TestRunStoredWithModuleSettings:
             config.pv_config, module_efficiency=0.2, temperature_coefficient=-0.004
         )
         assert loaded_config.pv_config != config.pv_config
+
+
+_PRE_DISPATCH_UNION_HOME_CONFIGS = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "stored_runs" / "pre_dispatch_union_home_configs.json"
+)
+"""A home run's stored config per dispatch strategy, as runs stored it before the strategies were
+variants of one union: all three strategy keys, the ones the strategy does not read null."""
+
+_STRATEGIES = (
+    SelfConsumptionStrategyConfig(),
+    TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+    PeakShavingStrategyConfig(import_limit_kw=3.0),
+)
+"""One example of each dispatch strategy, those of the stored configs above."""
+
+
+def _dispatching_home(strategy: Any, name: str = "Dispatching home") -> HomeConfig:
+    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges to 0.8, as the stored configs above."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        battery_config=BatteryConfig(
+            capacity_kwh=5.0,
+            dispatch_strategy=strategy,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+        ),
+        tariff_config=TariffConfig.economy_7(),
+        name=name,
+    )
+
+
+def _save_dispatching_home_run(storage: RunStorage, run_id: str, strategy: Any) -> HomeConfig:
+    """Save a home run of _dispatching_home(*strategy*) under *run_id*, and return its config."""
+    config = _dispatching_home(strategy)
+    storage.save_home_run(
+        run_id=run_id, config=config, results=_make_simulation_results(), summary=_make_summary()
+    )
+    return config
+
+
+class TestRunWithEachDispatchStrategy:
+    """A home run's battery dispatch strategy, whichever variant it is, loads back as that variant."""
+
+    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
+    def test_a_saved_run_loads_equal_with_an_equal_hash(self, storage: RunStorage, strategy: Any) -> None:
+        config = _save_dispatching_home_run(storage, "dispatch-001", strategy)
+
+        loaded_config, _, _ = storage.load_home_run("dispatch-001")
+
+        assert loaded_config == config
+        assert hash(loaded_config) == hash(config)
+
+    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
+    def test_a_run_stored_before_the_union_loads_its_strategy_as_its_variant(
+        self, storage: RunStorage, strategy: Any
+    ) -> None:
+        tag = strategy.strategy_type
+        _save_dispatching_home_run(storage, "pre-union-001", strategy)
+        config_path = stored_run_dir(storage, "pre-union-001") / "config.json"
+        config_path.write_text(json.dumps(_read_json(_PRE_DISPATCH_UNION_HOME_CONFIGS)[tag], indent=2))
+
+        loaded_config, _, _ = storage.load_home_run("pre-union-001")
+
+        assert loaded_config == _dispatching_home(strategy, name=f"Stored before the dispatch union: {tag}")
 
 
 class TestCorruptedParquet:
