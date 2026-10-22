@@ -871,6 +871,55 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
 
 
+def test_a_class_constructed_in_c_whose_metaclass_holds_a_signature_raises_type_error_naming_the_class_and_that_metaclass(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metas",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Signed(type):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class PropertySigned(type):\n"
+        "    @property\n"
+        "    def __signature__(cls):\n"
+        "        return signature\n",
+    )
+    users = imported_module(
+        tmp_path,
+        monkeypatch,
+        "users",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from metas import PropertySigned, Signed\n"
+        "\n"
+        "class Rated(dict, metaclass=Signed):\n"
+        "    pass\n"
+        "\n"
+        "class Overridden(dict, metaclass=PropertySigned):\n"
+        "    __signature__ = inspect.Signature()\n",
+    )
+
+    with pytest.raises(TypeError) as plain:
+        named_classes(users.Rated)
+    with pytest.raises(TypeError) as overriding:
+        named_classes(users.Overridden)
+
+    assert "users.Rated" in str(plain.value)
+    assert "metas.Signed" in str(plain.value)
+    assert "users.Overridden" in str(overriding.value)
+    assert "metas.PropertySigned" in str(overriding.value)
+
+
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
