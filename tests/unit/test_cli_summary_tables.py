@@ -92,7 +92,9 @@ def _fleet_summary(**changes: float | None) -> FleetSummary:
     return dataclasses.replace(every_field_set, **changes)
 
 
-bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
+_DAY = "2024-06-21"
+
+bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).bristol_tmy_fixture()
 
 
 @pytest.fixture
@@ -201,7 +203,7 @@ class TestPrintedSummaryTables:
 
         result = CliRunner().invoke(
             app,
-            ["fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--sequential"],
+            ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY, "--sequential"],
             catch_exceptions=False,
         )
 
@@ -229,7 +231,7 @@ class TestPrintedSummaryTables:
     @pytest.mark.parametrize(
         "argv",
         [
-            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY],
             ["home", "quick", "4", "5", "--days", "1"],
         ],
         ids=["home-run", "home-quick"],
@@ -266,7 +268,7 @@ class TestPrintedSummaryTables:
         )
 
         result = CliRunner().invoke(
-            app, ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21"], catch_exceptions=False
+            app, ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY], catch_exceptions=False
         )
 
         assert result.exit_code == 0
