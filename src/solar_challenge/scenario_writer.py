@@ -12,7 +12,7 @@ the pair it derives.
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import MISSING, Field, fields
-from typing import Any, Optional
+from typing import Any, Optional, TypeVar
 
 import yaml
 
@@ -25,10 +25,13 @@ from solar_challenge.config import (
     PV_BLOCK,
     ComponentBlock,
 )
+from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+
+_Component = TypeVar("_Component", bound=DataclassInstance)
 
 _PAIR_DERIVED_FROM_EFFICIENCY: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")
 """The per-direction efficiencies BatteryConfig derives from a round-trip efficiency, until S28 retires it."""
@@ -125,7 +128,7 @@ def _home_block(home: HomeConfig) -> dict[str, Any]:
 
 
 def _component_block(
-    block: ComponentBlock[Any], config: object, *, omit: Collection[str] = ()
+    block: ComponentBlock[_Component], config: _Component, *, omit: Collection[str] = ()
 ) -> dict[str, Any]:
     """The block config.py's reader of *block*'s table reads back as *config*.
 
@@ -143,7 +146,7 @@ def _component_block(
     }
 
 
-def _refuse_fields_without_a_key(block: ComponentBlock[Any], config: object) -> None:
+def _refuse_fields_without_a_key(block: ComponentBlock[_Component], config: _Component) -> None:
     """Refuse *config* if it sets a field *block*'s grammar has no key for away from its declared default.
 
     Raises:

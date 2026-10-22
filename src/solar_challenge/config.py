@@ -10,13 +10,12 @@ import math
 import random
 import re
 import warnings
-from dataclasses import MISSING, Field, asdict, dataclass, field, fields, replace
+from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
     Any,
     Callable,
-    ClassVar,
     Collection,
     Generic,
     Iterator,
@@ -32,6 +31,7 @@ import yaml
 
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
+from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
@@ -792,13 +792,7 @@ class SubBlock:
     write: Callable[[Any], dict[str, Any]]
 
 
-class _DataclassInstance(Protocol):
-    """An instance of any dataclass: what dataclasses.fields reads the fields of."""
-
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
-
-
-_Component = TypeVar("_Component", bound=_DataclassInstance)
+_Component = TypeVar("_Component", bound=DataclassInstance)
 
 
 @dataclass(frozen=True)
