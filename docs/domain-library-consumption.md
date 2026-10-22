@@ -597,6 +597,34 @@ first of a month at the month before's: at 3,400 kWh a year, 2024-10-26 to
 when they re-pin; those with such windows re-baseline the figures built on
 them.
 
+**Unreleased on main** (task 914): `HeatPumpConfig.thermal_capacity_kw` gains
+the default `8.0` and `EVConfig.arrival_hour` the default `18`; on the 0.5.0
+tag both are required. Code that passes them needs no change when it re-pins.
+The scenario grammar changes with them. A home's `heat_pump:` block may leave
+out `thermal_capacity_kw`, and its `ev:` block `arrival_hour`; the tag refuses
+both. A block without `heat_pump_type` or `charger_type` is refused naming its
+path, e.g. `home.ev.charger_type`. A key written as null in a `pv:`,
+`battery:`, `load:`, `heat_pump:`, `ev:` or `location:` block, or a home's
+`name: null`, reads as absent and takes the default; on the tag the null is
+handed on, so `pv: {tilt: null}` and a null `annual_heat_demand_kwh` raise a
+raw `TypeError`, `load: {use_stochastic: null}` selects the deterministic
+profile, and a null name is held as `None`. The `heat_pump:` and `ev:` blocks
+pass their values as written, as `pv:`, `battery:` and `load:` already do,
+where the tag converts them with `float()`, `int()` and `str()`: a fractional
+EV `arrival_hour` now reaches `EVConfig`, which the tag runs truncated, and
+simulating the home raises `IndexError` until `EVConfig` refuses it (task
+861). A value of a type a block's dataclass cannot use, such as a quoted
+number, which the tag's `heat_pump:` and `ev:` blocks convert, is refused as a
+`ConfigurationError` naming the block, e.g. `home.heat_pump`; on the tag it
+raises a raw `TypeError` in a `pv:`, `battery:`, `load:` or `location:` block.
+`system_losses` is a `pv:` key and `scenario_writer` writes it: a
+`HomeConfig` with `system_losses=0.05` exported as scenario YAML loads back as
+0.05, where the tag refuses the key and its export loads back as the default
+0.14076. An export writes every key of each component block, an unset one as
+null, a battery's unset `efficiency` included. Consumers whose scenario files
+rely on a null meaning `None`, or on those conversions, re-check them when they
+re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

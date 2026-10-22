@@ -16,6 +16,9 @@
 - The default is `pvlib.pvsystem.pvwatts_losses() / 100`, 14.08% (0.14075660688264469 in
   pvlib 0.15.1). A value outside [0, 1) raises `ValueError`, so 14.0, the percent that
   PVGIS and PVWatts take, is refused.
+- A scenario file's home `pv:` block sets it as `system_losses`, a fraction:
+  `system_losses: 0.05` is 5%. `scenario_writer` writes it back, so an exported home
+  loads back with its own losses.
 - **Performance ratio**, as this note and its measurements use it: a year's AC energy
   divided by the in-plane irradiation (kWh/m², before angle-of-incidence losses) times
   the wired DC capacity (`pv.wired_dc_capacity_kw`, the denominator of validation's
@@ -148,9 +151,10 @@ PVGIS-14% 0.793–0.815.
 
 ## 7. Open Items
 
-- **Task 283:** exposure in YAML, fleet distributions, sweeps and `scenario_writer`.
-  Until then every YAML, web and CLI run gets the default, only Python callers set the
-  field, and `config.py` refuses a YAML `system_losses` key.
+- **Exposure:** task 914 makes `system_losses` a home `pv:` key that the reader reads and
+  `scenario_writer` writes. A fleet's `pv:` distribution draws it after task 919 (S7 δ).
+  Web and CLI runs have no input for it (task 610), so they get the default unless they
+  load a scenario file. Parameter sweeps go with S5, which deletes the sweep.
 - **Task 284:** ageing is applied to the AC after clipping, not to the DC.
 
 ## 8. When to Revisit

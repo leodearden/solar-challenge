@@ -339,6 +339,7 @@ class TestHomeBlockKeys:
             "inverter_capacity_kw": 3.68,
             "system_age_years": 2.0,
             "degradation_rate_per_year": 0.006,
+            "system_losses": 0.05,
         }
         grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8}
         dispatch_strategy: dict[str, Any] = {

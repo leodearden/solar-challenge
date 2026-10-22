@@ -56,7 +56,7 @@ class EVConfig:
 
     Attributes:
         charger_type: Charger power rating (3.6kW, 7kW, or 22kW)
-        arrival_hour: Hour of day when EV arrives home (0-23)
+        arrival_hour: Hour of day when EV arrives home (0-23), default 18, 6pm
         departure_hour: Hour of day when EV departs (0-23), default 7am
         required_charge_kwh: Energy required per day in kWh, default 35 kWh
             (typical UK EV doing ~100 miles/day at 3.5 miles/kWh)
@@ -65,7 +65,7 @@ class EVConfig:
     """
 
     charger_type: str
-    arrival_hour: int
+    arrival_hour: int = 18
     departure_hour: int = 7
     required_charge_kwh: float = 35.0
     smart_charging_mode: str = "none"

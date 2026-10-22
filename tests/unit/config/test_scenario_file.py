@@ -316,10 +316,15 @@ class TestLocationBlockParsing:
         )
 
     @pytest.mark.parametrize(
-        "block", [pytest.param(None, id="absent"), pytest.param({}, id="empty")]
+        "block",
+        [
+            pytest.param(None, id="absent"),
+            pytest.param({}, id="empty"),
+            pytest.param({"name": None}, id="all-null"),
+        ],
     )
     def test_absent_or_empty_block_is_bristol(self, block: dict[str, object] | None) -> None:
-        """A config that gives no location simulates Bristol."""
+        """A config that gives no location, or only null keys, which read as absent, simulates Bristol."""
         assert parse_location_block(block) == Location.bristol()
 
     @pytest.mark.parametrize(
@@ -347,10 +352,21 @@ class TestLocationBlockParsing:
                 ),
                 id="coordinates-only",
             ),
+            pytest.param(
+                {"latitude": None, "name": "Clifton"},
+                Location(
+                    latitude=51.45,
+                    longitude=-2.58,
+                    timezone="Europe/London",
+                    altitude=11.0,
+                    name="Clifton",
+                ),
+                id="null-latitude",
+            ),
         ],
     )
     def test_omitted_keys_take_bristol_values_except_the_name(
         self, block: dict[str, object], expected: Location
     ) -> None:
-        """Omitted coordinates, timezone and altitude are Bristol's; an omitted name stays empty."""
+        """Omitted or null coordinates, timezone and altitude are Bristol's; an omitted name stays empty."""
         assert parse_location_block(block) == expected
