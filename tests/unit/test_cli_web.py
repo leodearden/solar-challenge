@@ -61,6 +61,16 @@ from solar_challenge.cli import app
 app(["web", "start", *sys.argv[1:]])
 """
 
+WEB_START_IMPORTING_SOURCE_FILE = """
+import sys
+
+import source_file
+
+from solar_challenge.cli import app
+
+app(["web", "start", *sys.argv[1:]])
+"""
+
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -136,6 +146,26 @@ def _run_status(port: int, run_id: str) -> str:
         return status
 
 
+def _dashboard_status(port: int) -> int:
+    """The status with which the server on port answers GET /."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=60) as response:
+        status: int = response.status
+        return status
+
+
+def _store_lock_file(home: Path) -> Path:
+    """The lock file of the dashboard store of a server whose HOME is home."""
+    return home / ".solar-challenge" / "dashboard.lock"
+
+
+def _store_holder_pid(home: Path) -> int | None:
+    """The pid that the lock file of the dashboard store under home records, or None while it records none."""
+    try:
+        return int(_store_lock_file(home).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
     """Ctrl+C drops the jobs still waiting for a worker, so they never run."""
     started_dir = tmp_path / "started"
@@ -179,7 +209,7 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
     started_dir = tmp_path / "started"
     started_dir.mkdir()
     port = _free_port()
-    lock_path = str(tmp_path / ".solar-challenge" / "dashboard.lock")
+    lock_path = str(_store_lock_file(tmp_path))
 
     with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
@@ -209,5 +239,31 @@ def test_web_start_debug_serves_the_dashboard(tmp_path: Path) -> None:
     with _server(tmp_path, WEB_START, "--debug", "--port", str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
 
-        with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=60) as response:
-            assert response.status == 200
+        assert _dashboard_status(port) == 200
+
+
+def test_web_start_debug_serves_again_after_a_source_file_changes_from_a_restarted_process_that_retakes_the_store(
+    tmp_path: Path,
+) -> None:
+    """The reloader restarts the serving process when a module it imported changes, and the restarted process can take the store only once the one before it has exited.
+
+    source_file.py starts dated to the epoch, so its change is newer than the time the reloader recorded at any clock resolution.
+    """
+    source_file = tmp_path / "source_file.py"
+    source_file.write_text("")
+    os.utime(source_file, (0, 0))
+    port = _free_port()
+
+    with _server(tmp_path, WEB_START_IMPORTING_SOURCE_FILE, "--debug", "--port", str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+        assert _dashboard_status(port) == 200
+        first_holder = _store_holder_pid(tmp_path)
+        assert first_holder not in (None, server.pid)
+
+        source_file.write_text("CHANGED = True\n")
+        _wait_until(
+            server,
+            lambda: _store_holder_pid(tmp_path) not in (None, first_holder),
+            "a restarted serving process takes the store",
+        )
+        assert _dashboard_status(port) == 200
