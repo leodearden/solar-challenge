@@ -597,6 +597,10 @@ first of a month at the month before's: at 3,400 kWh a year, 2024-10-26 to
 when they re-pin; those with such windows re-baseline the figures built on
 them.
 
+**Unreleased on main** (task 914): `HeatPumpConfig.thermal_capacity_kw` gains
+the default `8.0` and `EVConfig.arrival_hour` the default `18`; on the 0.5.0
+tag both are required. Code that passes them needs no change when it re-pins.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

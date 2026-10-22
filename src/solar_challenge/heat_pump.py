@@ -148,13 +148,13 @@ class HeatPumpConfig:
 
     Attributes:
         heat_pump_type: One of HEAT_PUMP_TYPES
-        thermal_capacity_kw: Thermal capacity in kilowatts (heating output)
+        thermal_capacity_kw: Thermal capacity in kilowatts (heating output), default 8 kW
         annual_heat_demand_kwh: Annual heating demand in kilowatt-hours
         name: Optional identifier for the heat pump
     """
 
     heat_pump_type: HeatPumpType
-    thermal_capacity_kw: float
+    thermal_capacity_kw: float = 8.0
     annual_heat_demand_kwh: float = 8000.0  # Typical UK home heating demand
     name: str = ""
 
@@ -188,28 +188,18 @@ class HeatPumpConfig:
         """Create a typical UK domestic air source heat pump.
 
         Returns:
-            HeatPumpConfig with 8 kW capacity, 8000 kWh annual demand
+            HeatPumpConfig with the declared default capacity and annual demand
         """
-        return cls(
-            heat_pump_type="ASHP",
-            thermal_capacity_kw=8.0,
-            annual_heat_demand_kwh=8000.0,
-            name="8 kW ASHP"
-        )
+        return cls(heat_pump_type="ASHP", name=f"{cls.thermal_capacity_kw:g} kW ASHP")
 
     @classmethod
     def default_gshp(cls) -> "HeatPumpConfig":
         """Create a typical UK domestic ground source heat pump.
 
         Returns:
-            HeatPumpConfig with 8 kW capacity, 8000 kWh annual demand
+            HeatPumpConfig with the declared default capacity and annual demand
         """
-        return cls(
-            heat_pump_type="GSHP",
-            thermal_capacity_kw=8.0,
-            annual_heat_demand_kwh=8000.0,
-            name="8 kW GSHP"
-        )
+        return cls(heat_pump_type="GSHP", name=f"{cls.thermal_capacity_kw:g} kW GSHP")
 
 
 def generate_heat_pump_load(
