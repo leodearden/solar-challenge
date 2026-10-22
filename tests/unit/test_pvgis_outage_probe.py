@@ -121,11 +121,10 @@ def test_an_answer_pvgis_gave_to_a_request_it_judged_is_no_outage(
 
 
 def test_a_connection_this_machine_refuses_is_an_outage(probe: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
-    with socket.socket() as released:
-        released.bind((_THIS_MACHINE, 0))
-        port = released.getsockname()[1]
-
-    exit_status = probe.main(["--api-url", _api_url_on(port)])
+    """The port is bound but never listened on, so the kernel refuses each connection, and no other socket can take it."""
+    with socket.socket() as never_listens:
+        never_listens.bind((_THIS_MACHINE, 0))
+        exit_status = probe.main(["--api-url", _api_url_on(never_listens.getsockname()[1])])
 
     assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: ConnectionError\n")
 
