@@ -36,6 +36,7 @@ from solar_challenge.dispatch import (
 from solar_challenge.finance import BillBreakdown, FinanceConfig, bill
 from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
     CLIMATE_YEARS,
     DEFAULT_CACHE_DIR,
     PVGIS_API_URL,
@@ -175,7 +176,13 @@ def print_report(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
-        "--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="weather cache holding Bristol's TMY"
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "weather cache holding Bristol's TMY "
+            f"(default: the directory {CACHE_DIR_VARIABLE} names, else {DEFAULT_CACHE_DIR})"
+        ),
     )
     parser.add_argument("--start", type=pd.Timestamp, default=DEFAULT_START, help="first day, YYYY-MM-DD")
     parser.add_argument("--end", type=pd.Timestamp, default=DEFAULT_END, help="last day, YYYY-MM-DD")
@@ -185,8 +192,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parser().parse_args(argv)
     home = home_config_for_run(SCENARIO)
-    bills = measure(home, args.start, args.end, weather=PvgisTmy(WeatherCache(args.cache_dir)))
-    print_report(home, bills, cache_dir=args.cache_dir, start=args.start, end=args.end)
+    cache = WeatherCache(args.cache_dir)
+    bills = measure(home, args.start, args.end, weather=PvgisTmy(cache))
+    print_report(home, bills, cache_dir=cache.cache_dir, start=args.start, end=args.end)
 
 
 if __name__ == "__main__":

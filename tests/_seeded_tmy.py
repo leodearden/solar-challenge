@@ -55,7 +55,7 @@ class ClearJuneDays:
         return synthetic_june_weather(self.first_day, irradiance_scale_per_day=(1.0,) * self.count)
 
     def seed_as_bristol_tmy(self, weather_cache: WeatherCache) -> None:
-        """Put these days in *weather_cache* as Bristol's TMY, which get_tmy_data then reads in place of PVGIS."""
+        """Put these days in *weather_cache* as Bristol's TMY, which default_weather() then reads in place of PVGIS."""
         weather_cache.put(self.hourly_weather(), "tmy", Location.bristol())
 
     def bristol_tmy_fixture(self) -> object:

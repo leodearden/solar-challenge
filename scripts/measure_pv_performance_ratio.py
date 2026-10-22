@@ -6,9 +6,9 @@ the repository root:
 
     uv run --locked --extra dev python scripts/measure_pv_performance_ratio.py [--cache-dir DIR]
 
-For each of fourteen UK sites it reads PVGIS's TMY through get_tmy_data, which the weather
+For each of fourteen UK sites it reads PVGIS's TMY through PvgisTmy, which the weather
 cache serves when it holds it, and fetches PVGIS's own hourly estimate for the same system
-at PVGIS's 14% loss over the climate years, from the release get_tmy_data uses, so it needs
+at PVGIS's 14% loss over the climate years, from the release PvgisTmy uses, so it needs
 network access to PVGIS; it takes about five minutes. It simulates PVConfig.default_4kw() with
 its system losses and without them. tests/unit/test_measurement_scripts.py runs measure
 offline on synthetic weather; the PVGIS fetches and the full run are not part of the test
@@ -34,13 +34,13 @@ from solar_challenge.pv import (
     wired_dc_capacity_kw,
 )
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
     CLIMATE_YEARS,
     DEFAULT_CACHE_DIR,
     PVGIS_API_URL,
     PVGIS_TIMEOUT_S,
+    PvgisTmy,
     WeatherCache,
-    get_tmy_data,
-    set_weather_cache,
 )
 
 # docs/pv-annual-yield-benchmark.md §3's sites, at its points.
@@ -199,14 +199,20 @@ def print_table(rows: Sequence[tuple[SiteMeasurement, PvgisEstimate]]) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
-        "--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="weather cache holding the TMYs"
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "weather cache holding the TMYs "
+            f"(default: the directory {CACHE_DIR_VARIABLE} names, else {DEFAULT_CACHE_DIR})"
+        ),
     )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parser().parse_args(argv)
-    set_weather_cache(WeatherCache(args.cache_dir))
+    weather = PvgisTmy(WeatherCache(args.cache_dir))
     print(
         f"PVGIS {PVGIS_API_URL}, climate years {CLIMATE_YEARS[0]}-{CLIMATE_YEARS[-1]};"
         f" PVConfig.default_4kw(), {CONFIG.capacity_kw} kW at tilt {CONFIG.tilt} and azimuth"
@@ -214,7 +220,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         f" {PVGIS_LOSS_PERCENT}% loss; PR = AC / (in-plane irradiation x wired kWp)"
     )
     rows = [
-        (measure(name, location, get_tmy_data(location)), fetch_pvgis_estimate(location))
+        (measure(name, location, weather.get(location)), fetch_pvgis_estimate(location))
         for name, location in SITES.items()
     ]
     print_table(rows)

@@ -7,8 +7,9 @@ kWp is validation.BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP to within 1%, the fig
 docs/pv-cell-temperature.md §3 records.
 Why 1%, and why the pvgis lane job does not run this: docs/prds/assistant-facts-from-engine.md §6 decision 3.
 
-The TMY comes through get_tmy_data from the working directory's weather cache, which
-serves every slow test, so a cold cache needs network access to PVGIS.
+The TMY comes through PvgisTmy from the weather cache WeatherCache() resolves, the one
+every slow test reads: the working directory's, unless SOLAR_CHALLENGE_WEATHER_CACHE_DIR
+names another. A cold cache needs network access to PVGIS.
 """
 
 from types import ModuleType
@@ -18,7 +19,7 @@ import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
-from solar_challenge.weather import get_tmy_data
+from solar_challenge.weather import PvgisTmy, WeatherCache
 from tests._scripts import load_script
 
 MCS_PERFORMANCE_RATIO_LOW = 0.76
@@ -36,7 +37,7 @@ def pv_performance_ratio() -> ModuleType:
 def bristol_site(pv_performance_ratio: ModuleType) -> Any:
     """measure_pv_performance_ratio's measurement of the default system over Bristol's TMY, one simulated year for every test here."""
     bristol = Location.bristol()
-    return pv_performance_ratio.measure("Bristol", bristol, get_tmy_data(bristol))
+    return pv_performance_ratio.measure("Bristol", bristol, PvgisTmy(WeatherCache()).get(bristol))
 
 
 @pytest.mark.slow

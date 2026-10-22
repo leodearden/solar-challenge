@@ -373,7 +373,7 @@ class TestPvgisTmy:
 
     @pytest.fixture
     def seeded_cache(self, tmp_path, june_day):
-        """A cache of the test's own, not the installed one, holding june_day as Bristol's TMY."""
+        """A cache of the test's own, not the weather_cache default_weather() reads, holding june_day as Bristol's TMY."""
         cache = WeatherCache(cache_dir=tmp_path / "weather")
         cache.put(june_day, "tmy", Location.bristol())
         return cache
@@ -389,8 +389,8 @@ class TestPvgisTmy:
     def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
         self, tmp_path, weather_cache, pvgis_requests
     ):
-        """A get its cache cannot answer fetches the scaled TMY once and puts it in that cache, not the installed
-        one; a later get is served from that cache with no request."""
+        """A get its cache cannot answer fetches the scaled TMY once and puts it in that cache, not in the
+        weather_cache default_weather() reads; a later get is served from that cache with no request."""
         bristol = Location.bristol()
         cache = WeatherCache(cache_dir=tmp_path / "weather")
 
@@ -407,7 +407,8 @@ class TestPvgisTmy:
         pd.testing.assert_frame_equal(PvgisTmy(cache).get(bristol), first, check_exact=True)
 
     def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
-        """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the installed cache."""
+        """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the weather_cache
+        default_weather() reads."""
         weather = PvgisTmy(None)
 
         weather.get(Location.bristol())
@@ -437,6 +438,14 @@ class TestDefaultWeather:
         monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
         monkeypatch.chdir(tmp_path)
 
+    @pytest.fixture
+    def installed_cache(self, tmp_path):
+        """A cache of the test's own, installed with set_weather_cache for the test and uninstalled after it."""
+        cache = WeatherCache(cache_dir=tmp_path / "installed")
+        set_weather_cache(cache)
+        yield cache
+        set_weather_cache(None)
+
     def test_get_weather_cache_with_none_installed_follows_the_variable_at_each_call(
         self, no_cache_installed, monkeypatch, tmp_path
     ):
@@ -447,16 +456,16 @@ class TestDefaultWeather:
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "second"))
         assert get_weather_cache().cache_dir == tmp_path / "second"
 
-    def test_set_weather_cache_overrides_the_variable(self, weather_cache, monkeypatch, tmp_path):
+    def test_set_weather_cache_overrides_the_variable(self, installed_cache, monkeypatch, tmp_path):
         """get_weather_cache() returns the installed cache, whatever directory the variable names."""
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
-        assert get_weather_cache() is weather_cache
+        assert get_weather_cache() is installed_cache
 
-    def test_default_weather_reads_the_installed_cache(self, weather_cache, pvgis_requests):
+    def test_default_weather_reads_the_installed_cache(self, installed_cache, pvgis_requests):
         """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
         june_day = synthetic_june_weather("2024-06-21")
-        weather_cache.put(june_day, "tmy", Location.bristol())
+        installed_cache.put(june_day, "tmy", Location.bristol())
 
         result = default_weather().get(Location.bristol())
 
