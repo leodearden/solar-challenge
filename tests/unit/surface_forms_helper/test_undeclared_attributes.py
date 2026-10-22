@@ -1,8 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's undeclared_attributes, one per test."""
 
+import _random
+import ast
+import collections
+import decimal
+import functools
 import pathlib
 import re
+import types
+from collections.abc import Callable
 from dataclasses import InitVar, dataclass
 
 import pytest
@@ -255,3 +262,47 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
 
     assert later.__file__ in str(undeclared.value)
     assert later.__file__ in str(unset.value)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+@pytest.mark.parametrize(
+    ("cls", "naming_it"),
+    [
+        pytest.param(types.ModuleType, r"\bbuiltins\.module\b.*\bimmutable type\b", id="types.ModuleType"),
+        pytest.param(int, r"\bbuiltins\.int\b.*\bimmutable type\b", id="int"),
+        pytest.param(
+            collections.OrderedDict,
+            r"\bcollections\.OrderedDict\b.*\bimmutable type\b",
+            id="collections.OrderedDict",
+        ),
+        pytest.param(
+            functools.partial, r"\bfunctools\.partial\b.*\bimmutable type\b", id="functools.partial"
+        ),
+        pytest.param(decimal.Decimal, r"\bdecimal\.Decimal\b.*\bimmutable type\b", id="decimal.Decimal"),
+    ],
+)
+def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], cls: type, naming_it: str
+) -> None:
+    with pytest.raises(TypeError, match=naming_it):
+        scan(cls)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+@pytest.mark.parametrize(
+    ("cls", "naming_it"),
+    [
+        pytest.param(ast.AST, r"\bast\.AST\b.*\bno class statement inspect can read\b", id="ast.AST"),
+        pytest.param(
+            _random.Random,
+            r"\b_random\.Random\b.*\bno class statement inspect can read\b",
+            id="_random.Random",
+        ),
+    ],
+)
+def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], cls: type, naming_it: str
+) -> None:
+    """Neither is an immutable type: ast.AST's module has a source file, and _random.Random's has none."""
+    with pytest.raises(TypeError, match=naming_it):
+        scan(cls)
