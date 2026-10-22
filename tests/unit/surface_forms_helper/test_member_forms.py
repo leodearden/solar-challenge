@@ -8,8 +8,9 @@ import inspect
 import pathlib
 import re
 import types
+from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
-from typing import Callable, ClassVar, Optional
+from typing import ClassVar, Optional
 
 import pytest
 
