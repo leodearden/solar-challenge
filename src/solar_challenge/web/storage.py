@@ -502,17 +502,19 @@ class RunStorage:
         Raises:
             FileNotFoundError: No run is stored under *run_id*: the store refuses the id (the
                 refusal is the cause), no directory holds it, no run is recorded under it, its
-                record has no type, or a document its kind reads is missing. The message names
-                the id.
+                record names no run kind (RunRecord.kind's refusal is the cause), or a document
+                its kind reads is missing. The message names the id.
             ValueError: A stored document is corrupted or incomplete.
         """
         run_dir = self._stored_run_dir(run_id)
         record = self.run_record(run_id)
         if record is None:
             raise FileNotFoundError(f"No run is recorded under {run_id!r}")
-        if record.type is None:
-            raise FileNotFoundError(f"Run {run_id!r} is recorded with no type, so no run kind reads its files")
-        return record.kind.read(run_dir, run_id)
+        try:
+            kind = record.kind
+        except ValueError as no_kind:
+            raise FileNotFoundError(f"No run kind reads the files of run {run_id!r}: {no_kind}") from no_kind
+        return kind.read(run_dir, run_id)
 
     def run_record(self, run_id: str) -> RunRecord | None:
         """The record of run *run_id*: its row in the runs table. None when no run has that id."""

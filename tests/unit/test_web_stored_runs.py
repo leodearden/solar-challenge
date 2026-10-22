@@ -166,13 +166,21 @@ def test_loading_a_run_whose_job_saved_no_files_raises_file_not_found_naming_its
         storage.load_run("pending-1")
 
 
-def test_loading_a_run_whose_record_has_no_type_raises_file_not_found_naming_its_id(storage: RunStorage) -> None:
+def test_loading_a_run_whose_record_has_no_type_raises_file_not_found_naming_its_id_caused_by_the_kinds_refusal(
+    storage: RunStorage,
+) -> None:
+    """The error's cause is the refusal RunRecord.kind makes of the record, the one place a record with no type is refused a kind."""
     store_home_run(storage, _HOME_RUN_ID, *_a_home())
     with storage.database.transaction() as conn:
         conn.execute("UPDATE runs SET type = NULL WHERE id = ?", (_HOME_RUN_ID,))
+    with pytest.raises(ValueError) as refused:
+        _ = _record(storage, _HOME_RUN_ID).kind
 
-    with pytest.raises(FileNotFoundError, match=_HOME_RUN_ID):
+    with pytest.raises(FileNotFoundError, match=_HOME_RUN_ID) as raised:
         storage.load_run(_HOME_RUN_ID)
+
+    assert isinstance(raised.value.__cause__, ValueError)
+    assert str(raised.value.__cause__) == str(refused.value)
 
 
 def test_the_kind_of_a_record_with_no_type_is_refused_naming_its_run() -> None:
