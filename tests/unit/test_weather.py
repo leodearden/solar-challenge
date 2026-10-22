@@ -220,8 +220,9 @@ class TestWeatherCache:
     )
     def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
         """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
-        ValueError names that str, and put leaves no file, so a get finds no entry."""
-        index = pd.date_range("2024-06-21", periods=48, freq="h", tz=tz)
+        ValueError names that str, and put leaves no file, so a get finds no entry. The index is built at UTC
+        and converted to tz, because pandas cannot localize wall times in some such zones."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert(tz)
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
 
         with pytest.raises(ValueError, match=re.escape(str(index.tz))):
