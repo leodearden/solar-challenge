@@ -23,6 +23,11 @@
   - Until task 818 the PV notes guessed generation as nameplate kW × 900 kWh, so one
     run read differently under a 1 kW and a 6 kW nameplate. The battery note took its
     day from the target annual consumption, which can differ from the run's demand.
+  - The notes are hints, and none changes whether a check passes. Their thresholds
+    have no source. The checks' first version (4b208f4) set them when VAL-003 and
+    VAL-004 (`git show 672cedb:feature_list.json`) asked a check outside its range to
+    document its assumptions, and task 818 kept their values. Nothing records why the
+    battery check's PV thresholds sit further from 1 than the PV-only check's.
 - `validate_simulation` runs the battery check for a capacity above zero, else the
   PV-only one, and neither without a target annual consumption.
 

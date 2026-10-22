@@ -382,15 +382,42 @@ def _self_consumption_benchmark(
     )
 
 
-def _pv_only_size_note(
-    sc_percent: float, band: tuple[float, float], generation_over_demand: float
+@dataclass(frozen=True)
+class _PvSizeThresholds:
+    """The run's generation over its demand beyond which a note attributes a ratio outside its band to the PV's size.
+
+    Above the band, the PV is small under small_below; below it, the PV is large_label
+    over large_above. Hints with no source: docs/self-consumption-benchmark.md §1.
+    """
+
+    small_below: float
+    large_above: float
+    large_label: str
+
+
+_PV_SIZE_THRESHOLDS_WITHOUT_A_BATTERY = _PvSizeThresholds(
+    small_below=1.0, large_above=1.5, large_label="large"
+)
+_PV_SIZE_THRESHOLDS_WITH_A_BATTERY = _PvSizeThresholds(
+    small_below=0.8, large_above=2.0, large_label="very large"
+)
+
+_SMALL_BATTERY_DAYS_OF_DEMAND = 0.3
+"""Below the band, a battery holding under this many days of the run's demand is small: a hint with no source, docs/self-consumption-benchmark.md §1."""
+
+
+def _pv_size_note(
+    sc_percent: float,
+    band: tuple[float, float],
+    generation_over_demand: float,
+    thresholds: _PvSizeThresholds,
 ) -> str:
-    """For a ratio outside band, whether generation_over_demand makes the run's PV small or large relative to its consumption; "" otherwise."""
+    """For a ratio outside band, whether generation_over_demand makes the run's PV small or large by thresholds; "" otherwise."""
     low, high = band
-    if sc_percent > high and generation_over_demand < 1.0:
+    if sc_percent > high and generation_over_demand < thresholds.small_below:
         return " (Note: PV small relative to consumption)"
-    if sc_percent < low and generation_over_demand > 1.5:
-        return " (Note: PV large relative to consumption)"
+    if sc_percent < low and generation_over_demand > thresholds.large_above:
+        return f" (Note: PV {thresholds.large_label} relative to consumption)"
     return ""
 
 
@@ -409,12 +436,15 @@ def validate_self_consumption_pv_only(results: SimulationResults) -> ValidationR
     summary = calculate_summary(results)
     sc_percent = summary.self_consumption_ratio * 100
     band = UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+    note = _pv_size_note(
+        sc_percent, band, _generation_over_demand(summary), _PV_SIZE_THRESHOLDS_WITHOUT_A_BATTERY
+    )
     return _self_consumption_benchmark(
         check_name="pv_only_self_consumption_benchmark",
         subject="Self-consumption ratio",
         sc_percent=sc_percent,
         band=band,
-        note=_pv_only_size_note(sc_percent, band, _generation_over_demand(summary)),
+        note=note,
     )
 
 
@@ -425,13 +455,14 @@ def _battery_size_note(
     battery_kwh: float,
     a_day_of_demand_kwh: float,
 ) -> str:
-    """For a ratio outside band, whether generation_over_demand makes the run's PV small or very large relative to its consumption, or battery_kwh is small against a_day_of_demand_kwh; "" otherwise."""
-    low, high = band
-    if sc_percent > high and generation_over_demand < 0.8:
-        return " (Note: PV small relative to consumption)"
-    if sc_percent < low and generation_over_demand > 2.0:
-        return " (Note: PV very large relative to consumption)"
-    if sc_percent < low and battery_kwh < 0.3 * a_day_of_demand_kwh:
+    """For a ratio outside band, the PV-size note at a battery's thresholds or, failing one, whether battery_kwh is small against a_day_of_demand_kwh; "" otherwise."""
+    pv_note = _pv_size_note(
+        sc_percent, band, generation_over_demand, _PV_SIZE_THRESHOLDS_WITH_A_BATTERY
+    )
+    if pv_note:
+        return pv_note
+    low, _ = band
+    if sc_percent < low and battery_kwh < _SMALL_BATTERY_DAYS_OF_DEMAND * a_day_of_demand_kwh:
         return " (Note: Battery small relative to daily consumption)"
     return ""
 
