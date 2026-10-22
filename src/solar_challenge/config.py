@@ -10,7 +10,7 @@ import math
 import random
 import re
 import warnings
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
@@ -816,6 +816,57 @@ class ComponentBlock(Generic[_Component]):
     when_omitted: Mapping[str, object]
 
 
+def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict[str, Any]:
+    """The keys the block at *block_path* sets, its null ones dropped, once every key it holds is one of *block*'s."""
+    return {
+        key: value
+        for key, value in _refuse_unrecognised_keys(block_path, data, block.keys).items()
+        if value is not None
+    }
+
+
+def _built_component(
+    block: ComponentBlock[_Component], set_keys: Mapping[str, Any], block_path: str
+) -> _Component:
+    """The config the block at *block_path* describes, built from the keys it sets.
+
+    Each sub-block it sets is read first, in the table's order; then the dataclass is built once
+    from the set values, as written, over the table's when-omitted values.
+
+    Raises:
+        ConfigurationError: naming by its path each key the block leaves out that has neither a
+            declared default nor a when-omitted value.
+    """
+    missing = [
+        _child_path(block_path, each.name)
+        for each in fields(block.config_type)
+        if each.default is MISSING and each.default_factory is MISSING
+        and each.name not in block.when_omitted and each.name not in set_keys
+    ]
+    if missing:
+        raise ConfigurationError(
+            f"Missing required keys in {_block_label(block_path)}: {', '.join(missing)}"
+        )
+    sub_block_configs = {
+        key: sub_block.read(set_keys[key], block_path=_child_path(block_path, key))
+        for key, sub_block in block.sub_blocks.items()
+        if key in set_keys
+    }
+    return block.config_type(**{**block.when_omitted, **set_keys, **sub_block_configs})
+
+
+def _read_component_block(
+    block: ComponentBlock[_Component], data: object, *, block_path: str
+) -> _Component:
+    """The config the component block at *block_path* describes, read by *block*'s table.
+
+    A key outside the table's keys is refused, null or not; a null key reads as absent; an
+    omitted key takes the table's when-omitted value, else the dataclass's declared default; and
+    a key with neither is refused by its path.
+    """
+    return _built_component(block, _set_keys(block, data, block_path), block_path)
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     """Coerce *value* to a float, keeping a null as None."""
     return None if value is None else float(value)
@@ -833,43 +884,25 @@ def _number_or_none(value: Any) -> Optional[float]:
     return None if value is None else _number(value)
 
 
-_LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
-    "latitude", "longitude", "timezone", "altitude", "name",
-})
-
-
 def parse_location_block(
     data: Optional[dict[str, Any]], *, block_path: str = "location"
 ) -> Location:
-    """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
-    bristol = Location.bristol()
-    if data is None or data == {}:
-        return bristol
-    _refuse_unrecognised_keys(block_path, data, _LOCATION_BLOCK_KEYS)
-    return Location(
-        latitude=data.get("latitude", bristol.latitude),
-        longitude=data.get("longitude", bristol.longitude),
-        timezone=data.get("timezone", bristol.timezone),
-        altitude=data.get("altitude", bristol.altitude),
-        name=data.get("name", ""),
-    )
+    """Parse a ``location:`` block into a Location, as LOCATION_BLOCK reads it.
 
-
-_PV_BLOCK_KEYS: frozenset[str] = frozenset({
-    "capacity_kw", "azimuth", "tilt", "name", "module_efficiency", "temperature_coefficient",
-    "inverter_efficiency", "inverter_capacity_kw", "system_age_years", "degradation_rate_per_year",
-})
-_PV_CAPACITY_KW_WHEN_OMITTED: float = 4.0
+    A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise each
+    key it leaves out takes Bristol's value, but an omitted name stays empty.
+    """
+    if data is None:
+        return Location.bristol()
+    set_keys = _set_keys(LOCATION_BLOCK, data, block_path)
+    if not set_keys:
+        return Location.bristol()
+    return _built_component(LOCATION_BLOCK, set_keys, block_path)
 
 
 def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
-    """Parse PV configuration from config data.
-
-    A key the block omits takes PVConfig's declared default. PVConfig declares no capacity, so a
-    block omitting capacity_kw is a _PV_CAPACITY_KW_WHEN_OMITTED kW array.
-    """
-    pv = _refuse_unrecognised_keys(block_path, data, _PV_BLOCK_KEYS)
-    return PVConfig(**{"capacity_kw": _PV_CAPACITY_KW_WHEN_OMITTED, **pv})
+    """Parse a pv: block into a PVConfig, as _read_component_block reads PV_BLOCK."""
+    return _read_component_block(PV_BLOCK, data, block_path=block_path)
 
 
 _GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
@@ -903,53 +936,18 @@ def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
     return {"target_soc_fraction": grid_charging.target_soc_fraction}
 
 
-_BATTERY_BLOCK_KEYS: frozenset[str] = frozenset({
-    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "name", "dispatch_strategy",
-    "grid_charging", "min_soc_fraction", "max_soc_fraction", "charge_efficiency",
-    "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
-    "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
-})
-_BATTERY_CAPACITY_KWH_WHEN_OMITTED: float = 5.0
-
-
 def _parse_battery_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryConfig]:
-    """Parse battery configuration from config data.
-
-    A null block is no battery. A key the block omits takes BatteryConfig's declared default, and
-    an omitted capacity_kwh is _BATTERY_CAPACITY_KWH_WHEN_OMITTED kWh.
-    """
+    """Parse a battery: block into a BatteryConfig, as _read_component_block reads BATTERY_BLOCK; a null block is no battery."""
     if data is None:
         return None
-    battery = _refuse_unrecognised_keys(block_path, data, _BATTERY_BLOCK_KEYS)
-    dispatch_strategy = parse_dispatch_strategy_config(
-        battery.get("dispatch_strategy"), block_path=_child_path(block_path, "dispatch_strategy")
-    )
-    grid_charging = _parse_grid_charge_config(
-        battery.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
-    )
-    return BatteryConfig(
-        **{
-            "capacity_kwh": _BATTERY_CAPACITY_KWH_WHEN_OMITTED,
-            **battery,
-            "dispatch_strategy": dispatch_strategy,
-            "grid_charging": grid_charging,
-        }
-    )
-
-
-_LOAD_BLOCK_KEYS: frozenset[str] = frozenset({
-    "annual_consumption_kwh", "household_occupants", "name", "use_stochastic", "seed",
-})
+    return _read_component_block(BATTERY_BLOCK, data, block_path=block_path)
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
-    """Parse load configuration from config data.
-
-    A key the block omits takes LoadConfig's declared default.
-    """
-    return LoadConfig(**_refuse_unrecognised_keys(block_path, data, _LOAD_BLOCK_KEYS))
+    """Parse a load: block into a LoadConfig, as _read_component_block reads LOAD_BLOCK."""
+    return _read_component_block(LOAD_BLOCK, data, block_path=block_path)
 
 
 _DISPATCH_STRATEGY_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1194,86 +1192,20 @@ def parse_tariff_config(
     return block_type.build(data, block_path)
 
 
-_HEAT_PUMP_BLOCK_KEYS: frozenset[str] = frozenset({
-    "heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh", "name",
-})
-
-
 def _parse_heat_pump_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[HeatPumpConfig]:
-    """Parse heat pump configuration from config data.
-
-    Args:
-        data: Dict with heat_pump_type, thermal_capacity_kw, and optional fields,
-              or None.
-        block_path: The block's path in its file, named in error messages.
-
-    Returns:
-        HeatPumpConfig or None if data is None.
-
-    Raises:
-        ConfigurationError: If the block is not a mapping, carries a key it does
-            not read, or lacks a required field.
-    """
+    """Parse a heat_pump: block into a HeatPumpConfig, as _read_component_block reads HEAT_PUMP_BLOCK; a null block is no heat pump."""
     if data is None:
         return None
-    _refuse_unrecognised_keys(block_path, data, _HEAT_PUMP_BLOCK_KEYS)
-    if "heat_pump_type" not in data:
-        raise ConfigurationError(
-            "heat_pump configuration requires 'heat_pump_type' field"
-        )
-    if "thermal_capacity_kw" not in data:
-        raise ConfigurationError(
-            "heat_pump configuration requires 'thermal_capacity_kw' field"
-        )
-    return HeatPumpConfig(
-        heat_pump_type=data["heat_pump_type"],
-        thermal_capacity_kw=float(data["thermal_capacity_kw"]),
-        annual_heat_demand_kwh=float(data.get("annual_heat_demand_kwh", 8000.0)),
-        name=data.get("name", ""),
-    )
-
-
-_EV_BLOCK_KEYS: frozenset[str] = frozenset({
-    "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
-    "smart_charging_mode", "name",
-})
+    return _read_component_block(HEAT_PUMP_BLOCK, data, block_path=block_path)
 
 
 def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Optional[EVConfig]:
-    """Parse EV configuration from config data.
-
-    Args:
-        data: Dict with charger_type, arrival_hour, and optional fields, or None.
-        block_path: The block's path in its file, named in error messages.
-
-    Returns:
-        EVConfig or None if data is None.
-
-    Raises:
-        ConfigurationError: If the block is not a mapping, carries a key it does
-            not read, or lacks a required field.
-    """
+    """Parse an ev: block into an EVConfig, as _read_component_block reads EV_BLOCK; a null block is no EV."""
     if data is None:
         return None
-    _refuse_unrecognised_keys(block_path, data, _EV_BLOCK_KEYS)
-    if "charger_type" not in data:
-        raise ConfigurationError(
-            "ev configuration requires 'charger_type' field"
-        )
-    if "arrival_hour" not in data:
-        raise ConfigurationError(
-            "ev configuration requires 'arrival_hour' field"
-        )
-    return EVConfig(
-        charger_type=str(data["charger_type"]),
-        arrival_hour=int(data["arrival_hour"]),
-        departure_hour=int(data.get("departure_hour", 7)),
-        required_charge_kwh=float(data.get("required_charge_kwh", 35.0)),
-        smart_charging_mode=str(data.get("smart_charging_mode", "none")),
-        name=str(data.get("name", "")),
-    )
+    return _read_component_block(EV_BLOCK, data, block_path=block_path)
 
 
 _HOME_SCALAR_KEYS: tuple[str, ...] = ("name", "dispatch_strategy")
@@ -1288,8 +1220,9 @@ def parse_home_block(
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
-    A key the block omits takes HomeConfig's declared default, and an omitted pv or load block
-    reads as an empty one.
+    A key the block omits takes HomeConfig's declared default, and so does a null name; a null
+    dispatch_strategy is handed on, for task 787's reader. An omitted pv or load block reads as an
+    empty one.
     """
     home = _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
     return HomeConfig(
@@ -1308,7 +1241,11 @@ def parse_home_block(
             home.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
         ),
         ev_config=_parse_ev_config(home.get("ev"), block_path=_child_path(block_path, "ev")),
-        **{key: home[key] for key in _HOME_SCALAR_KEYS if key in home},
+        **{
+            key: home[key]
+            for key in _HOME_SCALAR_KEYS
+            if key in home and (home[key] is not None or key == "dispatch_strategy")
+        },
     )
 
 
