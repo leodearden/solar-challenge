@@ -5,13 +5,14 @@ Provides validation functions for PV generation values, consumption patterns,
 and benchmark validation against expected UK domestic performance.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
 
 from solar_challenge.battery import has_battery
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
 from solar_challenge.timebase import SimulationWindow
 
@@ -344,11 +345,17 @@ def validate_consumption(
     return results
 
 
-def validate_self_consumption_pv_only(
-    results: SimulationResults,
-    capacity_kw: float,
-    annual_consumption_kwh: float,
-) -> ValidationResult:
+def _generation_over_demand(summary: SummaryStatistics) -> float:
+    """How large the run's PV is relative to its consumption: its generation total over its demand total.
+
+    inf for a run with generation and no demand, 0 for one with no generation.
+    """
+    if summary.total_demand_kwh > 0:
+        return summary.total_generation_kwh / summary.total_demand_kwh
+    return math.inf if summary.total_generation_kwh > 0 else 0.0
+
+
+def validate_self_consumption_pv_only(results: SimulationResults) -> ValidationResult:
     """Validate self-consumption ratio for PV-only home against benchmarks.
 
     UK benchmark for PV-only self-consumption: ~25-35%
@@ -356,8 +363,6 @@ def validate_self_consumption_pv_only(
 
     Args:
         results: Simulation results
-        capacity_kw: PV system capacity
-        annual_consumption_kwh: Target annual consumption
 
     Returns:
         ValidationResult indicating if within benchmark range
@@ -392,14 +397,14 @@ def validate_self_consumption_pv_only(
         # - Small consumption relative to PV
         # - Consumption misaligned with generation
 
-        ratio_pv_to_consumption = (capacity_kw * 900) / annual_consumption_kwh  # Rough UK yield
+        generation_over_demand = _generation_over_demand(summary)
         exception_msg = ""
 
         if sc_ratio > expected_max:
-            if ratio_pv_to_consumption < 1.0:
+            if generation_over_demand < 1.0:
                 exception_msg = " (Note: PV small relative to consumption)"
         elif sc_ratio < expected_min:
-            if ratio_pv_to_consumption > 1.5:
+            if generation_over_demand > 1.5:
                 exception_msg = " (Note: PV large relative to consumption)"
 
         return ValidationResult(
@@ -416,7 +421,6 @@ def validate_self_consumption_pv_only(
 
 def validate_self_consumption_with_battery(
     results: SimulationResults,
-    capacity_kw: float,
     battery_kwh: float,
     annual_consumption_kwh: float,
 ) -> ValidationResult:
@@ -427,9 +431,8 @@ def validate_self_consumption_with_battery(
 
     Args:
         results: Simulation results
-        capacity_kw: PV system capacity
         battery_kwh: Battery capacity
-        annual_consumption_kwh: Target annual consumption
+        annual_consumption_kwh: Target annual consumption, which only the battery-size note reads
 
     Returns:
         ValidationResult indicating if within benchmark range
@@ -458,15 +461,15 @@ def validate_self_consumption_with_battery(
         )
     else:
         # Document potential exceptions
-        ratio_pv_to_consumption = (capacity_kw * 900) / annual_consumption_kwh
+        generation_over_demand = _generation_over_demand(summary)
         battery_to_daily = battery_kwh / (annual_consumption_kwh / 365)
         exception_msg = ""
 
         if sc_ratio > expected_max:
-            if ratio_pv_to_consumption < 0.8:
+            if generation_over_demand < 0.8:
                 exception_msg = " (Note: PV small relative to consumption)"
         elif sc_ratio < expected_min:
-            if ratio_pv_to_consumption > 2.0:
+            if generation_over_demand > 2.0:
                 exception_msg = " (Note: PV very large relative to consumption)"
             elif battery_to_daily < 0.3:
                 exception_msg = " (Note: Battery small relative to daily consumption)"
@@ -493,9 +496,8 @@ def validate_simulation(
 
     Args:
         results: Simulation results to validate
-        pv_config: The PVConfig that produced results. validate_pv_generation
-            judges the generation against it; the self-consumption benchmarks
-            use its configured capacity_kw.
+        pv_config: The PVConfig that produced results, which validate_pv_generation
+            judges the generation against.
         battery_capacity_kwh: Battery capacity (None or 0 if no battery)
         target_annual_consumption_kwh: Expected annual consumption
 
@@ -534,16 +536,11 @@ def validate_simulation(
         ):
             sc_check = validate_self_consumption_with_battery(
                 results,
-                pv_config.capacity_kw,
                 battery_capacity_kwh,
                 target_annual_consumption_kwh,
             )
         else:
-            sc_check = validate_self_consumption_pv_only(
-                results,
-                pv_config.capacity_kw,
-                target_annual_consumption_kwh,
-            )
+            sc_check = validate_self_consumption_pv_only(results)
         all_results.append(sc_check)
 
     return ValidationReport(results=all_results)
