@@ -2,12 +2,14 @@
 """Tests for the tool-use path of the AI assistant's chat.
 
 That is the TOOLS surface the chat offers the model, dispatch_tool's routing to
-the handlers and its refusal of a malformed input, and the tool-use loop in
-POST /assistant/chat that runs the model's tool calls.
+the handlers and its refusal of a malformed input, the tool-use loop in
+POST /assistant/chat that runs the model's tool calls, and the engine's facts
+the chat tells the model.
 """
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from functools import partial
@@ -20,6 +22,13 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.validation import (
+    BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
+    UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_YIELD_BENCHMARK_KWH_PER_KWP,
+)
 from solar_challenge.web.assistant import (
     MAX_TOOL_ITERATIONS,
     METRIC_TABLE,
@@ -1171,3 +1180,93 @@ class TestMalformedToolInput:
             read_field()
 
         assert dispatch_tool(tool_name, tool_input, tool_context(tmp_path)) == {"error": str(refusal.value)}
+
+
+def _numbers_in(text: str) -> set[str]:
+    """Every number in *text* as it is written, so "1,800" is one number and "10.0" is not "10"."""
+    return set(re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", text))
+
+
+# The engine's facts as the model should read them: kWh with thousands separators,
+# percentages and kWh/kWp in their shortest form.
+_DEFAULT_CONSUMPTIONS_KWH = {f"{kwh:,g}" for kwh in OFGEM_TDCV_BY_OCCUPANTS.values()}
+_SELF_CONSUMPTION_BAND_ENDS_PERCENT = {
+    f"{percent:g}"
+    for band in (UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT, UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT)
+    for percent in band
+}
+_YIELDS_KWH_PER_KWP = {
+    f"{kwh_per_kwp:g}"
+    for kwh_per_kwp in (*UK_YIELD_BENCHMARK_KWH_PER_KWP, BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP)
+}
+
+
+class TestTheModelIsToldTheEnginesFacts:
+    """The figures the chat gives the model are the ones the engine simulates and validates with."""
+
+    def test_the_tool_results_carry_the_engines_facts(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """explain_metric answers with the simulator's default consumption by household size, the
+        self-consumption bands its validation applies, its plausible UK yield range and its default
+        system's Bristol yield, and attributes none of them to Ofgem."""
+        expected_numbers = {
+            "annual_consumption": _DEFAULT_CONSUMPTIONS_KWH,
+            "grid_import": _DEFAULT_CONSUMPTIONS_KWH,
+            "self_consumption_ratio": _SELF_CONSUMPTION_BAND_ENDS_PERCENT,
+            "pv_generation": _YIELDS_KWH_PER_KWP,
+        }
+        anthropic_api.set_streams([
+            make_tool_use_stream_from_blocks([
+                tool_use_block(f"toolu_fact_{metric}", "explain_metric", {"metric": metric})
+                for metric in expected_numbers
+            ]),
+            make_end_turn_stream(["Here are the figures."]),
+        ])
+
+        client.post("/assistant/chat", json={"message": "which figures does the simulator use?"}).get_data(
+            as_text=True
+        )
+
+        assert len(anthropic_api.calls) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(anthropic_api.calls)}"
+        )
+        results = {
+            block["tool_use_id"]: block["content"]
+            for block in anthropic_api.calls[1]["messages"][-1]["content"]
+        }
+        for metric, numbers in expected_numbers.items():
+            result = results[f"toolu_fact_{metric}"]
+            missing = numbers - _numbers_in(result)
+            assert not missing, f"Expected {metric}'s result to carry {sorted(missing)}; got {result!r}"
+        attributed = [tool_use_id for tool_use_id, result in results.items() if "Ofgem" in result]
+        assert not attributed, f"Expected no result to mention Ofgem; these do: {attributed}"
+
+    def test_the_system_block_states_the_default_consumption_by_household_size(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        anthropic_api.set_streams([make_end_turn_stream(["Hello."])])
+
+        client.post("/assistant/chat", json={"message": "hi"}).get_data(as_text=True)
+
+        system_text = anthropic_api.calls[0]["system"][0]["text"]
+        missing = _DEFAULT_CONSUMPTIONS_KWH - _numbers_in(system_text)
+        assert not missing, f"Expected the system block to carry {sorted(missing)}; got {system_text!r}"
+        assert "Ofgem" not in system_text, f"Expected the system block not to mention Ofgem; got {system_text!r}"
+
+    def test_the_sizing_tools_example_consumption_is_the_simulators_default_household(self) -> None:
+        sizing_tool = next(tool for tool in TOOLS if tool["name"] == "suggest_config")
+        description = sizing_tool["input_schema"]["properties"]["annual_consumption_kwh"]["description"]
+        default_household = LoadConfig()
+
+        missing = {
+            f"{default_household.get_annual_consumption():,g}",
+            str(default_household.household_occupants),
+        } - _numbers_in(description)
+
+        assert not missing, f"Expected the description to carry {sorted(missing)}; got {description!r}"
+        assert "Ofgem" not in description, f"Expected the description not to mention Ofgem; got {description!r}"
