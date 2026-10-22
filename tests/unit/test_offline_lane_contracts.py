@@ -24,14 +24,14 @@ from tests._uv_env import SharedUvEnvironments
 class LaneContract(Enum):
     """A contract a LANE_JOBS row may list for its job.
 
-    Every job also keeps the one contract no row lists: the lane runs exactly
-    one enabled job of its name.
+    Every job also keeps a contract no row lists: the lane runs exactly one
+    enabled job of its name. A job whose suite lies directly under tests/ keeps
+    another, which its suite's path states: a default collection of tests/
+    with addopts cleared never reaches the suite.
     """
 
     # Run as the lane runs it, the job collects at least one test, every one in its suite.
     COLLECTS_ONLY_ITS_SUITE = auto()
-    # A default collection of tests/ with addopts cleared never reaches the suite.
-    NEVER_IN_A_DEFAULT_COLLECTION = auto()
     # `-m 'not slow'` selects none of the suite's tests.
     EVERY_TEST_SLOW = auto()
 
@@ -57,13 +57,13 @@ LANE_JOBS: tuple[LaneJob, ...] = (
         "interpreter-matrix",
         "tests/interpreter_matrix",
         if_unrun="the interpreters other than the .python-version pin are never re-verified",
-        checked=frozenset({LaneContract.NEVER_IN_A_DEFAULT_COLLECTION, LaneContract.EVERY_TEST_SLOW}),
+        checked=frozenset({LaneContract.EVERY_TEST_SLOW}),
     ),
     LaneJob(
         "e2e",
         "tests/e2e",
         if_unrun="e2e regressions go unseen",
-        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE, LaneContract.NEVER_IN_A_DEFAULT_COLLECTION}),
+        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
     ),
     LaneJob(
         "pvgis",
@@ -89,6 +89,11 @@ LANE_JOBS: tuple[LaneJob, ...] = (
 def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
     """Return the LANE_JOBS rows that list *contract*, in table order."""
     return tuple(job for job in LANE_JOBS if contract in job.checked)
+
+
+def _whose_suite_lies_directly_under_tests() -> tuple[LaneJob, ...]:
+    """Return the LANE_JOBS rows whose suite lies directly under tests/, in table order."""
+    return tuple(job for job in LANE_JOBS if PurePosixPath(job.suite).parent == PurePosixPath("tests"))
 
 
 def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: Path) -> None:
@@ -163,32 +168,15 @@ def test_the_job_collects_its_suite_and_nothing_else(
     )
 
 
-def test_every_row_whose_suite_lies_directly_under_tests_lists_never_in_a_default_collection() -> None:
-    """Every LANE_JOBS row whose suite lies directly under tests/ lists NEVER_IN_A_DEFAULT_COLLECTION.
-
-    A suite directly under tests/ is lane-only through tests/conftest.py's
-    collect_ignore, which this contract's check keeps honest. pvgis's suite is a
-    file under tests/integration and stays out of the per-task verify through
-    its tests' slow mark.
-    """
-    unchecked = [
-        f"{job.name} ({job.suite})"
-        for job in LANE_JOBS
-        if PurePosixPath(job.suite).parent == PurePosixPath("tests")
-        and LaneContract.NEVER_IN_A_DEFAULT_COLLECTION not in job.checked
-    ]
-
-    assert not unchecked, (
-        f"the LANE_JOBS rows {unchecked} run a suite directly under tests/ without listing "
-        "NEVER_IN_A_DEFAULT_COLLECTION, so nothing checks that a default collection never reaches it; list "
-        "NEVER_IN_A_DEFAULT_COLLECTION in each row, and name the suite's directory in tests/conftest.py's "
-        "collect_ignore, so that plain `pytest` and dark-factory's `-o addopts=` reruns never reach it"
-    )
-
-
-@pytest.mark.parametrize("job", _checked_for(LaneContract.NEVER_IN_A_DEFAULT_COLLECTION), ids=lambda job: job.name)
+@pytest.mark.parametrize("job", _whose_suite_lies_directly_under_tests(), ids=lambda job: job.name)
 def test_a_default_collection_never_reaches_the_suite(job: LaneJob, project_root: Path) -> None:
-    """Collecting tests/ never reaches the job's suite, even with addopts cleared."""
+    """Collecting tests/ never reaches the job's suite, even with addopts cleared.
+
+    Every job whose suite lies directly under tests/ keeps this contract, since
+    tests/conftest.py's collect_ignore is what keeps such a suite lane-only.
+    pvgis's suite is a file under tests/integration and stays out of the
+    per-task verify through its tests' slow mark.
+    """
     reached = default_collection_node_ids_under(project_root, job.suite)
 
     assert not reached, (
