@@ -19,6 +19,11 @@ def default_module() -> dict[str, float]:
     return cec_module_params(DEFAULT_CEC_MODULE)
 
 
+def default_module_beyond_every_mppt_window() -> dict[str, float]:
+    """default_module() with a V_mp_ref that no CEC inverter's MPPT window admits, even as a one-module string."""
+    return {**default_module(), "V_mp_ref": 1e6}
+
+
 def pvwatts_300_w_module() -> dict[str, float]:
     """A 300 W module in PVWatts form, rated by its pdc0, with no STC, T_NOCT or A_c of its own."""
     return {"pdc0": 300.0, "gamma_pdc": -0.004}
