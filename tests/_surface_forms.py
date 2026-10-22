@@ -63,13 +63,14 @@ def surface_form(obj: object) -> str:
     a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor; so does a routine that wraps
-    such a class, through a functools.partial, a bound method or a functools.wraps
-    wrapper, unless one of them carries an inspect.Signature as its __signature__, which
-    inspect reads as given. Any other __signature__ counts as none for these refusals,
-    since Python 3.12 and 3.13 convert a string or call a callable given there and 3.11
-    and 3.14 refuse either. _refuse_minor_dependent_constructor lists the constructors it
-    refuses.
+    it and the class in its MRO holding that constructor, unless it carries a signature,
+    which inspect reads in that constructor's place; so does a routine that wraps such a
+    class, through a functools.partial, a bound method or a functools.wraps wrapper,
+    unless the class or one of the routine's links carries one. A signature is an
+    inspect.Signature as __signature__, which inspect reads as given. Any other
+    __signature__ counts as none for these refusals, since Python 3.12 and 3.13 convert a
+    string or call a callable given there and 3.11 and 3.14 refuse either.
+    _refuse_minor_dependent_constructor lists the constructors it refuses.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -139,12 +140,13 @@ def named_classes(obj: object) -> set[type]:
     routine surface_form reads as such a class, raises the TypeError surface_form raises
     for it, and a class with a member member_forms refuses, the TypeError member_forms
     raises for it.
-    A class's constructor is spelled in the module of the class
-    in its MRO whose own body defines __init__ or __new__, which may be a base defined in
-    another module; a parameter of an __init__ the dataclass decorator generated, in the
-    module of the nearest class in that MRO the decorator processed whose own body
-    annotates it, so an inherited field in the base that declares it, however a mixin
-    annotates it. What a type variable or a NewType carries is spelled in the
+    A class's constructor, or a signature the class carries in its place, which records
+    no module, is spelled in the module of the class in its MRO whose own body defines
+    __init__ or __new__, which may be a base defined in another module; a parameter of an
+    __init__ the dataclass decorator generated, in the module of the nearest class in
+    that MRO the decorator processed whose own body annotates it, so an inherited field
+    in the base that declares it, however a mixin annotates it.
+    What a type variable or a NewType carries is spelled in the
     module that declares it; inside its own declaration, as in
     TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
     def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
@@ -509,9 +511,9 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one."""
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature."""
     end = _chain_end(obj, stop=_carries_signature)
-    if inspect.isclass(end):
+    if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
 
@@ -639,11 +641,11 @@ def _spelling_modules(
     A routine's is that of the end of its chain, which _chain_end follows through to
     where inspect.get_annotations finds the namespace of a wrapper's annotations. If
     that end is an object its class makes callable, it is read as the __call__ its
-    class resolves, from which inspect derives its signature. A __signature__ a wrapper
-    carries does not change that: it records no module. A class's is that of the class
-    holding its constructor; but for a generated __init__, that of the nearest class in
-    the holder's MRO that the dataclass decorator processed and whose own body
-    annotates the name, or the holder's if none does.
+    class resolves, from which inspect derives its signature. A class's is that of the
+    class holding its constructor; but for a generated __init__, that of the nearest
+    class in the holder's MRO that the dataclass decorator processed and whose own body
+    annotates the name, or the holder's if none does. A __signature__ a wrapper or a
+    class carries changes neither: it records no module.
     """
     end = _chain_end(obj)
     if not inspect.isclass(end):
