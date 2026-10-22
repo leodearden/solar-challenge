@@ -124,6 +124,14 @@ def _create_simulation_results(
     )
 
 
+def _with_generation_over_demand(results: SimulationResults, ratio: float) -> SimulationResults:
+    """results with its demand rescaled so its generation total is ratio times its demand total; its self-consumption ratio is unchanged."""
+    return dataclasses.replace(
+        results,
+        demand=results.demand * (results.generation.sum() / (ratio * results.demand.sum())),
+    )
+
+
 def _minute_index_over(first_day: str, last_day: str) -> pd.DatetimeIndex:
     """1-minute rows on the UK clock from first_day's midnight to last_day's last minute."""
     return pd.date_range(first_day, f"{last_day} 23:59", freq="1min", tz="Europe/London")
@@ -671,11 +679,7 @@ class TestSelfConsumptionBenchmarks:
             has_battery=False,
         )
 
-        validation = validate_self_consumption_pv_only(
-            results,
-            capacity_kw=4.0,
-            annual_consumption_kwh=3400,
-        )
+        validation = validate_self_consumption_pv_only(results)
 
         assert validation.passed is True
         assert "benchmark" in validation.check_name
@@ -690,11 +694,7 @@ class TestSelfConsumptionBenchmarks:
             has_battery=False,
         )
 
-        validation = validate_self_consumption_pv_only(
-            results,
-            capacity_kw=4.0,
-            annual_consumption_kwh=3400,
-        )
+        validation = validate_self_consumption_pv_only(results)
 
         assert validation.passed is False
 
@@ -710,7 +710,6 @@ class TestSelfConsumptionBenchmarks:
 
         validation = validate_self_consumption_with_battery(
             results,
-            capacity_kw=4.0,
             battery_kwh=5.0,
             annual_consumption_kwh=3400,
         )
@@ -729,12 +728,77 @@ class TestSelfConsumptionBenchmarks:
 
         validation = validate_self_consumption_with_battery(
             results,
-            capacity_kw=4.0,
             battery_kwh=5.0,
             annual_consumption_kwh=3400,
         )
 
         assert validation.passed is False
+
+
+class TestSelfConsumptionSizeNotes:
+    """Outside the band, a note compares the run's own generation total with its own demand total."""
+
+    @pytest.mark.parametrize("pv_capacity_kw", [1.0, 6.0])
+    def test_generation_twice_demand_is_pv_large_whatever_the_capacity(
+        self, pv_capacity_kw: float
+    ) -> None:
+        """Nameplate x 900 kWh put 1 kW at 0.26 and 6 kW at 1.59 of 3,400 kWh, so the same totals once got different notes."""
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30),
+                pv_capacity_kw=pv_capacity_kw,
+                self_consumption_ratio=0.05,
+            ),
+            2.0,
+        )
+
+        validation = validate_self_consumption_pv_only(results)
+
+        assert validation.passed is False
+        assert validation.message.endswith("(Note: PV large relative to consumption)")
+
+    def test_generation_half_demand_is_pv_small(self) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(_create_minute_index(30), self_consumption_ratio=0.60),
+            0.5,
+        )
+
+        validation = validate_self_consumption_pv_only(results)
+
+        assert validation.message.endswith("(Note: PV small relative to consumption)")
+
+    def test_comparable_generation_and_demand_add_no_note(self) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(_create_minute_index(30), self_consumption_ratio=0.05),
+            1.2,
+        )
+
+        validation = validate_self_consumption_pv_only(results)
+
+        assert "Note:" not in validation.message
+
+    def test_generation_three_times_demand_is_pv_very_large_with_a_battery(self) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30), self_consumption_ratio=0.20, has_battery=True
+            ),
+            3.0,
+        )
+
+        validation = validate_self_consumption_with_battery(
+            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
+        )
+
+        assert validation.message.endswith("(Note: PV very large relative to consumption)")
+
+    def test_generation_with_no_demand_is_pv_large(self) -> None:
+        results = _create_simulation_results(_create_minute_index(30), self_consumption_ratio=0.05)
+        results = dataclasses.replace(results, demand=results.demand * 0.0)
+
+        validation = validate_self_consumption_pv_only(results)
+
+        assert validation.passed is False
+        assert validation.message.endswith("(Note: PV large relative to consumption)")
 
 
 class TestValidateSimulation:
