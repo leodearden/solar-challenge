@@ -145,8 +145,10 @@ def named_classes(obj: object) -> set[type]:
     __init__ or __new__, which may be a base defined in another module; a parameter of an
     __init__ the dataclass decorator generated, in the module of the nearest class in
     that MRO the decorator processed whose own body annotates it, so an inherited field
-    in the base that declares it, however a mixin annotates it.
-    What a type variable or a NewType carries is spelled in the
+    in the base that declares it, however a mixin annotates it. If object or a class
+    defined in C holds that constructor, neither of which spells an annotation, a
+    signature the class carries is spelled in the module of the class in its MRO whose
+    own namespace holds it. What a type variable or a NewType carries is spelled in the
     module that declares it; inside its own declaration, as in
     TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
     def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
@@ -556,8 +558,8 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
       class wraps object.__new__;
     - a functools.partial the holder's own namespace holds as __init__, unless that
       namespace also holds a __new__ not defined in C, which inspect reads first;
-    - the constructor of a holder defined in C other than object: each __new__ and
-      __init__ its own namespace holds is of a kind in _C_CONSTRUCTOR_KINDS.
+    - the constructor of a holder other than object that _constructed_in_c counts as
+      defined in C.
     """
     metaclass = type(cls)
     _refuse_wrapper_of_c_callable(
@@ -572,15 +574,7 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
             "functools.partial, which Python 3.14 binds to the instance as a method and "
             "earlier minors call without it: define __init__ with def"
         )
-    namespace = vars(holder)
-    own_constructors = [
-        namespace[constructor_name]
-        for constructor_name in ("__new__", "__init__")
-        if constructor_name in namespace
-    ]
-    if holder is not object and all(
-        isinstance(own, _C_CONSTRUCTOR_KINDS) for own in own_constructors
-    ):
+    if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
             "builtin or extension type), so inspect reads its signature from a text "
@@ -588,6 +582,16 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
             "minors do: make the name private, or give the class an __init__ or __new__ "
             "defined with def"
         )
+
+
+def _constructed_in_c(holder: type) -> bool:
+    """Whether the constructors *holder*'s own namespace holds are defined in C, as object's are and as a builtin or extension type's are: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS."""
+    namespace = vars(holder)
+    return all(
+        isinstance(namespace[name], _C_CONSTRUCTOR_KINDS)
+        for name in ("__new__", "__init__")
+        if name in namespace
+    )
 
 
 def _first_read_constructor(holder: type) -> tuple[str, object]:
@@ -644,8 +648,11 @@ def _spelling_modules(
     class resolves, from which inspect derives its signature. A class's is that of the
     class holding its constructor; but for a generated __init__, that of the nearest
     class in the holder's MRO that the dataclass decorator processed and whose own body
-    annotates the name, or the holder's if none does. A __signature__ a wrapper or a
-    class carries changes neither: it records no module.
+    annotates the name, or the holder's if none does. A holder _constructed_in_c counts
+    as defined in C, as it counts object, spells no annotation, so for a class that
+    carries a signature over one it is that of the class _signature_holder gives.
+    Otherwise a __signature__ a wrapper or a class carries changes neither rule: it
+    records no module.
     """
     end = _chain_end(obj)
     if not inspect.isclass(end):
@@ -653,6 +660,8 @@ def _spelling_modules(
             return _spelling_modules(type(end).__call__, names)
         return dict.fromkeys(names, _defining_module(end))
     holder = _constructor_holder(end)
+    if _carries_signature(end) and _constructed_in_c(holder):
+        return dict.fromkeys(names, _defining_module(_signature_holder(end)))
     if not _holds_generated_init(holder):
         return dict.fromkeys(names, _defining_module(holder))
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
@@ -669,6 +678,11 @@ def _constructor_holder(cls: type) -> type:
     return next(
         base for base in cls.__mro__ if "__init__" in vars(base) or "__new__" in vars(base)
     )
+
+
+def _signature_holder(cls: type) -> type:
+    """The class in *cls*'s MRO whose own namespace holds the __signature__ *cls* carries; *cls* itself if none does, as when its metaclass provides it."""
+    return next((base for base in cls.__mro__ if "__signature__" in vars(base)), cls)
 
 
 def _holds_generated_init(cls: type) -> bool:
