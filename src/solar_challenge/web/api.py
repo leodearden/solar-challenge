@@ -17,11 +17,11 @@ from typing import Any, Generator, assert_never
 
 import yaml as _yaml
 import pandas as pd
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context, url_for
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
-from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
+from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.database import PresetType
@@ -49,7 +49,7 @@ from solar_challenge.web.request_boundary import NotAJsonObject, request_json_ob
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
-from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
+from solar_challenge.web.storage import RUN_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,15 @@ def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable
     return jsonify({"error": str(unreadable)}), 500
 
 
+def _submitted_job_answer(job_id: str, run_id: str) -> tuple[Response, int]:
+    """Answer HTTP 201 with a submitted job's job_id and run_id, and as results_url the path of its run's results page."""
+    return jsonify({
+        "job_id": job_id,
+        "run_id": run_id,
+        "results_url": url_for("main.run_results", run_id=run_id),
+    }), 201
+
+
 @api_bp.route("/simulate/home", methods=["POST"])
 def simulate_home_api() -> tuple[Response, int]:
     """Submit a home simulation job for background execution.
@@ -82,7 +91,7 @@ def simulate_home_api() -> tuple[Response, int]:
     Expects a JSON body with simulation parameters.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
     try:
@@ -98,7 +107,7 @@ def simulate_home_api() -> tuple[Response, int]:
         name=name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/simulate/fleet", methods=["POST"])
 def simulate_fleet_api() -> tuple[Response, int]:
@@ -107,7 +116,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
     Expects a JSON body with a non-empty array of home configs under the 'homes' key.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
     homes_data = data.get("homes", [])
@@ -137,7 +146,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         name=fleet_name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str) -> tuple[Response, int]:
@@ -384,7 +393,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``job_id`` and ``run_id``, HTTP 201 on success; or the ``error``,
+        JSON with ``job_id``, ``run_id`` and ``results_url``, HTTP 201 on success; or the ``error``,
         HTTP 400, for a form parse_fleet_form refuses.
     """
     data = request_json_object()
@@ -403,7 +412,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         name=fleet.name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response | tuple[Response, int]:
@@ -614,7 +623,8 @@ def history_list_runs() -> Response:
         date_to: Filter runs created on or before this date
 
     Returns:
-        JSON response with ``runs`` list and ``pagination`` metadata.
+        JSON response with ``runs`` list, each row carrying the path of its run's results
+        page as ``results_url``, and ``pagination`` metadata.
     """
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
@@ -692,6 +702,7 @@ def history_list_runs() -> Response:
                 pass
         run_dict["total_generation_kwh"] = summary.get("total_generation_kwh")
         run_dict["self_consumption_ratio"] = summary.get("self_consumption_ratio")
+        run_dict["results_url"] = url_for("main.run_results", run_id=run_dict["id"])
         # Remove the full JSON from the list response to save bandwidth
         run_dict.pop("summary_json", None)
         runs_list.append(run_dict)
@@ -801,13 +812,7 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     run_name = run.name or "run"
 
     try:
-        if run.type == "home":
-            _config, results, _summary = storage.load_home_run(run_id)
-            df = results.to_dataframe()
-        else:
-            # For fleet runs, export the aggregate (sum across all homes)
-            fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
-            df = fleet_results.to_aggregate_dataframe()
+        df = storage.load_run(run_id).export_frame()
     except FileNotFoundError:
         return jsonify({"error": "Run data files not found"}), 404
 
@@ -826,12 +831,15 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     """Export a run's config as the scenario YAML that `home run` or load_fleet_config reads back.
 
+    The run's kind builds the scenario from the config the run's record holds, so the export
+    reads none of the run's files.
+
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response; 404 if the run or its config is missing, 500 if the
-        stored config does not decode, 422 if the scenario grammar cannot express it.
+        YAML file response; 404 if the run or its config is missing, 500 if its record names
+        no run kind or its config does not decode, 422 if the scenario grammar cannot express it.
     """
     run = get_storage().run_record(run_id)
 
@@ -842,23 +850,13 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": "No config data available"}), 404
 
     try:
-        config = json.loads(run.config_json)
-    except (json.JSONDecodeError, TypeError):
-        return jsonify({"error": "Invalid config data"}), 500
-
-    is_fleet = run.type == "fleet"
-    try:
-        homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
+        homes = run.kind.home_configs(run.decoded_config())
     except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
-        return jsonify({"error": f"Invalid config data: {exc}"}), 500
+        return jsonify({"error": f"Invalid run data: {exc}"}), 500
 
     run_name = run.name or "run"
     try:
-        document = (
-            fleet_scenario(homes, name=run_name)
-            if is_fleet
-            else home_scenario(homes[0], name=run_name)
-        )
+        document = run.kind.scenario_document(homes, run_name)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 422
 

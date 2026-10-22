@@ -2,198 +2,27 @@
 """Storage service for persisting simulation runs to disk and database.
 
 Provides RunStorage class for saving and loading simulation results with:
-- JSON serialization for config and summary metadata
-- Parquet format for time series data
+- the files of each run, in the format solar_challenge.web.stored_runs writes and reads
 - SQLite database for run metadata and indexing
 
 Storage structure:
-  {data_dir}/runs/{run_id}/
-    ├── config.json         # HomeConfig serialized
-    ├── summary.json        # SummaryStatistics serialized
-    └── data.parquet        # SimulationResults time series
+  {data_dir}/runs/{run_id}/   # the run's documents, as stored_runs lays them out for its kind
 """
 
-import functools
 import json
 import re
 import shutil
 import sqlite3
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from types import MappingProxyType, UnionType
-from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
-
-import pandas as pd
+from typing import Any, Literal, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
-
-T = TypeVar("T")
-
-
-def _serialize_dataclass(obj: Any) -> dict[str, Any]:
-    """Serialize a dataclass instance to a JSON-compatible dict.
-
-    Each field is emitted as _serialize_value emits it.
-
-    Args:
-        obj: Dataclass instance to serialize
-
-    Returns:
-        JSON-compatible dictionary
-    """
-    if not is_dataclass(obj):
-        raise TypeError(f"Expected dataclass, got {type(obj)}")
-
-    return {
-        field_info.name: _serialize_value(getattr(obj, field_info.name))
-        for field_info in fields(obj)
-    }
-
-
-def _serialize_value(value: Any) -> Any:
-    """Emit one value in its JSON-compatible form.
-
-    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string. A list or
-    tuple becomes a list, and a dict keeps its keys, with every item serialized the
-    same way. Anything else, None included, is returned unchanged.
-    """
-    if is_dataclass(value):
-        return _serialize_dataclass(value)
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if isinstance(value, (list, tuple)):
-        return [_serialize_value(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _serialize_value(item) for key, item in value.items()}
-    return value
-
-
-def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
-    """Recursively deserialize a dict to a dataclass instance.
-
-    Each field its constructor takes that the dict holds is rebuilt as its annotation
-    declares: nested dataclasses, lists and tuples of them, pd.Timestamp values and
-    optional members. Any other key, a field no constructor takes or one the class does
-    not have, is skipped.
-
-    Args:
-        cls: The dataclass type to instantiate
-        data: Dictionary with serialized data
-
-    Returns:
-        Instance of cls with deserialized data
-    """
-    if not is_dataclass(cls):
-        raise TypeError(f"Expected dataclass type, got {cls}")
-
-    field_types = _field_types(cls)
-    kwargs = {
-        each.name: None if data[each.name] is None else _deserialize_value(data[each.name], field_types[each.name])
-        for each in fields(cls)
-        if each.init and each.name in data
-    }
-    return cls(**kwargs)
-
-
-@functools.cache
-def _field_types(cls: type) -> Mapping[str, Any]:
-    """Return the type each field of dataclass *cls* is annotated with.
-
-    Resolved once per class and shared by every later call, so the mapping is read-only.
-
-    Raises:
-        NameError: An annotation names a type cls's module does not bind.
-    """
-    return MappingProxyType(get_type_hints(cls))
-
-
-def _deserialize_value(value: Any, annotation: Any) -> Any:
-    """Rebuild one JSON-decoded value as its annotation declares.
-
-    A union is read as the member _union_member picks. A dict becomes a dataclass.
-    An array becomes a list or a tuple, with every item rebuilt the same way.
-    An ISO string becomes a pd.Timestamp. Anything else is returned unchanged.
-    """
-    origin = get_origin(annotation)
-    if origin in (Union, UnionType):
-        return _deserialize_value(value, _union_member(annotation, value))
-    if isinstance(value, dict) and isinstance(annotation, type) and is_dataclass(annotation):
-        return _deserialize_dataclass(annotation, value)
-    if isinstance(value, list) and origin in (list, tuple):
-        item_annotation = _item_annotation(annotation)
-        items = [_deserialize_value(item, item_annotation) for item in value]
-        return tuple(items) if origin is tuple else items
-    if isinstance(value, str) and isinstance(annotation, type) and issubclass(annotation, pd.Timestamp):
-        return pd.Timestamp(value)
-    return value
-
-
-def _union_member(annotation: Any, value: Any) -> Any:
-    """The member of union *annotation* a stored, non-null *value* is rebuilt as.
-
-    When the union's non-None members are dataclasses that each tag themselves with the
-    same field, the member is the one whose tag is *value*'s; otherwise it is the first
-    non-None member.
-
-    Raises:
-        ValueError: For members tagged with a field when no member's tag is *value*'s,
-            naming the field, *value*'s value of it and the members' tags.
-    """
-    members = [arg for arg in get_args(annotation) if arg is not type(None)]
-    tag_field = _shared_tag_field(members)
-    if tag_field is None:
-        return next(iter(members), Any)
-    tags = [_tags(member)[tag_field] for member in members]
-    stored = value.get(tag_field) if isinstance(value, dict) else None
-    if stored not in tags:
-        raise ValueError(f"{tag_field} {stored!r} is not one of {tags}")
-    return members[tags.index(stored)]
-
-
-def _shared_tag_field(members: Sequence[Any]) -> str | None:
-    """The one field each of *members* tags itself with; None when they share no such field, or more than one."""
-    shared = set.intersection(*(set(_tags(member)) for member in members)) if members else set()
-    return shared.pop() if len(shared) == 1 else None
-
-
-def _tags(cls: Any) -> dict[str, Any]:
-    """Each field of *cls*, a dataclass, that tags it: no constructor takes it and it is annotated with a one-value Literal, with that value.
-
-    Empty for anything other than a dataclass.
-    """
-    if not (isinstance(cls, type) and is_dataclass(cls)):
-        return {}
-    field_types = _field_types(cls)
-    return {
-        each.name: get_args(field_types[each.name])[0]
-        for each in fields(cls)
-        if not each.init
-        and get_origin(field_types[each.name]) is Literal
-        and len(get_args(field_types[each.name])) == 1
-    }
-
-
-def _item_annotation(sequence_annotation: Any) -> Any:
-    """Return the annotation shared by every item of list[X], tuple[X, ...] or tuple[X, X].
-
-    Any when the items do not share one annotation, as in tuple[A, B].
-    """
-    item_annotations = {arg for arg in get_args(sequence_annotation) if arg is not Ellipsis}
-    return item_annotations.pop() if len(item_annotations) == 1 else Any
-
-
-def stored_home_config(config: Mapping[str, Any]) -> HomeConfig:
-    """The HomeConfig a home run's stored config holds, as save_home_run wrote it."""
-    return _deserialize_dataclass(HomeConfig, dict(config))
-
-
-def stored_fleet_home_configs(config: Mapping[str, Any]) -> list[HomeConfig]:
-    """The HomeConfigs a fleet run's stored config holds, as save_fleet_run wrote it."""
-    return [stored_home_config(home) for home in config["homes"]]
+from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
 
 
 @dataclass(frozen=True)
@@ -221,6 +50,17 @@ class RunRecord:
     def __post_init__(self) -> None:
         _require_one_of("type", self.type, RUN_TYPES)
         _require_one_of("status", self.status, RUN_STATUSES)
+
+    @property
+    def kind(self) -> RunKind:
+        """The kind of run the record's type names: its entry in RUN_KINDS.
+
+        Raises:
+            ValueError: The record has no type, so it names no kind; the message names its run.
+        """
+        if self.type is None:
+            raise ValueError(f"Run {self.id!r} is recorded with no type, so it is of no run kind")
+        return RUN_KINDS[self.type]
 
     def decoded_config(self) -> Any:
         """The value config_json encodes; {} when the run has no config text or it is not JSON."""
@@ -518,40 +358,23 @@ class RunStorage:
                 The save has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
-        config_dict = _serialize_dataclass(config)
-        summary_dict = _serialize_dataclass(summary)
+        stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
+        config_document = stored.config_document()
+        summary_document = stored.summary_document()
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
             name=name or config.name or "Unnamed Run",
             run_type="home",
-            config=config_dict,
-            summary=summary_dict,
+            config=config_document,
+            summary=summary_document,
             status=status,
             error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=1,
         )
-
-        # Create run directory
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write config to JSON
-        config_path = run_dir / "config.json"
-        with config_path.open("w") as f:
-            json.dump(config_dict, f, indent=2)
-
-        # Write summary to JSON
-        summary_path = run_dir / "summary.json"
-        with summary_path.open("w") as f:
-            json.dump(summary_dict, f, indent=2)
-
-        # Save time series DataFrame to parquet
-        df = results.to_dataframe()
-        parquet_path = run_dir / "data.parquet"
-        df.to_parquet(parquet_path, engine="pyarrow")
-
+        stored.write(run_dir, config_document, summary_document)
         self._upsert_run_row(row)
 
     def save_home_run_from_results(
@@ -579,53 +402,6 @@ class RunStorage:
             duration_seconds=duration_seconds,
             created_at=created_at,
         )
-
-    def load_home_run(
-        self,
-        run_id: str,
-    ) -> tuple[HomeConfig, SimulationResults, SummaryStatistics]:
-        """Load a home simulation run from storage.
-
-        Reconstructs HomeConfig, SimulationResults, and SummaryStatistics from
-        serialized JSON and parquet files.
-
-        Args:
-            run_id: Unique run identifier
-
-        Returns:
-            Tuple of (config, results, summary)
-
-        Raises:
-            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
-                or its directory is missing), or a required file is missing.
-            ValueError: If run data is corrupted or incomplete.
-        """
-        run_dir = self._stored_run_dir(run_id)
-
-        # Load config from JSON
-        config_path = run_dir / "config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        with config_path.open("r") as f:
-            config_dict = json.load(f)
-        config = stored_home_config(config_dict)
-
-        # Load summary from JSON
-        summary_path = run_dir / "summary.json"
-        if not summary_path.exists():
-            raise FileNotFoundError(f"Summary file not found: {summary_path}")
-        with summary_path.open("r") as f:
-            summary_dict = json.load(f)
-        summary = _deserialize_dataclass(SummaryStatistics, summary_dict)
-
-        # Load time series from parquet
-        parquet_path = run_dir / "data.parquet"
-        if not parquet_path.exists():
-            raise FileNotFoundError(f"Data file not found: {parquet_path}")
-        df = pd.read_parquet(parquet_path, engine="pyarrow")
-        results = SimulationResults.from_dataframe(df, strategy_name=summary.strategy_name)
-
-        return config, results, summary
 
     def save_fleet_run(
         self,
@@ -659,57 +435,33 @@ class RunStorage:
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
-                The save has written nothing then.
+            ValueError: If the store refuses run_id, per_home_summaries does not hold one
+                summary per home's results, or status is not one of RUN_STATUSES. The save
+                has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
-        fleet_config_dict = {
-            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
-            "n_homes": len(fleet_results.home_configs),
-        }
-        summary_dict = _serialize_dataclass(fleet_summary)
+        stored = StoredFleetRun(
+            run_id=run_id,
+            fleet_results=fleet_results,
+            summary=fleet_summary,
+            home_summaries=tuple(per_home_summaries),
+        )
+        config_document = stored.config_document()
+        summary_document = stored.summary_document()
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
             name=name or "Unnamed Fleet Run",
             run_type="fleet",
-            config=fleet_config_dict,
-            summary=summary_dict,
+            config=config_document,
+            summary=summary_document,
             status=status,
             error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=len(fleet_results.home_configs),
         )
-
-        # Create run directory and homes subdirectory
-        run_dir.mkdir(parents=True, exist_ok=True)
-        homes_dir = run_dir / "homes"
-        homes_dir.mkdir(exist_ok=True)
-
-        # Save fleet config (list of HomeConfigs) to JSON
-        config_path = run_dir / "config.json"
-        with config_path.open("w") as f:
-            json.dump(fleet_config_dict, f, indent=2)
-
-        # Save fleet summary to JSON
-        summary_path = run_dir / "summary.json"
-        with summary_path.open("w") as f:
-            json.dump(summary_dict, f, indent=2)
-
-        # Save per-home results to parquet files in homes/ subdirectory
-        for i, (home_result, home_summary) in enumerate(zip(fleet_results.per_home_results, per_home_summaries, strict=True)):
-            # Save time series data
-            df = home_result.to_dataframe()
-            parquet_path = homes_dir / f"home_{i}.parquet"
-            df.to_parquet(parquet_path, engine="pyarrow")
-
-            # Save per-home summary
-            home_summary_dict = _serialize_dataclass(home_summary)
-            home_summary_path = homes_dir / f"home_{i}_summary.json"
-            with home_summary_path.open("w") as f:
-                json.dump(home_summary_dict, f, indent=2)
-
+        stored.write(run_dir, config_document, summary_document)
         self._upsert_run_row(row)
 
     def save_fleet_run_from_results(
@@ -744,80 +496,25 @@ class RunStorage:
             created_at=created_at,
         )
 
-    def load_fleet_run(
-        self,
-        run_id: str,
-    ) -> tuple[FleetResults, FleetSummary, list[SummaryStatistics]]:
-        """Load a fleet simulation run from storage.
-
-        Reconstructs FleetResults, FleetSummary, and per-home SummaryStatistics
-        from serialized JSON and parquet files.
-
-        Args:
-            run_id: Unique run identifier
-
-        Returns:
-            Tuple of (fleet_results, fleet_summary, per_home_summaries)
+    def load_run(self, run_id: str) -> StoredRun:
+        """The run stored under *run_id*, read from its directory as its record's kind reads it.
 
         Raises:
-            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
-                or its directory is missing), or a required file is missing.
-            ValueError: If run data is corrupted or incomplete.
+            FileNotFoundError: No run is stored under *run_id*: the store refuses the id (the
+                refusal is the cause), no directory holds it, no run is recorded under it, its
+                record names no run kind (RunRecord.kind's refusal is the cause), or a document
+                its kind reads is missing. The message names the id.
+            ValueError: A stored document is corrupted or incomplete.
         """
         run_dir = self._stored_run_dir(run_id)
-
-        homes_dir = run_dir / "homes"
-        if not homes_dir.exists():
-            raise FileNotFoundError(f"Homes directory not found: {homes_dir}")
-
-        # Load fleet config from JSON
-        config_path = run_dir / "config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        with config_path.open("r") as f:
-            fleet_config_dict = json.load(f)
-
-        home_configs = stored_fleet_home_configs(fleet_config_dict)
-
-        # Load fleet summary from JSON
-        summary_path = run_dir / "summary.json"
-        if not summary_path.exists():
-            raise FileNotFoundError(f"Summary file not found: {summary_path}")
-        with summary_path.open("r") as f:
-            summary_dict = json.load(f)
-        fleet_summary = _deserialize_dataclass(FleetSummary, summary_dict)
-
-        # Load per-home results from homes/ subdirectory
-        n_homes = len(home_configs)
-        per_home_results: list[SimulationResults] = []
-        per_home_summaries: list[SummaryStatistics] = []
-
-        for i in range(n_homes):
-            # Load time series data
-            parquet_path = homes_dir / f"home_{i}.parquet"
-            if not parquet_path.exists():
-                raise FileNotFoundError(f"Home {i} data file not found: {parquet_path}")
-            df = pd.read_parquet(parquet_path, engine="pyarrow")
-
-            # Load per-home summary
-            home_summary_path = homes_dir / f"home_{i}_summary.json"
-            if not home_summary_path.exists():
-                raise FileNotFoundError(f"Home {i} summary not found: {home_summary_path}")
-            with home_summary_path.open("r") as f:
-                home_summary_dict = json.load(f)
-            home_summary = _deserialize_dataclass(SummaryStatistics, home_summary_dict)
-            per_home_summaries.append(home_summary)
-            per_home_results.append(
-                SimulationResults.from_dataframe(df, strategy_name=home_summary.strategy_name)
-            )
-
-        # Construct FleetResults
-        fleet_results = FleetResults(
-            per_home_results=per_home_results,
-            home_configs=home_configs,
-        )
-
-        return fleet_results, fleet_summary, per_home_summaries
+        record = self.run_record(run_id)
+        if record is None:
+            raise FileNotFoundError(f"No run is recorded under {run_id!r}")
+        try:
+            kind = record.kind
+        except ValueError as no_kind:
+            raise FileNotFoundError(f"No run kind reads the files of run {run_id!r}: {no_kind}") from no_kind
+        return kind.read(run_dir, run_id)
 
     def run_record(self, run_id: str) -> RunRecord | None:
         """The record of run *run_id*: its row in the runs table. None when no run has that id."""

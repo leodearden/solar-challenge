@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import Any, Generator, assert_never
 from uuid import uuid4
 
-from flask import Blueprint, Response, jsonify, render_template, session
+from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
@@ -490,7 +490,9 @@ def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
 
 
-def run_home_simulation(params: Mapping[str, Any], job_manager: JobManager) -> dict[str, Any]:
+def run_home_simulation(
+    params: Mapping[str, Any], job_manager: JobManager, results_url: Callable[[str], str]
+) -> dict[str, Any]:
     """Submit a home simulation job via the JobManager and return {run_id, results_url}.
 
     Parses *params* with ``parse_home_config`` from
@@ -506,6 +508,7 @@ def run_home_simulation(params: Mapping[str, Any], job_manager: JobManager) -> d
                      that send no window run _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager, which records the job's run in
                      the app's RunStorage.
+        results_url: Builds the path of a run's results page from its run id.
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
@@ -528,10 +531,12 @@ def run_home_simulation(params: Mapping[str, Any], job_manager: JobManager) -> d
     except Exception as exc:
         return {"error": f"Failed to submit home simulation job: {exc}"}
 
-    return {"run_id": run_id, "results_url": f"/results/home/{run_id}"}
+    return {"run_id": run_id, "results_url": results_url(run_id)}
 
 
-def run_fleet_simulation(n_homes: int, params: Mapping[str, Any], job_manager: JobManager) -> dict[str, Any]:
+def run_fleet_simulation(
+    n_homes: int, params: Mapping[str, Any], job_manager: JobManager, results_url: Callable[[str], str]
+) -> dict[str, Any]:
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
     Builds a homogeneous fleet by parsing the per-home *params* once with
@@ -547,6 +552,7 @@ def run_fleet_simulation(n_homes: int, params: Mapping[str, Any], job_manager: J
                      _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager, which records the job's run in
                      the app's RunStorage.
+        results_url: Builds the path of a run's results page from its run id.
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
@@ -580,7 +586,7 @@ def run_fleet_simulation(n_homes: int, params: Mapping[str, Any], job_manager: J
     except Exception as exc:
         return {"error": f"Failed to submit fleet simulation job: {exc}"}
 
-    return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
+    return {"run_id": run_id, "results_url": results_url(run_id)}
 
 
 @dataclass(frozen=True)
@@ -590,10 +596,13 @@ class ToolContext:
     *storage* is the app's RunStorage, whose runs the lookup tools read.
     *job_manager* is the app's JobManager, which the trigger tools submit jobs
     to and which records their runs in the app's RunStorage.
+    *results_url* builds the path of a run's results page from its run id,
+    the link the trigger tools return for the run they start.
     """
 
     storage: RunStorage
     job_manager: JobManager
+    results_url: Callable[[str], str]
 
 
 def _as_text(value: Any, field: str) -> str:
@@ -664,7 +673,7 @@ def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a run_home_simulation call: submit the home *tool_input* describes to *context*'s JobManager."""
-    return run_home_simulation(tool_input, context.job_manager)
+    return run_home_simulation(tool_input, context.job_manager, context.results_url)
 
 
 def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -674,6 +683,7 @@ def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolConte
         as_whole_number(tool_input["n_homes"], "n_homes"),
         per_home,
         context.job_manager,
+        context.results_url,
     )
 
 
@@ -1273,12 +1283,28 @@ def _refused_turn(reason: str) -> Response:
     return event_stream([sse_frame(CHAT_FAILED, ChatFailed(reason))])
 
 
+def _run_results_url_builder() -> Callable[[str], str]:
+    """Return a builder of the path of a run's results page, made in the request and callable after it ends.
+
+    It builds the URL ``url_for("main.run_results", run_id=...)`` builds in the
+    request, through the request's URL adapter, which the builder keeps.
+
+    Raises:
+        RuntimeError: If the app gives the request no URL adapter to build it with.
+    """
+    adapter = current_app.create_url_adapter(request)
+    if adapter is None:
+        raise RuntimeError("The app gave the request no URL adapter, so a run's results page URL cannot be built")
+    return lambda run_id: adapter.build("main.run_results", {"run_id": run_id})
+
+
 def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str, None, None]:
     """Return the SSE frames of the session's turn in which the model, through *client*, answers *user_message*.
 
     The run *run_id* names, if any, is the turn's context. This reads the
-    session and the app's extensions, in the request; the frames it returns
-    read neither, so the stream needs no request context.
+    session, the app's extensions and the request's URL adapter, in the
+    request; the frames it returns read no request state, so the stream needs
+    no request context.
     """
     database = get_database()
     storage = get_storage()
@@ -1287,7 +1313,9 @@ def _answer_frames(client: Any, user_message: str, run_id: str) -> Generator[str
     messages = request_messages(
         get_chat_history(database, session_id), user_message, _run_context(run_id, storage)
     )
-    context = ToolContext(storage=storage, job_manager=get_job_manager())
+    context = ToolContext(
+        storage=storage, job_manager=get_job_manager(), results_url=_run_results_url_builder()
+    )
     run_tool = partial(dispatch_tool, context=context)
     return _turn_frames(
         user_message,

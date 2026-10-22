@@ -51,7 +51,7 @@ def test_two_seeded_home_jobs_run_together_store_the_demand_a_serial_run_gives(
         for seed, (job_id, run_id) in jobs.items():
             state = manager.job_state(job_id)
             assert state is not None and state.status == "completed", state
-            if not storage.load_home_run(run_id)[1].demand.equals(serial[seed]):
+            if not storage.load_run(run_id).results.demand.equals(serial[seed]):
                 differing.append((trial, seed))
 
     assert differing == []

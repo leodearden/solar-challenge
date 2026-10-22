@@ -222,4 +222,4 @@ def test_late_superseded_request_does_not_replace_search_results(
     page.wait_for_load_state("networkidle")
 
     expect(result_links).to_have_count(1)
-    expect(result_links).to_have_attribute("href", f"/results/home/{run_id}")
+    expect(result_links).to_have_attribute("href", f"/results/{run_id}")

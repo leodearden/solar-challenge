@@ -2,11 +2,9 @@
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.fleet import FleetResults
@@ -19,7 +17,6 @@ from solar_challenge.web.charts import (
     fleet_heatmap,
     power_flow_timeline,
 )
-from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
@@ -160,7 +157,7 @@ class TestFleetChartFunctions:
 
 
 class TestFleetResultsRoute:
-    """Tests for the GET /results/fleet/<run_id> route."""
+    """Tests for the GET /results/<run_id> route, of a fleet run."""
 
     @pytest.mark.parametrize(
         "run_id",
@@ -170,18 +167,18 @@ class TestFleetResultsRoute:
         ],
     )
     def test_fleet_results_unknown_run_redirects(self, client: FlaskClient, run_id: str) -> None:
-        """The page of an id no run has redirects to the dashboard, which flashes Fleet run not found.
+        """The page of an id no run has redirects to the dashboard, which flashes Run not found.
 
         'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
         """
-        response = client.get(f"/results/fleet/{run_id}", follow_redirects=True)
+        response = client.get(f"/results/{run_id}", follow_redirects=True)
 
         assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
-        assert "Fleet run not found." in texts(response.get_data(as_text=True))
+        assert "Run not found." in texts(response.get_data(as_text=True))
 
     def test_fleet_results_route_exists(self, client: FlaskClient) -> None:
         """Test that the fleet results route is registered and accessible."""
-        response = client.get("/results/fleet/some-fake-id")
+        response = client.get("/results/some-fake-id")
         # Should redirect (302) because the run doesn't exist, but NOT 404
         # which would mean the route itself doesn't exist
         assert response.status_code == 302
@@ -197,7 +194,7 @@ class TestFleetResultsRoute:
             storage,
             make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
         )
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         expected_cards = {
@@ -229,7 +226,7 @@ class TestFleetResultsRoute:
             storage,
             make_fleet_results(n_homes=2, self_kwh=5.0, export_kwh=4.523, import_kwh=2.8745, days=1),
         )
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         expected_cards = {
@@ -251,7 +248,7 @@ class TestFleetResultsRoute:
         """The header under the title reads the saved fleet's number of homes and simulated days."""
         run_id = _save_fleet_run(storage, make_fleet_results(n_homes=3, days=2))
 
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         page = response.get_data(as_text=True)
@@ -268,7 +265,7 @@ class TestFleetResultsRoute:
             storage, make_fleet_results(n_homes=2, days=1), name="Phase 1 <South> & Co"
         )
 
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         page = response.get_data(as_text=True)
@@ -285,22 +282,21 @@ class TestFleetResultsRoute:
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "Renamed Fleet"})
         assert rename.status_code == 200
 
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Renamed Fleet"
 
-    def test_fleet_results_page_of_a_run_with_no_database_row_is_titled_fleet_simulation(
-        self, app: Flask, storage: RunStorage, client: FlaskClient
+    def test_fleet_results_page_of_a_run_with_no_name_is_titled_fleet_simulation(
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """A run whose files outlived its database row, as after the database is recreated, still has a title: the page's own."""
+        """A run with no name still has a title: the page's own."""
         run_id = _save_fleet_run(
             storage, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
-        with Database(Path(app.config["DATABASE"])).transaction() as conn:
-            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        storage.update_run_labels(run_id, {"name": None})
 
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         page = response.get_data(as_text=True)

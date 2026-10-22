@@ -255,11 +255,11 @@ class TestFleetFromDistribution:
     def test_valid_distribution_config_returns_201(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Valid 3-home distribution POST returns 201 with job_id/run_id.
+        """Valid 3-home distribution POST returns 201 with job_id/run_id and the run's results_url.
 
         Asserts:
         - status_code == 201
-        - body contains job_id and run_id from the mock
+        - body is job_id and run_id from the mock, and as results_url the path of the run's results page, /results/<run_id>
         - submit_fleet_job called exactly once
         - the configs argument is a list of exactly 3 HomeConfig instances
         - the 3 homes have distinct PV capacities (they were sampled, not copied)
@@ -279,9 +279,11 @@ class TestFleetFromDistribution:
             },
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
-        body = resp.get_json()
-        assert body["job_id"] == "job-fleet-001"
-        assert body["run_id"] == "run-fleet-001"
+        assert resp.get_json() == {
+            "job_id": "job-fleet-001",
+            "run_id": "run-fleet-001",
+            "results_url": "/results/run-fleet-001",
+        }
 
         mock_job_manager.submit_fleet_job.assert_called_once()
         call_kwargs = mock_job_manager.submit_fleet_job.call_args

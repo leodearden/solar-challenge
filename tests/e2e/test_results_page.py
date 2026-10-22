@@ -471,14 +471,8 @@ def test_results_nonexistent_run_returns_error(
     page: Page,
     live_server: str,
 ) -> None:
-    """/results/home/nonexistent -> redirect to dashboard."""
-    response = page.goto(live_server + "/results/home/nonexistent-run-id-xyz")
-    assert response is not None
+    """/results/<id no run has> -> the dashboard, which flashes "Run not found."."""
+    page.goto(live_server + "/results/nonexistent-run-id-xyz")
 
-    # Should redirect to dashboard (status 200 after redirect, or 302)
-    # The route flashes an error and redirects to main.index
-    final_url = page.url
-    # After redirect we should be on the dashboard or root
-    assert "/results/home/nonexistent" not in final_url, (
-        f"Expected redirect away from nonexistent results page, still at {final_url}"
-    )
+    expect(page).to_have_url(live_server + "/")
+    expect(page.get_by_text("Run not found.", exact=True)).to_be_visible()

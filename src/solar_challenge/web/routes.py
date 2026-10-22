@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
-from typing import Any
+from typing import Any, assert_never
 
 from flask import (
     Blueprint,
@@ -31,6 +31,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import StoredFleetRun, StoredHomeRun
 
 bp = Blueprint("main", __name__)
 
@@ -112,53 +113,6 @@ def simulate_home_page() -> str:
     ))
 
 
-@bp.route("/results/home/<run_id>", methods=["GET"])
-def home_results(run_id: str) -> Any:
-    """Display results for a completed home simulation.
-
-    Loads persisted results from storage, builds chart JSON using the
-    centralized charts module, and renders the full results page.
-
-    Args:
-        run_id: Unique identifier for the simulation run.
-
-    Returns:
-        Rendered results/home.html template.
-    """
-    storage = get_storage()
-    try:
-        config, sim_results, summary = storage.load_home_run(run_id)
-    except FileNotFoundError:
-        flash("Run not found.", "error")
-        return redirect(url_for("main.index"))
-
-    has_battery = config.battery_config is not None
-
-    charts: dict[str, Any] = {
-        "sankey": sankey_diagram(summary),
-        "daily_balance": daily_energy_balance(sim_results),
-        "power_flow": power_flow_timeline(sim_results),
-        "battery_soc": (
-            battery_soc_chart(sim_results, config.battery_config)
-            if has_battery and config.battery_config is not None
-            else None
-        ),
-        "financial": financial_breakdown(sim_results),
-        "monthly": monthly_summary(sim_results),
-        "seasonal": seasonal_comparison(sim_results),
-        "heat_pump": heat_pump_analysis(sim_results),
-    }
-
-    return render_template(
-        "results/home.html",
-        summary=summary,
-        charts=charts,
-        has_battery=has_battery,
-        run_id=run_id,
-        run_name=storage.run_name(run_id) or "Home Simulation",
-    )
-
-
 @bp.route("/simulate/fleet", methods=["GET"])
 def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads."""
@@ -170,39 +124,81 @@ def simulate_fleet_page() -> str:
     ))
 
 
-@bp.route("/results/fleet/<run_id>", methods=["GET"])
-def fleet_results(run_id: str) -> Any:
-    """Display results for a completed fleet simulation.
 
-    Loads persisted fleet results from storage, builds chart JSON
-    using the centralized charts module, and renders the fleet
-    results page with aggregate and per-home visualizations.
 
-    Args:
-        run_id: Unique identifier for the fleet simulation run.
+@bp.route("/results/<run_id>", methods=["GET"])
+def run_results(run_id: str) -> Any:
+    """Display a run's results page: the page of the kind of run load_run reads it as, titled with its name, with the values its stored run gives.
 
-    Returns:
-        Rendered results/fleet.html template.
+    A run with no record, or whose files load_run cannot find, redirects to the dashboard,
+    which flashes "Run not found.".
     """
     storage = get_storage()
+    record = storage.run_record(run_id)
+    if record is None:
+        return _run_not_found()
     try:
-        fleet_results_data, fleet_summary, per_home_summaries = storage.load_fleet_run(run_id)
+        stored = storage.load_run(run_id)
     except FileNotFoundError:
-        flash("Fleet run not found.", "error")
-        return redirect(url_for("main.index"))
+        return _run_not_found()
 
-    charts: dict[str, Any] = {
-        "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),
-        "grid_impact": fleet_grid_impact(fleet_results_data),
-        "heatmap": fleet_heatmap(per_home_summaries),
-        "box_plots": fleet_box_plots(per_home_summaries),
-        "distribution_histograms": fleet_distribution_histograms(per_home_summaries),
-    }
+    match stored:
+        case StoredHomeRun():
+            template = "results/home.html"
+            unnamed_title = "Home Simulation"
+            page_values = _home_results_values(stored)
+        case StoredFleetRun():
+            template = "results/fleet.html"
+            unnamed_title = "Fleet Simulation"
+            page_values = _fleet_results_values(stored)
+        case _:
+            assert_never(stored)
 
     return render_template(
-        "results/fleet.html",
-        summary=fleet_summary,
-        charts=charts,
+        template,
         run_id=run_id,
-        run_name=storage.run_name(run_id) or "Fleet Simulation",
+        run_name=record.name or unnamed_title,
+        **page_values,
     )
+
+
+@bp.route("/results/home/<run_id>", methods=["GET"])
+@bp.route("/results/fleet/<run_id>", methods=["GET"])
+def results_page_moved(run_id: str) -> Any:
+    """Answer 301 to the run's one results page, /results/<run_id>, whatever kind of run the old URL named."""
+    return redirect(url_for("main.run_results", run_id=run_id), code=301)
+
+
+def _run_not_found() -> Any:
+    """Redirect to the dashboard, flashing that the run asked for was not found."""
+    flash("Run not found.", "error")
+    return redirect(url_for("main.index"))
+
+
+def _home_results_values(run: StoredHomeRun) -> dict[str, Any]:
+    """The values results/home.html shows a home run with, besides its id and name: its summary, whether it has a battery, and its charts."""
+    results = run.results
+    battery_config = run.config.battery_config
+    charts: dict[str, Any] = {
+        "sankey": sankey_diagram(run.summary),
+        "daily_balance": daily_energy_balance(results),
+        "power_flow": power_flow_timeline(results),
+        "battery_soc": None if battery_config is None else battery_soc_chart(results, battery_config),
+        "financial": financial_breakdown(results),
+        "monthly": monthly_summary(results),
+        "seasonal": seasonal_comparison(results),
+        "heat_pump": heat_pump_analysis(results),
+    }
+    return {"summary": run.summary, "charts": charts, "has_battery": battery_config is not None}
+
+
+def _fleet_results_values(run: StoredFleetRun) -> dict[str, Any]:
+    """The values results/fleet.html shows a fleet run with, besides its id and name: its summary and its charts."""
+    charts: dict[str, Any] = {
+        "aggregate_timeline": fleet_aggregate_timeline(run.fleet_results),
+        "grid_impact": fleet_grid_impact(run.fleet_results),
+        "heatmap": fleet_heatmap(run.home_summaries),
+        "box_plots": fleet_box_plots(run.home_summaries),
+        "distribution_histograms": fleet_distribution_histograms(run.home_summaries),
+    }
+    return {"summary": run.summary, "charts": charts}

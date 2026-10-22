@@ -539,8 +539,13 @@ class TestListRecentRuns:
         )
 
 
+def _results_url_for_test(run_id: str) -> str:
+    """The results_url builder a test hands a trigger tool: a path no route of the app serves, so a URL it returns came from this builder."""
+    return f"/results-for-test/{run_id}"
+
+
 class TestRunHomeSimulation:
-    """Tests for run_home_simulation(params, job_manager) -> dict."""
+    """Tests for run_home_simulation(params, job_manager, results_url) -> dict, *results_url* building the path of a run's results page."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_home_job stubbed."""
@@ -549,24 +554,24 @@ class TestRunHomeSimulation:
         return jm
 
     def test_returns_run_id_and_results_url(self) -> None:
-        """run_home_simulation returns {run_id, results_url} with correct values."""
+        """run_home_simulation returns {run_id, results_url}, results_url being what its builder gives for the run."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        result = run_home_simulation(params, jm)
+        result = run_home_simulation(params, jm, _results_url_for_test)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-h", (
             f"Expected run_id='run-h'; got {result.get('run_id')!r}"
         )
-        assert result.get("results_url") == "/results/home/run-h", (
-            f"Expected results_url='/results/home/run-h'; got {result.get('results_url')!r}"
+        assert result.get("results_url") == _results_url_for_test("run-h"), (
+            f"Expected results_url={_results_url_for_test('run-h')!r}; got {result.get('results_url')!r}"
         )
 
     def test_submit_home_job_called_with_correct_config(self) -> None:
         """submit_home_job called once; config has correct pv_kw and battery_kwh."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        run_home_simulation(params, jm)
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -590,7 +595,7 @@ class TestRunHomeSimulation:
         params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
         params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
 
-        run_home_simulation(params_7, jm)
+        run_home_simulation(params_7, jm, _results_url_for_test)
         call_7 = jm.submit_home_job.call_args
         start_7 = call_7.kwargs.get("start_date") or call_7.args[1]
         end_7 = call_7.kwargs.get("end_date") or call_7.args[2]
@@ -599,7 +604,7 @@ class TestRunHomeSimulation:
         jm.reset_mock()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
-        run_home_simulation(params_30, jm)
+        run_home_simulation(params_30, jm, _results_url_for_test)
         call_30 = jm.submit_home_job.call_args
         start_30 = call_30.kwargs.get("start_date") or call_30.args[1]
         end_30 = call_30.kwargs.get("end_date") or call_30.args[2]
@@ -615,7 +620,7 @@ class TestRunHomeSimulation:
         params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
 
         try:
-            result = run_home_simulation(params, jm)
+            result = run_home_simulation(params, jm, _results_url_for_test)
         except Exception as exc:
             raise AssertionError(
                 f"run_home_simulation should not raise on invalid params; got: {exc!r}"
@@ -634,6 +639,7 @@ class TestRunHomeSimulation:
         result = run_home_simulation(
             {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"},
             jm,
+            _results_url_for_test,
         )
 
         assert submit_failure in result["error"]
@@ -644,7 +650,7 @@ class TestRunHomeSimulation:
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
-        run_home_simulation(params, jm)
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -665,7 +671,7 @@ class TestRunHomeSimulation:
         jm = self._make_jm()
         # Explicit days=30 must produce a 30-day window (span=29)
         params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
-        run_home_simulation(params, jm)
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -683,7 +689,7 @@ class TestRunHomeSimulation:
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
-        run_home_simulation(params, jm)
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -705,9 +711,10 @@ class TestRunHomeSimulation:
         result = run_home_simulation(
             {"pv_kw": 4, "location": "bristol", "start": "2024-03-01", "end": "2024-03-05"},
             jm,
+            _results_url_for_test,
         )
 
-        assert result == {"run_id": "run-h", "results_url": "/results/home/run-h"}
+        assert result == {"run_id": "run-h", "results_url": _results_url_for_test("run-h")}
         submitted = jm.submit_home_job.call_args.kwargs
         assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
             date(2024, 3, 1),
@@ -726,6 +733,7 @@ class TestRunHomeSimulation:
                 "end": "2024-03-05",
             },
             jm,
+            _results_url_for_test,
         )
 
         assert result == {
@@ -740,6 +748,7 @@ class TestRunHomeSimulation:
         result = run_home_simulation(
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
+            _results_url_for_test,
         )
 
         jm.submit_home_job.assert_not_called()
@@ -749,7 +758,7 @@ class TestRunHomeSimulation:
 
 
 class TestRunFleetSimulation:
-    """Tests for run_fleet_simulation(n_homes, params, job_manager) -> dict, *params* being the per-home fields."""
+    """Tests for run_fleet_simulation(n_homes, params, job_manager, results_url) -> dict, *params* being the per-home fields and *results_url* building the path of a run's results page."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_fleet_job stubbed."""
@@ -758,24 +767,24 @@ class TestRunFleetSimulation:
         return jm
 
     def test_returns_run_id_and_results_url(self) -> None:
-        """run_fleet_simulation returns {run_id, results_url} for fleet."""
+        """run_fleet_simulation returns {run_id, results_url} for fleet, results_url being what its builder gives for the run."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        result = run_fleet_simulation(3, params, jm)
+        result = run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-f", (
             f"Expected run_id='run-f'; got {result.get('run_id')!r}"
         )
-        assert result.get("results_url") == "/results/fleet/run-f", (
-            f"Expected results_url='/results/fleet/run-f'; got {result.get('results_url')!r}"
+        assert result.get("results_url") == _results_url_for_test("run-f"), (
+            f"Expected results_url={_results_url_for_test('run-f')!r}; got {result.get('results_url')!r}"
         )
 
     def test_submit_fleet_job_called_with_correct_configs_list(self) -> None:
         """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        run_fleet_simulation(3, params, jm)
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -795,7 +804,7 @@ class TestRunFleetSimulation:
         """n_homes=9999 results in configs list clamped to <= 100."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(9999, params, jm)
+        run_fleet_simulation(9999, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -808,7 +817,7 @@ class TestRunFleetSimulation:
         """n_homes=0 is clamped to at least 1 (no empty fleet)."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(0, params, jm)
+        run_fleet_simulation(0, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -823,7 +832,7 @@ class TestRunFleetSimulation:
         params = {"pv_kw": 999, "location": "bristol", "days": 7}
 
         try:
-            result = run_fleet_simulation(3, params, jm)
+            result = run_fleet_simulation(3, params, jm, _results_url_for_test)
         except Exception as exc:
             raise AssertionError(
                 f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
@@ -843,6 +852,7 @@ class TestRunFleetSimulation:
             3,
             {"pv_kw": 4, "location": "bristol", "days": 7},
             jm,
+            _results_url_for_test,
         )
 
         assert submit_failure in result["error"]
@@ -853,7 +863,7 @@ class TestRunFleetSimulation:
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
-        run_fleet_simulation(3, params, jm)
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -874,7 +884,7 @@ class TestRunFleetSimulation:
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
-        run_fleet_simulation(3, params, jm)
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -902,9 +912,10 @@ class TestRunFleetSimulation:
                 "end": "2024-03-05",
             },
             jm,
+            _results_url_for_test,
         )
 
-        assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
+        assert result == {"run_id": "run-f", "results_url": _results_url_for_test("run-f")}
         submitted = jm.submit_fleet_job.call_args.kwargs
         assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
             date(2024, 3, 1),
@@ -918,6 +929,7 @@ class TestRunFleetSimulation:
             3,
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
+            _results_url_for_test,
         )
 
         jm.submit_fleet_job.assert_not_called()
@@ -948,6 +960,7 @@ class TestRunHomeSimulationWithRealJobManager:
                 "days": 1,
             },
             job_manager,
+            _results_url_for_test,
         )
 
         assert "error" not in result, (
@@ -956,8 +969,8 @@ class TestRunHomeSimulationWithRealJobManager:
         run_id: str = result.get("run_id", "")
         results_url: str = result.get("results_url", "")
         assert run_id, f"Expected non-empty run_id; got {run_id!r}"
-        assert results_url == f"/results/home/{run_id}", (
-            f"Expected results_url='/results/home/{run_id}'; got {results_url!r}"
+        assert results_url == _results_url_for_test(run_id), (
+            f"Expected results_url={_results_url_for_test(run_id)!r}; got {results_url!r}"
         )
 
         # Poll (monotonic deadline ≤ 120 s) until the real sim completes.

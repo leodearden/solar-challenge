@@ -103,8 +103,8 @@ def test_fleet_dispatch_strategy_select_is_named_by_its_label(
 
 
 def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
-    """The 'View Results' link template should point to /results/fleet/<id>,
-    not /results?run_id=<id>.
+    """The 'View Results' link template should point to the submit answer's
+    results_url, not /results?run_id=<id>.
 
     We inspect the page source for the buggy URL pattern rather than
     running a full simulation.
@@ -117,5 +117,5 @@ def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
     # The buggy pattern: '/results?run_id=' + completedRunId
     assert "'/results?run_id='" not in content, (
         "Bug B2: fleet 'View Results' link uses wrong URL pattern "
-        "('/results?run_id=<id>' instead of '/results/fleet/<id>')"
+        "('/results?run_id=<id>' instead of the submit answer's results_url)"
     )

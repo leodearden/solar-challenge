@@ -7,7 +7,7 @@ document.addEventListener('alpine:init', () => {
         n_homes: 100,
         seed: DEFAULT_SEED,
         submitting: false,
-        jobId: null,
+        submittedJob: null,
         errorMsg: '',
         importNotice: '',
         simName: '',
@@ -181,7 +181,7 @@ document.addEventListener('alpine:init', () => {
             }
             this.submitting = true;
             this.errorMsg = '';
-            this.jobId = null;
+            this.submittedJob = null;
             try {
                 const resp = await fetch('/api/simulate/fleet-from-distribution', {
                     method: 'POST',
@@ -190,7 +190,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 const data = await resp.json();
                 if (resp.ok) {
-                    this.jobId = data.job_id;
+                    this.submittedJob = data;
                 } else {
                     this.errorMsg = data.error || 'Submission failed';
                 }

@@ -323,7 +323,7 @@ class TestJobManagerSimulation:
         state = _wait_until_finished(manager, job_id)
         assert state.status == "completed", state.message
         assert simulation.calls == [(_A_HOME, _JUNE_1, _JUNE_2)]
-        _, _, summary = storage.load_home_run(run_id)
+        summary = storage.load_run(run_id).summary
         assert summary.total_generation_kwh == pytest.approx(4.0)
 
     def test_a_fleet_job_runs_the_managers_simulation_once_per_home(self, storage: RunStorage) -> None:
@@ -339,7 +339,7 @@ class TestJobManagerSimulation:
         state = _wait_until_finished(manager, job_id)
         assert state.status == "completed", state.message
         assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
-        _, _, per_home_summaries = storage.load_fleet_run(run_id)
+        per_home_summaries = storage.load_run(run_id).home_summaries
         assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
 
 

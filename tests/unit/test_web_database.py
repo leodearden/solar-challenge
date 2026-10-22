@@ -309,7 +309,8 @@ class TestHomeRunRoundTrip:
         )
 
         # Load the run
-        loaded_config, loaded_results, loaded_summary = storage.load_home_run(run_id)
+        loaded = storage.load_run(run_id)
+        loaded_config, loaded_results, loaded_summary = loaded.config, loaded.results, loaded.summary
 
         # Verify config equality
         assert loaded_config.pv_config.capacity_kw == sample_home_config.pv_config.capacity_kw
@@ -363,10 +364,10 @@ class TestHomeRunRoundTrip:
         assert (run_dir / "summary.json").exists()
         assert (run_dir / "data.parquet").exists()
 
-    def test_load_home_run_nonexistent_raises(self, storage):
+    def test_load_run_nonexistent_raises(self, storage):
         """Test loading nonexistent run raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
-            storage.load_home_run("nonexistent-run")
+            storage.load_run("nonexistent-run")
 
 
 @pytest.fixture
@@ -464,8 +465,9 @@ class TestFleetRunRoundTrip:
         )
 
         # Load the fleet run
+        loaded = storage.load_run(run_id)
         loaded_fleet_results, loaded_fleet_summary, loaded_per_home_summaries = (
-            storage.load_fleet_run(run_id)
+            loaded.fleet_results, loaded.summary, loaded.home_summaries
         )
 
         # Verify fleet summary equality
@@ -523,6 +525,24 @@ class TestFleetRunRoundTrip:
         assert (homes_dir / "home_0_summary.json").exists()
         assert (homes_dir / "home_1_summary.json").exists()
         assert (homes_dir / "home_2_summary.json").exists()
+
+    @pytest.mark.parametrize("n_summaries", [2, 4], ids=["one-summary-too-few", "one-summary-too-many"])
+    def test_a_fleet_save_whose_home_summaries_do_not_pair_with_its_homes_raises_value_error_and_writes_nothing(
+        self, storage, sample_fleet_data, n_summaries
+    ):
+        """A fleet save given other than one summary per home raises ValueError naming both counts, and writes no file and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
+        with pytest.raises(ValueError, match=f"got 3 homes' results and {n_summaries} home_summaries"):
+            storage.save_fleet_run(
+                run_id="unpaired-summaries",
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=[per_home_summaries[0]] * n_summaries,
+            )
+
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
 
 
 class TestSavedRunRow:
@@ -1239,12 +1259,6 @@ ACCEPTED_RUN_IDS = [
     pytest.param("550e8400-e29b-41d4-a716-446655440000", id="uuid"),
 ]
 
-RUN_LOADERS = [
-    pytest.param(RunStorage.load_home_run, id="home"),
-    pytest.param(RunStorage.load_fleet_run, id="fleet"),
-]
-
-
 class TestRunIdValidation:
     """The run ids the store refuses and accepts, as its saves, loads and deletes see them."""
 
@@ -1283,13 +1297,10 @@ class TestRunIdValidation:
         assert storage.list_runs() == []
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
-    @pytest.mark.parametrize("load", RUN_LOADERS)
-    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(
-        self, storage, load, run_id
-    ):
+    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(self, storage, run_id):
         """A load of an id the store refuses raises FileNotFoundError, as a load of an id no run has does, and carries the refusal."""
         with pytest.raises(FileNotFoundError, match="Invalid run_id"):
-            load(storage, run_id)
+            storage.load_run(run_id)
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
     def test_a_delete_of_an_id_the_store_refuses_raises_value_error(self, storage, run_id):
@@ -1351,13 +1362,12 @@ class TestRunIdValidation:
         assert list(outside.iterdir()) == []
         assert storage.list_runs() == []
 
-    @pytest.mark.parametrize("load", RUN_LOADERS)
     def test_a_load_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_file_not_found_error(
-        self, storage, linked_run_id, load
+        self, storage, linked_run_id
     ):
         """A load of an id whose run directory links outside the runs directory raises FileNotFoundError, and carries the refusal rather than a missing file's error."""
         with pytest.raises(FileNotFoundError, match="Invalid run_id"):
-            load(storage, linked_run_id)
+            storage.load_run(linked_run_id)
 
     def test_a_delete_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_removes_nothing(
         self, storage, outside, linked_run_id
@@ -1383,7 +1393,7 @@ class TestRunIdValidation:
             summary=sample_summary,
         )
 
-        loaded_config, _, loaded_summary = storage.load_home_run(run_id)
+        loaded = storage.load_run(run_id)
 
-        assert (loaded_config, loaded_summary) == (sample_home_config, sample_summary)
+        assert (loaded.config, loaded.summary) == (sample_home_config, sample_summary)
         assert stored_run_dir(storage, run_id).is_dir()

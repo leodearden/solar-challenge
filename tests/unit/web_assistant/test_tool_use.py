@@ -67,6 +67,11 @@ from tests.unit.web_assistant._fakes import (
 from tests.unit.web_assistant._number_tokens import numbers_in
 
 
+def _results_url_for_test(run_id: str) -> str:
+    """The results_url builder a test hands a trigger tool: a path no route of the app serves, so a URL it returns came from this builder."""
+    return f"/results-for-test/{run_id}"
+
+
 def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
     """The ToolContext ``dispatch_tool`` runs a tool in, rooted in *tmp_path*.
 
@@ -76,6 +81,7 @@ def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
     defaults = ToolContext(
         storage=RunStorage(Database(tmp_path / "assistant.db"), tmp_path),
         job_manager=autospecced_job_manager(),
+        results_url=_results_url_for_test,
     )
     return replace(defaults, **overrides)
 
@@ -381,7 +387,7 @@ class TestToolUseLoop:
             if message["role"] == "user" and isinstance(message["content"], list)
             for block in message["content"]
         ]
-        assert urls_sent_to_the_model == [f"/results/home/run-{i}" for i in range(MAX_TOOL_ITERATIONS)]
+        assert urls_sent_to_the_model == [f"/results/run-{i}" for i in range(MAX_TOOL_ITERATIONS)]
         tools_run = ["run_home_simulation"] * MAX_TOOL_ITERATIONS
         assert [e.data["name"] for e in events if e.event == "tool"] == tools_run
         messages = client.get("/assistant/history").get_json()["messages"]
@@ -768,7 +774,7 @@ class TestSimulationToolSurface:
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        direct = run_home_simulation(params, jm)
+        direct = run_home_simulation(params, jm, _results_url_for_test)
 
         jm2 = autospecced_job_manager()
         jm2.submit_home_job.return_value = ("job-h", "run-h")
@@ -788,7 +794,7 @@ class TestSimulationToolSurface:
 
         jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
-        direct = run_fleet_simulation(2, {"pv_kw": 4, "location": "bristol", "days": 7}, jm)
+        direct = run_fleet_simulation(2, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, _results_url_for_test)
 
         jm2 = autospecced_job_manager()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
@@ -817,7 +823,7 @@ class TestSimulationToolSurface:
             tool_context(tmp_path, job_manager=jm),
         )
 
-        assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
+        assert result == {"run_id": "run-f", "results_url": _results_url_for_test("run-f")}
         assert len(jm.submit_fleet_job.call_args.kwargs["configs"]) == fleet_size
 
 
@@ -831,7 +837,7 @@ class TestSimulationToolUseSignal:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
-        tool_result contains /results/home/<run_id>."""
+        tool_result's results_url is the run's results page, /results/<run_id>."""
         RUN_ID = "run-home-001"
         JOB_ID = "job-home-001"
         TOOL_ID = "toolu_rhs_e2e_001"
@@ -894,9 +900,8 @@ class TestSimulationToolUseSignal:
             f"Expected tool_result block in last user message; content: {content}"
         )
         result_content = tool_result_block.get("content", "")
-        expected_url = f"/results/home/{RUN_ID}"
-        assert expected_url in result_content, (
-            f"Expected '{expected_url}' in tool_result content.\n"
+        assert json.loads(result_content)["results_url"] == f"/results/{RUN_ID}", (
+            f"Expected results_url '/results/{RUN_ID}' in tool_result content.\n"
             f"Content: {result_content!r}"
         )
 
@@ -906,8 +911,8 @@ class TestSimulationToolUseSignal:
         app: Flask,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """run_fleet_simulation: submit_fleet_job receives 3-home configs list; tool_result contains
-        /results/fleet/<run_id>."""
+        """run_fleet_simulation: submit_fleet_job receives 3-home configs list; tool_result's
+        results_url is the run's results page, /results/<run_id>."""
         RUN_ID = "run-fleet-001"
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
@@ -957,9 +962,8 @@ class TestSimulationToolUseSignal:
             f"Expected tool_result block; content: {content}"
         )
         result_content = tool_result_block.get("content", "")
-        expected_url = f"/results/fleet/{RUN_ID}"
-        assert expected_url in result_content, (
-            f"Expected '{expected_url}' in tool_result content.\n"
+        assert json.loads(result_content)["results_url"] == f"/results/{RUN_ID}", (
+            f"Expected results_url '/results/{RUN_ID}' in tool_result content.\n"
             f"Content: {result_content!r}"
         )
 

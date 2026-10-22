@@ -1,14 +1,14 @@
 {# Shared progress tracker macro for simulation pages.
    Parameters:
-   - result_type: 'home' or 'fleet' — used to build the results URL
    - heading: Display heading text (e.g. "Simulation Progress" or "Fleet Simulation Progress")
-   The tracker follows the job whose id is jobId in the calling page's Alpine scope, in a
-   progressTracker scope (static/js/progress-tracker.js, which base.html loads).
+   The tracker follows the submit endpoint's answer (job_id, results_url), held as submittedJob
+   in the calling page's Alpine scope, in a progressTracker scope (static/js/progress-tracker.js,
+   which base.html loads).
 #}
-{% macro progress_tracker(result_type, heading="Simulation Progress") %}
-{# Keyed by job, so a new jobId replaces the tracker and the old one's destroy() closes its job's progress stream #}
-<template x-for="trackedJobId in (jobId ? [jobId] : [])" :key="trackedJobId">
-    <div x-data="progressTracker(trackedJobId)" class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+{% macro progress_tracker(heading="Simulation Progress") %}
+{# Keyed by job, so a new submittedJob replaces the tracker and the old one's destroy() closes its job's progress stream #}
+<template x-for="job in (submittedJob ? [submittedJob] : [])" :key="job.job_id">
+    <div x-data="progressTracker(job.job_id, job.results_url)" class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
         <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100" x-text="'{{ heading }}'"></h3>
             <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
@@ -35,7 +35,7 @@
             <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
                 <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
                 <a
-                    :href="'/results/{{ result_type }}/' + completedRunId"
+                    :href="resultsUrl"
                     class="inline-flex items-center px-4 py-2 rounded-lg bg-primary-500 text-white font-medium hover:bg-primary-600 transition-colors"
                 >View Results</a>
             </div>

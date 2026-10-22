@@ -54,9 +54,9 @@ def test_a_home_run_saved_from_its_results_loads_back_with_the_summary_calculate
 
     storage.save_home_run_from_results("home-1", config, results)
 
-    loaded_config, _, summary = storage.load_home_run("home-1")
-    assert loaded_config == config
-    assert summary == calculate_summary(results)
+    loaded = storage.load_run("home-1")
+    assert loaded.config == config
+    assert loaded.summary == calculate_summary(results)
 
 
 def test_a_fleet_run_saved_from_its_results_loads_back_with_each_homes_summary_and_the_fleet_summary(
@@ -66,10 +66,10 @@ def test_a_fleet_run_saved_from_its_results_loads_back_with_each_homes_summary_a
 
     storage.save_fleet_run_from_results("fleet-1", fleet)
 
-    loaded_fleet, fleet_summary, per_home_summaries = storage.load_fleet_run("fleet-1")
-    assert loaded_fleet.home_configs == fleet.home_configs
-    assert per_home_summaries == [calculate_summary(results) for results in fleet.per_home_results]
-    assert fleet_summary == calculate_fleet_summary(fleet)
+    loaded = storage.load_run("fleet-1")
+    assert loaded.fleet_results.home_configs == fleet.home_configs
+    assert loaded.home_summaries == tuple(calculate_summary(results) for results in fleet.per_home_results)
+    assert loaded.summary == calculate_fleet_summary(fleet)
 
 
 def test_a_run_saved_from_its_results_is_recorded_with_the_name_duration_and_creation_time_it_is_given(
@@ -134,4 +134,4 @@ def test_a_fleet_unpaired_after_construction_is_refused_and_nothing_is_saved(sto
 
     assert storage.run_record("fleet-1") is None
     with pytest.raises(FileNotFoundError):
-        storage.load_fleet_run("fleet-1")
+        storage.load_run("fleet-1")

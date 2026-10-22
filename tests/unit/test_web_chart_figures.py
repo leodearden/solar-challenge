@@ -53,7 +53,7 @@ def _home_results_page(
     """The results page of a run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
     run_id = _saved_home_run(app, results, battery_config)
 
-    response = app.test_client().get(f"/results/home/{run_id}")
+    response = app.test_client().get(f"/results/{run_id}")
 
     assert response.status_code == 200
     return response.get_data(as_text=True)
@@ -106,7 +106,7 @@ def test_each_chart_on_the_fleet_results_page_is_drawn_from_the_figure_its_conta
     run_id = str(uuid.uuid4())
     store_fleet_run(run_storage_of(app), run_id, fleet)
 
-    response = app.test_client().get(f"/results/fleet/{run_id}")
+    response = app.test_client().get(f"/results/{run_id}")
 
     assert response.status_code == 200
     _assert_each_chart_is_drawn_from_the_figure_its_container_carries(

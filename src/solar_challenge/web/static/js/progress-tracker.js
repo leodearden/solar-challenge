@@ -1,14 +1,14 @@
 document.addEventListener('alpine:init', () => {
     // One job's progress, for the tracker that templates/simulate/partials/progress-tracker.html writes.
     // It follows the job's progress stream from init until the job completes or fails, or the tracker is removed.
-    Alpine.data('progressTracker', (jobId) => ({
+    Alpine.data('progressTracker', (jobId, resultsUrl) => ({
         status: 'queued',
         step: 'Queued',
         message: 'Waiting to start...',
         progress: 0,
         elapsed: 0,
         error: '',
-        completedRunId: '',
+        resultsUrl,
         reconnecting: false,
         _stream: null,
         _timer: null,
@@ -54,7 +54,6 @@ document.addEventListener('alpine:init', () => {
             this.progress = 100;
             this.step = 'Done';
             this.message = data.message || 'Simulation completed successfully';
-            if (data.run_id) this.completedRunId = data.run_id;
         },
 
         _onFailed(eventData) {

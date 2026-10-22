@@ -710,11 +710,16 @@ COMPLETED_RUN_ID = "run-1"
 
 @pytest.fixture
 def fleet_runs_complete_at_once(page: Page) -> None:
-    """Answer each fleet run the page submits as a job that completes at once as COMPLETED_RUN_ID, so no job reaches the live server's JobManager."""
+    """Answer each fleet run the page submits as a job that completes at once as COMPLETED_RUN_ID, with the results_url the server answers for it, so no job reaches the live server's JobManager."""
     page.route(
         "**/api/simulate/fleet-from-distribution",
         lambda route: route.fulfill(
-            status=201, json={"job_id": "job-1", "run_id": COMPLETED_RUN_ID}
+            status=201,
+            json={
+                "job_id": "job-1",
+                "run_id": COMPLETED_RUN_ID,
+                "results_url": f"/results/{COMPLETED_RUN_ID}",
+            },
         ),
     )
     completion = {"status": "completed", "run_id": COMPLETED_RUN_ID}
@@ -732,7 +737,7 @@ def test_fleet_run_that_refuses_the_form_leaves_the_earlier_runs_results_link(
     page: Page, live_server: str, page_errors: list[str]
 ) -> None:
     """Run of a form the page refuses, after a run that completed, shows the refusal and leaves that run's View Results link: a refusal is no submission to replace it."""
-    earlier_results = f"/results/fleet/{COMPLETED_RUN_ID}"
+    earlier_results = f"/results/{COMPLETED_RUN_ID}"
     page.goto(live_server + "/simulate/fleet")
     page.get_by_role("button", name="Run Fleet Simulation").click()
     results_link = page.get_by_role("link", name="View Results", exact=True)

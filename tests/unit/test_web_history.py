@@ -37,6 +37,7 @@ from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_attributes, element_count, texts_after
+from tests._run_storage_layout import stored_run_dir
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
@@ -261,6 +262,18 @@ class TestRunsAPI:
         run = data["runs"][0]
         assert run["total_generation_kwh"] == 100.0
         assert run["self_consumption_ratio"] == 0.60
+
+    def test_each_listed_run_links_to_its_results_page(self, storage: RunStorage, client: FlaskClient) -> None:
+        """Each row GET /api/history/runs lists, a home run's and a fleet run's alike, carries results_url, the path of its run's one results page, /results/<run_id>."""
+        _store_home_run(storage, "home-run", _A_HOME)
+        _store_fleet_run(storage, "fleet-run", [_A_HOME, _A_HOME])
+
+        rows = client.get("/api/history/runs").get_json()["runs"]
+
+        assert {row["id"]: row["results_url"] for row in rows} == {
+            "home-run": "/results/home-run",
+            "fleet-run": "/results/fleet-run",
+        }
 
     def test_the_run_list_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
         self, app: Flask, client: FlaskClient, tmp_path: Path
@@ -494,6 +507,16 @@ class TestExportAPI:
         response = client.get("/api/history/runs/nonexistent/export/yaml")
         assert response.status_code == 404
 
+    def test_api_export_yaml_of_a_run_whose_job_has_saved_nothing_yet_returns_404(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """A running run's record holds no config yet, so it has no scenario to export."""
+        storage.create_run("pending-1", run_type="home", name="Pending", n_homes=1, created_at="2024-06-01T09:00:00+00:00")
+
+        response = client.get("/api/history/runs/pending-1/export/yaml")
+
+        assert (response.status_code, response.get_json()) == (404, {"error": "No config data available"})
+
     def test_api_export_yaml_with_config(self, storage: RunStorage, client: FlaskClient) -> None:
         """Test YAML export returns config data."""
         _store_home_run(
@@ -575,6 +598,27 @@ class TestExportAPI:
         _store_fleet_run(storage, "two-home-fleet", home_configs)
 
         response = client.get("/api/history/runs/two-home-fleet/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert load_fleet_config(path).homes == home_configs
+
+    def test_export_of_a_fleet_run_reads_its_homes_from_its_record_and_none_of_its_time_series(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """The scenario is built from the config the run's record holds, so the export still answers once every time series file is gone."""
+        home_configs = [
+            HomeConfig(pv_config=PVConfig(capacity_kw=3.0), load_config=LoadConfig(annual_consumption_kwh=2900.0), name="Home 1"),
+            HomeConfig(pv_config=PVConfig(capacity_kw=6.0), load_config=LoadConfig(annual_consumption_kwh=4100.0), name="Home 2"),
+        ]
+        _store_fleet_run(storage, "fleet-without-time-series", home_configs)
+        time_series = list(stored_run_dir(storage, "fleet-without-time-series").rglob("*.parquet"))
+        assert len(time_series) == len(home_configs)
+        for time_series_file in time_series:
+            time_series_file.unlink()
+
+        response = client.get("/api/history/runs/fleet-without-time-series/export/yaml")
 
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
@@ -713,7 +757,7 @@ class TestExportAPI:
 
         assert response.status_code == 500
         error = response.get_json()["error"]
-        assert error.startswith("Invalid config data")
+        assert error.startswith("Invalid run data")
         for text in named:
             assert text in error
 
@@ -1031,13 +1075,13 @@ class TestContentDispositionHeader:
 def _store_home_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
     """Save a home run of _A_HOME as *run_id*, and return the path of its results page."""
     _store_home_run(storage, run_id, _A_HOME)
-    return f"/results/home/{run_id}"
+    return f"/results/{run_id}"
 
 
 def _store_fleet_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
     """Save a fleet run of two _A_HOMEs as *run_id*, and return the path of its results page."""
     _store_fleet_run(storage, run_id, [_A_HOME, _A_HOME])
-    return f"/results/fleet/{run_id}"
+    return f"/results/{run_id}"
 
 
 class TestResultsPageExportLinks:
