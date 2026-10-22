@@ -21,8 +21,10 @@ def started_by_reloader_watcher() -> bool:
 def run_reloader_watcher(host: str, port: int) -> None:
     """Bind *host* and *port* and run the reloader's watcher on them, starting the serving process and restarting it after each source change.
 
-    Returns once Ctrl+C stops it. When the serving process exits other than to reload,
-    raises SystemExit with that process's exit code, so this process exits with it.
+    Returns once Ctrl+C stops it, killing the serving process unless that process exits
+    within subprocess.call's brief SIGINT grace, so the simulations that process is
+    running end unfinished. When the serving process exits other than to reload, raises
+    SystemExit with that process's exit code, so this process exits with it.
     """
     run_simple(host, port, _never_served, use_reloader=True)
 
