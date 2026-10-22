@@ -15,7 +15,7 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
 from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._seeded_tmy import ClearJuneDays
-from tests._web_app import build_test_app, run_storage_of
+from tests._web_app import build_test_app, release_store_lock, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
 
@@ -145,6 +145,7 @@ class TestGetJobStatusEndpoint:
         )
         assert before_restart.extensions["job_manager"].wait_until_idle(timeout=30)
 
+        release_store_lock(before_restart)
         after_restart = build_test_app(tmp_path).test_client()
 
         assert after_restart.get(f"/api/jobs/{submitted['job_id']}").status_code == 404
@@ -249,6 +250,7 @@ class TestASubmittedJobsRunInRunHistory:
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
 
+        release_store_lock(before_restart)
         after_restart = build_test_app(tmp_path).test_client()
 
         interrupted = after_restart.get(f"/api/history/runs/{second_run_id}").get_json()

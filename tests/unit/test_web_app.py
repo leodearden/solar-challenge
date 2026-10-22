@@ -21,7 +21,7 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import live_managers
 from solar_challenge.web.shared import get_database, get_storage
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
-from tests._web_app import build_test_app, run_storage_of
+from tests._web_app import build_test_app, release_store_lock, run_storage_of
 
 
 def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
@@ -144,6 +144,7 @@ def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_director
 ) -> None:
     """With no SECRET_KEY in test_config or the environment, the app persists a generated key under the home directory and the next build reuses it."""
     first = build_test_app(tmp_path / "data", secret_key=None)
+    release_store_lock(first)
     second = build_test_app(tmp_path / "data", secret_key=None)
 
     key_file = home / ".solar-challenge" / ".secret_key"

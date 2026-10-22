@@ -12,13 +12,14 @@ tests/unit/test_conftests_need_no_web_extra.py says why.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from tests._server_drawn_badges import dashboard_macros_of
-from tests._web_app import build_test_app, run_storage_of
+from tests._web_app import build_test_app, release_store_lock, run_storage_of
 
 if TYPE_CHECKING:
     from flask import Flask
@@ -28,9 +29,11 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """The dashboard app in testing mode, its database and run files under the test's tmp_path."""
-    return build_test_app(tmp_path)
+def app(tmp_path: Path) -> Iterator[Flask]:
+    """The dashboard app in testing mode, its database and run files under the test's tmp_path; its teardown releases the app's store lock."""
+    app = build_test_app(tmp_path)
+    yield app
+    release_store_lock(app)
 
 
 @pytest.fixture

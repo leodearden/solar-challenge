@@ -20,6 +20,7 @@ from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
 from solar_challenge.web.scenarios import bp as scenarios_bp
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.store_lock import acquire_store_lock
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     and easy testing with different configurations.
 
     .. note::
-        This application requires single-worker deployment because the
-        JobManager uses in-memory state (job tracking dicts and SSE event
-        queues) that is not shared across processes.  Multi-worker
-        deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
-        missing from workers that did not create them.
+        One process per store: create_app takes the lock on DATA_DIR's
+        dashboard.lock before it opens the database or fails interrupted
+        runs, and keeps it on ``app.extensions['store_lock']`` until
+        ``StoreLock.release()`` or the end of the process. A second
+        create_app on the store, in this process or another, raises
+        StoreLocked naming the lock file and the holder's pid.
         A host other than ``solar-challenge web start`` must call
         ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
@@ -96,6 +98,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     Raises:
         FileNotFoundError: If the installed package lacks the dashboard's
             templates or static folder.
+        StoreLocked: If another app, in this process or another, holds
+            the store's lock.
+        StoreLockUnsupported: If this platform has no POSIX flock.
     """
     app = Flask(
         __name__,
@@ -121,6 +126,29 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         # Override with test-specific configuration when provided
         app.config.from_mapping(test_config)
 
+    _register_blueprints(app)
+
+    # Register custom error handlers
+    @app.errorhandler(404)
+    def page_not_found(e: Exception) -> tuple[str, int]:
+        return render_template("errors/404.html"), 404
+
+    @app.errorhandler(500)
+    def internal_server_error(e: Exception) -> tuple[str, int]:
+        return render_template("errors/500.html"), 500
+
+    store_lock = acquire_store_lock(Path(app.config["DATA_DIR"]))
+    try:
+        _open_store(app, default_data_dir)
+    except BaseException:
+        store_lock.release()
+        raise
+    app.extensions["store_lock"] = store_lock
+    return app
+
+
+def _open_store(app: Flask, default_data_dir: Path) -> None:
+    """Set *app* up on its store, which this process holds the lock on: the secret key, which may be persisted under *default_data_dir*, the database, the RunStorage and JobManager over it, and the failure of the runs an earlier server left running."""
     # Consult the persisted key only when no config source supplied one
     if app.secret_key is None:
         app.secret_key = _get_secret_key(default_data_dir)
@@ -141,19 +169,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     interrupted = storage.fail_interrupted_runs()
     if interrupted:
         logger.info("Marked %d runs interrupted by a server restart failed on startup", interrupted)
-
-    _register_blueprints(app)
-
-    # Register custom error handlers
-    @app.errorhandler(404)
-    def page_not_found(e: Exception) -> tuple[str, int]:
-        return render_template("errors/404.html"), 404
-
-    @app.errorhandler(500)
-    def internal_server_error(e: Exception) -> tuple[str, int]:
-        return render_template("errors/500.html"), 500
-
-    return app
 
 
 def _register_blueprints(app: Flask) -> None:
