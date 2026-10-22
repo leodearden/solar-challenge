@@ -59,13 +59,13 @@ def _wait_until_completed(manager: JobManager, job_id: str) -> None:
 
 def _summaries_a_finished_fleet_job_saves(
     storage: RunStorage, fleet: FleetResults
-) -> tuple[FleetSummary, list[SummaryStatistics]]:
+) -> tuple[FleetSummary, tuple[SummaryStatistics, ...]]:
     """The fleet and per-home summaries a fleet job saves to *storage* when simulating *fleet*'s homes gives its results."""
     manager = _job_manager_simulating(storage, fleet.home_configs, fleet.per_home_results)
     job_id, run_id = manager.submit_fleet_job(configs=fleet.home_configs, start_date=_JUNE_1, end_date=_JUNE_2)
     _wait_until_completed(manager, job_id)
-    _, fleet_summary, per_home_summaries = storage.load_fleet_run(run_id)
-    return fleet_summary, per_home_summaries
+    loaded = storage.load_run(run_id)
+    return loaded.summary, loaded.home_summaries
 
 
 def _summary_a_finished_home_job_saves(
@@ -75,8 +75,7 @@ def _summary_a_finished_home_job_saves(
     manager = _job_manager_simulating(storage, [config], [results])
     job_id, run_id = manager.submit_home_job(config=config, start_date=_JUNE_1, end_date=_JUNE_2)
     _wait_until_completed(manager, job_id)
-    _, _, summary = storage.load_home_run(run_id)
-    return summary
+    return storage.load_run(run_id).summary
 
 
 def test_a_stored_fleet_run_loads_back_with_the_summaries_a_finished_fleet_job_saves(
@@ -87,10 +86,10 @@ def test_a_stored_fleet_run_loads_back_with_the_summaries_a_finished_fleet_job_s
 
     store_fleet_run(storage, "fleet-1", fleet)
 
-    loaded_fleet, fleet_summary, per_home_summaries = storage.load_fleet_run("fleet-1")
-    assert loaded_fleet.home_configs == fleet.home_configs
-    assert fleet_summary == job_fleet_summary
-    assert per_home_summaries == job_per_home_summaries
+    loaded = storage.load_run("fleet-1")
+    assert loaded.fleet_results.home_configs == fleet.home_configs
+    assert loaded.summary == job_fleet_summary
+    assert loaded.home_summaries == job_per_home_summaries
 
 
 def test_a_stored_fleet_run_is_recorded_as_a_completed_fleet_run_with_the_given_name_and_creation_time(
@@ -124,9 +123,9 @@ def test_a_stored_home_run_loads_back_with_the_summary_a_finished_home_job_saves
 
     store_home_run(storage, "home-1", config, results)
 
-    loaded_config, _, summary = storage.load_home_run("home-1")
-    assert loaded_config == config
-    assert summary == job_summary
+    loaded = storage.load_run("home-1")
+    assert loaded.config == config
+    assert loaded.summary == job_summary
 
 
 def test_a_stored_home_run_is_recorded_as_a_completed_home_run_with_the_given_name_and_creation_time(

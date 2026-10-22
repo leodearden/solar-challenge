@@ -2,11 +2,9 @@
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.fleet import FleetResults
@@ -19,7 +17,6 @@ from solar_challenge.web.charts import (
     fleet_heatmap,
     power_flow_timeline,
 )
-from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
@@ -290,15 +287,14 @@ class TestFleetResultsRoute:
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Renamed Fleet"
 
-    def test_fleet_results_page_of_a_run_with_no_database_row_is_titled_fleet_simulation(
-        self, app: Flask, storage: RunStorage, client: FlaskClient
+    def test_fleet_results_page_of_a_run_with_no_name_is_titled_fleet_simulation(
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """A run whose files outlived its database row, as after the database is recreated, still has a title: the page's own."""
+        """A run with no name still has a title: the page's own."""
         run_id = _save_fleet_run(
             storage, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
-        with Database(Path(app.config["DATABASE"])).transaction() as conn:
-            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        storage.update_run_labels(run_id, {"name": None})
 
         response = client.get(f"/results/fleet/{run_id}")
 

@@ -37,6 +37,7 @@ from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import element_attributes, element_count, texts_after
+from tests._run_storage_layout import stored_run_dir
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
@@ -643,11 +644,11 @@ class TestExportAPI:
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_run_stored_before_the_dispatch_union_loads_back_with_its_variant(
-        self, app: Flask, client: FlaskClient, tmp_path: Path, strategy: object
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path, strategy: object
     ) -> None:
         """Such a run stores all three strategy keys, the ones its strategy does not read null."""
         stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
-        _insert_test_run(app, run_id="pre-union", config=stored)
+        _store_home_run_with_stored_config(storage, "pre-union", stored)
 
         response = client.get("/api/history/runs/pre-union/export/yaml")
 
@@ -704,16 +705,16 @@ class TestExportAPI:
         ],
     )
     def test_export_of_an_undecodable_stored_config_is_a_server_error(
-        self, app: Flask, client: FlaskClient, config: dict, named: tuple[str, ...]
+        self, storage: RunStorage, client: FlaskClient, config: dict, named: tuple[str, ...]
     ) -> None:
         """A stored config that a HomeConfig-tree constructor refuses, or whose strategy no variant is tagged with, is a JSON server error."""
-        _insert_test_run(app, run_id="undecodable", config=config)
+        _store_home_run_with_stored_config(storage, "undecodable", config)
 
         response = client.get("/api/history/runs/undecodable/export/yaml")
 
         assert response.status_code == 500
         error = response.get_json()["error"]
-        assert error.startswith("Invalid config data")
+        assert error.startswith("Invalid run data")
         for text in named:
             assert text in error
 
@@ -883,6 +884,12 @@ def _store_home_run(
 ) -> None:
     """Save a one-day home run of *config* through RunStorage, as a finished job does."""
     store_home_run(storage, run_id, config, make_sinusoidal_sim_results(days=1), name=name)
+
+
+def _store_home_run_with_stored_config(storage: RunStorage, run_id: str, stored_config: dict) -> None:
+    """Save a one-day home run of _A_HOME, as _store_home_run does, then replace its config.json with *stored_config*."""
+    _store_home_run(storage, run_id, _A_HOME)
+    (stored_run_dir(storage, run_id) / "config.json").write_text(json.dumps(stored_config, indent=2))
 
 
 def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:

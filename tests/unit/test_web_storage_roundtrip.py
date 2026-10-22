@@ -265,7 +265,7 @@ class TestHeatPumpHomeRoundtrip:
             summary=summary,
         )
 
-        loaded_config, loaded_results, loaded_summary = storage.load_home_run("hp-home-001")
+        loaded_results = storage.load_run("hp-home-001").results
 
         # heat_pump_load must not be None
         assert loaded_results.heat_pump_load is not None
@@ -302,9 +302,7 @@ class TestHeatPumpFleetRoundtrip:
             per_home_summaries=home_summaries,
         )
 
-        loaded_fleet, loaded_fleet_summary, loaded_home_summaries = storage.load_fleet_run(
-            "hp-fleet-001"
-        )
+        loaded_fleet = storage.load_run("hp-fleet-001").fleet_results
 
         for i, loaded_home in enumerate(loaded_fleet.per_home_results):
             assert loaded_home.heat_pump_load is not None, (
@@ -331,7 +329,7 @@ class TestGridChargeCostRoundtrip:
             summary=_make_summary(),
         )
 
-        _, loaded_results, _ = storage.load_home_run("grid-charge-home-001")
+        loaded_results = storage.load_run("grid-charge-home-001").results
 
         assert loaded_results.grid_charge_cost is not None
         pd.testing.assert_series_equal(
@@ -353,7 +351,7 @@ class TestGridChargeCostRoundtrip:
             per_home_summaries=[_make_summary(), _make_summary()],
         )
 
-        loaded_fleet, _, _ = storage.load_fleet_run("grid-charge-fleet-001")
+        loaded_fleet = storage.load_run("grid-charge-fleet-001").fleet_results
 
         for loaded, saved in zip(loaded_fleet.per_home_results, home_results, strict=True):
             assert loaded.grid_charge_cost is not None
@@ -371,7 +369,7 @@ class TestGridChargeCostRoundtrip:
             summary=_make_summary(),
         )
 
-        _, loaded_results, _ = storage.load_home_run("no-grid-charge-001")
+        loaded_results = storage.load_run("no-grid-charge-001").results
 
         assert loaded_results.grid_charge_cost is None
 
@@ -388,7 +386,7 @@ class TestGridChargeKwhRoundtrip:
             summary=dataclasses.replace(_make_summary(), total_grid_charge_kwh=2.5),
         )
 
-        _, _, loaded_summary = storage.load_home_run("grid-charge-kwh-001")
+        loaded_summary = storage.load_run("grid-charge-kwh-001").summary
 
         assert loaded_summary.total_grid_charge_kwh == 2.5
 
@@ -405,7 +403,7 @@ class TestGridChargeKwhRoundtrip:
         del stored["total_grid_charge_kwh"]
         summary_path.write_text(json.dumps(stored, indent=2))
 
-        _, _, loaded_summary = storage.load_home_run("no-grid-charge-kwh-001")
+        loaded_summary = storage.load_run("no-grid-charge-kwh-001").summary
 
         assert loaded_summary.total_grid_charge_kwh == 0.0
 
@@ -463,7 +461,8 @@ class TestFullHomeRoundtrip:
             duration_seconds=42.5,
         )
 
-        loaded_config, loaded_results, loaded_summary = storage.load_home_run("full-home-001")
+        loaded = storage.load_run("full-home-001")
+        loaded_config, loaded_results, loaded_summary = loaded.config, loaded.results, loaded.summary
 
         # Config fields
         assert loaded_config.pv_config.capacity_kw == config.pv_config.capacity_kw
@@ -534,8 +533,9 @@ class TestFullFleetRoundtrip:
             duration_seconds=120.0,
         )
 
-        loaded_fleet, loaded_fleet_summary, loaded_home_summaries = storage.load_fleet_run(
-            "full-fleet-001"
+        loaded = storage.load_run("full-fleet-001")
+        loaded_fleet, loaded_fleet_summary, loaded_home_summaries = (
+            loaded.fleet_results, loaded.summary, loaded.home_summaries
         )
 
         # Verify number of homes
@@ -600,7 +600,7 @@ class TestTupleFieldRoundtrip:
             summary=_make_summary(),
         )
 
-        loaded_config, _, _ = storage.load_home_run("tou-home-001")
+        loaded_config = storage.load_run("tou-home-001").config
 
         assert loaded_config == config
         assert hash(loaded_config) == hash(config)
@@ -627,7 +627,7 @@ class TestTupleFieldRoundtrip:
             per_home_summaries=[_make_summary() for _ in range(2)],
         )
 
-        loaded_fleet, _, _ = storage.load_fleet_run("tou-fleet-001")
+        loaded_fleet = storage.load_run("tou-fleet-001").fleet_results
 
         assert loaded_fleet.home_configs == home_configs
 
@@ -649,7 +649,7 @@ class TestEveryFieldShapeRoundtrip:
             summary=_make_summary(),
         )
 
-        loaded_config, _, _ = storage.load_home_run("every-shape-home")
+        loaded_config = storage.load_run("every-shape-home").config
 
         assert loaded_config == config
 
@@ -668,7 +668,7 @@ class TestEveryFieldShapeRoundtrip:
             per_home_summaries=[_make_summary() for _ in range(2)],
         )
 
-        loaded_fleet, _, _ = storage.load_fleet_run("every-shape-fleet")
+        loaded_fleet = storage.load_run("every-shape-fleet").fleet_results
 
         assert loaded_fleet.home_configs == home_configs
 
@@ -780,7 +780,7 @@ class TestStoredParquetColumns:
             stored_run_dir(storage, "columns-home-001") / "data.parquet", engine="pyarrow"
         )
 
-        _, loaded_results, _ = storage.load_home_run("columns-home-001")
+        loaded_results = storage.load_run("columns-home-001").results
 
         for position, field_name in enumerate(stored_column_by_field):
             series = getattr(loaded_results, field_name)
@@ -810,7 +810,7 @@ class TestRunSavedWithRetiredOptionalField:
         stored["pv_config"]["retired_optional_field"] = None
         config_path.write_text(json.dumps(stored, indent=2))
 
-        loaded_config, _, _ = storage.load_home_run("retired-null-001")
+        loaded_config = storage.load_run("retired-null-001").config
 
         assert loaded_config == config
 
@@ -834,7 +834,7 @@ class TestRunStoredWithModuleSettings:
         )
 
         stored = _read_json(stored_run_dir(storage, "module-settings-null-001") / "config.json")
-        loaded_config, _, _ = storage.load_home_run("module-settings-null-001")
+        loaded_config = storage.load_run("module-settings-null-001").config
 
         assert stored["pv_config"]["module_efficiency"] is None
         assert stored["pv_config"]["temperature_coefficient"] is None
@@ -856,7 +856,7 @@ class TestRunStoredWithModuleSettings:
         stored["pv_config"]["temperature_coefficient"] = -0.004
         config_path.write_text(json.dumps(stored, indent=2))
 
-        loaded_config, _, _ = storage.load_home_run("module-settings-old-001")
+        loaded_config = storage.load_run("module-settings-old-001").config
 
         assert loaded_config.pv_config == dataclasses.replace(
             config.pv_config, module_efficiency=0.2, temperature_coefficient=-0.004
@@ -909,7 +909,7 @@ class TestRunWithEachDispatchStrategy:
     def test_a_saved_run_loads_equal_with_an_equal_hash(self, storage: RunStorage, strategy: Any) -> None:
         config = _save_dispatching_home_run(storage, "dispatch-001", strategy)
 
-        loaded_config, _, _ = storage.load_home_run("dispatch-001")
+        loaded_config = storage.load_run("dispatch-001").config
 
         assert loaded_config == config
         assert hash(loaded_config) == hash(config)
@@ -923,7 +923,7 @@ class TestRunWithEachDispatchStrategy:
         config_path = stored_run_dir(storage, "pre-union-001") / "config.json"
         config_path.write_text(json.dumps(_read_json(_PRE_DISPATCH_UNION_HOME_CONFIGS)[tag], indent=2))
 
-        loaded_config, _, _ = storage.load_home_run("pre-union-001")
+        loaded_config = storage.load_run("pre-union-001").config
 
         assert loaded_config == _dispatching_home(strategy, name=f"Stored before the dispatch union: {tag}")
 
@@ -951,8 +951,8 @@ class TestCorruptedParquet:
         parquet_path.write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
 
         # Loading should raise an error, but not an unhandled crash
-        with pytest.raises(Exception):
-            storage.load_home_run("corrupt-001")
+        with pytest.raises(ValueError):
+            storage.load_run("corrupt-001")
 
 
 class TestMissingRunDirectory:
@@ -981,7 +981,7 @@ class TestMissingRunDirectory:
 
         # Loading should raise FileNotFoundError
         with pytest.raises(FileNotFoundError):
-            storage.load_home_run("missing-dir-001")
+            storage.load_run("missing-dir-001")
 
 
 class TestDeleteRun:

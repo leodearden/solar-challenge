@@ -372,13 +372,12 @@ class TestHomeResultsRoute:
         assert headings(page)[0] == "South Roof"
         assert "Results: South Roof - Solar Challenge" in texts(page)
 
-    def test_home_results_page_of_a_run_with_no_database_row_is_titled_home_simulation(
-        self, app: Flask, storage: RunStorage, client: FlaskClient
+    def test_home_results_page_of_a_run_with_no_name_is_titled_home_simulation(
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
+        """A run with no name still has a title: the page's own, not its home's name."""
         run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
-        with Database(Path(app.config["DATABASE"])).transaction() as conn:
-            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        storage.update_run_labels(run_id, {"name": None})
 
         response = client.get(f"/results/home/{run_id}")
 

@@ -31,6 +31,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import StoredFleetRun, StoredHomeRun, StoredRun
 
 bp = Blueprint("main", __name__)
 
@@ -127,10 +128,13 @@ def home_results(run_id: str) -> Any:
     """
     storage = get_storage()
     try:
-        config, sim_results, summary = storage.load_home_run(run_id)
+        stored: StoredRun | None = storage.load_run(run_id)
     except FileNotFoundError:
+        stored = None
+    if not isinstance(stored, StoredHomeRun):
         flash("Run not found.", "error")
         return redirect(url_for("main.index"))
+    config, sim_results, summary = stored.config, stored.results, stored.summary
 
     has_battery = config.battery_config is not None
 
@@ -186,10 +190,13 @@ def fleet_results(run_id: str) -> Any:
     """
     storage = get_storage()
     try:
-        fleet_results_data, fleet_summary, per_home_summaries = storage.load_fleet_run(run_id)
+        stored: StoredRun | None = storage.load_run(run_id)
     except FileNotFoundError:
+        stored = None
+    if not isinstance(stored, StoredFleetRun):
         flash("Fleet run not found.", "error")
         return redirect(url_for("main.index"))
+    fleet_results_data, fleet_summary, per_home_summaries = stored.fleet_results, stored.summary, stored.home_summaries
 
     charts: dict[str, Any] = {
         "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),

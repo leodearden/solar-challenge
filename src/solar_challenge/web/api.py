@@ -21,7 +21,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
-from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
+from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.database import PresetType
@@ -49,7 +49,7 @@ from solar_challenge.web.request_boundary import NotAJsonObject, request_json_ob
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
-from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
+from solar_challenge.web.storage import RUN_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -801,13 +801,7 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     run_name = run.name or "run"
 
     try:
-        if run.type == "home":
-            _config, results, _summary = storage.load_home_run(run_id)
-            df = results.to_dataframe()
-        else:
-            # For fleet runs, export the aggregate (sum across all homes)
-            fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
-            df = fleet_results.to_aggregate_dataframe()
+        df = storage.load_run(run_id).export_frame()
     except FileNotFoundError:
         return jsonify({"error": "Run data files not found"}), 404
 
@@ -830,35 +824,25 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response; 404 if the run or its config is missing, 500 if the
-        stored config does not decode, 422 if the scenario grammar cannot express it.
+        YAML file response; 404 if the run or its files are missing, 500 if a stored
+        document does not decode, 422 if the scenario grammar cannot express its config.
     """
-    run = get_storage().run_record(run_id)
+    storage = get_storage()
+    run = storage.run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    if not run.config_json:
-        return jsonify({"error": "No config data available"}), 404
-
     try:
-        config = json.loads(run.config_json)
-    except (json.JSONDecodeError, TypeError):
-        return jsonify({"error": "Invalid config data"}), 500
-
-    is_fleet = run.type == "fleet"
-    try:
-        homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
+        stored = storage.load_run(run_id)
+    except FileNotFoundError:
+        return jsonify({"error": "Run data files not found"}), 404
     except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
-        return jsonify({"error": f"Invalid config data: {exc}"}), 500
+        return jsonify({"error": f"Invalid run data: {exc}"}), 500
 
     run_name = run.name or "run"
     try:
-        document = (
-            fleet_scenario(homes, name=run_name)
-            if is_fleet
-            else home_scenario(homes[0], name=run_name)
-        )
+        document = stored.scenario_document(run_name)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 422
 
