@@ -102,9 +102,11 @@ def member_forms(cls: type) -> dict[str, str]:
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
     module does not bind raises NameError, and a module another of the same name has
-    replaced in sys.modules raises LookupError. A public member that is a
-    functools.partialmethod, which no member rule spells, raises TypeError naming *cls*,
-    the member and its kind.
+    replaced in sys.modules raises LookupError. A public member that no member rule
+    spells and whose signature inspect cannot read raises TypeError naming *cls*, the
+    member and its kind: one that is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is, or a descriptor defined in Python that neither
+    wraps a callable, as functools.wraps records one, nor carries a signature.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -551,6 +553,32 @@ def _carries_signature(obj: object) -> bool:
     return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
 
 
+def _is_unreadable_routine(obj: object) -> bool:
+    """Whether *obj* is a routine whose signature inspect cannot read.
+
+    That is one that is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is; or a callable whose chain, as _chain_end follows
+    it, ends at a routine whose class defines __get__ in Python and that carries no
+    signature, which inspect reads as a builtin, by a text signature only a routine
+    defined in C gives.
+    """
+    if not _is_routine(obj):
+        return False
+    if not callable(obj):
+        return True
+    end = _chain_end(obj, stop=_carries_signature)
+    getter = inspect.getattr_static(type(end), "__get__", None)
+    return _is_routine(end) and isinstance(getter, types.FunctionType) and not _carries_signature(end)
+
+
+def _unreadable_routine_error(label: str, routine: object) -> TypeError:
+    """The error for *routine*, a routine _is_unreadable_routine holds of, which *label* names."""
+    return TypeError(
+        f"{label} is a {_label(type(routine))}, a routine whose signature inspect cannot "
+        "read, so no form spells it: make the name private, or define it with def"
+    )
+
+
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 
 
@@ -985,7 +1013,11 @@ class _AnnotatedAttribute:
 
 
 def _public_members(cls: type) -> dict[str, object]:
-    """The members member_forms(cls) spells, by name, once _refuse_partialmethod has passed each: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins."""
+    """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
+
+    A member that _spelled_function has no rule for and that _is_unreadable_routine
+    holds of raises TypeError naming *cls*, the member and its kind.
+    """
     pinned = _pinned_by_class_form(cls)
     members = {
         name: member
@@ -993,18 +1025,9 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
-        _refuse_partialmethod(cls, name, member)
+        if _spelled_function(member) is None and _is_unreadable_routine(member):
+            raise _unreadable_routine_error(f"{_label(cls)}.{name}", member)
     return members
-
-
-def _refuse_partialmethod(cls: type, name: str, member: object) -> None:
-    """Raise TypeError naming *cls*'s member *name*, its kind and the rule if *member* is a functools.partialmethod, which no member rule spells."""
-    if isinstance(member, functools.partialmethod):
-        kind = _label(type(member))
-        raise TypeError(
-            f"{_label(cls)}.{name} is a {kind}, which member_forms has no rule for: define "
-            f"{name} with def"
-        )
 
 
 def _own_members(cls: type) -> dict[str, object]:
