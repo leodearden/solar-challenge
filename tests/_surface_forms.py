@@ -682,23 +682,45 @@ def _constructor_holder(cls: type) -> type:
 
 
 def _signature_holder(cls: type) -> type:
-    """The class in *cls*'s MRO whose own namespace holds the __signature__ *cls* carries.
+    """The class in *cls*'s MRO whose own namespace holds, as an inspect.Signature, the __signature__ *cls* carries.
 
-    If its metaclass provides that signature, or may, raises TypeError naming *cls* and
-    the metaclass: a class in the metaclass's MRO that holds a __signature__ provides it
-    unless *cls*'s MRO holds one and it is no data descriptor, and a metaclass's
-    __getattr__ may provide it when neither MRO holds one.
+    It mirrors type.__getattribute__, the lookup inspect reads *cls*.__signature__
+    through, and raises TypeError naming *cls* and its metaclass where that metaclass
+    provides the signature or may: when a class in the metaclass's MRO other than type
+    and object defines __getattribute__; when the first one there that holds a
+    __signature__ holds a data descriptor, which outranks *cls*'s own; and when *cls*'s
+    MRO holds no inspect.Signature there first, so a metaclass attribute, a metaclass
+    __getattr__ or a descriptor provides it.
     """
-    holder = next((base for base in cls.__mro__ if "__signature__" in vars(base)), None)
-    metaclass_holds = any("__signature__" in vars(meta) for meta in inspect.getmro(type(cls)))
-    if holder is None or metaclass_holds:
+    metaclass_mro = inspect.getmro(type(cls))
+    metaclass_holder = _namespace_holder(metaclass_mro, "__signature__")
+    holder = _namespace_holder(cls.__mro__, "__signature__")
+    if (
+        _namespace_holder(
+            tuple(meta for meta in metaclass_mro if meta not in (type, object)),
+            "__getattribute__",
+        )
+        is not None
+        or (
+            metaclass_holder is not None
+            and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
+        )
+        or holder is None
+        or not isinstance(vars(holder)["__signature__"], inspect.Signature)
+    ):
         raise TypeError(
             f"{_label(cls)} is constructed in C and carries a signature its metaclass "
-            f"{_label(type(cls))} provides or may provide, so no module is known to spell "
-            "it: give the class a constructor defined with def, or a metaclass that "
-            "provides no __signature__"
+            f"{_label(type(cls))} provides or may provide, through an attribute, a data "
+            "descriptor or a __getattribute__ or __getattr__ it defines, so no module is "
+            "known to spell it: give the class a constructor defined with def, or a "
+            "metaclass that provides no __signature__"
         )
     return holder
+
+
+def _namespace_holder(mro: tuple[type, ...], name: str) -> type | None:
+    """The first class in *mro* whose own namespace holds *name*, or None if none does."""
+    return next((base for base in mro if name in vars(base)), None)
 
 
 def _holds_generated_init(cls: type) -> bool:
