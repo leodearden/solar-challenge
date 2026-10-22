@@ -164,8 +164,8 @@ def run(
             generate_summary_report(results, home_config.name, seg_tariff_pence_per_kwh=seg_rate)
         )
     else:
-        # Why this summary gets no SEG rate: test_home_run_prints_a_seg_blocks_export_income_once
-        # in tests/unit/test_cli_summary_tables.py
+        # Why this summary gets no SEG rate:
+        # tests/unit/test_cli_summary_tables.py::TestPrintedSummaryTables::test_home_run_prints_a_seg_blocks_export_income_once
         summary = calculate_summary(results)
         console.print(
             create_summary_table(home_summary_rows(summary), title=f"Simulation Results: {home_config.name}")

@@ -121,7 +121,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         // Follow each point's job in turn until signal aborts, so the page holds one progress stream at a time;
-        // tests/e2e/test_parameter_sweep.py's test_another_tab_loads_run_history_while_an_eight_point_sweep_runs says why, and what it costs
+        // tests/e2e/test_parameter_sweep.py::test_another_tab_loads_run_history_while_an_eight_point_sweep_runs says why, and what it costs
         async _followSweep(rows, signal) {
             for (const row of rows) {
                 if (signal.aborted) return;

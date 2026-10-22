@@ -4,7 +4,7 @@ document.addEventListener('alpine:init', () => {
 
     // The scope distribution_editor (templates/components/distribution-editor.html) opens for the distribution getDist
     // returns. dist calls getDist on every read, because a page that loads a scenario replaces its distributions
-    // (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
+    // (pinned by tests/e2e/test_fleet_interactions.py::test_fleet_import_yaml_shows_each_distribution_in_its_card).
     Alpine.data('distributionEditor', (getDist, newRowValue) => ({
         get dist() { return getDist(); },
 
