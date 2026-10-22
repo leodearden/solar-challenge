@@ -6,7 +6,8 @@ allowing different algorithms to decide when and how to charge/discharge
 batteries based on generation, demand, tariffs, and other factors.
 
 It also defines the configuration a battery names its strategy and its grid
-charging with: the variants of DispatchStrategyConfig, and GridChargeConfig.
+charging with: the variants of DispatchStrategyConfig, and GridChargeConfig;
+build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
@@ -15,10 +16,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Literal, Optional, Tuple, TypeAlias, get_args
+from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
@@ -759,6 +761,24 @@ class PeakShavingStrategy(DispatchStrategy):
             discharge_kw=discharge_kw,
             grid_charge_kw=grid_charge_kw,
         )
+
+
+def build_dispatch_strategy(
+    config: DispatchStrategyConfig,
+    *,
+    grid_charging: GridChargeConfig | None,
+    tariff: TariffConfig | None,
+) -> DispatchStrategy:
+    """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff."""
+    match config:
+        case SelfConsumptionStrategyConfig():
+            return SelfConsumptionStrategy()
+        case TOUOptimizedStrategyConfig():
+            return TOUOptimizedStrategy(list(config.peak_hours))
+        case PeakShavingStrategyConfig():
+            return PeakShavingStrategy(config.import_limit_kw)
+        case _:
+            assert_never(config)
 
 
 _ONE_DAY = timedelta(days=1)
