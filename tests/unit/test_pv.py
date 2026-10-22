@@ -25,6 +25,7 @@ from solar_challenge.pv import (
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
+from tests._pv_modules import pvwatts_300_w_module, sapm_library_module
 from tests._pv_runs import per_array
 
 
@@ -361,8 +362,7 @@ def overcast_january_daytime() -> pd.DataFrame:
 
 @pytest.fixture
 def sapm_module() -> dict[str, float]:
-    """The first row of pvlib's SAPM module library (SandiaMod), which rates its module by neither a pdc0 nor an STC."""
-    return dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
+    return sapm_library_module()
 
 
 @pytest.fixture
@@ -793,9 +793,6 @@ class TestInverterModelMatchesModuleModel:
         )
 
 
-_PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
-
-
 def _wired_module_count(system: pvlib.pvsystem.PVSystem) -> int:
     """The modules wired across all of the system's arrays."""
     return sum(array.modules_per_string * array.strings for array in system.arrays)
@@ -824,7 +821,7 @@ class TestWiredDcCapacity:
             PVConfig(capacity_kw=0.3),
             *SYSTEM_SIZE_CONFIGS,
             pytest.param(
-                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
                 id="pvwatts-module-without-STC",
             ),
             pytest.param(
@@ -850,7 +847,7 @@ class TestWiredDcCapacity:
         ("config", "modules", "module_w"),
         [
             pytest.param(
-                PVConfig(capacity_kw=4.0, custom_module_params=_PVWATTS_300_W_MODULE),
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
                 13,
                 300.0,
                 id="4kW-of-300W-pvwatts-modules-without-STC",

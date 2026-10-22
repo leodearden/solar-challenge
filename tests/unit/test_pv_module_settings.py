@@ -16,14 +16,13 @@ import pandas as pd
 import pvlib
 import pytest
 from solar_challenge.pv import (
-    DEFAULT_CEC_MODULE,
     PVConfig,
-    cec_module_params,
     create_pv_system,
     create_pvwatts_inverter_params,
     create_simple_module_params,
     wired_dc_capacity_kw,
 )
+from tests._pv_modules import default_module, pvwatts_300_w_module, sapm_library_module
 from tests._pv_runs import clear_day_kwh
 
 _CEC_SINGLE_DIODE_KEYS = ("alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref", "R_s", "Adjust")
@@ -32,8 +31,7 @@ _PVWATTS_KEYS = ("pdc0", "gamma_pdc")
 
 @pytest.fixture
 def sapm_module() -> dict[str, float]:
-    """The first row of pvlib's SAPM module library (SandiaMod), in neither CEC single-diode nor PVWatts form."""
-    return dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
+    return sapm_library_module()
 
 
 @pytest.fixture
@@ -43,20 +41,15 @@ def pdc0_module_without_gamma_pdc() -> dict[str, float]:
 
 
 @pytest.fixture
-def default_module() -> dict[str, float]:
-    return cec_module_params(DEFAULT_CEC_MODULE)
-
-
-@pytest.fixture
-def cec_module_without_alpha_sc(default_module: dict[str, float]) -> dict[str, float]:
+def cec_module_without_alpha_sc() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row with no short-circuit current temperature coefficient: Adjust scales only alpha_sc, so no Adjust moves the modelled coefficient."""
-    return {**default_module, "alpha_sc": 0.0}
+    return {**default_module(), "alpha_sc": 0.0}
 
 
 @pytest.fixture
-def cec_module_with_a_wide_band_gap(default_module: dict[str, float]) -> dict[str, float]:
+def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row at a 3.0 eV band gap: the Adjusts that keep its photocurrent positive from -40 to 85 °C reach a modelled coefficient only from -0.0908 to -3.1151 %/K (measured), so not -0.05 %/K."""
-    return {**default_module, "EgRef": 3.0}
+    return {**default_module(), "EgRef": 3.0}
 
 
 @pytest.fixture(scope="module")
@@ -156,7 +149,7 @@ class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
         "template",
         [
             pytest.param(lambda: None, id="DEFAULT_CEC_MODULE"),
-            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="a-CECMod-row"),
+            pytest.param(default_module, id="a-CECMod-row"),
             pytest.param(create_simple_module_params, id="create_simple_module_params"),
         ],
     )
@@ -191,9 +184,6 @@ class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
             _assert_equal_apart_from(array.module_parameters, pdc0_module_without_gamma_pdc, {"A_c"})
 
 
-_PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
-
-
 class TestASetEfficiencySetsTheModulesArea:
     """A set module_efficiency sets the template's A_c to its rating over efficiency x 1000 W/m², so it acts through NOCT-SAM's cell temperature."""
 
@@ -202,13 +192,13 @@ class TestASetEfficiencySetsTheModulesArea:
         "template",
         [
             pytest.param(None, id="DEFAULT_CEC_MODULE"),
-            pytest.param(_PVWATTS_300_W_MODULE, id="a-300-W-PVWatts-module"),
+            pytest.param(pvwatts_300_w_module(), id="a-300-W-PVWatts-module"),
         ],
     )
     def test_every_array_takes_the_area_at_which_its_rating_is_that_efficiency(
         self, template: dict[str, float] | None, efficiency: float
     ) -> None:
-        module = cec_module_params(DEFAULT_CEC_MODULE) if template is None else template
+        module = default_module() if template is None else template
         rating_w = module["STC"] if template is None else module["pdc0"]
         config = PVConfig(capacity_kw=4.0, module_efficiency=efficiency, custom_module_params=template)
 
@@ -223,7 +213,7 @@ class TestASetEfficiencySetsTheModulesArea:
         "module",
         [
             pytest.param(create_simple_module_params(), id="create_simple_module_params"),
-            pytest.param(_PVWATTS_300_W_MODULE, id="a-300-W-PVWatts-module"),
+            pytest.param(pvwatts_300_w_module(), id="a-300-W-PVWatts-module"),
         ],
     )
     def test_with_neither_field_set_every_array_wires_the_template_as_it_is(
@@ -252,12 +242,13 @@ class TestASetTemperatureCoefficientOnACecModule:
         "as_custom_params", [False, True], ids=["DEFAULT_CEC_MODULE", "its-row-as-custom-params"]
     )
     def test_the_derived_module_has_that_coefficient_at_the_rows_stc_point(
-        self, coefficient: float, as_custom_params: bool, default_module: dict[str, float]
+        self, coefficient: float, as_custom_params: bool
     ) -> None:
+        row = default_module()
         config = PVConfig(
             capacity_kw=4.0,
             temperature_coefficient=coefficient,
-            custom_module_params=default_module if as_custom_params else None,
+            custom_module_params=row if as_custom_params else None,
         )
 
         for array in create_pv_system(config).arrays:
@@ -265,34 +256,36 @@ class TestASetTemperatureCoefficientOnACecModule:
             modelled = _modelled_gamma_per_k(module)
             assert abs(modelled - coefficient) <= 1e-6, f"modelled {modelled} per K"
             assert module["gamma_r"] == pytest.approx(100 * coefficient)
-            assert _p_mp_at_stc_w(module) == pytest.approx(_p_mp_at_stc_w(default_module), rel=1e-9)
-            _assert_equal_apart_from(module, default_module, {"Adjust", "gamma_r"})
+            assert _p_mp_at_stc_w(module) == pytest.approx(_p_mp_at_stc_w(row), rel=1e-9)
+            _assert_equal_apart_from(module, row, {"Adjust", "gamma_r"})
 
     def test_the_rows_own_coefficient_gives_back_the_row(
-        self, default_module: dict[str, float], default_clear_day_kwh: float
+        self, default_clear_day_kwh: float
     ) -> None:
         """The row's own modelled coefficient at a 0.5 K half-width is -0.34730 %/K, beside its catalogue gamma_r of -0.3448."""
+        row = default_module()
         config = PVConfig(
             capacity_kw=4.0,
-            temperature_coefficient=_modelled_gamma_per_k(default_module, half_width_k=0.5),
+            temperature_coefficient=_modelled_gamma_per_k(row, half_width_k=0.5),
         )
 
         for array in create_pv_system(config).arrays:
             assert array.module_parameters["Adjust"] == pytest.approx(
-                default_module["Adjust"], abs=1e-6
+                row["Adjust"], abs=1e-6
             )
         assert clear_day_kwh(config) == pytest.approx(default_clear_day_kwh, rel=1e-9)
 
 
 class TestASetTemperatureCoefficientOnAPvwattsModule:
     def test_sets_its_gamma_pdc(self) -> None:
+        module = pvwatts_300_w_module()
         config = PVConfig(
-            capacity_kw=4.0, temperature_coefficient=-0.005, custom_module_params=_PVWATTS_300_W_MODULE
+            capacity_kw=4.0, temperature_coefficient=-0.005, custom_module_params=module
         )
 
         for array in create_pv_system(config).arrays:
             assert array.module_parameters["gamma_pdc"] == -0.005
-            _assert_equal_apart_from(array.module_parameters, _PVWATTS_300_W_MODULE, {"gamma_pdc"})
+            _assert_equal_apart_from(array.module_parameters, module, {"gamma_pdc"})
 
 
 class TestASetTemperatureCoefficientActsOnAClearDay:
