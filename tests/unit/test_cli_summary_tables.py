@@ -12,7 +12,6 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import fleet_summary_rows, home_summary_rows
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
 
 _HOME = {
@@ -93,12 +92,14 @@ def _fleet_summary(**changes: float | None) -> FleetSummary:
     return dataclasses.replace(every_field_set, **changes)
 
 
+clear_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
+
+
 @pytest.fixture
 def clear_june_in_tmp_path(
-    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    clear_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-    ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).seed_as_bristol_tmy(weather_cache)
+    """Work in tmp_path, where each test writes its config, on the clear 21 June that clear_june_tmy serves as the TMY of Bristol, where a config with no location simulates."""
     monkeypatch.chdir(tmp_path)
 
 
