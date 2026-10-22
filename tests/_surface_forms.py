@@ -150,21 +150,22 @@ def named_classes(obj: object) -> set[type]:
     nearest class in its MRO that holds one has in its own body, which may be a base
     defined in another module, is spelled where a routine is, so one that body assigns
     from another module, or that wraps one there as functools.wraps records one, is
-    spelled there. One compiled outside that body and renamed into the class, as
-    collections.namedtuple compiles a __new__, is spelled in that class's module; a
-    parameter of an __init__ the dataclass decorator generated, in the module of the
-    nearest class in that MRO the decorator processed whose own body annotates it, so an
-    inherited field in the base that declares it, however a mixin annotates it. A
-    signature a class carries in its constructor's place is spelled where that
-    constructor is, or where the class holding the signature is if the constructor is
-    defined in C or wraps a callable defined in C, as object's is; one its metaclass or
-    a descriptor gives raises TypeError. What a type variable or a NewType carries is
-    spelled in the module that declares it; inside its own declaration, as in
-    TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
-    def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
-    the module that spells the signature holding it. That module binds no type
-    parameter, so a string that names one, as "Node[T]" names T, raises NameError. A
-    constant names its type, and an Enum's members name nothing.
+    spelled there. An __init__ is read once bound to the class as inspect binds it, so a
+    functools.partialmethod is spelled where the callable it wraps is. One compiled
+    outside that body and renamed into the class, as collections.namedtuple compiles a
+    __new__, is spelled in that class's module; a parameter of an __init__ the dataclass
+    decorator generated, in the module of the nearest class in that MRO the decorator
+    processed whose own body annotates it, so an inherited field in the base that
+    declares it, however a mixin annotates it. A signature a class carries in its
+    constructor's place is spelled where that constructor is, or where the class holding
+    the signature is if the constructor is defined in C or wraps a callable defined in
+    C, as object's is; one its metaclass or a descriptor gives raises TypeError. What a
+    type variable or a NewType carries is spelled in the module that declares it;
+    inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
+    A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
+    it carries is spelled in the module that spells the signature holding it. That
+    module binds no type parameter, so a string that names one, as "Node[T]" names T,
+    raises NameError. A constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -744,8 +745,13 @@ def _constructor_spelling_modules(
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds: the one _first_read_constructor gives."""
-    return _first_read_constructor(holder)[1]
+    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls* through its type's __get__."""
+    kind, constructor = _first_read_constructor(holder)
+    get = getattr(type(constructor), "__get__", None)
+    if kind == "__new__" or get is None or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+        return constructor
+    bound: object = get(constructor, cls, type(cls))
+    return bound
 
 
 def _generated_constructor_modules(
