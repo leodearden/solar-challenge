@@ -44,7 +44,9 @@ from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
-_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1)
+_DAY = "2024-06-21"
+
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
 bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
@@ -673,7 +675,7 @@ home:
         seg_yaml: str,
         *extra_args: str,
     ) -> tuple[Result, dict[str, HomeConfig]]:
-        """Run `home run --report` for 21 June on a config ending in *seg_yaml*.
+        """Run `home run --report` for _DAY on a config ending in *seg_yaml*.
 
         *extra_args* are appended to the command line after ``--report``.
         Returns the CLI result and the spy's capture; ``captured["home_config"]``
@@ -695,8 +697,8 @@ home:
             app,
             [
                 "home", "run", str(cfg_path),
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
+                "--start", _DAY,
+                "--end", _DAY,
                 "--report",
                 *extra_args,
             ],
@@ -782,7 +784,7 @@ def clear_june_in_tmp_path(
 
 
 def _run_home_named(home_name: str, *options: str) -> Result:
-    """Run `home run` with options for 21 June on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
+    """Run `home run` with options for _DAY on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
     Path("home.yaml").write_text(
         yaml.safe_dump(
             {
@@ -797,7 +799,7 @@ def _run_home_named(home_name: str, *options: str) -> Result:
 
     return runner.invoke(
         app,
-        ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", *options],
+        ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY, *options],
         catch_exceptions=False,
     )
 
@@ -822,18 +824,18 @@ def _write_scenario(scenario_name: str) -> None:
 
 
 def _run_finance(scenario_name: str) -> Result:
-    """Run `finance run` for 21 June on the scenario _write_scenario writes, named scenario_name."""
+    """Run `finance run` for _DAY on the scenario _write_scenario writes, named scenario_name."""
     _write_scenario(scenario_name)
 
     return runner.invoke(
         app,
-        ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+        ["finance", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY],
         catch_exceptions=False,
     )
 
 
 def _run_optimize_configs() -> Result:
-    """Run `optimize configs` for 21 June on the scenario _write_scenario writes, named Bristol: a sweep of the one config with 4 kW of PV, no battery and a 5 kW inverter, and no sensitivity panel."""
+    """Run `optimize configs` for _DAY on the scenario _write_scenario writes, named Bristol: a sweep of the one config with 4 kW of PV, no battery and a 5 kW inverter, and no sensitivity panel."""
     _write_scenario("Bristol")
 
     return runner.invoke(
@@ -841,7 +843,7 @@ def _run_optimize_configs() -> Result:
         [
             "optimize", "configs", "scenario.yaml",
             "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
-            "--start", "2024-06-21", "--end", "2024-06-21",
+            "--start", _DAY, "--end", _DAY,
         ],
         catch_exceptions=False,
     )
@@ -912,7 +914,7 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         assert result.exit_code == 0
         assert result.stdout.splitlines()[0].strip() == "Simulation Results: Bristol"
         status = " ".join(result.stderr.split())
-        assert "Simulating 1 days from 2024-06-21 to 2024-06-21" in status
+        assert f"Simulating 1 days from {_DAY} to {_DAY}" in status
         assert "Running simulation..." in status
 
     def test_home_run_report_prints_the_report_in_place_of_the_summary_table(self) -> None:
@@ -929,7 +931,7 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
 
         result = runner.invoke(
             app,
-            ["fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY],
             catch_exceptions=False,
         )
 
@@ -1011,10 +1013,10 @@ def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, ob
 
 
 def _run_fleet(*argv: str) -> Result:
-    """Run the `fleet` command argv for 21 June, simulating its homes one after another."""
+    """Run the `fleet` command argv for _DAY, simulating its homes one after another."""
     return runner.invoke(
         app,
-        ["fleet", *argv, "--start", "2024-06-21", "--end", "2024-06-21", "--sequential"],
+        ["fleet", *argv, "--start", _DAY, "--end", _DAY, "--sequential"],
         catch_exceptions=False,
     )
 
@@ -1144,7 +1146,7 @@ class TestQuietOption:
         result = runner.invoke(
             app,
             [
-                "--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21",
+                "--quiet", "fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY,
                 "--community-report", "community.md",
             ],
             catch_exceptions=False,
@@ -1160,7 +1162,7 @@ class TestQuietOption:
 
         result = runner.invoke(
             app,
-            ["--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            ["--quiet", "fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY],
             catch_exceptions=False,
         )
 
