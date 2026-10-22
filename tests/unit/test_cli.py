@@ -45,6 +45,7 @@ from tests._seeded_tmy import ClearJuneDays
 runner = CliRunner()
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
 
@@ -637,14 +638,9 @@ class TestCreateSummaryTableTitle:
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 
 
-@pytest.mark.usefixtures("clear_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
-
-    @pytest.fixture
-    def clear_june_tmy(self, weather_cache: WeatherCache) -> None:
-        """Serve a clear 21 June as the TMY of Bristol, where `home run` puts a home whose config has no location."""
-        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
 
     def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
         """Write a temp YAML config with tariff, followed by *seg_yaml*.
@@ -779,10 +775,9 @@ home:
 
 @pytest.fixture
 def clear_june_in_tmp_path(
-    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+    """Work in tmp_path, where each test writes its config."""
     monkeypatch.chdir(tmp_path)
 
 

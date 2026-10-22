@@ -51,13 +51,15 @@ _SUMMARY_COLUMNS = [
     "grid_export_kwh",
 ]
 
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
+
 
 @pytest.fixture(autouse=True)
 def _clear_june_in_tmp_path(
-    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serve a clear _DAY as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config and the sweep its output."""
-    ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).seed_as_bristol_tmy(weather_cache)
+    """Work in tmp_path, where each test writes its config and the sweep its output."""
     monkeypatch.chdir(tmp_path)
 
 
@@ -209,7 +211,7 @@ def test_a_param_sweep_of_a_placeholder_in_the_location_block_simulates_each_poi
 ) -> None:
     """Latitude 50 is served the clear _DAY and latitude 52 a sunless one, so a point generates only if its homes simulate at the latitude its sweep value gives."""
     weather_cache.put(
-        ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).hourly_weather(),
+        _JUNE_DAYS.hourly_weather(),
         "tmy",
         Location(latitude=50.0, longitude=Location.BRISTOL_LON),
     )

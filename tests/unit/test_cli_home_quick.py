@@ -23,12 +23,9 @@ runner = CliRunner()
 _DAY = "2024-06-01"
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
-
-@pytest.fixture(autouse=True)
-def _bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Serve a clear _DAY, the day `home quick` starts on, as Bristol's TMY."""
-    _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+pytestmark = pytest.mark.usefixtures("bristol_june_tmy")
 
 
 def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
@@ -91,9 +88,8 @@ def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_
     """`home quick 4 --days 1`, run as a child in an empty working directory, simulates offline from the cache the variable names.
 
     The child runs solar_challenge.cli.app, the object the solar-challenge console script runs. It
-    sees none of this process's weather, only the directory the variable names: the autouse fixture
-    seeds this test's in-process cache, which no child can read. It leaves no cache in its working
-    directory.
+    sees none of this process's weather, only the directory the variable names. It leaves no cache
+    in its working directory.
     """
     cache_dir = tmp_path / "weather"
     _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir=cache_dir))
