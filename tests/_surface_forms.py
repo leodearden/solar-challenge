@@ -804,7 +804,6 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
     return module
 
 
-_PY_TPFLAGS_HEAPTYPE = 1 << 9
 _PY_TPFLAGS_IMMUTABLETYPE = 1 << 8
 
 
@@ -819,13 +818,13 @@ def _class_module(cls: type) -> types.ModuleType:
     A class defined outside any function must be bound there under its qualified name; for
     one defined inside a function, the module's globals must be those the first function
     its body compiled carries. Otherwise, as once another module of the same name has
-    replaced its own in sys.modules, LookupError names *cls* and the module found. A
-    static type, which CPython defines in C, carries no source or annotation to misread,
+    replaced its own in sys.modules, LookupError names *cls* and the module found. An
+    immutable type, which only C code defines, carries no source or annotation to misread,
     and a class inside a function whose body compiled no function carries nothing to check
     it by, so their module is looked up unchecked.
     """
     module = _module_named(cls.__module__, cls)
-    if not cls.__flags__ & _PY_TPFLAGS_HEAPTYPE:
+    if _is_immutable_type(cls):
         return module
     if "<locals>" in cls.__qualname__:
         function = _function_compiled_in_body(cls)
