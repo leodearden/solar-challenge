@@ -507,6 +507,16 @@ class TestExportAPI:
         response = client.get("/api/history/runs/nonexistent/export/yaml")
         assert response.status_code == 404
 
+    def test_api_export_yaml_of_a_run_whose_job_has_saved_nothing_yet_returns_404(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """A running run's record holds no config yet, so it has no scenario to export."""
+        storage.create_run("pending-1", run_type="home", name="Pending", n_homes=1, created_at="2024-06-01T09:00:00+00:00")
+
+        response = client.get("/api/history/runs/pending-1/export/yaml")
+
+        assert (response.status_code, response.get_json()) == (404, {"error": "No config data available"})
+
     def test_api_export_yaml_with_config(self, storage: RunStorage, client: FlaskClient) -> None:
         """Test YAML export returns config data."""
         _store_home_run(
@@ -594,6 +604,27 @@ class TestExportAPI:
         path.write_bytes(response.data)
         assert load_fleet_config(path).homes == home_configs
 
+    def test_export_of_a_fleet_run_reads_its_homes_from_its_record_and_none_of_its_time_series(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """The scenario is built from the config the run's record holds, so the export still answers once every time series file is gone."""
+        home_configs = [
+            HomeConfig(pv_config=PVConfig(capacity_kw=3.0), load_config=LoadConfig(annual_consumption_kwh=2900.0), name="Home 1"),
+            HomeConfig(pv_config=PVConfig(capacity_kw=6.0), load_config=LoadConfig(annual_consumption_kwh=4100.0), name="Home 2"),
+        ]
+        _store_fleet_run(storage, "fleet-without-time-series", home_configs)
+        time_series = list(stored_run_dir(storage, "fleet-without-time-series").rglob("*.parquet"))
+        assert len(time_series) == len(home_configs)
+        for time_series_file in time_series:
+            time_series_file.unlink()
+
+        response = client.get("/api/history/runs/fleet-without-time-series/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert load_fleet_config(path).homes == home_configs
+
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_home_run_with_battery_dispatch_and_grid_charging_loads_back(
         self, storage: RunStorage, client: FlaskClient, tmp_path: Path, strategy: object
@@ -656,11 +687,11 @@ class TestExportAPI:
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_run_stored_before_the_dispatch_union_loads_back_with_its_variant(
-        self, storage: RunStorage, client: FlaskClient, tmp_path: Path, strategy: object
+        self, app: Flask, client: FlaskClient, tmp_path: Path, strategy: object
     ) -> None:
         """Such a run stores all three strategy keys, the ones its strategy does not read null."""
         stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
-        _store_home_run_with_stored_config(storage, "pre-union", stored)
+        _insert_test_run(app, run_id="pre-union", config=stored)
 
         response = client.get("/api/history/runs/pre-union/export/yaml")
 
@@ -717,10 +748,10 @@ class TestExportAPI:
         ],
     )
     def test_export_of_an_undecodable_stored_config_is_a_server_error(
-        self, storage: RunStorage, client: FlaskClient, config: dict, named: tuple[str, ...]
+        self, app: Flask, client: FlaskClient, config: dict, named: tuple[str, ...]
     ) -> None:
         """A stored config that a HomeConfig-tree constructor refuses, or whose strategy no variant is tagged with, is a JSON server error."""
-        _store_home_run_with_stored_config(storage, "undecodable", config)
+        _insert_test_run(app, run_id="undecodable", config=config)
 
         response = client.get("/api/history/runs/undecodable/export/yaml")
 
@@ -896,12 +927,6 @@ def _store_home_run(
 ) -> None:
     """Save a one-day home run of *config* through RunStorage, as a finished job does."""
     store_home_run(storage, run_id, config, make_sinusoidal_sim_results(days=1), name=name)
-
-
-def _store_home_run_with_stored_config(storage: RunStorage, run_id: str, stored_config: dict) -> None:
-    """Save a one-day home run of _A_HOME, as _store_home_run does, then replace its config.json with *stored_config*."""
-    _store_home_run(storage, run_id, _A_HOME)
-    (stored_run_dir(storage, run_id) / "config.json").write_text(json.dumps(stored_config, indent=2))
 
 
 def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:

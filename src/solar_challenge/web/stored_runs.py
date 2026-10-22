@@ -9,10 +9,11 @@ home_{i}.parquet and home_{i}_summary.json. Each config and summary is its datac
 field tree in JSON.
 
 StoredHomeRun and StoredFleetRun are the runs as their directories store them: each
-writes its documents and answers its run's CSV and YAML exports. RUN_KINDS is the run
-type to behaviour table, one RunKind per RunType. Where a run's directory lives, and
-the runs table that records each run's type, are RunStorage's: nothing here reads SQL
-or Flask.
+writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
+behaviour table, one RunKind per RunType; a kind also decodes the HomeConfigs a run's
+record holds, and builds from them the scenario its YAML export answers with. Where a
+run's directory lives, and the runs table that records each run's type, are RunStorage's:
+nothing here reads SQL or Flask.
 """
 
 import functools
@@ -195,6 +196,26 @@ def _fleet_run_configs(config_document: Mapping[str, Any]) -> tuple[HomeConfig, 
     return tuple(_deserialize_dataclass(HomeConfig, dict(home)) for home in config_document["homes"])
 
 
+def _home_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[str, Any]:
+    """The scenario *name* a home run of the one HomeConfig in *home_configs* exports: home_scenario of it.
+
+    Raises:
+        ValueError: *home_configs* does not hold exactly one HomeConfig, or the scenario grammar
+            cannot express it.
+    """
+    (home,) = home_configs
+    return home_scenario(home, name=name)
+
+
+def _fleet_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[str, Any]:
+    """The scenario *name* a fleet run of *home_configs* exports: fleet_scenario of them, in order.
+
+    Raises:
+        ValueError: The scenario grammar cannot express the homes, as fleet_scenario refuses them.
+    """
+    return fleet_scenario(home_configs, name=name)
+
+
 @dataclass(frozen=True)
 class StoredHomeRun:
     """A home run as its directory stores it: the run's HomeConfig, its results and their summary."""
@@ -239,14 +260,6 @@ class StoredHomeRun:
     def export_frame(self) -> pd.DataFrame:
         """The run's time series, as its CSV export holds them: one column per series of its results."""
         return self.results.to_dataframe()
-
-    def scenario_document(self, name: str) -> dict[str, Any]:
-        """The run's scenario, named *name*, as its YAML export writes it: home_scenario of its HomeConfig.
-
-        Raises:
-            ValueError: The scenario grammar cannot express the run's HomeConfig.
-        """
-        return home_scenario(self.config, name=name)
 
 
 @dataclass(frozen=True)
@@ -315,14 +328,6 @@ class StoredFleetRun:
     def export_frame(self) -> pd.DataFrame:
         """The fleet's total time series, as its CSV export holds them: FleetResults.to_aggregate_dataframe, the sum across its homes."""
         return self.fleet_results.to_aggregate_dataframe()
-
-    def scenario_document(self, name: str) -> dict[str, Any]:
-        """The run's scenario, named *name*, as its YAML export writes it: fleet_scenario of its homes' HomeConfigs.
-
-        Raises:
-            ValueError: The scenario grammar cannot express a home's HomeConfig.
-        """
-        return fleet_scenario(self.fleet_results.home_configs, name=name)
 
 
 StoredRun = StoredHomeRun | StoredFleetRun
@@ -429,7 +434,7 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
 
 @dataclass(frozen=True)
 class RunKind:
-    """What a run of one type has, and how its stored documents are read and shown.
+    """What a run of one type has, how its stored documents are read and shown, and how its config is exported.
 
     Attributes:
         summary_type: The class of the summary a run of the type has.
@@ -438,12 +443,16 @@ class RunKind:
             FileNotFoundError when a document it needs is missing.
         home_configs: Each home's HomeConfig, in order, decoded from the config document
             the run's record holds.
+        scenario_document: The scenario, under a name, that a run of the type with those
+            HomeConfigs exports as YAML; it raises ValueError when the scenario grammar cannot
+            express them.
     """
 
     summary_type: type[SummaryStatistics] | type[FleetSummary]
     results_template: str
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
+    scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
 
 
 RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
@@ -453,12 +462,14 @@ RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
             results_template="results/home.html",
             read=_read_home_run,
             home_configs=_home_run_configs,
+            scenario_document=_home_run_scenario,
         ),
         "fleet": RunKind(
             summary_type=FleetSummary,
             results_template="results/fleet.html",
             read=_read_fleet_run,
             home_configs=_fleet_run_configs,
+            scenario_document=_fleet_run_scenario,
         ),
     }
 )

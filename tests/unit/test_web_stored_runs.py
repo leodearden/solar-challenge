@@ -3,7 +3,8 @@
 
 RUN_KINDS holds one RunKind for each RunType. A run's record names its kind, and load_run
 reads the run's files back as a StoredHomeRun or a StoredFleetRun, the variant whose
-export_frame and scenario_document the run's CSV and YAML exports answer with.
+export_frame the run's CSV export answers with. The kind also reads the HomeConfigs the
+run's record holds, and builds from them the scenario the run's YAML export answers with.
 """
 
 import json
@@ -131,24 +132,42 @@ def test_each_run_kinds_results_template_is_a_template_of_the_app(app: Flask, ru
     assert app.jinja_env.get_template(results_template).name == results_template
 
 
-def test_a_stored_home_run_exports_its_time_series_and_its_home_scenario(storage: RunStorage) -> None:
+def test_a_stored_home_run_exports_its_time_series(storage: RunStorage) -> None:
     config, results = _a_home()
     store_home_run(storage, _HOME_RUN_ID, config, results)
 
     stored = storage.load_run(_HOME_RUN_ID)
 
     pd.testing.assert_frame_equal(stored.export_frame(), results.to_dataframe(), check_freq=False)
-    assert stored.scenario_document("North Roof") == home_scenario(config, name="North Roof")
 
 
-def test_a_stored_fleet_run_exports_its_aggregate_time_series_and_its_fleet_scenario(storage: RunStorage) -> None:
+def test_a_stored_fleet_run_exports_its_aggregate_time_series(storage: RunStorage) -> None:
     fleet = _two_unlike_homes()
     store_fleet_run(storage, _FLEET_RUN_ID, fleet)
 
     stored = storage.load_run(_FLEET_RUN_ID)
 
     pd.testing.assert_frame_equal(stored.export_frame(), fleet.to_aggregate_dataframe(), check_freq=False)
-    assert stored.scenario_document("Community Fleet") == fleet_scenario(fleet.home_configs, name="Community Fleet")
+
+
+def test_the_home_kinds_scenario_of_the_config_a_home_run_records_is_its_home_scenario(storage: RunStorage) -> None:
+    config, results = _a_home()
+    store_home_run(storage, _HOME_RUN_ID, config, results)
+    home = RUN_KINDS["home"]
+
+    scenario = home.scenario_document(home.home_configs(_recorded_config(storage, _HOME_RUN_ID)), "North Roof")
+
+    assert scenario == home_scenario(config, name="North Roof")
+
+
+def test_the_fleet_kinds_scenario_of_the_configs_a_fleet_run_records_is_its_fleet_scenario(storage: RunStorage) -> None:
+    fleet = _two_unlike_homes()
+    store_fleet_run(storage, _FLEET_RUN_ID, fleet)
+    kind = RUN_KINDS["fleet"]
+
+    scenario = kind.scenario_document(kind.home_configs(_recorded_config(storage, _FLEET_RUN_ID)), "Community Fleet")
+
+    assert scenario == fleet_scenario(fleet.home_configs, name="Community Fleet")
 
 
 @pytest.mark.parametrize("run_id", ["no-such-run", "../escape"], ids=["no-run-has-it", "the-store-refuses-it"])

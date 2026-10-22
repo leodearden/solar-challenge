@@ -831,29 +831,32 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     """Export a run's config as the scenario YAML that `home run` or load_fleet_config reads back.
 
+    The run's kind builds the scenario from the config the run's record holds, so the export
+    reads none of the run's files.
+
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response; 404 if the run or its files are missing, 500 if a stored
-        document does not decode, 422 if the scenario grammar cannot express its config.
+        YAML file response; 404 if the run or its config is missing, 500 if its record names
+        no run kind or its config does not decode, 422 if the scenario grammar cannot express it.
     """
-    storage = get_storage()
-    run = storage.run_record(run_id)
+    run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
+    if not run.config_json:
+        return jsonify({"error": "No config data available"}), 404
+
     try:
-        stored = storage.load_run(run_id)
-    except FileNotFoundError:
-        return jsonify({"error": "Run data files not found"}), 404
+        homes = run.kind.home_configs(run.decoded_config())
     except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
         return jsonify({"error": f"Invalid run data: {exc}"}), 500
 
     run_name = run.name or "run"
     try:
-        document = stored.scenario_document(run_name)
+        document = run.kind.scenario_document(homes, run_name)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 422
 
