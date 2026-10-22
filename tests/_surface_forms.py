@@ -140,17 +140,16 @@ def named_classes(obj: object) -> set[type]:
     routine surface_form reads as such a class, raises the TypeError surface_form raises
     for it, and a class with a member member_forms refuses, the TypeError member_forms
     raises for it.
-    A class's constructor, or a signature the class carries in its place, which records
-    no module, is spelled in the module of the class in its MRO whose own body defines
-    __init__ or __new__, which may be a base defined in another module; a parameter of an
-    __init__ the dataclass decorator generated, in the module of the nearest class in
-    that MRO the decorator processed whose own body annotates it, so an inherited field
-    in the base that declares it, however a mixin annotates it. If object or a class
-    defined in C holds that constructor, neither of which spells an annotation, a
-    signature the class carries is spelled in the module of the class in its MRO whose
-    own namespace holds it, and one whose metaclass provides it raises TypeError naming
-    the class and that metaclass. What a type variable or a NewType carries is spelled
-    in the module that declares it; inside its own declaration, as in
+    A class's constructor is spelled in the module of the class in its MRO whose own body
+    defines __init__ or __new__, which may be a base defined in another module; a
+    parameter of an __init__ the dataclass decorator generated, in the module of the
+    nearest class in that MRO the decorator processed whose own body annotates it, so an
+    inherited field in the base that declares it, however a mixin annotates it. A
+    signature a class carries in its constructor's place is spelled where that
+    constructor is, or where the class holding the signature is if object or a class
+    defined in C holds the constructor; one its metaclass or a descriptor gives raises
+    TypeError. What a type variable or a NewType carries is spelled in the module that
+    declares it; inside its own declaration, as in
     TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
     def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
     the module that spells the signature holding it. That module binds no type
@@ -646,14 +645,13 @@ def _spelling_modules(
     A routine's is that of the end of its chain, which _chain_end follows through to
     where inspect.get_annotations finds the namespace of a wrapper's annotations. If
     that end is an object its class makes callable, it is read as the __call__ its
-    class resolves, from which inspect derives its signature. A class's is that of the
-    class holding its constructor; but for a generated __init__, that of the nearest
-    class in the holder's MRO that the dataclass decorator processed and whose own body
-    annotates the name, or the holder's if none does. A holder _constructed_in_c counts
-    as defined in C, as it counts object, spells no annotation, so for a class that
-    carries a signature over one it is that of the class _signature_holder gives.
-    Otherwise a __signature__ a wrapper or a class carries changes neither rule: it
-    records no module.
+    class resolves, from which inspect derives its signature. A __signature__ a wrapper
+    carries does not change that: it records no module. A class's is that of the class
+    holding its constructor; but for a generated __init__, that of the nearest class in
+    the holder's MRO that the dataclass decorator processed and whose own body
+    annotates the name, or the holder's if none does. _signature_holder checks every
+    class that carries a signature, and if _constructed_in_c counts the holder, which
+    spells no annotation, the class's is that of the class _signature_holder gives.
     """
     end = _chain_end(obj)
     if not inspect.isclass(end):
@@ -661,8 +659,10 @@ def _spelling_modules(
             return _spelling_modules(type(end).__call__, names)
         return dict.fromkeys(names, _defining_module(end))
     holder = _constructor_holder(end)
-    if _carries_signature(end) and _constructed_in_c(holder):
-        return dict.fromkeys(names, _defining_module(_signature_holder(end)))
+    if _carries_signature(end):
+        signature_holder = _signature_holder(end)
+        if _constructed_in_c(holder):
+            return dict.fromkeys(names, _defining_module(signature_holder))
     if not _holds_generated_init(holder):
         return dict.fromkeys(names, _defining_module(holder))
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
@@ -682,37 +682,45 @@ def _constructor_holder(cls: type) -> type:
 def _signature_holder(cls: type) -> type:
     """The class in *cls*'s MRO whose own namespace holds, as an inspect.Signature, the __signature__ *cls* carries.
 
-    It mirrors type.__getattribute__, the lookup inspect reads *cls*.__signature__
-    through, and raises TypeError naming *cls* and its metaclass where that metaclass
-    provides the signature or may: when a class in the metaclass's MRO other than type
-    and object defines __getattribute__; when the first one there that holds a
-    __signature__ holds a data descriptor, which outranks *cls*'s own; and when *cls*'s
-    MRO holds no inspect.Signature there first, so a metaclass attribute, a metaclass
-    __getattr__ or a descriptor provides it.
+    No module is known to spell a signature that comes from anywhere else. So TypeError
+    names *cls* and its metaclass where _metaclass_may_provide_signature(*cls*); and
+    where the first class in *cls*'s MRO that holds a __signature__ holds a descriptor
+    that gives one, not an inspect.Signature, TypeError names *cls*, that class and the
+    descriptor's type.
     """
+    if _metaclass_may_provide_signature(cls):
+        raise TypeError(
+            f"{_label(cls)} carries a signature its metaclass {_label(type(cls))} provides "
+            "or may provide, through an attribute, a data descriptor or a __getattribute__ "
+            "or __getattr__ it defines, so no module is known to spell it: make the name "
+            "private, or give the class a metaclass that provides no __signature__"
+        )
+    holder = next(_namespace_holders(cls.__mro__, "__signature__"))
+    held = vars(holder)["__signature__"]
+    if not isinstance(held, inspect.Signature):
+        raise TypeError(
+            f"{_label(cls)} carries the signature a {_label(type(held))} descriptor gives "
+            f"as {_label(holder)}.__signature__, so no module is known to spell it: make "
+            "the name private, or set __signature__ to an inspect.Signature"
+        )
+    return holder
+
+
+def _metaclass_may_provide_signature(cls: type) -> bool:
+    """Whether *cls*'s metaclass provides the __signature__ type.__getattribute__ gives inspect for *cls*, or may: a class in the metaclass's MRO other than type and object defines __getattribute__; the first one there that holds a __signature__ holds a data descriptor, which outranks *cls*'s own; or no class in *cls*'s MRO holds one, so a metaclass attribute, descriptor or __getattr__ provides it."""
     metaclass_mro = inspect.getmro(type(cls))
     metaclass_holder = next(_namespace_holders(metaclass_mro, "__signature__"), None)
-    holder = next(_namespace_holders(cls.__mro__, "__signature__"), None)
-    lookups = _namespace_holders(
+    getattribute_holders = _namespace_holders(
         (meta for meta in metaclass_mro if meta not in (type, object)), "__getattribute__"
     )
-    if (
-        next(lookups, None) is not None
+    return (
+        next(getattribute_holders, None) is not None
         or (
             metaclass_holder is not None
             and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
         )
-        or holder is None
-        or not isinstance(vars(holder)["__signature__"], inspect.Signature)
-    ):
-        raise TypeError(
-            f"{_label(cls)} is constructed in C and carries a signature its metaclass "
-            f"{_label(type(cls))} provides or may provide, through an attribute, a data "
-            "descriptor or a __getattribute__ or __getattr__ it defines, so no module is "
-            "known to spell it: give the class a constructor defined with def, or a "
-            "metaclass that provides no __signature__"
-        )
-    return holder
+        or next(_namespace_holders(cls.__mro__, "__signature__"), None) is None
+    )
 
 
 def _namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
