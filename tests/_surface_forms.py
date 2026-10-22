@@ -190,6 +190,9 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
+    An immutable type, which only C code defines, has no class statement to read, so it
+    raises TypeError naming it before anything else is read.
+
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
     *cls* and the write's text, unless *reviewed* holds that text; a text in *reviewed*
@@ -201,6 +204,7 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     source is read from its own module only, so a module another of the same name has
     replaced in sys.modules raises LookupError.
     """
+    _refuse_immutable_type(cls)
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
     return _attributes_set_on_self(cls, reviewed) - declared
 
@@ -208,11 +212,11 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
 
-    As in undeclared_attributes, a write to self whose attribute name the scan cannot
-    read raises TypeError unless *reviewed* holds its text, a text in *reviewed* that is
-    no such write's raises ValueError, and one string given as *reviewed* raises
-    TypeError. A reviewed write sets none of the declared attributes, since its names
-    are unknown.
+    As in undeclared_attributes, an immutable type raises TypeError naming it before
+    anything else is read, a write to self whose attribute name the scan cannot read
+    raises TypeError unless *reviewed* holds its text, a text in *reviewed* that is no
+    such write's raises ValueError, and one string given as *reviewed* raises TypeError.
+    A reviewed write sets none of the declared attributes, since its names are unknown.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
@@ -222,6 +226,7 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
     """
+    _refuse_immutable_type(cls)
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
     return declared - _attributes_set_on_self(cls, reviewed) - _defaulted_fields(cls)
 
@@ -800,6 +805,12 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
 
 
 _PY_TPFLAGS_HEAPTYPE = 1 << 9
+_PY_TPFLAGS_IMMUTABLETYPE = 1 << 8
+
+
+def _is_immutable_type(cls: type) -> bool:
+    """Whether *cls*'s flags mark it an immutable type, which only C code defines: Python marks no class a class statement or type() creates, and CPython marks every static type and many heap types it defines in C, though not all, such as ast.AST."""
+    return bool(cls.__flags__ & _PY_TPFLAGS_IMMUTABLETYPE)
 
 
 def _class_module(cls: type) -> types.ModuleType:
@@ -1080,6 +1091,16 @@ def _dataclass_kind(cls: type) -> str:
 def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
     """*kind*, then *qualifiers* in brackets if there are any, as in property[settable, deletable]."""
     return f"{kind}[{', '.join(qualifiers)}]" if qualifiers else kind
+
+
+def _refuse_immutable_type(cls: type) -> None:
+    """Raise TypeError naming *cls* if it is an immutable type, which only C code defines, so no class statement holds the __init__ and __post_init__ the scan reads."""
+    if _is_immutable_type(cls):
+        raise TypeError(
+            f"{_label(cls)} is an immutable type, which only C code defines, so no class "
+            "statement holds an __init__ or __post_init__ to read: pass a class that a "
+            "class statement defines"
+        )
 
 
 def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
