@@ -47,11 +47,25 @@ def start(
     another holds it, this command exits with an error naming the lock file
     and the holding process.
 
+    Under --debug the server restarts when a source file changes; the
+    restarted server process, not the watcher that restarts it, holds the
+    store.
+
     Examples:
       solar-challenge web start
       solar-challenge web start --host 0.0.0.0 --port 8080
       solar-challenge web start --debug
     """
+    from solar_challenge.web.reloader import is_reloader_watcher, run_reloader_watcher
+
+    if debug and is_reloader_watcher():
+        run_reloader_watcher(host, port)
+    else:
+        _serve(host, port, debug)
+
+
+def _serve(host: str, port: int, debug: bool) -> None:
+    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped; exit 1 if this process cannot take the store."""
     from solar_challenge.web import create_app
     from solar_challenge.web.jobs import shutdown_all_managers
     from solar_challenge.web.store_lock import StoreLockError
