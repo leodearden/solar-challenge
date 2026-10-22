@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
 **Task:** #823
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -102,6 +102,10 @@ This is a dated record. Re-measure before relying on it.
 - **The headline.** Bristol's default 4 kW system yields 1012.1 kWh per wired kWp a year
   (from 993.1, +1.9%), a performance ratio of 0.819, inside
   `tests/integration/test_pv_performance_ratio.py`'s 0.76–0.84.
+- **The code's copy.** `validation.BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP` is this
+  1012.1 figure (task 907, 2026-10-22). `tests/integration/test_pv_performance_ratio.py`
+  fails when a re-measurement moves the figure by more than 1% from the constant, until
+  the constant moves with it.
 - **Bristol, default 4 kW**, by the script's `measure` (4.00428 wired kWp; in-plane
   1236.12 kWh/m²), SAPM → NOCT-SAM:
   - with the system losses: 3976.80 → 4052.83 kWh, 993.14 → 1012.12 kWh/kWp, ratio
