@@ -292,11 +292,21 @@ def explain_metric(metric: str) -> dict[str, str]:
     }
 
 
-# Rule-of-thumb sizing behind suggest_config.  Its returned note quotes these
-# figures, so the arithmetic and the note share one source.
-_UK_YIELD_KWH_PER_KWP = 950.0
+# The battery half of the rule of thumb behind suggest_config.  Its returned
+# note quotes these figures, so the arithmetic and the note share one source.
 _BATTERY_DAILY_DEMAND_COVERAGE = 0.5
 _BATTERY_USABLE_CAPACITY_HEADROOM = 1.2
+
+# suggest_config's note, formatted once, at import, from the figures it sizes with.
+_SIZING_NOTE = (
+    "These figures are indicative estimates from a simple rule of thumb: "
+    f"PV kWp ≈ annual consumption in kWh / {_KWH_PER_KWP.value(BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP)}, "
+    "the yearly yield of the simulator's default PV system in Bristol, and "
+    f"battery kWh ≈ {_PERCENT.value(_BATTERY_DAILY_DEMAND_COVERAGE * 100)} of daily demand "
+    f"× {_BATTERY_USABLE_CAPACITY_HEADROOM:g}, "
+    "both sized up slightly when the goal is self-sufficiency. "
+    "Please run a simulation to confirm sizing for your specific site."
+)
 
 
 def suggest_config(
@@ -306,7 +316,7 @@ def suggest_config(
     """Return rule-of-thumb PV and battery sizing for a household.
 
     Uses the heuristics of docs/prds/web-ai-assistant.md §11, open question 4:
-    - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
+    - PV kWp ≈ annual_consumption_kwh / BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP  (the yearly yield of the simulator's default PV system in Bristol)
     - Battery kWh ≈ daily_demand × 0.5 × 1.2  (≈ 50 % of daily demand with 1.2× usable-capacity headroom)
 
     Goal-aware nudging:
@@ -327,7 +337,7 @@ def suggest_config(
         Never raises.
     """
     # Base heuristics
-    pv_kwp: float = annual_consumption_kwh / _UK_YIELD_KWH_PER_KWP
+    pv_kwp: float = annual_consumption_kwh / BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 
     # Battery: cover a share of daily demand (rule-of-thumb shortfall for a typical
     # house without PV self-consumption), with headroom for usable capacity
@@ -346,14 +356,7 @@ def suggest_config(
     return {
         "recommended_pv_kwp": round(pv_kwp, 2),
         "recommended_battery_kwh": round(battery_kwh, 2),
-        "note": (
-            "These figures are indicative estimates from a simple rule of thumb: "
-            f"PV kWp ≈ annual consumption in kWh / {_UK_YIELD_KWH_PER_KWP:g}, and "
-            f"battery kWh ≈ {_BATTERY_DAILY_DEMAND_COVERAGE * 100:g} % of daily demand "
-            f"× {_BATTERY_USABLE_CAPACITY_HEADROOM:g}, "
-            "both sized up slightly when the goal is self-sufficiency. "
-            "Please run a simulation to confirm sizing for your specific site."
-        ),
+        "note": _SIZING_NOTE,
     }
 
 
