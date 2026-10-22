@@ -786,6 +786,271 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     assert named_classes(submetering.settled) == {fractions.Fraction}
 
 
+def test_a_class_names_the_classes_its_signature_names_read_where_its_constructor_is_spelled_though_the_class_carries_one(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, share: 'Share', rate: int) -> None: ...\n",
+    )
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "decorating",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def without_rate(cls):\n"
+        "    signature = inspect.signature(cls)\n"
+        "    parameters = list(signature.parameters.values())[:1]\n"
+        "    cls.__signature__ = signature.replace(parameters=parameters)\n"
+        "    return cls\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from decorating import without_rate\n"
+        "from metering import Meter\n"
+        "\n"
+        "@without_rate\n"
+        "class Submeter(Meter):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(submetering.Submeter) == {fractions.Fraction}
+
+
+def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_names_read_where_the_class_holding_that_signature_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rates = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rates",
+        "import collections\n"
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Rated(dict):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Ordered(collections.OrderedDict):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Plain:\n"
+        "    __signature__ = signature\n",
+    )
+    rerates = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rerates",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from rates import Rated\n"
+        "\n"
+        "class Rerated(Rated):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(rates.Rated) == {fractions.Fraction}
+    assert named_classes(rates.Ordered) == {fractions.Fraction}
+    assert named_classes(rates.Plain) == {fractions.Fraction}
+    assert named_classes(functools.partial(rates.Rated)) == {fractions.Fraction}
+    assert named_classes(rerates.Rerated) == {fractions.Fraction}
+
+
+def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_the_class_and_that_metaclass_whatever_its_constructor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metas",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Signed(type):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class PropertySigned(type):\n"
+        "    @property\n"
+        "    def __signature__(cls):\n"
+        "        return signature\n",
+    )
+    users = imported_module(
+        tmp_path,
+        monkeypatch,
+        "users",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from metas import PropertySigned, Signed\n"
+        "\n"
+        "class Rated(dict, metaclass=Signed):\n"
+        "    pass\n"
+        "\n"
+        "class DefinedRated(metaclass=Signed):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Overridden(dict, metaclass=PropertySigned):\n"
+        "    __signature__ = inspect.Signature()\n"
+        "\n"
+        "class DefinedOverridden(metaclass=PropertySigned):\n"
+        "    __signature__ = inspect.Signature()\n"
+        "\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+
+    with pytest.raises(TypeError) as plain:
+        named_classes(users.Rated)
+    with pytest.raises(TypeError) as defined_plain:
+        named_classes(users.DefinedRated)
+    with pytest.raises(TypeError) as overriding:
+        named_classes(users.Overridden)
+    with pytest.raises(TypeError) as defined_overriding:
+        named_classes(users.DefinedOverridden)
+
+    assert "users.Rated" in str(plain.value)
+    assert "metas.Signed" in str(plain.value)
+    assert "users.DefinedRated" in str(defined_plain.value)
+    assert "metas.Signed" in str(defined_plain.value)
+    assert "users.Overridden" in str(overriding.value)
+    assert "metas.PropertySigned" in str(overriding.value)
+    assert "users.DefinedOverridden" in str(defined_overriding.value)
+    assert "metas.PropertySigned" in str(defined_overriding.value)
+
+
+def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "lookup_metas",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('meta', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class PlainSigned(type):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Intercepting(type):\n"
+        "    def __getattribute__(cls, name):\n"
+        "        if name == '__signature__':\n"
+        "            return signature\n"
+        "        return super().__getattribute__(name)\n",
+    )
+    lookup_users = imported_module(
+        tmp_path,
+        monkeypatch,
+        "lookup_users",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from lookup_metas import Intercepting, PlainSigned\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Shadowed(dict, metaclass=PlainSigned):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Intercepted(dict, metaclass=Intercepting):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class DefinedIntercepted(metaclass=Intercepting):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+
+    with pytest.raises(TypeError) as intercepted:
+        named_classes(lookup_users.Intercepted)
+    with pytest.raises(TypeError) as defined_intercepted:
+        named_classes(lookup_users.DefinedIntercepted)
+
+    assert "lookup_users.Intercepted" in str(intercepted.value)
+    assert "lookup_metas.Intercepting" in str(intercepted.value)
+    assert "lookup_users.DefinedIntercepted" in str(defined_intercepted.value)
+    assert "lookup_metas.Intercepting" in str(defined_intercepted.value)
+    assert named_classes(lookup_users.Shadowed) == {decimal.Decimal}
+
+
+def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_the_class_holding_that_descriptor_and_its_type_whatever_its_constructor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "describing",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Describing:\n"
+        "    def __get__(self, instance, owner):\n"
+        "        return signature\n",
+    )
+    described = imported_module(
+        tmp_path,
+        monkeypatch,
+        "described",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from describing import Describing\n"
+        "\n"
+        "class Described(dict):\n"
+        "    __signature__ = Describing()\n"
+        "\n"
+        "class Redescribed(Described):\n"
+        "    pass\n"
+        "\n"
+        "class DefinedDescribed:\n"
+        "    __signature__ = Describing()\n"
+        "\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+
+    with pytest.raises(TypeError) as own:
+        named_classes(described.Described)
+    with pytest.raises(TypeError) as inherited:
+        named_classes(described.Redescribed)
+    with pytest.raises(TypeError) as defined:
+        named_classes(described.DefinedDescribed)
+
+    assert "described.Described" in str(own.value)
+    assert "describing.Describing" in str(own.value)
+    assert "builtins.type" not in str(own.value)
+    assert "described.Redescribed" in str(inherited.value)
+    assert "described.Described" in str(inherited.value)
+    assert "describing.Describing" in str(inherited.value)
+    assert "described.DefinedDescribed" in str(defined.value)
+    assert "describing.Describing" in str(defined.value)
+
+
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
