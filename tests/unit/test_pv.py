@@ -374,8 +374,7 @@ def overcast_january_daytime() -> pd.DataFrame:
 
 
 CLEAR_AND_OVERCAST_DAYS = [
-    pytest.param(clear_june_daytime, id="clear_june_daytime"),
-    pytest.param(overcast_january_daytime, id="overcast_january_daytime"),
+    pytest.param(day, id=day.__name__) for day in (clear_june_daytime, overcast_january_daytime)
 ]
 
 
