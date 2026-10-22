@@ -93,6 +93,8 @@ def test_view_results_link_navigates_to_results_page(
     page.goto(live_server + "/simulate/home")
     response = submit_two_day_run(page)
     assert response.status == 201, response.text()
+    # Read before the click: the browser drops this page's response bodies when it navigates away
+    run_id = response.json()["run_id"]
 
     # Wait for "View Results" link
     view_results = page.locator("a", has_text="View Results")
@@ -101,7 +103,7 @@ def test_view_results_link_navigates_to_results_page(
     view_results.click()
     page.wait_for_load_state("domcontentloaded")
 
-    assert page.url == f"{live_server}/results/{response.json()['run_id']}"
+    assert page.url == f"{live_server}/results/{run_id}"
 
 
 # -- Results page has stat cards (seeded) -----------------------------------
