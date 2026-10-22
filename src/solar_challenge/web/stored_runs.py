@@ -434,11 +434,10 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
 
 @dataclass(frozen=True)
 class RunKind:
-    """What a run of one type has, how its stored documents are read and shown, and how its config is exported.
+    """What a run of one type has, how its stored documents are read, and how its config is exported.
 
     Attributes:
         summary_type: The class of the summary a run of the type has.
-        results_template: The template the run's results page renders.
         read: The run stored in a directory under an id, read from its documents; it raises
             FileNotFoundError when a document it needs is missing.
         home_configs: Each home's HomeConfig, in order, decoded from the config document
@@ -449,7 +448,6 @@ class RunKind:
     """
 
     summary_type: type[SummaryStatistics] | type[FleetSummary]
-    results_template: str
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
     scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
@@ -459,14 +457,12 @@ RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
     {
         "home": RunKind(
             summary_type=SummaryStatistics,
-            results_template="results/home.html",
             read=_read_home_run,
             home_configs=_home_run_configs,
             scenario_document=_home_run_scenario,
         ),
         "fleet": RunKind(
             summary_type=FleetSummary,
-            results_template="results/fleet.html",
             read=_read_fleet_run,
             home_configs=_fleet_run_configs,
             scenario_document=_fleet_run_scenario,

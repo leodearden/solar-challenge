@@ -16,8 +16,6 @@ import pytest
 
 pytest.importorskip("flask")
 
-from flask import Flask
-
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
@@ -123,13 +121,6 @@ def test_the_fleet_kind_reads_the_config_a_fleet_run_records_as_its_homes_in_ord
     store_fleet_run(storage, _FLEET_RUN_ID, fleet)
 
     assert RUN_KINDS["fleet"].home_configs(_recorded_config(storage, _FLEET_RUN_ID)) == tuple(fleet.home_configs)
-
-
-@pytest.mark.parametrize("run_type", get_args(RunType))
-def test_each_run_kinds_results_template_is_a_template_of_the_app(app: Flask, run_type: RunType) -> None:
-    results_template = RUN_KINDS[run_type].results_template
-
-    assert app.jinja_env.get_template(results_template).name == results_template
 
 
 def test_a_stored_home_run_exports_its_time_series(storage: RunStorage) -> None:

@@ -128,7 +128,7 @@ def simulate_fleet_page() -> str:
 
 @bp.route("/results/<run_id>", methods=["GET"])
 def run_results(run_id: str) -> Any:
-    """Display a run's results page: the template its record's kind names, with the values its stored run gives.
+    """Display a run's results page: the page of the kind of run load_run reads it as, titled with its name, with the values its stored run gives.
 
     A run with no record, or whose files load_run cannot find, redirects to the dashboard,
     which flashes "Run not found.".
@@ -144,16 +144,18 @@ def run_results(run_id: str) -> Any:
 
     match stored:
         case StoredHomeRun():
+            template = "results/home.html"
             unnamed_title = "Home Simulation"
             page_values = _home_results_values(stored)
         case StoredFleetRun():
+            template = "results/fleet.html"
             unnamed_title = "Fleet Simulation"
             page_values = _fleet_results_values(stored)
         case _:
             assert_never(stored)
 
     return render_template(
-        record.kind.results_template,
+        template,
         run_id=run_id,
         run_name=record.name or unnamed_title,
         **page_values,
