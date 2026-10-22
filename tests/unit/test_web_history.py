@@ -263,6 +263,18 @@ class TestRunsAPI:
         assert run["total_generation_kwh"] == 100.0
         assert run["self_consumption_ratio"] == 0.60
 
+    def test_each_listed_run_links_to_its_results_page(self, storage: RunStorage, client: FlaskClient) -> None:
+        """Each row GET /api/history/runs lists, a home run's and a fleet run's alike, carries results_url, the path of its run's one results page, /results/<run_id>."""
+        _store_home_run(storage, "home-run", _A_HOME)
+        _store_fleet_run(storage, "fleet-run", [_A_HOME, _A_HOME])
+
+        rows = client.get("/api/history/runs").get_json()["runs"]
+
+        assert {row["id"]: row["results_url"] for row in rows} == {
+            "home-run": "/results/home-run",
+            "fleet-run": "/results/fleet-run",
+        }
+
     def test_the_run_list_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
         self, app: Flask, client: FlaskClient, tmp_path: Path
     ) -> None:

@@ -173,7 +173,7 @@ class TestDashboardRoute:
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
         self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
+        """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's one results page, /results/<run_id>, whatever its kind."""
         results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
             storage, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
@@ -190,9 +190,9 @@ class TestDashboardRoute:
             "North Roof", "home", "2024-06-01", "completed",
         ]
         link_by_name = {
-            "South Roof": f"/results/home/{failed_run_id}",
-            "Community Fleet": f"/results/fleet/{fleet_run_id}",
-            "North Roof": f"/results/home/{home_run_id}",
+            "South Roof": f"/results/{failed_run_id}",
+            "Community Fleet": f"/results/{fleet_run_id}",
+            "North Roof": f"/results/{home_run_id}",
         }
         for name, link in link_by_name.items():
             assert element_count(page, "a", {"href": link}) == 1, name

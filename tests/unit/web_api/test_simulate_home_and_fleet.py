@@ -55,12 +55,14 @@ class TestSimulateHomeAPI:
     def test_valid_config_returns_201(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Valid JSON body returns 201 with job_id and run_id."""
+        """Valid JSON body returns 201 with the submitted job's job_id and run_id, and as results_url the path of the run's results page, /results/<run_id>."""
         resp = client.post("/api/simulate/home", json=VALID_HOME_PAYLOAD)
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert data["job_id"] == "job-home-001"
-        assert data["run_id"] == "run-home-001"
+        assert resp.get_json() == {
+            "job_id": "job-home-001",
+            "run_id": "run-home-001",
+            "results_url": "/results/run-home-001",
+        }
         mock_job_manager.submit_home_job.assert_called_once()
 
     def test_default_values_accepted(
@@ -306,12 +308,14 @@ class TestSimulateFleetAPI:
     def test_valid_fleet_returns_201(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Valid fleet config returns 201 with job_id and run_id."""
+        """Valid fleet config returns 201 with the submitted job's job_id and run_id, and as results_url the path of the run's results page, /results/<run_id>."""
         resp = client.post("/api/simulate/fleet", json=VALID_FLEET_PAYLOAD)
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert data["job_id"] == "job-fleet-001"
-        assert data["run_id"] == "run-fleet-001"
+        assert resp.get_json() == {
+            "job_id": "job-fleet-001",
+            "run_id": "run-fleet-001",
+            "results_url": "/results/run-fleet-001",
+        }
         mock_job_manager.submit_fleet_job.assert_called_once()
 
     def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
