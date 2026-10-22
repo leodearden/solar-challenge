@@ -25,7 +25,11 @@ from solar_challenge.pv import (
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
-from tests._pv_modules import pvwatts_300_w_module, sapm_library_module
+from tests._pv_modules import (
+    default_module_beyond_every_mppt_window,
+    pvwatts_300_w_module,
+    sapm_library_module,
+)
 from tests._pv_runs import per_array
 
 
@@ -386,8 +390,7 @@ def rated_sapm_module(sapm_module: dict[str, float]) -> dict[str, float]:
 
 @pytest.fixture
 def module_beyond_every_mppt_window() -> dict[str, float]:
-    """DEFAULT_CEC_MODULE with a V_mp_ref that no CEC inverter's MPPT window admits, even as a one-module string."""
-    return {**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6}
+    return default_module_beyond_every_mppt_window()
 
 
 class TestInverterMatchesStringVoltage:

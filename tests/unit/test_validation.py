@@ -11,9 +11,7 @@ from pvlib.pvsystem import PVSystem
 from solar_challenge import pv
 from solar_challenge.home import SimulationResults
 from solar_challenge.pv import (
-    DEFAULT_CEC_MODULE,
     PVConfig,
-    cec_module_params,
     create_pv_system,
     create_simple_module_params,
     wired_dc_capacity_kw,
@@ -32,6 +30,7 @@ from solar_challenge.validation import (
     validate_self_consumption_with_battery,
     validate_simulation,
 )
+from tests._pv_modules import default_module_beyond_every_mppt_window
 
 
 def _create_minute_index(days: int = 7) -> pd.DatetimeIndex:
@@ -325,8 +324,7 @@ class TestValidatePVGeneration:
     def test_a_config_create_pv_system_refuses_is_refused_with_its_error(self) -> None:
         """No CEC inverter's MPPT window admits that module's string voltage."""
         config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params={**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6},
+            capacity_kw=4.0, custom_module_params=default_module_beyond_every_mppt_window()
         )
 
         with pytest.raises(ValueError) as building:
