@@ -33,6 +33,11 @@ _POINTER = re.compile(
     re.VERBOSE,
 )
 
+_NAMED_WITHOUT_ITS_NODE_ID = (
+    "names a test without its file: point at it by its node-id from the project root,"
+    " tests/<file>.py::[<Class>::]<name>"
+)
+
 
 @dataclass(frozen=True)
 class _Pointer:
@@ -127,10 +132,7 @@ def _unresolved(root: Path, pointer: _Pointer) -> str | None:
     is never imported.
     """
     if pointer.path is None:
-        return (
-            "names a test without its file: point at it by its node-id from the project root,"
-            " tests/<file>.py::[<Class>::]<name>"
-        )
+        return _NAMED_WITHOUT_ITS_NODE_ID
     target = root / pointer.path
     if not target.exists():
         return f"{pointer.path} does not exist"
@@ -277,12 +279,6 @@ def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
 
     assert pointers == []
     assert _dangling(project, pointers) == []
-
-
-_NAMED_WITHOUT_ITS_NODE_ID = (
-    "names a test without its file: point at it by its node-id from the project root,"
-    " tests/<file>.py::[<Class>::]<name>"
-)
 
 
 def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -> None:
