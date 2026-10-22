@@ -39,6 +39,7 @@ from solar_challenge.web.simulation_params import (
     FULL_YEAR_DAYS_SENTINEL,
     FULL_YEAR_END,
     FULL_YEAR_START,
+    MAX_DAYS,
     MAX_WINDOW_DAYS,
     parse_home_config,
     with_default_days,
@@ -313,10 +314,11 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
         "type": "integer",
         "description": (
-            f"Simulation duration in days (1–{MAX_WINDOW_DAYS}), counted from "
-            f"{DAYS_WINDOW_START}, except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year "
-            f"{FULL_YEAR_START} to {FULL_YEAR_END}. Must not be sent with start or end; with "
-            f"none of the three sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
+            f"Simulation duration in days (1–{MAX_DAYS}), counted from {DAYS_WINDOW_START} "
+            f"and running on past {FULL_YEAR_END} when longer than the rest of that year, "
+            f"except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year {FULL_YEAR_START} to "
+            f"{FULL_YEAR_END}. Must not be sent with start or end; with none of the three "
+            f"sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
         ),
     },
     "start": {
