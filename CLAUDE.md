@@ -176,16 +176,27 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the sandbox.
 - The lane's `pvgis` job runs `tests/integration/test_pvgis.py`, the PVGIS
   contract tests, after every merge. They check PVGIS's live response, never a
-  cached TMY, so a change in PVGIS's or pvlib's response turns the lane red. A
-  fix task it files names `test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
-  when the red run printed no failing node-id (it hit the job's `timeout`, or
-  pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. If the
-  named tests pass, the red was a PVGIS outage that outlasted the run and its
-  confirm re-run; it needs no code change. If every test ERRORs at setup of
-  `bristol_tmy` and the cause is a connection error, a timeout or an HTTP 5xx,
-  PVGIS is still out of reach: retry later before changing code. Any other
-  failure means PVGIS's response, or pvlib's mapping of it, has changed.
+  cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
+  After a red run the lane runs the job's outage probe,
+  `scripts/pvgis_outage_probe.py`. When PVGIS gives no answer, or answers a
+  request with HTTP 403, 429 or 5xx, the red is an outage: the lane raises one
+  escalation naming PVGIS instead of filing a fix task, and closes it once the
+  probe passes again. A fix task it files names `test_pvgis.py` node-ids, or
+  `pvgis::nonzero-exit` when the red run printed no failing node-id (it hit the
+  job's `timeout`, or pytest could not start, e.g. uv refused a stale
+  `uv.lock`). Reproduce with
+  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`, and
+  check PVGIS as the lane does with
+  `uv run --locked --extra dev python scripts/pvgis_outage_probe.py`. The
+  failure line a fix task quotes is the traceback's first: for a request PVGIS
+  refused, pvlib's JSONDecodeError on PVGIS's HTML error page. The HTTP status
+  is at the end of the traceback, in the pass's `detect.log` under the main
+  checkout's `data/orchestrator/offline-lane/pvgis/`. If the named tests pass,
+  the red was a PVGIS outage that outlasted the run and its confirm re-run; it
+  needs no code change. If every test ERRORs at setup of `bristol_tmy` and the
+  cause is a connection error, a timeout, or an HTTP 403, 429 or 5xx, PVGIS is
+  still out of reach: retry later before changing code. Any other failure
+  means PVGIS's response, or pvlib's mapping of it, has changed.
 - The lane's `css-build` job rebuilds the web package's `static/dist/style.css`
   from the committed sources and `package-lock.json` in a scratch copy, and
   fails when the committed file differs. Tailwind scans the raw text of

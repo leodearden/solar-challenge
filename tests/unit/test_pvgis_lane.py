@@ -6,8 +6,10 @@ returns it. The per-task verify never runs it, because its tests are slow.
 The orchestrator offline lane's pvgis job runs it after every merge instead,
 so a change in PVGIS's or pvlib's response files a fix task rather than going
 unseen. That holds only while each of its tests checks PVGIS itself, never a
-cached copy. The contracts the pvgis job shares with every lane job are
-checked in tests/unit/test_offline_lane_contracts.py.
+cached copy. The job also declares an outage probe, so that an outage of PVGIS
+is escalated rather than filed, which holds only while the probe reports PVGIS
+out of reach as an outage. The contracts the pvgis job shares with every lane
+job are checked in tests/unit/test_offline_lane_contracts.py.
 """
 
 import os
