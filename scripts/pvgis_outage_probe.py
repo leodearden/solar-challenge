@@ -35,23 +35,21 @@ from types import MappingProxyType
 import requests
 
 from solar_challenge.location import Location
-from solar_challenge.weather import CLIMATE_YEARS, PVGIS_API_URL
+from solar_challenge.weather import PVGIS_API_URL, PVGIS_TMY_REQUEST
 
 _ENDPOINTS = ("tmy", "seriescalc")
 """The PVGIS endpoints PvgisTmy reads, in the order it reads them."""
 
 _BRISTOL = Location.bristol()
 
-_QUERY: Mapping[str, int | float | str] = MappingProxyType(
+_QUERY: Mapping[str, float | str] = MappingProxyType(
     {
         "lat": _BRISTOL.latitude,
         "lon": _BRISTOL.longitude,
-        "outputformat": "json",
-        "startyear": CLIMATE_YEARS[0],
-        "endyear": CLIMATE_YEARS[-1],
+        **{name: str(PVGIS_TMY_REQUEST[name]) for name in ("outputformat", "startyear", "endyear")},
     }
 )
-"""What each endpoint is asked for: the contract tests' point and climate years, in JSON."""
+"""What each endpoint is asked for: the contract tests' point, and the arguments of their TMY request that get_pvgis_tmy sends PVGIS as query parameters of the same name."""
 
 _REQUEST_TIMEOUT_S = 30.0
 """Seconds a request may take to connect, and again to answer: both requests fit dark-factory's default outage_probe_timeout_secs of 180."""
