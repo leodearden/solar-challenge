@@ -20,6 +20,7 @@ from solar_challenge.pv import (
 )
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.validation import (
+    BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
     UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
     UK_YIELD_BENCHMARK_KWH_PER_KWP,
@@ -444,6 +445,19 @@ class TestAnnualYieldPerWiredKwp:
 
         assert result.passed is True
         assert result.value == pytest.approx(kwh_per_wired_kwp)
+
+    def test_the_default_systems_measured_bristol_yield_passes(self) -> None:
+        pv_config = PVConfig.default_4kw()
+        generation = _year_of_generation(
+            BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP * wired_dc_capacity_kw(pv_config)
+        )
+
+        result = _annual_yield_check(
+            validate_pv_generation(generation, pv_config, check_annual=True)
+        )
+
+        assert result.passed is True
+        assert result.value == pytest.approx(BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP)
 
     def test_a_pvwatts_module_without_an_stc_is_judged_per_the_dc_its_pdc0_wires(self) -> None:
         generation = _year_of_generation(1000.0 * 3.9)

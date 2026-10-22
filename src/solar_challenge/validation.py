@@ -84,6 +84,14 @@ UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT: tuple[float, float] = (10.0, 45.0
 UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT: tuple[float, float] = (35.0, 90.0)
 """The same share with a 5 kWh battery: docs/self-consumption-benchmark.md §2."""
 
+BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP: float = 1012.1
+"""A year's AC energy per wired kWp of PVConfig.default_4kw() on Bristol's TMY, as scripts/measure_pv_performance_ratio.py measures it.
+
+docs/pv-cell-temperature.md §3 records the measurement, and
+tests/integration/test_pv_performance_ratio.py re-measures it. It is not a validation
+band: no check applies it.
+"""
+
 _YIELD_BENCHMARK_MIN_DAYS = 365
 
 

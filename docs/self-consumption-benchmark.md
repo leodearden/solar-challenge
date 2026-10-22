@@ -1,7 +1,7 @@
 # Self-Consumption Benchmarks: PV Only and with a Battery
 
 **Task:** #818
-**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_self_consumption_pv_only`, `validate_self_consumption_with_battery`, `UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT`, `UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT`)
+**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_self_consumption_pv_only`, `validate_self_consumption_with_battery`, `UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT`, `UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT`); [`src/solar_challenge/web/assistant.py`](../src/solar_challenge/web/assistant.py) (`METRIC_TABLE`, a reader of both constants)
 
 ---
 
@@ -107,6 +107,8 @@
   - On 2026-10-22 the dashboard assistant's `METRIC_TABLE` said 30–40% and 55–70%,
     citing "Solar Energy UK / BEIS smart export data 2022–2024". No such publication was
     found on 2026-10-19.
+    - Task 907 (2026-10-22) makes the assistant quote the two constants instead: its
+      `self_consumption_ratio` band is formatted from them at import.
 
 ## 3. The Reference's Figures
 

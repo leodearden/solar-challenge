@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
+from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
     explain_metric,
@@ -28,6 +29,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._job_manager_double import autospecced_job_manager
 from tests._web_app import run_storage_of
 from tests.unit.web_assistant._fakes import seed_run
+from tests.unit.web_assistant._number_tokens import numbers_in
 
 
 class TestExplainMetric:
@@ -194,6 +196,18 @@ class TestSuggestConfig:
         assert ss["recommended_battery_kwh"] > bs["recommended_battery_kwh"], (
             f"Expected self_sufficiency battery ({ss['recommended_battery_kwh']}) "
             f"> bill_savings battery ({bs['recommended_battery_kwh']})"
+        )
+
+    def test_bill_savings_sizes_pv_at_the_default_systems_bristol_yield(self) -> None:
+        """PV is sized at the yield the simulator's own default system gives in Bristol, and the note quotes it."""
+        result = suggest_config(3100.0, "bill_savings")
+
+        expected_pv_kwp = round(3100.0 / BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP, 2)
+        assert result["recommended_pv_kwp"] == expected_pv_kwp, (
+            f"Expected {expected_pv_kwp} kWp for 3100 kWh a year; got {result['recommended_pv_kwp']}"
+        )
+        assert f"{BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}" in numbers_in(result["note"]), (
+            f"Expected the note to quote {BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}; got {result['note']!r}"
         )
 
 
