@@ -526,6 +526,24 @@ class TestFleetRunRoundTrip:
         assert (homes_dir / "home_1_summary.json").exists()
         assert (homes_dir / "home_2_summary.json").exists()
 
+    @pytest.mark.parametrize("n_summaries", [2, 4], ids=["one-summary-too-few", "one-summary-too-many"])
+    def test_a_fleet_save_whose_home_summaries_do_not_pair_with_its_homes_raises_value_error_and_writes_nothing(
+        self, storage, sample_fleet_data, n_summaries
+    ):
+        """A fleet save given other than one summary per home raises ValueError naming both counts, and writes no file and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
+        with pytest.raises(ValueError, match=f"got 3 homes' results and {n_summaries} home_summaries"):
+            storage.save_fleet_run(
+                run_id="unpaired-summaries",
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=[per_home_summaries[0]] * n_summaries,
+            )
+
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
+
 
 class TestSavedRunRow:
     """Tests for the runs row each save writes, home and fleet alike."""

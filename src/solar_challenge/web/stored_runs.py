@@ -254,6 +254,15 @@ class StoredFleetRun:
     summary: FleetSummary
     home_summaries: tuple[SummaryStatistics, ...]
 
+    def __post_init__(self) -> None:
+        """Refuse, with a ValueError naming both counts, home_summaries that do not pair one summary with each home's results."""
+        n_homes = len(self.fleet_results.per_home_results)
+        if len(self.home_summaries) != n_homes:
+            raise ValueError(
+                "StoredFleetRun pairs one summary with each home's results: "
+                f"got {n_homes} homes' results and {len(self.home_summaries)} home_summaries"
+            )
+
     def config_document(self) -> dict[str, Any]:
         """The run's config.json document: each home's HomeConfig field tree, in the fleet's order, and their count."""
         return {
@@ -266,12 +275,7 @@ class StoredFleetRun:
         return _serialize_dataclass(self.summary)
 
     def write(self, run_dir: Path) -> None:
-        """Write the run's documents into *run_dir*, creating it if need be: config.json, summary.json, and in homes/ each home's time series and summary.
-
-        Raises:
-            ValueError: home_summaries does not pair one summary with each home's results; the
-                homes paired before the mismatch have been written by then.
-        """
+        """Write the run's documents into *run_dir*, creating it if need be: config.json, summary.json, and in homes/ each home's time series and summary."""
         # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
         homes_dir = run_dir / "homes"

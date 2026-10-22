@@ -433,8 +433,9 @@ class RunStorage:
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
-                The save has written nothing then.
+            ValueError: If the store refuses run_id, per_home_summaries does not hold one
+                summary per home's results, or status is not one of RUN_STATUSES. The save
+                has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredFleetRun(
