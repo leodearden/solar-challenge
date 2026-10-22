@@ -64,7 +64,7 @@ class _Outage:
 
 
 def _is_outage_status(status: int) -> bool:
-    """Whether *status* is PVGIS refusing a request or failing to serve it: 403, 429 or any 5xx."""
+    """Whether *status* is PVGIS refusing a request or failing to serve it."""
     return status in (HTTPStatus.FORBIDDEN, HTTPStatus.TOO_MANY_REQUESTS) or status >= HTTPStatus.INTERNAL_SERVER_ERROR
 
 
