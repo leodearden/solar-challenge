@@ -49,10 +49,10 @@ DAYS_WINDOW_START = date(2024, 6, 1)
 
 #: The most days a simulation window may span: the full 2024 calendar year that
 #: days=FULL_YEAR_DAYS_SENTINEL and a request without dates run; rationale in
-#: docs/web-ui-design.md (Period).
+#: docs/web-ui-design.md (Simulation window).
 MAX_WINDOW_DAYS: int = (FULL_YEAR_END - FULL_YEAR_START).days + 1
 #: The most days a body may send: FULL_YEAR_DAYS_SENTINEL, so the full year is the one
-#: year-long window days runs; rationale in docs/web-ui-design.md (Period).
+#: year-long window days runs; rationale in docs/web-ui-design.md (Simulation window).
 MAX_DAYS: int = FULL_YEAR_DAYS_SENTINEL
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.

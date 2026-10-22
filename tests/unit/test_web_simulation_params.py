@@ -133,7 +133,7 @@ class TestParseDateRange:
     def test_days_longer_than_the_rest_of_the_year_run_past_full_year_end(
         self, days: int, window: tuple[str, str]
     ) -> None:
-        """A days other than the sentinel runs that many days from DAYS_WINDOW_START, on past FULL_YEAR_END when it is longer than the rest of the year; docs/web-ui-design.md (Period) says why."""
+        """A days other than the sentinel runs that many days from DAYS_WINDOW_START, on past FULL_YEAR_END when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
         assert parse_date_range({"days": days}) == window
 
     def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
