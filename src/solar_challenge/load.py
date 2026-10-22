@@ -25,14 +25,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Ofgem Typical Domestic Consumption Values (TDCV) by household size
-# Values in kWh/year for electricity (excluding electric heating)
+# The simulator's default annual electricity consumption by number of occupants, in
+# kWh/year, excluding electric heating. It is the project's own interpolation by
+# occupants, not Ofgem's Typical Domestic Consumption Values, which Ofgem publishes as
+# low, medium and high bands. The name is frozen (FROZEN_SURFACE in
+# tests/unit/test_public_api_surface.py).
 OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
-    1: 1800.0,   # Single occupant
-    2: 2700.0,   # 2 people
-    3: 3200.0,   # 3 people (close to "medium" TDCV of 2900)
-    4: 3900.0,   # 4 people
-    5: 4500.0,   # 5+ people (extrapolated)
+    1: 1800.0,
+    2: 2700.0,
+    3: 3200.0,
+    4: 3900.0,
+    5: 4500.0,  # 5 or more occupants: LoadConfig.get_annual_consumption extrapolates above 5
 }
 
 
@@ -64,7 +67,7 @@ class LoadConfig:
 
     Attributes:
         annual_consumption_kwh: Target annual electricity consumption in kWh.
-            If not specified and household_occupants is set, derived from Ofgem TDCV.
+            If not specified and household_occupants is set, derived from OFGEM_TDCV_BY_OCCUPANTS.
         household_occupants: Number of household occupants, held to the rule
             household_occupant_count states. Affects consumption and profile shape.
         name: Optional identifier for the load profile
@@ -104,7 +107,7 @@ class LoadConfig:
         if self.annual_consumption_kwh is not None:
             return self.annual_consumption_kwh
 
-        # Derive from Ofgem TDCV based on household size
+        # Derive from the by-occupants table, OFGEM_TDCV_BY_OCCUPANTS
         occupants = min(self.household_occupants, 5)  # Cap at 5 for lookup
         base_consumption = OFGEM_TDCV_BY_OCCUPANTS[occupants]
 
