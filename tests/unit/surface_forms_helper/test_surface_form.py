@@ -778,6 +778,29 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
         named_classes(Counted)
 
 
+def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by_that_call_whatever_its_constructor() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Charging(type):
+        def __call__(cls, rate: int) -> None: ...
+
+    class Keyed(dict, metaclass=Charging):
+        pass
+
+    class Built(metaclass=Charging):
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Created(metaclass=Charging):
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Created":
+            return object.__new__(cls)
+
+    assert surface_form(Keyed) == "(rate: int) -> None"
+    assert named_classes(Keyed) == {int}
+    assert surface_form(Built) == "(rate: int) -> None"
+    assert surface_form(Created) == "(rate: int) -> None"
+
+
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
 def test_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_it_and_its_kind(
     routine: object, kind: str
