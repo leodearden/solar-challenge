@@ -812,6 +812,19 @@ class ComponentBlock(Generic[_Component]):
     sub_blocks: Mapping[str, SubBlock]
     when_omitted: Mapping[str, object]
 
+    def value_when_omitted(self, name: str) -> object:
+        """The value field *name* is built with when a block does not set it, as no block sets a field outside the grammar.
+
+        That is the table's when-omitted value, else the dataclass's declared default or its
+        default factory's value, else MISSING, which no value equals.
+        """
+        if name in self.when_omitted:
+            return self.when_omitted[name]
+        declared = {each.name: each for each in fields(self.config_type)}[name]
+        if declared.default_factory is not MISSING:
+            return declared.default_factory()
+        return declared.default
+
 
 def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict[str, Any]:
     """The keys the block at *block_path* sets, its null ones dropped, once every key it holds is one of *block*'s."""
@@ -835,10 +848,9 @@ def _built_component(
             declared default nor a when-omitted value.
     """
     missing = [
-        _child_path(block_path, each.name)
-        for each in fields(block.config_type)
-        if each.default is MISSING and each.default_factory is MISSING
-        and each.name not in block.when_omitted and each.name not in set_keys
+        _child_path(block_path, key)
+        for key in block.keys
+        if key not in set_keys and block.value_when_omitted(key) is MISSING
     ]
     if missing:
         raise ConfigurationError(

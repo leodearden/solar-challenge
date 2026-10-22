@@ -11,7 +11,6 @@ the pair it derives.
 """
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import MISSING, Field, fields
 from typing import Any, Optional, TypeVar
 
 import yaml
@@ -153,21 +152,14 @@ def _refuse_fields_without_a_key(block: ComponentBlock[_Component], config: _Com
         ValueError: naming each such field with the reason no key carries it.
     """
     unwritable = [
-        f"{each.name} ({block.outside_grammar[each.name]})"
-        for each in fields(block.config_type)
-        if each.name in block.outside_grammar and getattr(config, each.name) != _declared_default(each)
+        f"{name} ({reason})"
+        for name, reason in block.outside_grammar.items()
+        if getattr(config, name) != block.value_when_omitted(name)
     ]
     if unwritable:
         raise ValueError(
             f"{block.config_type.__name__} {' and '.join(unwritable)} cannot be written as scenario YAML"
         )
-
-
-def _declared_default(declared: Field[Any]) -> object:
-    """*declared*'s default, or its default factory's value; MISSING, which no value equals, when it has neither."""
-    if declared.default_factory is not MISSING:
-        return declared.default_factory()
-    return declared.default
 
 
 def _tariff_block(tariff: TariffConfig) -> dict[str, Any]:

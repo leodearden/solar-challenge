@@ -35,23 +35,10 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 
 
-def _omitted_reading(block: ComponentBlock[Any], key: str) -> object:
-    """What a block leaving out *key* reads it as: the table's when-omitted value, else the field's declared default.
-
-    A field with neither reads as MISSING, which no value equals.
-    """
-    if key in block.when_omitted:
-        return block.when_omitted[key]
-    declared = next(field for field in dataclasses.fields(block.config_type) if field.name == key)
-    if declared.default_factory is not dataclasses.MISSING:
-        return declared.default_factory()
-    return declared.default
-
-
 def _setting_every_key(block: ComponentBlock[Any], **values: Any) -> Any:
     """*block*'s dataclass built from *values*, refused unless each of *block*'s keys is set away from what an omitted key reads as."""
     config = block.config_type(**values)
-    unset = [key for key in block.keys if getattr(config, key) == _omitted_reading(block, key)]
+    unset = [key for key in block.keys if getattr(config, key) == block.value_when_omitted(key)]
     assert not unset, f"{block.config_type.__name__} leaves {unset} as an omitted key reads"
     return config
 

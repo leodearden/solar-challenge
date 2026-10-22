@@ -80,6 +80,20 @@ def test_a_field_added_to_the_dataclass_fails_until_its_table_places_it() -> Non
     assert faults == ["bifacial_gain is neither a key nor outside the grammar"]
 
 
+def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() -> None:
+    """value_when_omitted gives such a field the value constructing the dataclass without it gives, as it does a declared default."""
+    widened = dataclasses.make_dataclass(
+        "WidenedPVConfig",
+        [("bifacial_gains", tuple[float, ...], dataclasses.field(default_factory=lambda: (0.1,)))],
+        bases=(PVConfig,),
+        frozen=True,
+    )
+
+    omitted = dataclasses.replace(PV_BLOCK, config_type=widened).value_when_omitted("bifacial_gains")
+
+    assert omitted == widened(capacity_kw=4.0).bifacial_gains
+
+
 @pytest.mark.parametrize(
     ("block", "outside_grammar", "sub_blocks", "when_omitted"),
     [
