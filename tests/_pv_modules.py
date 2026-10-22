@@ -20,11 +20,7 @@ def default_module() -> dict[str, float]:
 
 
 def pvwatts_300_w_module() -> dict[str, float]:
-    """A 300 W module in PVWatts form, rated by its pdc0, with no STC, T_NOCT or A_c of its own.
-
-    test_pv.py's without-STC cases and test_pv_cell_temperature.py's neither-key, own-T_NOCT and own-A_c cases read
-    those absences.
-    """
+    """A 300 W module in PVWatts form, rated by its pdc0, with no STC, T_NOCT or A_c of its own."""
     return {"pdc0": 300.0, "gamma_pdc": -0.004}
 
 
