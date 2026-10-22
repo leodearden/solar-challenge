@@ -92,12 +92,12 @@ def _fleet_summary(**changes: float | None) -> FleetSummary:
     return dataclasses.replace(every_field_set, **changes)
 
 
-clear_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
+bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
 
 
 @pytest.fixture
 def clear_june_in_tmp_path(
-    clear_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Work in tmp_path, where each test writes its config."""
     monkeypatch.chdir(tmp_path)

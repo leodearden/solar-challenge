@@ -52,12 +52,12 @@ _SUMMARY_COLUMNS = [
 ]
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
-clear_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 
 @pytest.fixture(autouse=True)
 def _clear_june_in_tmp_path(
-    clear_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Work in tmp_path, where each test writes its config and the sweep its output."""
     monkeypatch.chdir(tmp_path)
