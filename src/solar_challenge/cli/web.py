@@ -41,7 +41,9 @@ def start(
     visualising solar PV and battery simulation results.
 
     Stopping the server drops the simulations still queued; those already
-    running finish before the process exits.
+    running finish before the process exits. Under --debug, stopping the
+    server ends the running simulations too, and the next start marks their
+    runs failed.
 
     One dashboard at a time may use the store under ~/.solar-challenge; while
     another holds it, this command exits with an error naming the lock file
