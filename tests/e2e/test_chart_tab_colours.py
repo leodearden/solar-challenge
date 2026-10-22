@@ -10,8 +10,6 @@ from typing import Any
 import pytest
 from playwright.sync_api import Page, expect
 
-pytestmark = pytest.mark.e2e
-
 
 def _results_home_path(run: tuple[str, str]) -> str:
     run_id, _ = run

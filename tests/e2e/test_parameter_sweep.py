@@ -42,8 +42,6 @@ from tests.e2e._job_requests import (
 )
 from tests.e2e._run_badges import classes_of_each
 
-pytestmark = pytest.mark.e2e
-
 
 # -- Page loading ----------------------------------------------------------
 

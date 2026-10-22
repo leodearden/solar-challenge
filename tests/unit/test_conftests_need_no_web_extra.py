@@ -41,7 +41,12 @@ def _web_extra_modules(project_root: Path) -> list[str]:
 
 
 def _conftests_outside_the_e2e_suite() -> list[str]:
-    """Return the module name of every conftest.py under tests/ but tests/e2e's, which a default run never loads: pyproject.toml's addopts --ignore tests/e2e."""
+    """Return the module name of every conftest.py under tests/ but tests/e2e's.
+
+    A default run never loads tests/e2e's, since tests/conftest.py's
+    collect_ignore names its directory, and the lane's e2e job, which does,
+    installs the web extra.
+    """
     tests = Path(__file__).resolve().parents[1]
     return sorted(
         ".".join(conftest.relative_to(tests.parent).with_suffix("").parts)

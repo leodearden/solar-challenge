@@ -13,8 +13,6 @@ them.
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
-pytestmark = pytest.mark.e2e
-
 # The desktop sidebar is only visible at lg breakpoint (>= 1024px).
 # Playwright's default viewport (1280x720) satisfies this.
 

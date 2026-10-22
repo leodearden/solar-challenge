@@ -15,13 +15,10 @@ time, once its tab is shown again. A chart that cannot be
 fitted to its container logs one error naming it.
 """
 
-import pytest
 from playwright.sync_api import Locator, Page, expect
 
 from tests.e2e._chart_tabs import open_chart_tab, show_chart_tab
 from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
-
-pytestmark = pytest.mark.e2e
 
 
 # -- The page's chart tabs --------------------------------------------------

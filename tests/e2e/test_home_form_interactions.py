@@ -8,7 +8,6 @@ field visibility.
 
 from urllib.parse import quote
 
-import pytest
 from playwright.sync_api import Page, expect
 
 from tests.e2e._home_form import (
@@ -18,8 +17,6 @@ from tests.e2e._home_form import (
     open_location_tab,
     open_period_tab,
 )
-
-pytestmark = pytest.mark.e2e
 
 
 # -- Preset populates form values -------------------------------------------

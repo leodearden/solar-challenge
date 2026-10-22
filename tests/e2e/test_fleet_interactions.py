@@ -25,8 +25,6 @@ from typing import Any
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
-pytestmark = pytest.mark.e2e
-
 
 # -- Slider-input sync -----------------------------------------------------
 

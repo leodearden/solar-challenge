@@ -3,12 +3,9 @@
 Verifies that a chat answer that failed shows its message as the page's notice.
 """
 
-import pytest
 from playwright.sync_api import Page, Route, expect
 
 from solar_challenge.web.sse import CHAT_FAILED, ChatFailed, sse_frame
-
-pytestmark = pytest.mark.e2e
 
 
 def test_a_chat_answer_that_failed_shows_its_message_as_the_page_s_notice(

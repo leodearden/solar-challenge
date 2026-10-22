@@ -49,7 +49,7 @@ def _module_of_failing_tests(*names: str) -> str:
 
 @pytest.fixture
 def project_with_ini_addopts(tmp_path: Path) -> Path:
-    """A throwaway project whose ini addopts, like this repo's, ignore a test module."""
+    """A throwaway project whose ini addopts ignore a test module."""
     (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --ignore=test_ignored.py\n", encoding="utf-8")
     (tmp_path / "test_kept.py").write_text(
         _module_of_failing_tests("test_alpha", "test_beta", "test_gamma"), encoding="utf-8"

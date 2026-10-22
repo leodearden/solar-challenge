@@ -9,10 +9,6 @@ import socket
 import urllib.request
 from urllib.parse import urlsplit
 
-import pytest
-
-pytestmark = pytest.mark.e2e
-
 
 def test_live_server_answers_while_another_connection_is_open(live_server: str) -> None:
     address = urlsplit(live_server)

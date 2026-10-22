@@ -17,8 +17,6 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
-pytestmark = pytest.mark.e2e
-
 
 # ── Page loading ─────────────────────────────────────────────────────
 

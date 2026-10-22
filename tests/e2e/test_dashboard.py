@@ -1,9 +1,6 @@
 """End-to-end tests for the dashboard page (/)."""
 
-import pytest
 from playwright.sync_api import Page, Request, expect
-
-pytestmark = pytest.mark.e2e
 
 
 def test_ctrl_clicking_a_recent_run_opens_its_results_in_a_new_tab_and_leaves_the_dashboard_open(

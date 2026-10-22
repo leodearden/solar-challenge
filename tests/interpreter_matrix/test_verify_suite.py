@@ -55,8 +55,6 @@ def _suite_env(major: int, minor: int) -> dict[str, str]:
     env = isolated_uv_env(_matrix_venv(major, minor))
     # "+gil" is load-bearing: a plain 3.14 request selects the free-threaded 3.14t on the factory host.
     env["UV_PYTHON"] = f"{major}.{minor}+gil"
-    # The suite must never collect this matrix, even if tests/conftest.py stops ignoring it.
-    env["PYTEST_ADDOPTS"] = "--ignore=tests/interpreter_matrix"
     return env
 
 
