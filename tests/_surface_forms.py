@@ -71,6 +71,11 @@ def surface_form(obj: object) -> str:
     __signature__ counts as none for these refusals, since Python 3.12 and 3.13 convert a
     string or call a callable given there and 3.11 and 3.14 refuse either.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
+
+    A routine whose signature inspect cannot read raises TypeError naming it and its
+    kind: one that is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is, or a descriptor defined in Python that neither
+    wraps a callable, as functools.wraps records one, nor carries a signature.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -103,10 +108,8 @@ def member_forms(cls: type) -> dict[str, str]:
     attribute; a string annotation is read as named_classes reads one, so a name its
     module does not bind raises NameError, and a module another of the same name has
     replaced in sys.modules raises LookupError. A public member that no member rule
-    spells and whose signature inspect cannot read raises TypeError naming *cls*, the
-    member and its kind: one that is not callable, as no functools.partialmethod or
-    functools.singledispatchmethod is, or a descriptor defined in Python that neither
-    wraps a callable, as functools.wraps records one, nor carries a signature.
+    spells and that is a routine whose signature inspect cannot read, as surface_form
+    describes one, raises TypeError naming *cls*, the member and its kind.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -138,10 +141,10 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type; a class whose constructor surface_form refuses, or a
-    routine surface_form reads as such a class, raises the TypeError surface_form raises
-    for it, and a class with a member member_forms refuses, the TypeError member_forms
-    raises for it.
+    naming it and its type; a class whose constructor surface_form refuses, a routine
+    surface_form reads as such a class, or a routine whose signature inspect cannot read
+    raises the TypeError surface_form raises for it, and a class with a member
+    member_forms refuses, the TypeError member_forms raises for it.
     A class's constructor is spelled in the module of the class in its MRO whose own body
     defines __init__ or __new__, which may be a base defined in another module; a
     parameter of an __init__ the dataclass decorator generated, in the module of the
@@ -523,7 +526,13 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature."""
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature.
+
+    A routine _is_unreadable_routine holds of raises TypeError naming it and its kind
+    before anything else is read.
+    """
+    if _is_unreadable_routine(obj):
+        raise _unreadable_routine_error(_label(obj), obj)
     end = _chain_end(obj, stop=_carries_signature)
     if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
