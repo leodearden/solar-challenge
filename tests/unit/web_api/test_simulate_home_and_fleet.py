@@ -11,7 +11,7 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.web.request_boundary import resolve_location
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
@@ -275,8 +275,13 @@ class TestSimulateHomeAPI:
             ),
             pytest.param(
                 {"pv_kw": 4.0, "days": 80000},
-                f"days must be between 1 and {MAX_WINDOW_DAYS}, got 80000",
+                f"days must be between 1 and {MAX_DAYS}, got 80000",
                 id="80000-days",
+            ),
+            pytest.param(
+                {"pv_kw": 4.0, "days": 366},
+                f"days must be between 1 and {MAX_DAYS}, got 366",
+                id="366-days",
             ),
             pytest.param(
                 {"pv_kw": 4.0, "start": "2024-06-10", "end": "2024-06-01"},
@@ -288,7 +293,7 @@ class TestSimulateHomeAPI:
     def test_window_it_cannot_run_returns_400_naming_it_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, body: dict, message: str
     ) -> None:
-        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is a 400 naming it, never a queued run."""
+        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, or a days outside 1 to MAX_DAYS, is a 400 naming it, never a queued run."""
         resp = client.post("/api/simulate/home", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}

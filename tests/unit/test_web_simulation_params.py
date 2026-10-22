@@ -20,6 +20,7 @@ from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_END,
     FULL_YEAR_START,
+    MAX_DAYS,
     MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
@@ -113,9 +114,27 @@ class TestParseDateRange:
         assert start == "2024-01-01"
         assert end == "2024-12-31"
 
-    def test_days_max_window_days_is_the_longest_window(self) -> None:
-        """days=MAX_WINDOW_DAYS is the longest window, a year of days from 2024-06-01."""
-        assert parse_date_range({"days": MAX_WINDOW_DAYS}) == ("2024-06-01", "2025-06-01")
+    def test_days_max_days_runs_the_full_year(self) -> None:
+        """days=MAX_DAYS, the most days a body may send, is the full-year sentinel, so it runs FULL_YEAR_START to FULL_YEAR_END."""
+        assert parse_date_range({"days": MAX_DAYS}) == (
+            FULL_YEAR_START.isoformat(),
+            FULL_YEAR_END.isoformat(),
+        )
+
+    @pytest.mark.parametrize(
+        ("days", "window"),
+        [
+            pytest.param(215, ("2024-06-01", "2025-01-01"), id="one-day-past-full-year-end"),
+            pytest.param(
+                364, ("2024-06-01", "2025-05-30"), id="longest-days-from-the-window-start"
+            ),
+        ],
+    )
+    def test_days_longer_than_the_rest_of_the_year_run_past_full_year_end(
+        self, days: int, window: tuple[str, str]
+    ) -> None:
+        """A days other than the sentinel runs that many days from DAYS_WINDOW_START, on past FULL_YEAR_END when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
+        assert parse_date_range({"days": days}) == window
 
     def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
         """The full 2024 leap year, 366 days, is the longest start/end window, and is accepted."""
@@ -269,29 +288,27 @@ class TestParseDateRange:
     @pytest.mark.parametrize(
         ("days", "message"),
         [
-            pytest.param(0, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 0", id="zero"),
+            pytest.param(0, f"days must be between 1 and {MAX_DAYS}, got 0", id="zero"),
+            pytest.param(-7, f"days must be between 1 and {MAX_DAYS}, got -7", id="negative"),
             pytest.param(
-                -7, f"days must be between 1 and {MAX_WINDOW_DAYS}, got -7", id="negative"
-            ),
-            pytest.param(
-                MAX_WINDOW_DAYS + 1,
-                f"days must be between 1 and {MAX_WINDOW_DAYS}, got {MAX_WINDOW_DAYS + 1}",
-                id="one-past-the-longest-window",
+                MAX_DAYS + 1,
+                f"days must be between 1 and {MAX_DAYS}, got {MAX_DAYS + 1}",
+                id="one-past-max-days",
             ),
             pytest.param(
                 200000,
-                f"days must be between 1 and {MAX_WINDOW_DAYS}, got 200000",
+                f"days must be between 1 and {MAX_DAYS}, got 200000",
                 id="past-pandas-timedelta-range",
             ),
             pytest.param(
-                1e300, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 1e+300", id="huge-float"
+                1e300, f"days must be between 1 and {MAX_DAYS}, got 1e+300", id="huge-float"
             ),
         ],
     )
     def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
         self, days: object, message: str
     ) -> None:
-        """A days outside 1 to MAX_WINDOW_DAYS is refused with a ValueError naming days, the range and the value as sent."""
+        """A days outside 1 to MAX_DAYS is refused with a ValueError naming days, the range and the value as sent."""
         with pytest.raises(ValueError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message

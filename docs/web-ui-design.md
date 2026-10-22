@@ -79,13 +79,22 @@ Full configuration form exposing all `HomeConfig` parameters, with run execution
 | **Heat Pump** | Enable toggle, Type: ASHP / GSHP radio, Thermal capacity (kW), Annual heat demand (kWh) | Only visible when enabled |
 | **Tariff** | Preset selector: Flat / Economy 7 / Economy 10 / Custom, Custom: add/remove TOU periods (start time, end time, rate, name) | SEG export rate (p/kWh, optional) |
 | **Location** | Preset dropdown (Bristol, London, Edinburgh, Manchester) + Custom (lat, lon, altitude), Name field | Map pin would be nice but not required |
-| **Period** | Date range picker, Quick presets: 7 days / 30 days / 90 days / 365 days | 365 days defaults to full year 2024-01-01 to 2024-12-31. A run spans at most that full year, 366 days, and must not end before it starts: the weather is one TMY year, so a longer window would repeat it (`MAX_WINDOW_DAYS`, web/simulation_params.py). The form leaves both rules to the server and shows its refusal. |
+| **Period** | Date range picker, Quick presets: 7 / 14 / 30 / 90 days / 1 year (365 days) | 365 days runs the full year 2024-01-01 to 2024-12-31; any other days value runs from 2024-06-01. The form leaves the window's rules to the server and shows its refusal; see [Simulation window](#simulation-window). |
 
 **Execution:**
 - "Run Simulation" button -> HTMX POST to `/api/simulate/home`
 - Progress tracker appears (SSE-driven progress bar, step indicators, elapsed time)
 - On completion, results section renders inline (below form or in separate tab)
 - "Save to History" button persists results to SQLite
+
+#### Simulation window
+
+The server enforces two rules on a run's window (web/simulation_params.py):
+
+- **Days** (`MAX_DAYS`): a request may send 1 to 365 days. 365 runs the full year 2024-01-01 to 2024-12-31. Any other value runs that many days from 2024-06-01, so one above 214 continues into 2025.
+  - Running past the year's end is intended. The weather is read by UTC time of year and wraps at the year's end, so such a run reads each TMY day at most once, as a start/end window across the new year does.
+  - Days stops at 365 so that the full year is the only year-long days window. 366 days from 2024-06-01 would be a second, June-to-June year that reads one TMY day twice.
+- **Span** (`MAX_WINDOW_DAYS`): a run spans at most the full year, 366 days, and must not end before it starts. The weather is one TMY year, so a longer window would repeat it.
 
 ### 3. Fleet Simulator
 
