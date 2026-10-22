@@ -99,7 +99,8 @@ One of the largest modules. Key concepts:
 - **Parameter sweeps** — Geometric/linear sweep specs with cross-sweep parallel execution
 - **Variable substitution** — `${VAR}` syntax in config files
 - **`generate_homes_from_distribution()`** — Creates heterogeneous fleet configs from distributions
-- **`scenario_writer.py`** — Writes HomeConfigs back as scenario YAML, the inverse of config.py's parsers; change both together
+- **Component block tables** — `PV_BLOCK`, `BATTERY_BLOCK`, `LOAD_BLOCK`, `HEAT_PUMP_BLOCK`, `EV_BLOCK` and `LOCATION_BLOCK` hold each block's keys in field order, the fields with no YAML form, sub-blocks and when-omitted values. A new dataclass field is placed in its table; `tests/unit/config/test_component_blocks.py` (T1) fails until it is
+- **`scenario_writer.py`** — Writes HomeConfigs back as scenario YAML, the inverse of config.py's parsers; both read config.py's component block tables, so a field's key is declared once
 
 ### CLI (`cli/`)
 
