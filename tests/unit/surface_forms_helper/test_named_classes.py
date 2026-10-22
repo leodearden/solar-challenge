@@ -828,6 +828,49 @@ def test_a_class_names_the_classes_its_signature_names_read_where_its_constructo
     assert named_classes(submetering.Submeter) == {fractions.Fraction}
 
 
+def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_names_read_where_the_class_holding_that_signature_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rates = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rates",
+        "import collections\n"
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Rated(dict):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Ordered(collections.OrderedDict):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Plain:\n"
+        "    __signature__ = signature\n",
+    )
+    rerates = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rerates",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from rates import Rated\n"
+        "\n"
+        "class Rerated(Rated):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(rates.Rated) == {fractions.Fraction}
+    assert named_classes(rates.Ordered) == {fractions.Fraction}
+    assert named_classes(rates.Plain) == {fractions.Fraction}
+    assert named_classes(functools.partial(rates.Rated)) == {fractions.Fraction}
+    assert named_classes(rerates.Rerated) == {fractions.Fraction}
+
+
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
