@@ -864,6 +864,7 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
         monkeypatch,
         "rates",
         "import collections\n"
+        "import functools\n"
         "import inspect\n"
         "from fractions import Fraction as Share\n"
         "\n"
@@ -878,6 +879,14 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
         "    __signature__ = signature\n"
         "\n"
         "class Plain:\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Counting(type):\n"
+        "    @functools.wraps(type.__call__)\n"
+        "    def __call__(cls, *args, **kwargs):\n"
+        "        return super().__call__(*args, **kwargs)\n"
+        "\n"
+        "class Counted(metaclass=Counting):\n"
         "    __signature__ = signature\n",
     )
     rerates = imported_module(
@@ -895,6 +904,7 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rates.Rated) == {fractions.Fraction}
     assert named_classes(rates.Ordered) == {fractions.Fraction}
     assert named_classes(rates.Plain) == {fractions.Fraction}
+    assert named_classes(rates.Counted) == {fractions.Fraction}
     assert named_classes(functools.partial(rates.Rated)) == {fractions.Fraction}
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
 
@@ -919,7 +929,12 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
         "class PropertySigned(type):\n"
         "    @property\n"
         "    def __signature__(cls):\n"
-        "        return signature\n",
+        "        return signature\n"
+        "\n"
+        "class CallingSigned(type):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "    def __call__(cls, share: 'Share') -> None: ...\n",
     )
     users = imported_module(
         tmp_path,
@@ -928,7 +943,7 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
         "import inspect\n"
         "from decimal import Decimal as Share\n"
         "\n"
-        "from metas import PropertySigned, Signed\n"
+        "from metas import CallingSigned, PropertySigned, Signed\n"
         "\n"
         "class Rated(dict, metaclass=Signed):\n"
         "    pass\n"
@@ -942,7 +957,10 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
         "class DefinedOverridden(metaclass=PropertySigned):\n"
         "    __signature__ = inspect.Signature()\n"
         "\n"
-        "    def __init__(self, share: 'Share') -> None: ...\n",
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Called(metaclass=CallingSigned):\n"
+        "    pass\n",
     )
 
     with pytest.raises(TypeError) as plain:
@@ -953,6 +971,8 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
         named_classes(users.Overridden)
     with pytest.raises(TypeError) as defined_overriding:
         named_classes(users.DefinedOverridden)
+    with pytest.raises(TypeError) as called:
+        named_classes(users.Called)
 
     assert "users.Rated" in str(plain.value)
     assert "metas.Signed" in str(plain.value)
@@ -962,6 +982,8 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
     assert "metas.PropertySigned" in str(overriding.value)
     assert "users.DefinedOverridden" in str(defined_overriding.value)
     assert "metas.PropertySigned" in str(defined_overriding.value)
+    assert "users.Called" in str(called.value)
+    assert "metas.CallingSigned" in str(called.value)
 
 
 def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
@@ -1077,6 +1099,67 @@ def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_
     assert "describing.Describing" in str(inherited.value)
     assert "described.DefinedDescribed" in str(defined.value)
     assert "describing.Describing" in str(defined.value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Plain", id="no-constructor"),
+        pytest.param("Initialised", id="own-init"),
+        pytest.param("Inherited", id="call-a-base-metaclass-defines"),
+        pytest.param("Halved", id="call-assigned-as-a-descriptor"),
+        pytest.param("Signed", id="carries-a-signature"),
+    ],
+)
+def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_names_the_classes_that_call_names_read_where_it_is_spelled_not_where_its_constructor_is(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "charging",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Charging(type):\n"
+        "    def __call__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "def settle(cls, share: 'Share', rate=1) -> None: ...\n",
+    )
+    recharging = imported_module(
+        tmp_path,
+        monkeypatch,
+        "recharging",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "from functools import partialmethod\n"
+        "\n"
+        "from charging import Charging, settle\n"
+        "\n"
+        "class Recharging(Charging):\n"
+        "    pass\n"
+        "\n"
+        "class Halving(type):\n"
+        "    __call__ = partialmethod(settle, rate=2)\n"
+        "\n"
+        "class Plain(metaclass=Charging):\n"
+        "    pass\n"
+        "\n"
+        "class Initialised(metaclass=Charging):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Inherited(metaclass=Recharging):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Halved(metaclass=Halving):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Signed(metaclass=Charging):\n"
+        "    __signature__ = inspect.Signature(\n"
+        "        [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        "    )\n",
+    )
+
+    assert named_classes(getattr(recharging, name)) == {fractions.Fraction}
 
 
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
