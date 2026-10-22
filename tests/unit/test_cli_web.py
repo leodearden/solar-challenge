@@ -73,7 +73,11 @@ def _free_port() -> int:
 
 @contextlib.contextmanager
 def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Popen[bytes]]:
-    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; kill it on exit."""
+    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; on exit kill its whole process group.
+
+    The whole group: under --debug werkzeug's reloader serves from a second process, which
+    a kill of the first alone would orphan, still holding the port and the store.
+    """
     stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
     with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
         server = subprocess.Popen(
@@ -82,11 +86,13 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Pope
             env={**os.environ, "HOME": str(tmp_path)},
             stdout=stdout,
             stderr=stderr,
+            start_new_session=True,
         )
         try:
             yield server
         finally:
-            server.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(server.pid, signal.SIGKILL)
             server.wait()
             print(stdout_log.read_text())
             print(stderr_log.read_text(), file=sys.stderr)
@@ -194,3 +200,14 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
         assert re.search(rf"(?<!\d){server.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
         assert "Traceback" not in second.stderr
         assert _run_status(port, run_id) == "running"
+
+
+def test_web_start_debug_serves_the_dashboard(tmp_path: Path) -> None:
+    """B13: werkzeug's reloader binds the port at once, and the process it serves from accepts the queued request once it serves."""
+    port = _free_port()
+
+    with _server(tmp_path, WEB_START, "--debug", "--port", str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+
+        with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=60) as response:
+            assert response.status == 200
