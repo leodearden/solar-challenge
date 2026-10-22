@@ -5,9 +5,10 @@ A pointer is a path rooted at tests/, optionally followed by the ::<Class> and :
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none.
 
-A test function or class named any other way, as test_<name> or Test<Name> alone or next to its file in prose, is
-refused: the settled form is the node-id, which pytest runs as written and this gate resolves. A name the Python
-module's own code uses, such as a parameter called test_config, is no pointer.
+A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
+prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
+pytest runs as written and this gate resolves. A name the Python module's own code uses, such as a parameter called
+test_config, is no pointer.
 """
 
 import ast
@@ -26,7 +27,7 @@ _POINTER = re.compile(
     r"""
     (?<![\w./-])
     (?:
-        (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)(?P<names>(?:::\w+)*)
+        (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)(?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
       | (?P<bare>test_\w+|Test[A-Z]\w*)
     )
     """,
@@ -43,17 +44,20 @@ _NAMED_WITHOUT_ITS_NODE_ID = (
 class _Pointer:
     """A pointer into tests/: the file holding it, relative to the project root, its line, and the path and names it gives.
 
-    A test named without its file has no path, and its name is the one name.
+    A test named without its file has no path, and its name is the one name. The dotted names follow the last name with
+    a dot, as in <Class>.<test>, and a node-id has none.
     """
 
     source: PurePosixPath
     line: int
     path: PurePosixPath | None
     names: tuple[str, ...]
+    dotted_names: tuple[str, ...]
 
     def __str__(self) -> str:
         parts = self.names if self.path is None else (str(self.path), *self.names)
-        return f"{self.source}:{self.line}: {'::'.join(parts)}"
+        dotted = "".join(f".{name}" for name in self.dotted_names)
+        return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
 
 
 def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
@@ -93,9 +97,13 @@ def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer
     """Return the pointer *match* found in *text*, the text of the file *source*."""
     line = text.count("\n", 0, match.start()) + 1
     if match["bare"] is not None:
-        return _Pointer(source=source, line=line, path=None, names=(match["bare"],))
+        return _Pointer(source=source, line=line, path=None, names=(match["bare"],), dotted_names=())
     return _Pointer(
-        source=source, line=line, path=PurePosixPath(match["path"]), names=tuple(match["names"].split("::")[1:])
+        source=source,
+        line=line,
+        path=PurePosixPath(match["path"]),
+        names=tuple(match["names"].split("::")[1:]),
+        dotted_names=tuple(match["dotted_names"].split(".")[1:]),
     )
 
 
@@ -128,11 +136,14 @@ def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
 def _unresolved(root: Path, pointer: _Pointer) -> str | None:
     """Return why *pointer* leads to no file, directory or test under *root*, or None if it leads to one.
 
-    It must give a path, and that path must exist. Its names are read from the Python file's syntax tree, and the file
-    is never imported.
+    It must give a path, with its names joined by ::, and that path must exist. Its names are read from the Python
+    file's syntax tree, and the file is never imported.
     """
     if pointer.path is None:
         return _NAMED_WITHOUT_ITS_NODE_ID
+    if pointer.dotted_names:
+        node_id = "::".join((str(pointer.path), *pointer.names, *pointer.dotted_names))
+        return f"a node-id joins its names with ::, so write {node_id}"
     target = root / pointer.path
     if not target.exists():
         return f"{pointer.path} does not exist"
@@ -252,6 +263,7 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/test_absent.py\n"
         "# tests/unit/test_pointed_at.py::test_member\n"
         "# tests/unit/test_pointed_at.py::TestGroup::test_absent\n"
+        "# tests/unit/test_pointed_at.py::TestGroup.test_absent\n"
         "# tests/unit/test_pointed_at.py::test_top::test_inner\n"
         "# tests/unit/notes.txt::test_top\n"
         "# tests/unit::test_top\n",
@@ -262,11 +274,13 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "src/pkg/module.py:2: tests/unit/test_pointed_at.py::test_member:"
         " tests/unit/test_pointed_at.py defines no test_member at its top level",
         "src/pkg/module.py:3: tests/unit/test_pointed_at.py::TestGroup::test_absent: TestGroup defines no test_absent",
-        "src/pkg/module.py:4: tests/unit/test_pointed_at.py::test_top::test_inner:"
+        "src/pkg/module.py:4: tests/unit/test_pointed_at.py::TestGroup.test_absent:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup::test_absent",
+        "src/pkg/module.py:5: tests/unit/test_pointed_at.py::test_top::test_inner:"
         " test_top is a function, so it defines no test_inner",
-        "src/pkg/module.py:5: tests/unit/notes.txt::test_top:"
+        "src/pkg/module.py:6: tests/unit/notes.txt::test_top:"
         " tests/unit/notes.txt is not a Python file, so it defines no test_top",
-        "src/pkg/module.py:6: tests/unit::test_top: tests/unit is not a Python file, so it defines no test_top",
+        "src/pkg/module.py:7: tests/unit::test_top: tests/unit is not a Python file, so it defines no test_top",
     ]
 
 
