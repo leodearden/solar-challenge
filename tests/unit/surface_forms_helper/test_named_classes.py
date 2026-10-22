@@ -1422,6 +1422,37 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
     assert named_classes(signing.Reinitialised) == {decimal.Decimal}
 
 
+def test_a_constructor_assigned_as_a_descriptor_is_read_once_bound_to_its_class_and_names_the_classes_the_module_of_the_function_it_wraps_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "settling",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(self, share: 'Share', rate: int) -> None: ...\n",
+    )
+    resettling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "resettling",
+        "from decimal import Decimal as Share\n"
+        "from functools import partialmethod, singledispatchmethod\n"
+        "\n"
+        "from settling import settle\n"
+        "\n"
+        "class Halved:\n"
+        "    __init__ = partialmethod(settle, rate=1)\n"
+        "\n"
+        "class Dispatched:\n"
+        "    __init__ = singledispatchmethod(settle)\n",
+    )
+
+    assert named_classes(resettling.Halved) == {fractions.Fraction, int}
+    assert named_classes(resettling.Dispatched) == {fractions.Fraction, int}
+
+
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
