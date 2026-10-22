@@ -2044,6 +2044,7 @@ web = [
     { name = "flask" },
     { name = "plotly" },
     { name = "pyarrow" },
+    { name = "werkzeug" },
 ]
 
 [package.metadata]
@@ -2068,6 +2069,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.10" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "typer", specifier = ">=0.26.3" },
+    { name = "werkzeug", marker = "extra == 'web'", specifier = ">=3.1.8" },
 ]
 provides-extras = ["dev", "stochastic", "web", "e2e"]
 

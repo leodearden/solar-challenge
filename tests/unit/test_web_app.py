@@ -4,8 +4,10 @@
 import gc
 import importlib
 import importlib.util
+import os
 import re
 import shutil
+import sqlite3
 import sys
 import weakref
 from contextlib import closing
@@ -18,7 +20,8 @@ pytest.importorskip("flask")
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import live_managers
 from solar_challenge.web.shared import get_database, get_storage
-from tests._web_app import build_test_app
+from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
+from tests._web_app import build_test_app, release_store_lock, run_storage_of
 
 
 def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
@@ -141,6 +144,7 @@ def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_director
 ) -> None:
     """With no SECRET_KEY in test_config or the environment, the app persists a generated key under the home directory and the next build reuses it."""
     first = build_test_app(tmp_path / "data", secret_key=None)
+    release_store_lock(first)
     second = build_test_app(tmp_path / "data", secret_key=None)
 
     key_file = home / ".solar-challenge" / ".secret_key"
@@ -205,3 +209,43 @@ def test_a_live_apps_job_manager_is_among_the_live_managers(tmp_path: Path) -> N
     app = build_test_app(tmp_path)
 
     assert app.extensions["job_manager"] in live_managers()
+
+
+def test_an_app_on_a_store_another_app_holds_is_refused_naming_this_process_and_the_holders_running_run_stays_running(
+    tmp_path: Path,
+) -> None:
+    """B12: the refused build never reaches the recovery that would fail the run the holder's job is running."""
+    first = build_test_app(tmp_path)
+    run_storage_of(first).create_run(
+        "r-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-22T09:00:00"
+    )
+
+    with pytest.raises(StoreLocked) as refused:
+        build_test_app(tmp_path)
+
+    assert refused.value.holder_pid == os.getpid()
+    assert refused.value.path == tmp_path / "dashboard.lock"
+    record = run_storage_of(first).run_record("r-1")
+    assert record is not None
+    assert record.status == "running"
+
+
+def test_an_app_refused_its_store_opens_no_database(tmp_path: Path) -> None:
+    held = acquire_store_lock(tmp_path)
+    try:
+        with pytest.raises(StoreLocked):
+            build_test_app(tmp_path)
+
+        assert not (tmp_path / "test.db").exists()
+    finally:
+        held.release()
+
+
+def test_a_build_that_fails_after_taking_its_store_lock_releases_it(tmp_path: Path) -> None:
+    """A directory where the database file belongs fails the build when it opens the database."""
+    (tmp_path / "test.db").mkdir()
+
+    with pytest.raises(sqlite3.OperationalError):
+        build_test_app(tmp_path)
+
+    acquire_store_lock(tmp_path).release()

@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The web dashboard's Flask app for tests, its database and run files under one directory, and the RunStorage it keeps its runs in.
+"""The web dashboard's Flask app for tests, its database and run files under one directory, the RunStorage it keeps its runs in, and the release of the store lock it holds.
 
-build_test_app and run_storage_of import the web package when they are called, not
-when this module loads. So importing this module needs no web extra, and a call made
-after a test drops solar_challenge.web.app from sys.modules imports the factory anew.
+build_test_app, run_storage_of and release_store_lock import the web package when they
+are called, not when this module loads. So importing this module needs no web extra, and
+a call made after a test drops solar_challenge.web.app from sys.modules imports the
+factory anew.
 
 Usage::
 
-    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, run_storage_of
+    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 
     app = build_test_app(tmp_path)
     storage = run_storage_of(app)
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+    release_store_lock(app)
+    rebuilt = build_test_app(tmp_path)
 """
 
 from __future__ import annotations
@@ -54,6 +58,20 @@ def run_storage_of(app: Flask) -> RunStorage:
 
     with app.app_context():
         return get_storage()
+
+
+def release_store_lock(app: Flask) -> None:
+    """Release the store lock *app* took on its data directory, as the end of a server's process does, so the test can build another app on that directory.
+
+    Releasing twice is harmless.
+    """
+    from solar_challenge.web.store_lock import StoreLock
+
+    store_lock = app.extensions.get("store_lock")
+    assert isinstance(store_lock, StoreLock), (
+        f"app.extensions['store_lock'] is a {type(store_lock).__name__}, not the StoreLock create_app keeps there"
+    )
+    store_lock.release()
 
 
 def point_store_config_at_a_missing_directory(app: Flask, directory: Path) -> None:

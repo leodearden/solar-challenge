@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -57,7 +58,17 @@ import sys
 
 from solar_challenge.cli import app
 
-app(["web", "start", "--port", sys.argv[1]])
+app(["web", "start", *sys.argv[1:]])
+"""
+
+WEB_START_IMPORTING_SOURCE_FILE = """
+import sys
+
+import source_file
+
+from solar_challenge.cli import app
+
+app(["web", "start", *sys.argv[1:]])
 """
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -72,7 +83,11 @@ def _free_port() -> int:
 
 @contextlib.contextmanager
 def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Popen[bytes]]:
-    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; kill it on exit."""
+    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; on exit kill its whole process group.
+
+    The whole group: under --debug werkzeug's reloader serves from a second process, which
+    a kill of the first alone would orphan, still holding the port and the store.
+    """
     stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
     with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
         server = subprocess.Popen(
@@ -81,11 +96,13 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Pope
             env={**os.environ, "HOME": str(tmp_path)},
             stdout=stdout,
             stderr=stderr,
+            start_new_session=True,
         )
         try:
             yield server
         finally:
-            server.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(server.pid, signal.SIGKILL)
             server.wait()
             print(stdout_log.read_text())
             print(stderr_log.read_text(), file=sys.stderr)
@@ -109,7 +126,8 @@ def _accepts_connections(port: int) -> bool:
         return False
 
 
-def _submit_home_job(port: int, pv_kw: float) -> None:
+def _submit_home_job(port: int, pv_kw: float) -> str:
+    """Submit a home job of pv_kw to the server on port, and return its run's id."""
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/simulate/home",
         data=json.dumps({"pv_kw": pv_kw, "days": 1}).encode(),
@@ -117,6 +135,35 @@ def _submit_home_job(port: int, pv_kw: float) -> None:
     )
     with _LOCALHOST.open(request, timeout=30) as response:
         assert response.status == 201
+        run_id: str = json.load(response)["run_id"]
+        return run_id
+
+
+def _run_status(port: int, run_id: str) -> str:
+    """The status of run run_id, as the server on port reports it."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/api/history/runs/{run_id}", timeout=30) as response:
+        status: str = json.load(response)["status"]
+        return status
+
+
+def _dashboard_status(port: int) -> int:
+    """The status with which the server on port answers GET /."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=60) as response:
+        status: int = response.status
+        return status
+
+
+def _store_lock_file(home: Path) -> Path:
+    """The lock file of the dashboard store of a server whose HOME is home."""
+    return home / ".solar-challenge" / "dashboard.lock"
+
+
+def _store_holder_pid(home: Path) -> int | None:
+    """The pid that the lock file of the dashboard store under home records, or None while it records none."""
+    try:
+        return int(_store_lock_file(home).read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
@@ -144,7 +191,7 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
     port = _free_port()
 
-    with _server(tmp_path, WEB_START, str(port)) as server:
+    with _server(tmp_path, WEB_START, "--port", str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
 
     status = (tmp_path / "stderr.log").read_text().splitlines()
@@ -153,3 +200,70 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     start = status.index(status_line)
     assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
     assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
+
+
+def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_holder_and_the_first_servers_run_stays_running(
+    tmp_path: Path,
+) -> None:
+    """COLUMNS keeps Rich from folding the long lock path at 80 columns on the second server's stderr, which is not a terminal."""
+    started_dir = tmp_path / "started"
+    started_dir.mkdir()
+    port = _free_port()
+    lock_path = str(_store_lock_file(tmp_path))
+
+    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+        run_id = _submit_home_job(port, 1.0)
+        _wait_until(server, lambda: (started_dir / "1.0").exists(), "its job's simulation starts")
+
+        second = subprocess.run(
+            [sys.executable, "-c", WEB_START, "--port", str(_free_port())],
+            cwd=tmp_path,
+            env={**os.environ, "HOME": str(tmp_path), "COLUMNS": "1000"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert second.returncode == 1, second.stderr
+        assert lock_path in second.stderr
+        assert re.search(rf"(?<!\d){server.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
+        assert "Traceback" not in second.stderr
+        assert _run_status(port, run_id) == "running"
+
+
+def test_web_start_debug_serves_the_dashboard(tmp_path: Path) -> None:
+    """B13: werkzeug's reloader binds the port at once, and the process it serves from accepts the queued request once it serves."""
+    port = _free_port()
+
+    with _server(tmp_path, WEB_START, "--debug", "--port", str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+
+        assert _dashboard_status(port) == 200
+
+
+def test_web_start_debug_serves_again_after_a_source_file_changes_from_a_restarted_process_that_retakes_the_store(
+    tmp_path: Path,
+) -> None:
+    """The reloader restarts the serving process when a module it imported changes, and the restarted process can take the store only once the one before it has exited.
+
+    source_file.py starts dated to the epoch, so its change is newer than the time the reloader recorded at any clock resolution.
+    """
+    source_file = tmp_path / "source_file.py"
+    source_file.write_text("")
+    os.utime(source_file, (0, 0))
+    port = _free_port()
+
+    with _server(tmp_path, WEB_START_IMPORTING_SOURCE_FILE, "--debug", "--port", str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+        assert _dashboard_status(port) == 200
+        first_holder = _store_holder_pid(tmp_path)
+        assert first_holder not in (None, server.pid)
+
+        source_file.write_text("CHANGED = True\n")
+        _wait_until(
+            server,
+            lambda: _store_holder_pid(tmp_path) not in (None, first_holder),
+            "a restarted serving process takes the store",
+        )
+        assert _dashboard_status(port) == 200

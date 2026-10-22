@@ -53,6 +53,7 @@ web = [
     "plotly>=6.7.0",
     "pyarrow>=24.0.0",
     "anthropic>=0.105.2",  # streaming chat endpoint in web/assistant.py (imported lazily)
+    "werkzeug>=3.1.8",
 ]
 e2e = [
     "playwright>=1.61.0",
