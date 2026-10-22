@@ -1846,6 +1846,28 @@ class _DistributionSampler:
             return _nearest_count(value, spec, setting)
         return value
 
+    def sample_hour(self, spec: DistributionSpec, setting: str) -> Optional[float]:
+        """Sample an hour of the day for *setting* from *spec*, as sample does, refusing an infinity or a NaN whichever spec gives it.
+
+        A home's EVConfig holds its hours as whole numbers, which neither can be
+        made into. sample refuses one only when a normal or uniform spec draws it,
+        so this also refuses a fixed value, and a weighted discrete or shuffled
+        pool outcome. A value that is not a float, as a listed int, bool or string
+        outcome can be, is returned as sample gives it.
+
+        Args:
+            spec: The setting's distribution specification
+            setting: The setting's path in the fleet distribution, e.g. 'ev.arrival_hour'
+
+        Raises:
+            ConfigurationError: As sample does, or for an infinite or NaN hour,
+                naming *setting* and the hour.
+        """
+        hour = self.sample(spec, setting)
+        if isinstance(hour, float) and not math.isfinite(hour):
+            raise ConfigurationError(f"{setting} must be a finite number, got {hour!r}")
+        return hour
+
     def sample_with_context(
         self, spec: DistributionSpec, context: dict[str, Optional[float]], setting: str
     ) -> Optional[float]:
@@ -1908,8 +1930,10 @@ def generate_homes_from_distribution(
             setting; if a normal or uniform draw is not a finite number, naming the
             setting and the draw; if load.household_occupants is a normal or uniform
             with no whole number from its min to its max, naming it, the min and the
-            max; if a sampled PV capacity is not positive; or if a sampled heat pump
-            type is not one of heat_pump.HEAT_PUMP_TYPES.
+            max; if a sampled PV capacity is not positive; if a sampled heat pump
+            type is not one of heat_pump.HEAT_PUMP_TYPES; or if an EV hour is an
+            infinity or a NaN, whichever spec gives it, naming its setting and the
+            hour.
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
             if load.household_occupant_count refuses a home's household occupants.
@@ -2033,8 +2057,10 @@ def generate_homes_from_distribution(
         if config.ev is not None:
             charger_type = sampler.sample(config.ev.charger_type, "ev.charger_type")
             if charger_type is not None:
-                arrival_hour_val = sampler.sample(config.ev.arrival_hour, "ev.arrival_hour")
-                departure_hour_val = sampler.sample(config.ev.departure_hour, "ev.departure_hour")
+                arrival_hour_val = sampler.sample_hour(config.ev.arrival_hour, "ev.arrival_hour")
+                departure_hour_val = sampler.sample_hour(
+                    config.ev.departure_hour, "ev.departure_hour"
+                )
                 required_charge_val = sampler.sample(
                     config.ev.required_charge_kwh, "ev.required_charge_kwh"
                 )
