@@ -65,8 +65,11 @@ def surface_form(obj: object) -> str:
     A class whose constructor inspect reads differently by minor raises TypeError naming
     it and the class in its MRO holding that constructor; so does a routine that wraps
     such a class, through a functools.partial, a bound method or a functools.wraps
-    wrapper, unless one of them carries a __signature__, which inspect reads as given.
-    _refuse_minor_dependent_constructor lists the constructors it refuses.
+    wrapper, unless one of them carries an inspect.Signature as its __signature__, which
+    inspect reads as given. Any other __signature__ counts as none for these refusals,
+    since Python 3.12 and 3.13 convert a string or call a callable given there and 3.11
+    and 3.14 refuse either. _refuse_minor_dependent_constructor lists the constructors it
+    refuses.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -528,8 +531,12 @@ def _chain_end(
 
 
 def _carries_signature(obj: object) -> bool:
-    """Whether *obj* carries a signature in its __signature__, which inspect.signature reads as given, whatever *obj* wraps; a __signature__ of None is none."""
-    return getattr(obj, "__signature__", None) is not None
+    """Whether *obj* carries a signature: an inspect.Signature as its __signature__, the one value inspect.signature reads as given on every admitted minor, whatever *obj* is or wraps.
+
+    Any other __signature__ is none: None, or a string or a callable, which Python 3.12
+    and 3.13 convert or call and 3.11 and 3.14 refuse.
+    """
+    return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
