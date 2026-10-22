@@ -143,11 +143,11 @@ def test_the_job_collects_its_suite_and_nothing_else(
 ) -> None:
     """Run as the lane runs it, the job collects at least one test, every one in its suite.
 
-    The repo's pytest addopts stay in force, as they do in the lane, so a job
-    whose suite they --ignore, as they do tests/e2e, collects it only by naming
-    it explicitly. The job's uv environment is fresh, as the lane's is, and
-    shared only with probes whose uv run options are the same, so it holds only
-    the extras the job names.
+    The repo's pytest addopts stay in force, as they do in the lane. A suite
+    that tests/conftest.py's collect_ignore names, as it names tests/e2e, is
+    collected only because the job names it explicitly. The job's uv
+    environment is fresh, as the lane's is, and shared only with probes whose
+    uv run options are the same, so it holds only the extras the job names.
     """
     collection = collect_lane_job(project_root, job.name, env_for=shared_uv_probe_environments.for_command)
 

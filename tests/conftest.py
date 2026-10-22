@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
-collect_ignore = ["interpreter_matrix", "css_build", "newest_releases"]
+collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
