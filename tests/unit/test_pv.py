@@ -195,9 +195,9 @@ class TestSimulatePVOutput:
     """Test simulate_pv_output function."""
 
     @pytest.fixture
-    def sample_weather_data(self, clear_june_daytime: pd.DataFrame) -> pd.DataFrame:
+    def sample_weather_data(self) -> pd.DataFrame:
         """The clear June daytime, with air temperature and wind that rise and fall through the day."""
-        return clear_june_daytime.assign(
+        return clear_june_daytime().assign(
             temp_air=[15, 17, 19, 21, 23, 24, 24, 23, 21, 19, 17, 15],
             wind_speed=[2, 2, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2],
         )
@@ -218,13 +218,11 @@ class TestSimulatePVOutput:
         # Peak should not exceed system capacity by much
         assert output.max() < config.capacity_kw * 1.2  # Allow some tolerance
 
-    def test_an_undersized_inverter_clips_the_ac_at_its_rating(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_an_undersized_inverter_clips_the_ac_at_its_rating(self) -> None:
         config = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.0)
         rating_kw = create_pv_system(config).inverter_parameters["Paco"] / 1000
 
-        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
 
         assert peak_kw == pytest.approx(rating_kw), (
             f"{config.capacity_kw} kW of modules on a {rating_kw:.3f} kW inverter peaked at "
@@ -350,7 +348,6 @@ def _usable_cec_inverter_numbers() -> pd.DataFrame:
     return numbers[((numbers > 0) & np.isfinite(numbers)).all(axis=1)]
 
 
-@pytest.fixture
 def clear_june_daytime() -> pd.DataFrame:
     """Hourly weather for a cloudless midsummer day, 06:00-17:00 London time."""
     index = pd.date_range("2024-06-21 06:00", periods=12, freq="1h", tz="Europe/London")
@@ -366,7 +363,6 @@ def clear_june_daytime() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
 def overcast_january_daytime() -> pd.DataFrame:
     """Hourly weather for a dull midwinter day, 08:00-16:00 London time, diffuse light only."""
     index = pd.date_range("2024-01-15 08:00", periods=9, freq="1h", tz="Europe/London")
@@ -377,20 +373,15 @@ def overcast_january_daytime() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
-def sapm_module() -> dict[str, float]:
-    return sapm_library_module()
+CLEAR_AND_OVERCAST_DAYS = [
+    pytest.param(day, id=day.__name__) for day in (clear_june_daytime, overcast_january_daytime)
+]
 
 
-@pytest.fixture
-def rated_sapm_module(sapm_module: dict[str, float]) -> dict[str, float]:
-    """sapm_module rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
-    return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
-
-
-@pytest.fixture
-def module_beyond_every_mppt_window() -> dict[str, float]:
-    return default_module_beyond_every_mppt_window()
+def rated_sapm_module() -> dict[str, float]:
+    """sapm_library_module() rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
+    module = sapm_library_module()
+    return {**module, "STC": module["Impo"] * module["Vmpo"]}
 
 
 class TestInverterMatchesStringVoltage:
@@ -469,13 +460,15 @@ class TestInverterMatchesStringVoltage:
     @pytest.mark.parametrize("config", SYSTEM_SIZE_CONFIGS, ids=_config_id)
     @pytest.mark.parametrize(
         ("day", "floor"),
-        [("clear_june_daytime", 0.92), ("overcast_january_daytime", 0.5)],
-        ids=["clear", "overcast"],
+        [
+            pytest.param(clear_june_daytime, 0.92, id="clear"),
+            pytest.param(overcast_january_daytime, 0.5, id="overcast"),
+        ],
     )
     def test_ac_energy_stays_a_physical_fraction_of_a_flat_inverter_of_the_same_rating(
-        self, request: pytest.FixtureRequest, config: PVConfig, day: str, floor: float
+        self, config: PVConfig, day: Callable[[], pd.DataFrame], floor: float
     ) -> None:
-        weather = request.getfixturevalue(day)
+        weather = day()
         flat_inverter = create_simple_inverter_params(
             efficiency=FLAT_INVERTER_EFFICIENCY,
             capacity_w=config.effective_inverter_capacity_kw * 1000,
@@ -490,7 +483,7 @@ class TestInverterMatchesStringVoltage:
         ceiling = 1 / FLAT_INVERTER_EFFICIENCY
         assert floor <= ratio <= ceiling, (
             f"{config.capacity_kw} kW dc on a {config.effective_inverter_capacity_kw} kW "
-            f"inverter on the {day} gave {actual_kwh:.3f} kWh, {ratio:.3f} of the flat-"
+            f"inverter on the {day.__name__} gave {actual_kwh:.3f} kWh, {ratio:.3f} of the flat-"
             f"{FLAT_INVERTER_EFFICIENCY:.0%} reference's {reference_kwh:.3f} kWh "
             f"(physical range {floor} to {ceiling:.4f})"
         )
@@ -505,12 +498,10 @@ class TestInverterMatchesStringVoltage:
         with pytest.raises(ValueError, match="MPPT window"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module))
 
-    def test_a_sapm_module_needs_an_explicit_inverter(
-        self, rated_sapm_module: dict[str, float]
-    ) -> None:
+    def test_a_sapm_module_needs_an_explicit_inverter(self) -> None:
         """A SAPM module has no V_mp_ref to voltage-match a CEC inverter to, and no pdc0 and gamma_pdc for a PVWatts inverter."""
         with pytest.raises(ValueError, match="custom_inverter_params"):
-            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module))
+            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module()))
 
 
 class TestBatteryInverterChargersAreNotPicked:
@@ -525,10 +516,10 @@ class TestBatteryInverterChargersAreNotPicked:
     @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize("config", NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS, ids=_config_id)
     def test_strings_deliver_a_clear_summer_days_dc_energy_above_the_mppt_floor(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig
     ) -> None:
         chain = create_model_chain(config, Location.bristol())
-        chain.run_model(clear_june_daytime)
+        chain.run_model(clear_june_daytime())
         floor_v = chain.system.inverter_parameters["Mppt_low"]
 
         arrays = per_array(chain.results.dc)
@@ -669,12 +660,12 @@ class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
 
     @pytest.mark.parametrize("module_power_w", [250.0, 400.0, 500.0])
-    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    @pytest.mark.parametrize("day", CLEAR_AND_OVERCAST_DAYS)
     def test_yields_the_energy_per_kwp_of_the_default_module(
-        self, request: pytest.FixtureRequest, module_power_w: float, day: str
+        self, module_power_w: float, day: Callable[[], pd.DataFrame]
     ) -> None:
         """Each rating divides 4 kW exactly, so every system wires the same 4 kW as the default's 10 x 400.4 W."""
-        weather = request.getfixturevalue(day)
+        weather = day()
         default = PVConfig(capacity_kw=4.0)
         pvwatts = dataclasses.replace(
             default,
@@ -686,37 +677,34 @@ class TestPVWattsModule:
 
         ratio = pvwatts_kwh / default_kwh
         assert 0.9 <= ratio <= 1.1, (
-            f"4 kW of {module_power_w:.0f} W PVWatts modules on the {day} gave "
+            f"4 kW of {module_power_w:.0f} W PVWatts modules on the {day.__name__} gave "
             f"{pvwatts_kwh:.3f} kWh, {ratio:.3f} of the default module's {default_kwh:.3f} kWh"
         )
 
-    def test_the_automatic_inverter_clips_at_the_configured_ac_capacity(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_the_automatic_inverter_clips_at_the_configured_ac_capacity(self) -> None:
         config = PVConfig(
             capacity_kw=4.0,
             inverter_capacity_kw=3.0,
             custom_module_params=create_simple_module_params(),
         )
 
-        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
 
         assert peak_kw == pytest.approx(3.0), (
             f"a 3 kW inverter on 4 kW of modules peaked at {peak_kw:.3f} kW"
         )
 
-    def test_the_automatic_inverter_runs_at_the_configured_efficiency(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_the_automatic_inverter_runs_at_the_configured_efficiency(self) -> None:
         at_96_percent = PVConfig(
             capacity_kw=4.0,
             inverter_efficiency=0.96,
             custom_module_params=create_simple_module_params(),
         )
         at_90_percent = dataclasses.replace(at_96_percent, inverter_efficiency=0.90)
+        weather = clear_june_daytime()
 
-        kwh_at_96_percent = simulate_pv_output(at_96_percent, Location.bristol(), clear_june_daytime).sum()
-        kwh_at_90_percent = simulate_pv_output(at_90_percent, Location.bristol(), clear_june_daytime).sum()
+        kwh_at_96_percent = simulate_pv_output(at_96_percent, Location.bristol(), weather).sum()
+        kwh_at_90_percent = simulate_pv_output(at_90_percent, Location.bristol(), weather).sum()
 
         assert kwh_at_90_percent / kwh_at_96_percent == pytest.approx(0.90 / 0.96, rel=0.01), (
             f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
@@ -747,14 +735,15 @@ class TestCecInverterEfficiency:
 
     @pytest.mark.parametrize("capacity_kw", [3.68, 5.0])
     def test_ac_energy_rises_with_the_configured_efficiency_through_the_default(
-        self, capacity_kw: float, clear_june_daytime: pd.DataFrame
+        self, capacity_kw: float
     ) -> None:
         efficiencies = (0.95, 0.955, 0.96, 0.965, 0.97)
+        weather = clear_june_daytime()
         kwh = [
             simulate_pv_output(
                 PVConfig(capacity_kw=capacity_kw, inverter_efficiency=efficiency),
                 Location.bristol(),
-                clear_june_daytime,
+                weather,
             ).sum()
             for efficiency in efficiencies
         ]
@@ -793,16 +782,14 @@ class TestInverterModelMatchesModuleModel:
         with pytest.raises(ValueError, match="PVWatts"):
             create_model_chain(config, Location.bristol())
 
-    def test_a_pvwatts_module_takes_custom_pvwatts_inverter_parameters(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_a_pvwatts_module_takes_custom_pvwatts_inverter_parameters(self) -> None:
         config = PVConfig(
             capacity_kw=4.0,
             custom_module_params=create_simple_module_params(),
             custom_inverter_params=create_pvwatts_inverter_params(capacity_w=3000.0),
         )
 
-        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
 
         assert peak_kw == pytest.approx(3.0), (
             f"a custom 3 kW PVWatts inverter on 4 kW of PVWatts modules peaked at {peak_kw:.3f} kW"
@@ -901,11 +888,11 @@ class TestWiredDcCapacity:
         ids=["voltage-matched-inverter", "custom-sandia-inverter"],
     )
     def test_a_module_with_neither_pdc0_nor_stc_is_refused(
-        self, custom_inverter_params: dict[str, float] | None, sapm_module: dict[str, float]
+        self, custom_inverter_params: dict[str, float] | None
     ) -> None:
         config = PVConfig(
             capacity_kw=4.0,
-            custom_module_params=sapm_module,
+            custom_module_params=sapm_library_module(),
             custom_inverter_params=custom_inverter_params,
         )
 
@@ -916,13 +903,20 @@ class TestWiredDcCapacity:
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
 
     @pytest.mark.parametrize(
-        "module", ["sapm_module", "rated_sapm_module", "module_beyond_every_mppt_window"]
+        "module",
+        [
+            pytest.param(sapm_library_module, id="sapm_module"),
+            pytest.param(rated_sapm_module, id="rated_sapm_module"),
+            pytest.param(
+                default_module_beyond_every_mppt_window, id="module_beyond_every_mppt_window"
+            ),
+        ],
     )
     def test_refuses_a_config_create_pv_system_refuses(
-        self, request: pytest.FixtureRequest, module: str
+        self, module: Callable[[], dict[str, float]]
     ) -> None:
         """The wired DC is that of the system create_pv_system builds, so there is none where it builds none."""
-        config = PVConfig(capacity_kw=4.0, custom_module_params=request.getfixturevalue(module))
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module())
 
         with pytest.raises(ValueError) as building:
             create_pv_system(config)
@@ -963,12 +957,12 @@ class TestSystemLossesReachTheInverterAsDCPower:
             ),
         ],
     )
-    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    @pytest.mark.parametrize("day", CLEAR_AND_OVERCAST_DAYS)
     def test_a_linear_inverter_passes_on_exactly_the_kept_fraction(
-        self, request: pytest.FixtureRequest, config: PVConfig, day: str
+        self, config: PVConfig, day: Callable[[], pd.DataFrame]
     ) -> None:
         """The simple inverter's AC is (Paco / Pdco) x DC power whatever the voltage, and 4 kW of modules never reach its 8 kW rating."""
-        weather = request.getfixturevalue(day)
+        weather = day()
         lossless = dataclasses.replace(config, system_losses=0.0)
 
         lossless_kwh = simulate_pv_output(lossless, Location.bristol(), weather).sum()
@@ -976,7 +970,7 @@ class TestSystemLossesReachTheInverterAsDCPower:
 
         assert lossless_kwh > 0
         assert kwh / lossless_kwh == pytest.approx(1 - config.system_losses, rel=1e-9), (
-            f"{config.system_losses:.4%} system losses on the {day} kept {kwh:.4f} kWh "
+            f"{config.system_losses:.4%} system losses on the {day.__name__} kept {kwh:.4f} kWh "
             f"of the lossless {lossless_kwh:.4f} kWh"
         )
 
@@ -990,7 +984,6 @@ class TestSystemLossesReachTheInverterAsDCPower:
         build: Callable[[PVConfig], pvlib.modelchain.ModelChain],
         capacity_kw: float,
         array_count: int,
-        clear_june_daytime: pd.DataFrame,
     ) -> None:
         """The Sandia and ADR inverters read v_mp, and create_pv_system matches the strings' voltage to the inverter's MPPT window."""
         config = PVConfig(capacity_kw=capacity_kw)
@@ -1001,8 +994,9 @@ class TestSystemLossesReachTheInverterAsDCPower:
             f"strings), not as the {array_count} array(s) this case covers"
         )
 
-        lossy.run_model(clear_june_daytime)
-        lossless.run_model(clear_june_daytime)
+        weather = clear_june_daytime()
+        lossy.run_model(weather)
+        lossless.run_model(weather)
 
         kept = 1 - config.system_losses
         for lossy_dc, lossless_dc in zip(
@@ -1021,12 +1015,12 @@ class TestSystemLossesReachTheInverterAsDCPower:
         ],
     )
     def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig
     ) -> None:
         """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
         chain = create_model_chain(config, Location.bristol())
 
-        chain.run_model(clear_june_daytime)
+        chain.run_model(clear_june_daytime())
 
         assert chain.results.losses == pytest.approx(1 - config.system_losses)
 
@@ -1045,12 +1039,13 @@ class TestSystemLossesReachTheInverterAsDCPower:
         ],
     )
     def test_an_inverter_limited_array_still_reaches_its_rating(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig
     ) -> None:
         """A derate of the AC instead would cap the peak below the rating and take the whole fraction of the energy."""
-        lossy = simulate_pv_output(config, Location.bristol(), clear_june_daytime)
+        weather = clear_june_daytime()
+        lossy = simulate_pv_output(config, Location.bristol(), weather)
         lossless = simulate_pv_output(
-            dataclasses.replace(config, system_losses=0.0), Location.bristol(), clear_june_daytime
+            dataclasses.replace(config, system_losses=0.0), Location.bristol(), weather
         )
         system = f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter"
 

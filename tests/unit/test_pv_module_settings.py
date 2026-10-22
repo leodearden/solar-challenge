@@ -29,24 +29,16 @@ _CEC_SINGLE_DIODE_KEYS = ("alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref",
 _PVWATTS_KEYS = ("pdc0", "gamma_pdc")
 
 
-@pytest.fixture
-def sapm_module() -> dict[str, float]:
-    return sapm_library_module()
-
-
-@pytest.fixture
 def pdc0_module_without_gamma_pdc() -> dict[str, float]:
     """A module rated by its pdc0 and STC that lacks gamma_pdc, so is not in PVWatts form."""
     return {"STC": 450.0, "pdc0": 450.0}
 
 
-@pytest.fixture
 def cec_module_without_alpha_sc() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row with no short-circuit current temperature coefficient: Adjust scales only alpha_sc, so no Adjust moves the modelled coefficient."""
     return {**default_module(), "alpha_sc": 0.0}
 
 
-@pytest.fixture
 def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row at a 3.0 eV band gap: the Adjusts that keep its photocurrent positive from -40 to 85 °C reach a modelled coefficient only from -0.0908 to -3.1151 %/K (measured), so not -0.05 %/K."""
     return {**default_module(), "EgRef": 3.0}
@@ -130,15 +122,21 @@ class TestASettingOutsideItsDomainIsRefused:
 class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
     """A set coefficient solves a CEC single-diode module's Adjust or sets a PVWatts module's gamma_pdc, so a module in neither form cannot take it."""
 
-    @pytest.mark.parametrize("module", ["sapm_module", "pdc0_module_without_gamma_pdc"])
+    @pytest.mark.parametrize(
+        "module",
+        [
+            pytest.param(sapm_library_module, id="sapm_module"),
+            pytest.param(pdc0_module_without_gamma_pdc, id="pdc0_module_without_gamma_pdc"),
+        ],
+    )
     def test_a_module_in_neither_form_is_refused_naming_the_keys_of_each(
-        self, request: pytest.FixtureRequest, module: str
+        self, module: Callable[[], dict[str, float]]
     ) -> None:
         with pytest.raises(ValueError) as refusal:
             PVConfig(
                 capacity_kw=4.0,
                 temperature_coefficient=-0.004,
-                custom_module_params=request.getfixturevalue(module),
+                custom_module_params=module(),
             )
 
         message = str(refusal.value)
@@ -162,26 +160,25 @@ class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
 
         assert config.temperature_coefficient == -0.004
 
-    def test_a_module_efficiency_has_no_form_rule(
-        self, pdc0_module_without_gamma_pdc: dict[str, float]
-    ) -> None:
+    def test_a_module_efficiency_has_no_form_rule(self) -> None:
         """A module in neither form takes an efficiency over its rating, its STC; it has no V_mp_ref to voltage-match a CEC inverter to, so it takes custom inverter parameters."""
+        module = pdc0_module_without_gamma_pdc()
         efficiency = 0.15
         config = PVConfig(
             capacity_kw=4.0,
             module_efficiency=efficiency,
-            custom_module_params=pdc0_module_without_gamma_pdc,
+            custom_module_params=module,
             custom_inverter_params=create_pvwatts_inverter_params(),
         )
 
         for array in create_pv_system(config).arrays:
             assert array.module_parameters["A_c"] == pytest.approx(
-                pdc0_module_without_gamma_pdc["STC"] / (efficiency * 1000)
+                module["STC"] / (efficiency * 1000)
             )
             assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(
                 efficiency
             )
-            _assert_equal_apart_from(array.module_parameters, pdc0_module_without_gamma_pdc, {"A_c"})
+            _assert_equal_apart_from(array.module_parameters, module, {"A_c"})
 
 
 class TestASetEfficiencySetsTheModulesArea:
@@ -314,15 +311,24 @@ class TestASetTemperatureCoefficientActsOnAClearDay:
 class TestACoefficientNoAdjustReachesIsRefusedAtUse:
     @pytest.mark.parametrize(
         ("module", "coefficient"),
-        [("cec_module_without_alpha_sc", -0.004), ("cec_module_with_a_wide_band_gap", -0.0005)],
+        [
+            pytest.param(
+                cec_module_without_alpha_sc, -0.004, id="cec_module_without_alpha_sc--0.004"
+            ),
+            pytest.param(
+                cec_module_with_a_wide_band_gap,
+                -0.0005,
+                id="cec_module_with_a_wide_band_gap--0.0005",
+            ),
+        ],
     )
     def test_naming_the_field_and_its_value(
-        self, request: pytest.FixtureRequest, module: str, coefficient: float
+        self, module: Callable[[], dict[str, float]], coefficient: float
     ) -> None:
         config = PVConfig(
             capacity_kw=4.0,
             temperature_coefficient=coefficient,
-            custom_module_params=request.getfixturevalue(module),
+            custom_module_params=module(),
         )
 
         with pytest.raises(ValueError) as building:
