@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 import pvlib
 import pytest
-from solar_challenge.location import Location
 from solar_challenge.pv import (
     DEFAULT_CEC_MODULE,
     PVConfig,
@@ -23,10 +22,9 @@ from solar_challenge.pv import (
     create_pv_system,
     create_pvwatts_inverter_params,
     create_simple_module_params,
-    simulate_pv_output,
     wired_dc_capacity_kw,
 )
-from tests._synthetic_weather import synthetic_june_weather
+from tests._pv_runs import clear_day_kwh
 
 _CEC_SINGLE_DIODE_KEYS = ("alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref", "R_s", "Adjust")
 _PVWATTS_KEYS = ("pdc0", "gamma_pdc")
@@ -62,18 +60,9 @@ def cec_module_with_a_wide_band_gap(default_module: dict[str, float]) -> dict[st
 
 
 @pytest.fixture(scope="module")
-def clear_day() -> pd.DataFrame:
-    return synthetic_june_weather("2024-06-21")
-
-
-@pytest.fixture(scope="module")
-def default_clear_day_kwh(clear_day: pd.DataFrame) -> float:
+def default_clear_day_kwh() -> float:
     """The default 4 kW's energy on the clear day: 26.8194 kWh."""
-    return _clear_day_kwh(PVConfig(capacity_kw=4.0), clear_day)
-
-
-def _clear_day_kwh(config: PVConfig, clear_day: pd.DataFrame) -> float:
-    return float(simulate_pv_output(config, Location.bristol(), clear_day).sum())
+    return clear_day_kwh(PVConfig(capacity_kw=4.0))
 
 
 def _p_mp_w(module: Mapping[str, float], cell_temperatures_c: list[float]) -> np.ndarray:
@@ -244,10 +233,10 @@ class TestASetEfficiencySetsTheModulesArea:
             assert array.module_parameters == module
 
     def test_a_less_efficient_module_runs_hotter_so_yields_less_on_a_clear_day(
-        self, clear_day: pd.DataFrame, default_clear_day_kwh: float
+        self, default_clear_day_kwh: float
     ) -> None:
         """Measured x0.990086 of the default's 26.8194 kWh."""
-        kwh = _clear_day_kwh(PVConfig(capacity_kw=4.0, module_efficiency=0.10), clear_day)
+        kwh = clear_day_kwh(PVConfig(capacity_kw=4.0, module_efficiency=0.10))
 
         assert kwh <= 0.995 * default_clear_day_kwh, (
             f"4 kW at a module efficiency of 0.10 gave {kwh:.4f} kWh, "
@@ -280,10 +269,7 @@ class TestASetTemperatureCoefficientOnACecModule:
             _assert_equal_apart_from(module, default_module, {"Adjust", "gamma_r"})
 
     def test_the_rows_own_coefficient_gives_back_the_row(
-        self,
-        default_module: dict[str, float],
-        clear_day: pd.DataFrame,
-        default_clear_day_kwh: float,
+        self, default_module: dict[str, float], default_clear_day_kwh: float
     ) -> None:
         """The row's own modelled coefficient at a 0.5 K half-width is -0.34730 %/K, beside its catalogue gamma_r of -0.3448."""
         config = PVConfig(
@@ -295,7 +281,7 @@ class TestASetTemperatureCoefficientOnACecModule:
             assert array.module_parameters["Adjust"] == pytest.approx(
                 default_module["Adjust"], abs=1e-6
             )
-        assert _clear_day_kwh(config, clear_day) == pytest.approx(default_clear_day_kwh, rel=1e-9)
+        assert clear_day_kwh(config) == pytest.approx(default_clear_day_kwh, rel=1e-9)
 
 
 class TestASetTemperatureCoefficientOnAPvwattsModule:
@@ -312,21 +298,17 @@ class TestASetTemperatureCoefficientOnAPvwattsModule:
 class TestASetTemperatureCoefficientActsOnAClearDay:
     """The clear day's cells run above 25 °C, so a steeper coefficient yields less; over a Bristol year they run mostly below it, so no annual direction holds (docs/pv-module-settings.md)."""
 
-    def test_a_steeper_coefficient_yields_less(
-        self, clear_day: pd.DataFrame, default_clear_day_kwh: float
-    ) -> None:
+    def test_a_steeper_coefficient_yields_less(self, default_clear_day_kwh: float) -> None:
         """Measured x0.978618 of the default's 26.8194 kWh at -0.005 per K."""
-        kwh = _clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.005), clear_day)
+        kwh = clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.005))
 
         assert kwh <= 0.985 * default_clear_day_kwh, (
             f"-0.005 per K gave {kwh:.4f} kWh, the default {default_clear_day_kwh:.4f} kWh"
         )
 
-    def test_a_shallower_coefficient_yields_more(
-        self, clear_day: pd.DataFrame, default_clear_day_kwh: float
-    ) -> None:
+    def test_a_shallower_coefficient_yields_more(self, default_clear_day_kwh: float) -> None:
         """Measured x1.006607 of the default's at -0.003 per K."""
-        kwh = _clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003), clear_day)
+        kwh = clear_day_kwh(PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003))
 
         assert kwh > default_clear_day_kwh, (
             f"-0.003 per K gave {kwh:.4f} kWh, the default {default_clear_day_kwh:.4f} kWh"

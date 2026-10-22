@@ -8,7 +8,6 @@ docs/pv-cell-temperature.md records the decision and its measurements.
 
 import math
 from collections.abc import Callable
-from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -25,30 +24,14 @@ from solar_challenge.pv import (
     simulate_pv_output,
     wired_dc_capacity_kw,
 )
-from tests._synthetic_weather import synthetic_june_weather
-
-_PerArray = TypeVar("_PerArray", pd.Series, pd.DataFrame)
+from tests._pv_runs import clear_day_kwh, clear_day_weather, per_array
 
 _PVWATTS_300_W_MODULE = {"pdc0": 300.0, "gamma_pdc": -0.004}
 
 
 @pytest.fixture
-def clear_day() -> pd.DataFrame:
-    return synthetic_june_weather("2024-06-21")
-
-
-@pytest.fixture
 def default_module() -> dict[str, float]:
     return cec_module_params(DEFAULT_CEC_MODULE)
-
-
-def _per_array(result: _PerArray | tuple[_PerArray, ...]) -> tuple[_PerArray, ...]:
-    """A run's result for each array: pvlib gives a tuple for several arrays and a bare value for one."""
-    return result if isinstance(result, tuple) else (result,)
-
-
-def _clear_day_kwh(config: PVConfig, clear_day: pd.DataFrame) -> float:
-    return float(simulate_pv_output(config, Location.bristol(), clear_day).sum())
 
 
 class TestCellTemperatureIsNoctSamFromTheModule:
@@ -74,19 +57,19 @@ class TestCellTemperatureIsNoctSamFromTheModule:
         self,
         capacity_kw: float,
         array_count: int,
-        clear_day: pd.DataFrame,
         default_module: dict[str, float],
     ) -> None:
         """Sunless hours compare equal: noct_sam's cell temperature is NaN in each of them."""
+        clear_day = clear_day_weather()
         chain = create_model_chain(PVConfig(capacity_kw=capacity_kw), Location.bristol())
         assert len(chain.system.arrays) == array_count
 
         chain.run_model(clear_day)
 
         for cell_temperature, total_irrad, effective_irradiance in zip(
-            _per_array(chain.results.cell_temperature),
-            _per_array(chain.results.total_irrad),
-            _per_array(chain.results.effective_irradiance),
+            per_array(chain.results.cell_temperature),
+            per_array(chain.results.total_irrad),
+            per_array(chain.results.effective_irradiance),
             strict=True,
         ):
             noct_sam = pvlib.temperature.noct_sam(
@@ -99,14 +82,14 @@ class TestCellTemperatureIsNoctSamFromTheModule:
             )
             pd.testing.assert_series_equal(cell_temperature, noct_sam, check_names=False)
 
-    def test_the_default_4kw_clear_day_energy_is_noct_sams(self, clear_day: pd.DataFrame) -> None:
+    def test_the_default_4kw_clear_day_energy_is_noct_sams(self) -> None:
         """x1.031 the 26.0119 kWh of SAPM's generic open-rack glass/glass set (docs/pv-cell-temperature.md §3)."""
-        assert _clear_day_kwh(PVConfig.default_4kw(), clear_day) == pytest.approx(26.819, rel=1e-3)
+        assert clear_day_kwh(PVConfig.default_4kw()) == pytest.approx(26.819, rel=1e-3)
 
-    def test_a_less_efficient_module_runs_hotter_so_yields_less(self, clear_day: pd.DataFrame) -> None:
+    def test_a_less_efficient_module_runs_hotter_so_yields_less(self) -> None:
         def kwh_at(efficiency: float) -> float:
             module = create_simple_module_params(efficiency=efficiency)
-            return _clear_day_kwh(PVConfig(capacity_kw=4.0, custom_module_params=module), clear_day)
+            return clear_day_kwh(PVConfig(capacity_kw=4.0, custom_module_params=module))
 
         kwh_at_10_percent, kwh_at_22_percent = kwh_at(0.10), kwh_at(0.22)
 
@@ -166,10 +149,9 @@ class TestCellTemperatureIsNoctSamFromTheModule:
             ),
         ],
     )
-    def test_the_ac_is_finite_every_hour_and_zero_without_sun(
-        self, config: PVConfig, clear_day: pd.DataFrame
-    ) -> None:
+    def test_the_ac_is_finite_every_hour_and_zero_without_sun(self, config: PVConfig) -> None:
         """Where noct_sam's cell temperature is NaN, pvlib fills the DC or AC with 0, so no NaN reaches an energy total."""
+        clear_day = clear_day_weather()
         ac_kw = simulate_pv_output(config, Location.bristol(), clear_day)
 
         assert np.isfinite(ac_kw).all(), ac_kw[~np.isfinite(ac_kw)]
