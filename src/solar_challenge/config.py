@@ -10,13 +10,13 @@ import math
 import random
 import re
 import warnings
-from dataclasses import MISSING, asdict, dataclass, field, fields, replace
+from dataclasses import MISSING, Field, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
+    ClassVar,
     Collection,
     Generic,
     Iterator,
@@ -45,9 +45,6 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.weather import default_weather
-
-if TYPE_CHECKING:
-    from _typeshed import DataclassInstance
 
 
 #: Dispatch strategy names recognised by the simulation engine.
@@ -795,7 +792,13 @@ class SubBlock:
     write: Callable[[Any], dict[str, Any]]
 
 
-_Component = TypeVar("_Component", bound="DataclassInstance")
+class _DataclassInstance(Protocol):
+    """An instance of any dataclass: what dataclasses.fields reads the fields of."""
+
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+
+_Component = TypeVar("_Component", bound=_DataclassInstance)
 
 
 @dataclass(frozen=True)
