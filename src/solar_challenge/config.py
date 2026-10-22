@@ -1219,6 +1219,10 @@ def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Opti
 
 _HOME_SCALAR_KEYS: tuple[str, ...] = ("name", "dispatch_strategy")
 
+#: The home scalars whose null parse_home_block hands on to HomeConfig rather than reading it as
+#: absent: a null dispatch_strategy is held as None until task 787's reader reads it.
+_HOME_SCALARS_HANDING_ON_NULL: frozenset[str] = frozenset({"dispatch_strategy"})
+
 _HOME_BLOCK_KEYS: frozenset[str] = frozenset({
     *_HOME_SCALAR_KEYS, "pv", "battery", "load", "tariff", "heat_pump", "ev",
 })
@@ -1229,9 +1233,9 @@ def parse_home_block(
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
-    A key the block omits takes HomeConfig's declared default, and so does a null name; a null
-    dispatch_strategy is handed on, for task 787's reader. An omitted pv or load block reads as an
-    empty one.
+    A key the block omits takes HomeConfig's declared default, and so does a null scalar other than
+    those _HOME_SCALARS_HANDING_ON_NULL names, which are handed on. An omitted pv or load block
+    reads as an empty one.
     """
     home = _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
     return HomeConfig(
@@ -1253,7 +1257,7 @@ def parse_home_block(
         **{
             key: home[key]
             for key in _HOME_SCALAR_KEYS
-            if key in home and (home[key] is not None or key == "dispatch_strategy")
+            if key in home and (home[key] is not None or key in _HOME_SCALARS_HANDING_ON_NULL)
         },
     )
 
