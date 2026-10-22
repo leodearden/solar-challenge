@@ -135,6 +135,11 @@ def _with_generation_over_demand(results: SimulationResults, ratio: float) -> Si
     )
 
 
+def _a_day_of_demand_kwh(results: SimulationResults) -> float:
+    """A day of results' own demand: its mean kW over 24 hours."""
+    return float(results.demand.mean()) * 24
+
+
 def _edges_and_whether_inside(band: tuple[float, float]) -> list[tuple[float, bool]]:
     """Each edge of band, 0.1 percentage point either side, with whether it lies inside band."""
     low, high = band
@@ -709,9 +714,7 @@ class TestSelfConsumptionBenchmarks:
             _create_minute_index(30), self_consumption_ratio=percent / 100, has_battery=True
         )
 
-        validation = validate_self_consumption_with_battery(
-            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
-        )
+        validation = validate_self_consumption_with_battery(results, battery_kwh=5.0)
 
         low, high = UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT
         assert validation.passed is passed
@@ -753,15 +756,13 @@ class TestSelfConsumptionBenchmarks:
             _create_minute_index(30), self_consumption_ratio=percent / 100, has_battery=True
         )
 
-        validation = validate_self_consumption_with_battery(
-            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
-        )
+        validation = validate_self_consumption_with_battery(results, battery_kwh=5.0)
 
         assert validation.passed is True
 
 
 class TestSelfConsumptionSizeNotes:
-    """Outside the band, a note compares the run's own generation total with its own demand total."""
+    """Outside the band, a note compares the run's own generation total with its own demand total, or a battery with a day of the run's own demand."""
 
     @pytest.mark.parametrize("pv_capacity_kw", [1.0, 6.0])
     def test_generation_twice_demand_is_pv_large_whatever_the_capacity(
@@ -802,20 +803,6 @@ class TestSelfConsumptionSizeNotes:
 
         assert "Note:" not in validation.message
 
-    def test_generation_three_times_demand_is_pv_very_large_with_a_battery(self) -> None:
-        results = _with_generation_over_demand(
-            _create_simulation_results(
-                _create_minute_index(30), self_consumption_ratio=0.20, has_battery=True
-            ),
-            3.0,
-        )
-
-        validation = validate_self_consumption_with_battery(
-            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
-        )
-
-        assert validation.message.endswith("(Note: PV very large relative to consumption)")
-
     def test_generation_with_no_demand_is_pv_large(self) -> None:
         results = _create_simulation_results(_create_minute_index(30), self_consumption_ratio=0.05)
         results = dataclasses.replace(results, demand=results.demand * 0.0)
@@ -824,6 +811,81 @@ class TestSelfConsumptionSizeNotes:
 
         assert validation.passed is False
         assert validation.message.endswith("(Note: PV large relative to consumption)")
+
+    @pytest.mark.parametrize(("generation_over_demand", "noted"), [(0.7, True), (0.9, False)])
+    def test_generation_under_0_8_of_demand_is_pv_small_with_a_battery(
+        self, generation_over_demand: float, noted: bool
+    ) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30), self_consumption_ratio=0.95, has_battery=True
+            ),
+            generation_over_demand,
+        )
+
+        validation = validate_self_consumption_with_battery(results, battery_kwh=5.0)
+
+        assert validation.message.endswith("(Note: PV small relative to consumption)") is noted
+
+    @pytest.mark.parametrize(("generation_over_demand", "noted"), [(1.9, False), (2.1, True)])
+    def test_generation_over_twice_demand_is_pv_very_large_with_a_battery(
+        self, generation_over_demand: float, noted: bool
+    ) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30), self_consumption_ratio=0.20, has_battery=True
+            ),
+            generation_over_demand,
+        )
+
+        validation = validate_self_consumption_with_battery(results, battery_kwh=5.0)
+
+        assert (
+            validation.message.endswith("(Note: PV very large relative to consumption)") is noted
+        )
+
+    @pytest.mark.parametrize(("days_of_demand", "noted"), [(0.25, True), (0.35, False)])
+    def test_a_battery_under_0_3_of_a_day_of_the_runs_own_demand_is_small(
+        self, days_of_demand: float, noted: bool
+    ) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30), self_consumption_ratio=0.20, has_battery=True
+            ),
+            1.2,
+        )
+
+        validation = validate_self_consumption_with_battery(
+            results, battery_kwh=days_of_demand * _a_day_of_demand_kwh(results)
+        )
+
+        assert (
+            validation.message.endswith("(Note: Battery small relative to daily consumption)")
+            is noted
+        )
+
+    def test_pv_very_large_outranks_a_small_battery(self) -> None:
+        results = _with_generation_over_demand(
+            _create_simulation_results(
+                _create_minute_index(30), self_consumption_ratio=0.20, has_battery=True
+            ),
+            3.0,
+        )
+
+        validation = validate_self_consumption_with_battery(
+            results, battery_kwh=0.1 * _a_day_of_demand_kwh(results)
+        )
+
+        assert validation.message.endswith("(Note: PV very large relative to consumption)")
+
+    def test_no_generation_and_no_demand_add_no_note_with_a_battery(self) -> None:
+        results = _create_simulation_results(_create_minute_index(30), pv_capacity_kw=0.0)
+        results = dataclasses.replace(results, demand=results.demand * 0.0)
+
+        validation = validate_self_consumption_with_battery(results, battery_kwh=5.0)
+
+        assert validation.passed is False
+        assert "Note:" not in validation.message
 
 
 class TestValidateSimulation:

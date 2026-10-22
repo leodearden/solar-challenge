@@ -18,10 +18,11 @@
   applied, and `expected_range` is the band.
 - Outside the band, a note may say whether the run's PV is large or small relative to
   its consumption: its own generation total over its own demand total.
-  - Until task 818 the note guessed generation as nameplate kW × 900 kWh, so one run
-    read differently under a 1 kW and a 6 kW nameplate.
   - The battery check's other note compares the battery's capacity with a day of the
-    target annual consumption.
+    run's own demand: its demand total over its days.
+  - Until task 818 the PV notes guessed generation as nameplate kW × 900 kWh, so one
+    run read differently under a 1 kW and a 6 kW nameplate. The battery note took its
+    day from the target annual consumption, which can differ from the run's demand.
 - `validate_simulation` runs the battery check for a capacity above zero, else the
   PV-only one, and neither without a target annual consumption.
 
