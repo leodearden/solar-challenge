@@ -190,8 +190,7 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
-    An immutable type, which only C code defines, has no class statement to read, so it
-    raises TypeError naming it before anything else is read.
+    An immutable type raises TypeError naming it before anything else is read.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
@@ -808,7 +807,11 @@ _PY_TPFLAGS_IMMUTABLETYPE = 1 << 8
 
 
 def _is_immutable_type(cls: type) -> bool:
-    """Whether *cls*'s flags mark it an immutable type, which only C code defines: Python marks no class a class statement or type() creates, and CPython marks every static type and many heap types it defines in C, though not all, such as ast.AST."""
+    """Whether *cls*'s flags mark it an immutable type, which only C code defines.
+
+    Python marks no class a class statement or type() creates, and CPython marks every
+    static type and many heap types it defines in C, though not all, such as ast.AST.
+    """
     return bool(cls.__flags__ & _PY_TPFLAGS_IMMUTABLETYPE)
 
 
@@ -819,9 +822,9 @@ def _class_module(cls: type) -> types.ModuleType:
     one defined inside a function, the module's globals must be those the first function
     its body compiled carries. Otherwise, as once another module of the same name has
     replaced its own in sys.modules, LookupError names *cls* and the module found. An
-    immutable type, which only C code defines, carries no source or annotation to misread,
-    and a class inside a function whose body compiled no function carries nothing to check
-    it by, so their module is looked up unchecked.
+    immutable type carries no source or annotation to misread, and a class inside a
+    function whose body compiled no function carries nothing to check it by, so their
+    module is looked up unchecked.
     """
     module = _module_named(cls.__module__, cls)
     if _is_immutable_type(cls):
@@ -1093,12 +1096,11 @@ def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
 
 
 def _refuse_immutable_type(cls: type) -> None:
-    """Raise TypeError naming *cls* if it is an immutable type, which only C code defines, so no class statement holds the __init__ and __post_init__ the scan reads."""
+    """Raise TypeError naming *cls* if it is an immutable type."""
     if _is_immutable_type(cls):
         raise TypeError(
-            f"{_label(cls)} is an immutable type, which only C code defines, so no class "
-            "statement holds an __init__ or __post_init__ to read: pass a class that a "
-            "class statement defines"
+            f"{_label(cls)} is an immutable type, so no class statement holds an __init__ "
+            "or __post_init__ to read: pass a class that a class statement defines"
         )
 
 
