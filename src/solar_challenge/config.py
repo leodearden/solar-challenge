@@ -845,7 +845,8 @@ def _built_component(
 
     Raises:
         ConfigurationError: naming by its path each key the block leaves out that has neither a
-            declared default nor a when-omitted value.
+            declared default nor a when-omitted value; or naming the block, for a value of a
+            type its dataclass cannot use, which building it refuses with a TypeError.
     """
     missing = [
         _child_path(block_path, key)
@@ -861,7 +862,10 @@ def _built_component(
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    return block.config_type(**{**block.when_omitted, **set_keys, **sub_block_configs})
+    try:
+        return block.config_type(**{**block.when_omitted, **set_keys, **sub_block_configs})
+    except TypeError as refusal:
+        raise ConfigurationError(f"{_block_label(block_path)}: {refusal}") from refusal
 
 
 def _read_component_block(
@@ -870,8 +874,9 @@ def _read_component_block(
     """The config the component block at *block_path* describes, read by *block*'s table.
 
     A key outside the table's keys is refused, null or not; a null key reads as absent; an
-    omitted key takes the table's when-omitted value, else the dataclass's declared default; and
-    a key with neither is refused by its path.
+    omitted key takes the table's when-omitted value, else the dataclass's declared default; a
+    key with neither is refused by its path; and a value of a type the dataclass cannot use is
+    refused naming the block.
     """
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 

@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     BATTERY_BLOCK,
     EV_BLOCK,
@@ -23,6 +24,7 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 
@@ -238,4 +240,30 @@ def test_a_null_required_key_is_refused_naming_its_path(
 ) -> None:
     """R1: a null required key reads as absent, so its block is refused, naming the key by its path."""
     with pytest.raises(ConfigurationError, match=re.escape(path)):
+        read(data)
+
+
+_WORDS_FOR_NUMBERS: dict[type, dict[str, str]] = {
+    PVConfig: {"azimuth": "south"},
+    BatteryConfig: {"capacity_kwh": "ten"},
+    LoadConfig: {"annual_consumption_kwh": "lots"},
+    HeatPumpConfig: {"thermal_capacity_kw": "eight"},
+    EVConfig: {"arrival_hour": "evening"},
+    Location: {"latitude": "north"},
+}
+"""For each table's dataclass, one of its numbers given as a word."""
+
+
+@pytest.mark.parametrize(
+    ("read", "data"),
+    [
+        pytest.param(read, {**base, **_WORDS_FOR_NUMBERS[block.config_type]}, id=_table_id(block))
+        for block, read, base in _PUBLIC_READINGS
+    ],
+)
+def test_a_word_for_a_number_is_refused_as_a_configuration_error(
+    read: Callable[[dict[str, Any]], object], data: dict[str, Any]
+) -> None:
+    """R1 hands a block's values to its dataclass as written: a word where it takes a number is refused as the grammar refuses a scenario, not with a raw TypeError."""
+    with pytest.raises(ConfigurationError):
         read(data)
