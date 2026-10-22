@@ -115,6 +115,8 @@ git:
   #   scripts/pvgis_outage_probe.py, defines what counts as a PVGIS outage;
   #   CLAUDE.md says how to triage a red. `timeout` caps a hung request at
   #   600 s; a run measures ~20 s: uv syncs a fresh .venv, then 11 s of tests.
+  #   outage_probe_timeout_secs is pinned here, not left to dark-factory's
+  #   default, because the probe's request timeout is sized to fit it.
   # - css-build: rebuilds static/dist/style.css in a scratch copy from the
   #   committed sources and package-lock.json (tests/css_build), and goes red
   #   when the committed file differs, e.g. after an unrebuilt
@@ -148,6 +150,7 @@ git:
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider"
       fix_task_priority: "medium"
       outage_probe: "uv run --locked --extra dev python scripts/pvgis_outage_probe.py"
+      outage_probe_timeout_secs: 180
     - name: css-build
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider"
       fix_task_priority: "medium"

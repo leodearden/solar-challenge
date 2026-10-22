@@ -52,7 +52,7 @@ _QUERY: Mapping[str, float | str] = MappingProxyType(
 """What each endpoint is asked for: the contract tests' point, and the arguments of their TMY request that get_pvgis_tmy sends PVGIS as query parameters of the same name."""
 
 _REQUEST_TIMEOUT_S = 30.0
-"""Seconds a request may take to connect, and again to answer: both requests fit dark-factory's default outage_probe_timeout_secs of 180."""
+"""Seconds a request may take to connect, and again to answer. Four times this, for both requests, plus uv's start, the imports and the name lookups it does not bound, must fit the pvgis job's outage_probe_timeout_secs in dark-factory-orchestrator.yaml."""
 
 
 @dataclass(frozen=True)

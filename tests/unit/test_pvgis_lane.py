@@ -89,6 +89,7 @@ def test_with_pvgis_out_of_reach_the_pvgis_jobs_outage_probe_reports_a_pvgis_out
     """Run as the lane runs it after a red pass, the pvgis job's outage probe reports PVGIS as the dependency that is not usable.
 
     It runs in the uv environment of the job's command, which the job's red run has synced when the lane runs the probe.
+    Here that environment may not be synced yet, so the run is given longer than the job's outage_probe_timeout_secs.
     """
     _put_pvgis_behind_the_dead_proxy(monkeypatch)
     probe = lane_outage_probe(project_root, "pvgis")
