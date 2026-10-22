@@ -28,7 +28,7 @@ from solar_challenge.web.charts import sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from solar_challenge.web.simulation_params import MAX_DAYS
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
 from tests._plotly_figure import traces
@@ -130,7 +130,7 @@ class TestSweepRoute:
         assert [text for text in texts(page) if "Sweep ID" in text] == []
 
     def test_sweep_page_days_input_allows_the_days_the_server_accepts(self, client: FlaskClient) -> None:
-        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_WINDOW_DAYS: the days parse_date_range accepts."""
+        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_DAYS: the days parse_date_range accepts."""
         page = client.get("/scenarios/sweep").get_data(as_text=True)
         days_inputs = [
             attributes
@@ -138,7 +138,7 @@ class TestSweepRoute:
             if attributes.get("x-model") == "baseConfig.days"
         ]
         assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
-            ("1", str(MAX_WINDOW_DAYS))
+            ("1", str(MAX_DAYS))
         ]
 
     def test_sweep_page_has_no_chart_card_that_nothing_draws(self, client: FlaskClient) -> None:
