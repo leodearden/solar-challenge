@@ -2,7 +2,8 @@
 """Each table of config.py's scenario grammar, a component block table, held to its dataclass."""
 
 import dataclasses
-from typing import Any
+import re
+from typing import Any, Callable
 
 import pytest
 
@@ -16,7 +17,12 @@ from solar_challenge.config import (
     ComponentBlock,
     DispatchStrategyConfig,
     GridChargeConfig,
+    parse_home_block,
+    parse_location_block,
 )
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.ev import EVConfig
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 
@@ -149,3 +155,73 @@ def test_each_battery_sub_block_reads_back_what_it_writes(key: str, value: objec
     sub_block = BATTERY_BLOCK.sub_blocks[key]
 
     assert sub_block.read(sub_block.write(value), block_path=f"home.battery.{key}") == value
+
+
+def _home_component(home_key: str, attribute: str) -> Callable[[dict[str, Any]], object]:
+    """A reader of a block as parse_home_block reads a home's *home_key* block, giving HomeConfig's *attribute*."""
+
+    def read(block: dict[str, Any]) -> object:
+        return getattr(parse_home_block({home_key: block}, Location.bristol()), attribute)
+
+    return read
+
+
+_PUBLIC_READINGS: tuple[
+    tuple[ComponentBlock[Any], Callable[[dict[str, Any]], object], dict[str, Any]], ...
+] = (
+    (PV_BLOCK, _home_component("pv", "pv_config"), {"capacity_kw": 5.0}),
+    (BATTERY_BLOCK, _home_component("battery", "battery_config"), {"capacity_kwh": 9.0}),
+    (LOAD_BLOCK, _home_component("load", "load_config"), {"annual_consumption_kwh": 3000.0}),
+    (HEAT_PUMP_BLOCK, _home_component("heat_pump", "heat_pump_config"), {"heat_pump_type": "GSHP"}),
+    (EV_BLOCK, _home_component("ev", "ev_config"), {"charger_type": "3.6kW"}),
+    (LOCATION_BLOCK, parse_location_block, {"name": "Clifton"}),
+)
+"""Each table, the public reader of its blocks, and a block of it setting one key."""
+
+_REQUIRED_KEY_PATHS: dict[tuple[type, str], str] = {
+    (HeatPumpConfig, "heat_pump_type"): "home.heat_pump.heat_pump_type",
+    (EVConfig, "charger_type"): "home.ev.charger_type",
+}
+"""The keys a block may not leave out, each by its path in a home: block."""
+
+_EVERY_TABLE_KEY = [
+    (block, read, base, key) for block, read, base in _PUBLIC_READINGS for key in block.keys
+]
+
+
+@pytest.mark.parametrize(
+    ("read", "base", "key"),
+    [
+        pytest.param(read, base, key, id=f"{block.config_type.__name__}-{key}")
+        for block, read, base, key in _EVERY_TABLE_KEY
+        if (block.config_type, key) not in _REQUIRED_KEY_PATHS
+    ],
+)
+def test_a_null_key_reads_as_absent(
+    read: Callable[[dict[str, Any]], object], base: dict[str, Any], key: str
+) -> None:
+    """R1: a block whose key is null reads as the same block without the key."""
+    without_the_key = {name: value for name, value in base.items() if name != key}
+
+    assert read({**base, key: None}) == read(without_the_key)
+
+
+@pytest.mark.parametrize(
+    ("read", "data", "path"),
+    [
+        pytest.param(
+            read,
+            {**base, key: None},
+            _REQUIRED_KEY_PATHS[block.config_type, key],
+            id=f"{block.config_type.__name__}-{key}",
+        )
+        for block, read, base, key in _EVERY_TABLE_KEY
+        if (block.config_type, key) in _REQUIRED_KEY_PATHS
+    ],
+)
+def test_a_null_required_key_is_refused_naming_its_path(
+    read: Callable[[dict[str, Any]], object], data: dict[str, Any], path: str
+) -> None:
+    """R1: a null required key reads as absent, so its block is refused, naming the key by its path."""
+    with pytest.raises(ConfigurationError, match=re.escape(path)):
+        read(data)

@@ -3,15 +3,18 @@
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
     DispatchStrategyConfig,
     GridChargeConfig,
+    load_fleet_config,
     load_home_config,
     parse_dispatch_strategy_config,
     parse_home_block,
@@ -358,14 +361,11 @@ home:
 class TestOmittedAndNullKeys:
     """A block gives its dataclass only the keys it sets, and so does the home block, to HomeConfig.
 
-    An omitted key takes the dataclass's declared default; a null is a value set, handed on and
-    never read as the default.
-
-    The null cases characterize a known gap and endorse none of it: no block checks a value, so a
-    null in a field the dataclass does not check is held as None (a null use_stochastic is falsy,
-    which selects the deterministic load profile), and a null the dataclass compares is refused by
-    its own TypeError, which names neither the key nor the block. Refusing a null at the block
-    changes these cases.
+    An omitted key takes the dataclass's declared default, or the table's when-omitted value where
+    the dataclass declares none, and a key written as null reads as absent; test_component_blocks.py
+    sweeps every key of every table. Two nulls are kept gaps, each owned by a task: a null home
+    dispatch_strategy is held as None (task 787), and a null grid_charging target_soc_fraction is
+    refused by GridChargeConfig itself (tasks 864 and 866).
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -394,110 +394,48 @@ class TestOmittedAndNullKeys:
         assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
 
     @pytest.mark.parametrize(
-        ("blocks", "attribute", "dataclass", "fields"),
+        ("blocks", "attribute", "expected"),
         [
             pytest.param(
-                {"pv": {"name": None}},
-                "pv_config",
-                PVConfig,
-                {"capacity_kw": 4.0, "name": None},
-                id="pv-name",
+                {"pv": {"tilt": None}}, "pv_config", PVConfig(capacity_kw=4.0, tilt=35.0), id="pv-tilt"
             ),
             pytest.param(
-                {"battery": {"name": None}},
-                "battery_config",
-                BatteryConfig,
-                {"capacity_kwh": 5.0, "name": None},
-                id="battery-name",
-            ),
-            pytest.param(
-                {"load": {"name": None}},
-                "load_config",
-                LoadConfig,
-                {"name": None},
-                id="load-name",
-            ),
-            pytest.param(
-                {"load": {"use_stochastic": None}},
-                "load_config",
-                LoadConfig,
-                {"use_stochastic": None},
-                id="load-use_stochastic",
+                {"heat_pump": {"heat_pump_type": "ASHP", "annual_heat_demand_kwh": None}},
+                "heat_pump_config",
+                HeatPumpConfig("ASHP", annual_heat_demand_kwh=8000.0),
+                id="heat_pump-annual_heat_demand_kwh",
             ),
         ],
     )
-    def test_a_null_in_a_field_the_dataclass_does_not_check_is_held_as_none(
-        self,
-        blocks: dict[str, Any],
-        attribute: str,
-        dataclass: Callable[..., object],
-        fields: dict[str, Any],
+    def test_a_null_key_takes_the_declared_default(
+        self, blocks: dict[str, Any], attribute: str, expected: object
     ) -> None:
-        """Known gap: a null name or use_stochastic is held as None, not replaced by the declared default."""
-        assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
+        """B4: a null tilt is a 35° array and a null annual demand an 8000 kWh heat pump, as if omitted."""
+        assert getattr(_parsed_home(**blocks), attribute) == expected
 
     @pytest.mark.parametrize("key", ["module_efficiency", "temperature_coefficient"])
     def test_a_null_module_setting_is_the_modules_own_as_an_omitted_one_is(self, key: str) -> None:
-        """PVConfig declares None, the module's own value, for both, so a null handed on is the declared default."""
+        """A null module setting reads as absent: PVConfig's declared None, the module's own value."""
         pv_config = _parsed_home(pv={key: None}).pv_config
 
         assert pv_config == PVConfig(capacity_kw=4.0)
         assert getattr(pv_config, key) is None
 
-    @pytest.mark.parametrize("key", ["name", "dispatch_strategy"])
-    def test_a_null_home_scalar_is_held_as_none(self, key: str) -> None:
-        """Known gap: HomeConfig checks no value, so a null name or dispatch_strategy is held as None, not defaulted."""
-        assert getattr(_parsed_home(**{key: None}), key) is None
+    def test_a_null_home_name_reads_as_absent(self) -> None:
+        """A null home name takes HomeConfig's declared empty name."""
+        assert _parsed_home(name=None).name == ""
 
-    @pytest.mark.parametrize(
-        ("blocks", "dataclass", "fields"),
-        [
-            pytest.param(
-                {"pv": {"capacity_kw": None}},
-                PVConfig,
-                {"capacity_kw": None},
-                id="pv-capacity_kw",
-            ),
-            pytest.param(
-                {"pv": {"azimuth": None}},
-                PVConfig,
-                {"capacity_kw": 4.0, "azimuth": None},
-                id="pv-azimuth",
-            ),
-            pytest.param(
-                {"battery": {"capacity_kwh": None}},
-                BatteryConfig,
-                {"capacity_kwh": None},
-                id="battery-capacity_kwh",
-            ),
-            pytest.param(
-                {"battery": {"max_charge_kw": None}},
-                BatteryConfig,
-                {"capacity_kwh": 5.0, "max_charge_kw": None},
-                id="battery-max_charge_kw",
-            ),
-            pytest.param(
-                {"load": {"household_occupants": None}},
-                LoadConfig,
-                {"household_occupants": None},
-                id="load-household_occupants",
-            ),
-            pytest.param(
-                {"battery": {"grid_charging": {"target_soc_fraction": None}}},
-                GridChargeConfig,
-                {"target_soc_fraction": None},
-                id="grid_charging-target_soc_fraction",
-            ),
-        ],
-    )
-    def test_a_null_the_dataclass_refuses_is_refused_as_constructing_it_refuses_it(
-        self,
-        blocks: dict[str, Any],
-        dataclass: Callable[..., object],
-        fields: dict[str, Any],
-    ) -> None:
-        """A null is not the declared default: the dataclass refuses it, with an error naming neither key nor block."""
-        assert _refusal(lambda: _parsed_home(**blocks)) == _refusal(lambda: dataclass(**fields))
+    def test_a_null_home_dispatch_strategy_is_held_as_none(self) -> None:
+        """Kept gap, task 787's: HomeConfig checks no value, so a null home dispatch_strategy is held as None, not defaulted."""
+        assert _parsed_home(dispatch_strategy=None).dispatch_strategy is None
+
+    def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
+        """Kept gap, tasks 864 and 866's: the null reaches GridChargeConfig, whose refusal names neither key nor block."""
+        grid_charging = {"target_soc_fraction": None}
+
+        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == _refusal(
+            lambda: GridChargeConfig(**grid_charging)
+        )
 
     def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:
         """The battery block reads its dispatch_strategy before its grid_charging, in whatever order the file lists them."""
@@ -654,32 +592,56 @@ class TestParseHomeBlockHeatPumpEV:
         assert result.ev_config is None, "ev_config should be None when key absent"
 
 
-class TestHeatPumpEvBlockErrors:
-    """parse_home_block refuses a heat_pump or ev block that lacks a required field, naming the field."""
+class TestHeatPumpEvRequiredAndOmittedKeys:
+    """A heat_pump or ev block may leave out every key but its type, which it is refused without, by the key's path."""
 
     def test_heat_pump_missing_heat_pump_type_raises(self) -> None:
-        """heat_pump block without heat_pump_type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="heat_pump_type"):
+        """heat_pump block without heat_pump_type raises ConfigurationError naming its path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.heat_pump.heat_pump_type")):
             _parsed_home(heat_pump={"thermal_capacity_kw": 8.0})
 
-    def test_heat_pump_missing_thermal_capacity_raises(self) -> None:
-        """heat_pump block without thermal_capacity_kw raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="thermal_capacity_kw"):
-            _parsed_home(heat_pump={"heat_pump_type": "ASHP"})
-
     def test_ev_missing_charger_type_raises(self) -> None:
-        """ev block without charger_type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="charger_type"):
+        """ev block without charger_type raises ConfigurationError naming its path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev.charger_type")):
             _parsed_home(ev={"arrival_hour": 18})
 
-    def test_ev_missing_arrival_hour_raises(self) -> None:
-        """ev block without arrival_hour raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="arrival_hour"):
-            _parsed_home(ev={"charger_type": "7kW"})
+    def test_ev_with_a_null_charger_type_raises(self) -> None:
+        """A null charger_type reads as absent, so the block is refused as one without it."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev.charger_type")):
+            _parsed_home(ev={"charger_type": None, "arrival_hour": 18})
+
+    def test_a_fleet_homes_ev_missing_charger_type_raises_naming_the_homes_place(
+        self, tmp_path: Path
+    ) -> None:
+        """Read through load_fleet_config, the path names the home by its place in the homes: list."""
+        path = tmp_path / "fleet.json"
+        path.write_text(
+            json.dumps({
+                "homes": [
+                    {"pv": {"capacity_kw": 4.0}},
+                    {"pv": {"capacity_kw": 4.0}, "ev": {"arrival_hour": 18}},
+                ]
+            })
+        )
+
+        with pytest.raises(ConfigurationError, match=re.escape("homes[1].ev.charger_type")):
+            load_fleet_config(path)
+
+    def test_a_heat_pump_block_giving_only_its_type_is_an_8_kw_heat_pump(self) -> None:
+        """B4, P10: an omitted thermal_capacity_kw takes HeatPumpConfig's declared 8 kW."""
+        heat_pump = _parsed_home(heat_pump={"heat_pump_type": "ASHP"}).heat_pump_config
+
+        assert heat_pump == HeatPumpConfig("ASHP", thermal_capacity_kw=8.0)
+
+    def test_an_ev_block_giving_only_its_charger_type_arrives_at_18(self) -> None:
+        """B4, P11: an omitted arrival_hour takes EVConfig's declared 18:00."""
+        ev = _parsed_home(ev={"charger_type": "7kW"}).ev_config
+
+        assert ev == EVConfig("7kW", arrival_hour=18)
 
 
 class TestPVBlockParsing:
-    """parse_home_block threads the pv: block's degradation keys through to PVConfig."""
+    """A home's pv: block's keys reach its PVConfig."""
 
     def test_explicit_degradation_keys_are_passed_through(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVConfig."""
@@ -691,3 +653,10 @@ class TestPVBlockParsing:
         pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 15.0
         assert pv.degradation_rate_per_year == 0.008
+
+    def test_a_home_file_sets_the_system_losses_home_run_simulates_with(self, tmp_path: Path) -> None:
+        """B1: a home file's pv: block sets system_losses, the losses `home run` simulates with."""
+        path = tmp_path / "home.yaml"
+        path.write_text("home:\n  pv:\n    capacity_kw: 4\n    system_losses: 0.05\n", encoding="utf-8")
+
+        assert home_config_for_run(path).pv_config == PVConfig(capacity_kw=4, system_losses=0.05)
