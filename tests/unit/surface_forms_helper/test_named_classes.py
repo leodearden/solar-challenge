@@ -15,6 +15,7 @@ import functools
 import gc
 import inspect
 import pathlib
+import re
 import sys
 import types
 import weakref
@@ -40,7 +41,12 @@ from typing import (
 import pytest
 
 from tests._surface_forms import named_classes, surface_form
-from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    UNREADABLE_ROUTINES,
+    Outer,
+    Preset,
+    imported_module,
+)
 
 if TYPE_CHECKING:
     from decimal import Decimal
@@ -640,13 +646,14 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
     }
 
 
-def test_a_class_with_a_partialmethod_member_raises_the_type_error_member_forms_raises_for_it() -> None:
+@pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
+def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
+    routine: object, kind: str
+) -> None:
     class Meter:
-        def settle(self, share: fractions.Fraction, rate: int) -> None: ...
+        half = routine
 
-        half = functools.partialmethod(settle, rate=1)
-
-    with pytest.raises(TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partialmethod\b"):
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
         named_classes(Meter)
 
 

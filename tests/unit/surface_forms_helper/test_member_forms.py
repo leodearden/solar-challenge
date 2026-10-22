@@ -4,9 +4,12 @@
 import abc
 import enum
 import functools
+import inspect
 import pathlib
+import re
+import types
 from dataclasses import InitVar, dataclass, field
-from typing import ClassVar, Optional
+from typing import Callable, ClassVar, Optional
 
 import pytest
 
@@ -16,7 +19,11 @@ from tests._surface_forms import (
     undeclared_attributes,
     unset_attributes,
 )
-from tests.unit.surface_forms_helper._fixtures import Preset, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    UNREADABLE_ROUTINES,
+    Preset,
+    imported_module,
+)
 
 
 def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
@@ -370,11 +377,43 @@ def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
     assert member_forms(Child) == {"reset": "(self) -> None"}
 
 
-def test_a_partialmethod_member_raises_a_type_error_naming_the_class_and_the_member() -> None:
+def test_a_callable_descriptor_member_is_spelled_by_the_signature_inspect_reads_through_the_function_it_wraps_or_the_signature_it_carries() -> None:
+    class Memoized:
+        def __init__(self, function: Callable[..., object]) -> None:
+            functools.update_wrapper(self, function)
+            self.function = function
+
+        def __get__(self, instance: object, owner: type) -> object:
+            return types.MethodType(self, instance)
+
+        def __call__(self, *args: object) -> object:
+            return self.function(*args)
+
+    class Signed:
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        )
+
+        def __get__(self, instance: object, owner: type) -> "Signed":
+            return self
+
+        def __call__(self, rate: int) -> None: ...
+
     class Meter:
-        def settle(self, site: pathlib.Path, rate: int) -> None: ...
+        @Memoized
+        def read(self, at: int) -> float: ...
 
-        half = functools.partialmethod(settle, rate=1)
+        signed = Signed()
 
-    with pytest.raises(TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partialmethod\b"):
+    assert member_forms(Meter) == {"read": "(self, at: int) -> float", "signed": "(rate: int)"}
+
+
+@pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
+def test_a_member_that_is_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_the_class_the_member_and_its_kind(
+    routine: object, kind: str
+) -> None:
+    class Meter:
+        half = routine
+
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
         member_forms(Meter)
