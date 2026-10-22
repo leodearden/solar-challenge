@@ -26,6 +26,7 @@ from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
+from tests._web_app import run_storage_of
 from tests.unit.web_assistant._fakes import seed_run
 
 
@@ -922,7 +923,7 @@ class TestRunHomeSimulationWithRealJobManager:
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
         """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
         job_manager = app.extensions["job_manager"]
-        storage = app.extensions["storage"]
+        storage = run_storage_of(app)
 
         result = run_home_simulation(
             {

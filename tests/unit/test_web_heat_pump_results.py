@@ -16,10 +16,9 @@ import pytest
 
 pytest.importorskip("flask")
 
-from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._html_page import element_ids
-from tests._web_app import build_test_app
+from tests._web_app import build_test_app, run_storage_of
 from tests._web_runs import store_home_run
 
 
@@ -30,8 +29,7 @@ def test_home_results_page_of_a_run_with_a_heat_pump_has_a_container_for_each_he
     one_day = make_sim_results(days=1)
     results = dataclasses.replace(one_day, heat_pump_load=pd.Series(0.3, index=one_day.demand.index))
     run_id = str(uuid.uuid4())
-    storage: RunStorage = app.extensions["storage"]
-    store_home_run(storage, run_id, make_home_config(), results)
+    store_home_run(run_storage_of(app), run_id, make_home_config(), results)
 
     response = app.test_client().get(f"/results/home/{run_id}")
 

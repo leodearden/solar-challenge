@@ -14,7 +14,6 @@ from solar_challenge.home import HomeConfig, SimulationResults, calculate_summar
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import Database, RunStatus
-from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
     chart_figures,
@@ -29,13 +28,8 @@ from tests._html_page import (
 )
 from tests._plotly_figure import annotations_by_text
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
+from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
-
-
-def _run_storage(app: Flask) -> RunStorage:
-    """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
-    storage: RunStorage = app.extensions["storage"]
-    return storage
 
 
 def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> HomeConfig:
@@ -65,7 +59,7 @@ def _save_home_run(
     """
     run_id = str(uuid.uuid4())
     store_home_run(
-        _run_storage(app),
+        run_storage_of(app),
         run_id,
         _home_config(name, battery_config=battery_config),
         results,
@@ -89,7 +83,7 @@ def _save_fleet_run(
     """
     run_id = str(uuid.uuid4())
     store_fleet_run(
-        _run_storage(app),
+        run_storage_of(app),
         run_id,
         FleetResults(
             per_home_results=per_home_results,

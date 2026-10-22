@@ -16,10 +16,10 @@ pytest.importorskip("flask")
 from flask import Flask
 
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType
-from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
 from tests._server_drawn_badges import server_drawn_badge, server_drawn_classes
+from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
 
 _BADGE = {"inline-flex", "items-center", "px-2.5", "py-0.5", "rounded-full", "text-xs", "font-medium"}
@@ -43,15 +43,9 @@ def _spans(app: Flask, path: str) -> list[Mapping[str, str | None]]:
     return element_attributes(response.get_data(as_text=True), "span")
 
 
-def _storage(app: Flask) -> RunStorage:
-    """The RunStorage *app* keeps its runs in, which its pages read."""
-    storage: RunStorage = app.extensions["storage"]
-    return storage
-
-
 def _save_home_run(app: Flask, run_id: str, status: RunStatus = "completed") -> None:
     """Save a 1-day home run under *run_id* to *app*'s store, with *status*."""
-    store_home_run(_storage(app), run_id, make_home_config(), make_sim_results(days=1), status=status)
+    store_home_run(run_storage_of(app), run_id, make_home_config(), make_sim_results(days=1), status=status)
 
 
 @pytest.mark.parametrize(
@@ -128,7 +122,7 @@ def test_the_compare_page_draws_each_runs_type_with_run_type_badge(
     app: Flask, macros: Any
 ) -> None:
     _save_home_run(app, "cmp-home")
-    store_fleet_run(_storage(app), "cmp-fleet", make_fleet_results(n_homes=2, days=1))
+    store_fleet_run(run_storage_of(app), "cmp-fleet", make_fleet_results(n_homes=2, days=1))
 
     spans = _spans(app, "/history/compare?ids=cmp-home,cmp-fleet")
 
