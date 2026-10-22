@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for PV ageing by calculate_degradation_factor: 1 - age x rate, floored at zero."""
+"""Tests for PV ageing: calculate_degradation_factor's 1 - age x rate, floored at zero, and apply_degradation's scaling of a generation series by it."""
 
 import math
 import re
