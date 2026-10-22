@@ -77,6 +77,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         ``StoreLock.release()`` or the end of the process. A second
         create_app on the store, in this process or another, raises
         StoreLocked naming the lock file and the holder's pid.
+        The server must still run single-worker: a process forked after
+        create_app shares its lock, so a host that forks workers from one
+        built app (e.g. ``gunicorn --preload -w 2``) gets past it, and a
+        job, whose state is in memory, goes missing from the workers that
+        did not create it.
         A host other than ``solar-challenge web start`` must call
         ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
