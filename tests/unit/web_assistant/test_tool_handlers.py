@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
+import re
 import time
 from datetime import date
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
+from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
     explain_metric,
@@ -194,6 +196,19 @@ class TestSuggestConfig:
         assert ss["recommended_battery_kwh"] > bs["recommended_battery_kwh"], (
             f"Expected self_sufficiency battery ({ss['recommended_battery_kwh']}) "
             f"> bill_savings battery ({bs['recommended_battery_kwh']})"
+        )
+
+    def test_bill_savings_sizes_pv_at_the_default_systems_bristol_yield(self) -> None:
+        """PV is sized at the yield the simulator's own default system gives in Bristol, and the note quotes it."""
+        result = suggest_config(3100.0, "bill_savings")
+
+        expected_pv_kwp = round(3100.0 / BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP, 2)
+        assert result["recommended_pv_kwp"] == expected_pv_kwp, (
+            f"Expected {expected_pv_kwp} kWp for 3100 kWh a year; got {result['recommended_pv_kwp']}"
+        )
+        note_numbers = re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", result["note"])
+        assert f"{BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}" in note_numbers, (
+            f"Expected the note to quote {BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}; got {result['note']!r}"
         )
 
 
