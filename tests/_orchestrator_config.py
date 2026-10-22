@@ -11,6 +11,7 @@ Usage::
         git_config,
         lane_command,
         lane_commands,
+        lane_outage_probe,
         offline_lane_jobs,
         verify_command,
     )
@@ -18,12 +19,13 @@ Usage::
     test_command = verify_command(project_root, "test_command")
     verify_commands = [verify_command(project_root, slot) for slot in VERIFY_SLOTS]
     e2e_job = lane_command(project_root, "e2e")
+    pvgis_outage_probe = lane_outage_probe(project_root, "pvgis")
     every_lane_job = lane_commands(project_root)
     offline_lane_enabled = git_config(project_root).get("offline_lane_enabled")
     lane_job_names = [job["name"] for job in offline_lane_jobs(project_root)]
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -89,6 +91,23 @@ def lane_command(project_root: Path, name: str) -> OrchestratorCommand:
     cwd = job.get("cwd", ".")
     assert isinstance(cwd, str), f"the cwd of the {label} is {cwd!r}, not a path string, so dark-factory rejects it"
     return OrchestratorCommand(label=label, command=job["command"], directory=project_root / cwd, role="offline")
+
+
+def lane_outage_probe(project_root: Path, name: str) -> OrchestratorCommand:
+    """Return the outage probe the offline-lane job *name* of *project_root*'s yaml declares, as the lane runs it after a red run of the job.
+
+    The rules are dark-factory's LaneCommand.outage_probe: the lane runs it with
+    `sh -c` in the job's directory, in the job's offline role. It asserts the job
+    passes lane_command's checks and declares its probe as a command string, so a
+    job whose outages the lane would file as fix tasks fails here, naming the job.
+    """
+    job = lane_command(project_root, name)
+    probe = _sole_offline_lane_job(project_root, name).get("outage_probe")
+    assert isinstance(probe, str) and probe.strip(), (
+        f"the {job.label} declares outage_probe {probe!r} (None if it declares none), not a command string, so the "
+        "lane files a fix task for every outage of the service its tests use"
+    )
+    return replace(job, label=f"outage probe of the {job.label}", command=probe)
 
 
 def lane_commands(project_root: Path) -> tuple[OrchestratorCommand, ...]:
