@@ -102,7 +102,7 @@ _MARKS_OF_TESTS_ALLOWED_ONLINE = ("slow", "e2e")
 
 @dataclass(frozen=True)
 class _OfflineWindow:
-    """What a test not marked slow or e2e runs in: its own empty weather cache, and the destinations it was refused."""
+    """What a test not marked slow or e2e runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
 
     weather_cache: WeatherCache
     refused: list[str]
@@ -115,20 +115,18 @@ _OFFLINE_WINDOW_KEY = pytest.StashKey[_OfflineWindow]()
 def _open_offline_window() -> Iterator[_OfflineWindow]:
     """Open a test's window, which closes after the test is reported, where an error would abort the session.
 
+    CACHE_DIR_VARIABLE names the window's weather cache until it closes, so default_weather() reads that cache.
     The first window imports solar_challenge.weather, before it refuses the network, so sessions that run no test never load it.
     """
-    from solar_challenge.weather import WeatherCache, set_weather_cache
+    from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 
     with (
         tempfile.TemporaryDirectory(prefix="weather-cache-", ignore_cleanup_errors=True) as cache_dir,
         refusing_network() as refused,
+        pytest.MonkeyPatch.context() as patch,
     ):
-        window = _OfflineWindow(WeatherCache(cache_dir=Path(cache_dir)), refused)
-        set_weather_cache(window.weather_cache)
-        try:
-            yield window
-        finally:
-            set_weather_cache(None)
+        patch.setenv(CACHE_DIR_VARIABLE, cache_dir)
+        yield _OfflineWindow(WeatherCache(cache_dir=Path(cache_dir)), refused)
 
 
 @pytest.hookimpl(wrapper=True)
@@ -136,11 +134,11 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     """Run each test not marked slow or e2e offline, from the setup of its first fixture to the teardown of its last.
 
     Every fixture the test sets up or tears down, whatever its scope, runs in its
-    window. There get_tmy_data reads the test's own empty weather cache, and every
-    name lookup or connection off this machine, from any thread, is refused, as is
-    every HTTP(S) request the test's child processes send through the standard
-    proxy variables. A cache another fixture installs lasts only until the window
-    closes, or until the weather_cache fixture reinstalls the test's own.
+    window. There CACHE_DIR_VARIABLE names the test's own empty weather cache, so
+    default_weather() reads it, in the test and in a child process that inherits its
+    environment. Every name lookup or connection off this machine, from any thread,
+    is refused, as is every HTTP(S) request the test's child processes send through
+    the standard proxy variables.
     """
     if any(item.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
         return (yield)
@@ -172,17 +170,14 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, object, object
 
 @pytest.fixture
 def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
-    """The test's own weather cache, empty and installed, over any cache installed before it, as the one get_tmy_data reads; seed a TMY with its put()."""
+    """The test's own empty weather cache, which default_weather() reads in the test and in a child process that inherits its environment; seed a TMY with its put()."""
     window: _OfflineWindow | None = request.node.stash.get(_OFFLINE_WINDOW_KEY, None)
     if window is None:
         pytest.fail(
-            f"{request.node.nodeid} is marked slow or e2e, so get_tmy_data reads the working directory's "
-            "weather cache; weather_cache serves a test that runs offline",
+            f"{request.node.nodeid} is marked slow or e2e, so default_weather() reads the weather cache its "
+            "environment names, else the working directory's; weather_cache serves a test that runs offline",
             pytrace=False,
         )
-    from solar_challenge.weather import set_weather_cache
-
-    set_weather_cache(window.weather_cache)
     return window.weather_cache
 
 

@@ -4,6 +4,7 @@ import multiprocessing
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -935,8 +936,18 @@ class TestMultiSweepResults:
         assert len(fr) == 1
 
 
+_Result = TypeVar("_Result")
+
+
+def _emptying_the_cache_after_the_first(results: Iterator[_Result], cache: WeatherCache) -> Iterator[_Result]:
+    """Yield results, emptying cache once the first has been drawn and before the rest are."""
+    yield next(results)
+    cache.clear()
+    yield from results
+
+
 class TestParallelFleetWeather:
-    """Parallel workers simulate each home on its location's TMY from the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals: each worker receives its home's weather in its job."""
+    """A fleet run fetches its homes' TMYs from the test's weather_cache in this process before any home runs, and each home's job carries its location's: so each home gets exactly what simulate_home gives it here, whether the run is sequential or its workers start by forkserver (Linux's default from Python 3.14) or spawn (macOS's)."""
 
     _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
     _LOAD =LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
@@ -948,20 +959,16 @@ class TestParallelFleetWeather:
         """Serve a clear 21 June as Bristol's TMY and the same day at half its irradiance as Bath's.
 
         Workers receive their weather in the job. The test runs in an empty working directory,
-        so a worker that read the default weather itself would find nothing there and write
-        nothing to the repository.
+        so whatever a worker writes under its working directory stays out of the repository.
         """
         monkeypatch.chdir(tmp_path)
         _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
         weather_cache.put(synthetic_june_weather(_JUNE_DAYS.first_day, irradiance_scale_per_day=(0.5,)), "tmy", self._BATH)
 
-    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
-    def test_fleet_gives_each_home_the_results_simulate_home_gives_it_here(
-        self, worker_start_method: str
-    ) -> None:
-        """simulate_fleet, sequential or parallel, gives a Bristol home and a Bath home exactly what simulate_home gives each in this process."""
-        start, end = _JUNE_DAYS.window(1)
-        fleet = FleetConfig(
+    @pytest.fixture
+    def bristol_and_bath_fleet(self) -> FleetConfig:
+        """A Bristol home and a Bath home, each with 4 kW of PV."""
+        return FleetConfig(
             homes=[
                 HomeConfig(
                     pv_config=PVConfig(capacity_kw=4.0),
@@ -972,28 +979,11 @@ class TestParallelFleetWeather:
                 for location in (Location.bristol(), self._BATH)
             ]
         )
-        alone = [simulate_home(home, start, end, weather=default_weather()) for home in fleet.homes]
-        assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
-            "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
-        )
 
-        for parallel in (False, True):
-            fleet_results = simulate_fleet(fleet, start, end, parallel=parallel, max_workers=2)
-            for home, in_fleet, expected in zip(fleet.homes, fleet_results.per_home_results, alone, strict=True):
-                pd.testing.assert_frame_equal(
-                    in_fleet.to_dataframe(),
-                    expected.to_dataframe(),
-                    check_exact=True,
-                    obj=f"{home.name}'s results with parallel={parallel}",
-                )
-
-    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
-    def test_multi_sweep_gives_each_home_the_results_simulate_home_gives_it_here(
-        self, worker_start_method: str
-    ) -> None:
-        """simulate_multi_sweep_iter, sequential or parallel, gives each home of a Bristol sweep and a Bath sweep exactly what simulate_home gives it in this process."""
-        start, end = _JUNE_DAYS.window(1)
-        sweeps = [
+    @pytest.fixture
+    def bristol_and_bath_sweeps(self) -> list[tuple[float, FleetConfig]]:
+        """A sweep of two Bristol homes with 2 kW of PV and a sweep of two Bath homes with 4 kW."""
+        return [
             (
                 2.0,
                 FleetConfig.create_uniform(
@@ -1014,12 +1004,89 @@ class TestParallelFleetWeather:
             ),
         ]
 
+    def test_fleet_jobs_carry_the_weather_fetched_before_the_first_home_ran(
+        self, bristol_and_bath_fleet: FleetConfig, weather_cache: WeatherCache
+    ) -> None:
+        """A sequential simulate_fleet_iter whose cache is emptied once its first home has run gives each home exactly what simulate_home gives it here: a job that read the default weather itself would find the cache empty and be refused at PVGIS."""
+        start, end = _JUNE_DAYS.window(1)
+        alone = [
+            simulate_home(home, start, end, weather=default_weather()) for home in bristol_and_bath_fleet.homes
+        ]
+
+        in_fleet = dict(
+            _emptying_the_cache_after_the_first(
+                simulate_fleet_iter(bristol_and_bath_fleet, start, end, parallel=False), weather_cache
+            )
+        )
+
+        for index, (home, expected) in enumerate(zip(bristol_and_bath_fleet.homes, alone, strict=True)):
+            pd.testing.assert_frame_equal(
+                in_fleet[index].to_dataframe(), expected.to_dataframe(), check_exact=True, obj=f"{home.name}'s results"
+            )
+
+    def test_multi_sweep_jobs_carry_the_weather_fetched_before_the_first_home_ran(
+        self, bristol_and_bath_sweeps: list[tuple[float, FleetConfig]], weather_cache: WeatherCache
+    ) -> None:
+        """A sequential simulate_multi_sweep_iter whose cache is emptied once its first home has run gives each home exactly what simulate_home gives it here: a job that read the default weather itself would find the cache empty and be refused at PVGIS."""
+        start, end = _JUNE_DAYS.window(1)
+        alone = {
+            (sweep_index, home_index): simulate_home(home, start, end, weather=default_weather())
+            for sweep_index, (_, fleet) in enumerate(bristol_and_bath_sweeps)
+            for home_index, home in enumerate(fleet.homes)
+        }
+
+        in_sweeps = {
+            (sweep_index, home_index): results
+            for sweep_index, home_index, results in _emptying_the_cache_after_the_first(
+                simulate_multi_sweep_iter(bristol_and_bath_sweeps, start, end, parallel=False), weather_cache
+            )
+        }
+
+        for (sweep_index, home_index), expected in alone.items():
+            pd.testing.assert_frame_equal(
+                in_sweeps[sweep_index, home_index].to_dataframe(),
+                expected.to_dataframe(),
+                check_exact=True,
+                obj=f"home {home_index} of sweep {sweep_index}",
+            )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_fleet_gives_each_home_the_results_simulate_home_gives_it_here(
+        self, bristol_and_bath_fleet: FleetConfig, worker_start_method: str
+    ) -> None:
+        """simulate_fleet, sequential or parallel, gives a Bristol home and a Bath home exactly what simulate_home gives each in this process."""
+        start, end = _JUNE_DAYS.window(1)
+        alone = [
+            simulate_home(home, start, end, weather=default_weather()) for home in bristol_and_bath_fleet.homes
+        ]
+        assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
+            "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
+        )
+
+        for parallel in (False, True):
+            fleet_results = simulate_fleet(bristol_and_bath_fleet, start, end, parallel=parallel, max_workers=2)
+            for home, in_fleet, expected in zip(
+                bristol_and_bath_fleet.homes, fleet_results.per_home_results, alone, strict=True
+            ):
+                pd.testing.assert_frame_equal(
+                    in_fleet.to_dataframe(),
+                    expected.to_dataframe(),
+                    check_exact=True,
+                    obj=f"{home.name}'s results with parallel={parallel}",
+                )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_multi_sweep_gives_each_home_the_results_simulate_home_gives_it_here(
+        self, bristol_and_bath_sweeps: list[tuple[float, FleetConfig]], worker_start_method: str
+    ) -> None:
+        """simulate_multi_sweep_iter, sequential or parallel, gives each home of a Bristol sweep and a Bath sweep exactly what simulate_home gives it in this process."""
+        start, end = _JUNE_DAYS.window(1)
         for parallel in (False, True):
             collected = collect_multi_sweep_results(
-                sweeps,
-                simulate_multi_sweep_iter(sweeps, start, end, parallel=parallel, max_workers=2),
+                bristol_and_bath_sweeps,
+                simulate_multi_sweep_iter(bristol_and_bath_sweeps, start, end, parallel=parallel, max_workers=2),
             )
-            for (pv_kw, fleet), (_, fleet_results) in zip(sweeps, collected.iter_results(), strict=True):
+            for (pv_kw, fleet), (_, fleet_results) in zip(bristol_and_bath_sweeps, collected.iter_results(), strict=True):
                 for home, in_sweep in zip(fleet.homes, fleet_results.per_home_results, strict=True):
                     pd.testing.assert_frame_equal(
                         in_sweep.to_dataframe(),

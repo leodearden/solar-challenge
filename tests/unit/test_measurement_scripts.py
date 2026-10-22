@@ -11,6 +11,7 @@ scripts/measure_pv_performance_ratio.py and scripts/measure_charge_window_bills.
 import dataclasses
 import statistics
 from collections.abc import Mapping
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -32,7 +33,13 @@ from solar_challenge.pv import (
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
-from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
+from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
+    CLIMATE_YEARS,
+    DEFAULT_CACHE_DIR,
+    IRRADIANCE_COLUMNS,
+    WeatherCache,
+)
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
@@ -146,6 +153,30 @@ class TestMeasureMpptWindow:
                 f"{row.longest_string_stc_v:.1f} V at STC times {factor:.4f} is above the "
                 f"inverter's Mppt_high of {row.mppt_high_v:.1f} V"
             )
+
+    @_QUIET_DIODE_SOLVER
+    def test_main_without_cache_dir_reads_the_tmy_from_the_cache_the_variable_names(
+        self,
+        mppt_window: ModuleType,
+        one_day_tmy: pd.DataFrame,
+        census_rows: pd.DataFrame,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Its CSV is census_rows', which main wrote reading one_day_tmy through --cache-dir."""
+        WeatherCache(tmp_path / "weather").put(one_day_tmy, "tmy", Location.bristol())
+        working = tmp_path / "working"
+        working.mkdir()
+        monkeypatch.chdir(working)
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "weather"))
+        csv_path = tmp_path / "mppt-window.csv"
+
+        mppt_window.main(["--csv", str(csv_path), "--dc-kw", "4"])
+
+        pd.testing.assert_frame_equal(
+            pd.read_csv(csv_path, dtype={"inverter_kw": str}), census_rows, check_exact=True
+        )
+        assert not (working / DEFAULT_CACHE_DIR).exists()
 
     def test_strings_held_at_either_edge_keep_at_most_their_maximum_power_less_the_same_losses(
         self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
@@ -461,3 +492,24 @@ class TestMeasureChargeWindowBills:
         rows = report.splitlines()
         for label in "ABCD":
             assert sum(row.startswith(f"| {label} |") for row in rows) == 1, label
+
+    @_QUIET_DIODE_SOLVER
+    def test_main_without_cache_dir_reads_the_tmy_from_the_cache_the_variable_names(
+        self,
+        charge_window_bills: ModuleType,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The test runs offline, so main returns only if it read the TMY there: a miss is refused at PVGIS."""
+        home = bristol_arbitrage_home()
+        WeatherCache(tmp_path / "weather").put(synthetic_june_weather("1990-06-21"), "tmy", home.location)
+        working = tmp_path / "working"
+        working.mkdir()
+        monkeypatch.chdir(working)
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "weather"))
+
+        charge_window_bills.main(["--start", "2024-06-21", "--end", "2024-06-21"])
+
+        assert f"read from the cache in {tmp_path / 'weather'}" in capsys.readouterr().out
+        assert not (working / DEFAULT_CACHE_DIR).exists()

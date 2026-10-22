@@ -20,7 +20,7 @@ SCENARIOS = """
     import pandas as pd
     import pytest
 
-    from solar_challenge.weather import WeatherCache, set_weather_cache
+    from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
     from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 
     from tests._seeded_tmy import ClearJuneDays
@@ -38,9 +38,9 @@ SCENARIOS = """
     def live_server_weather_in_place(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
         ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(cache)
-        set_weather_cache(cache)
-        yield
-        set_weather_cache(None)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv(CACHE_DIR_VARIABLE, str(cache.cache_dir))
+            yield
 
 
     def test_an_earlier_test_submits_a_job_and_ends_without_waiting_for_it(live_server):

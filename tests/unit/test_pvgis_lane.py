@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PVGIS lane contract tests.
 
-tests/integration/test_pvgis.py checks PVGIS's TMY response as get_tmy_data
+tests/integration/test_pvgis.py checks PVGIS's TMY response as PvgisTmy
 returns it. The per-task verify never runs it, because its tests are slow.
 The orchestrator offline lane's pvgis job runs it after every merge instead,
 so a change in PVGIS's or pvlib's response files a fix task rather than going
@@ -17,7 +17,7 @@ import pvlib
 import pytest
 
 from solar_challenge.location import Location
-from solar_challenge.weather import DEFAULT_CACHE_DIR, TMY_HOURS, WeatherCache
+from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, TMY_HOURS, WeatherCache
 
 _PVGIS_CONTRACT_TESTS = "tests/integration/test_pvgis.py"
 _DEAD_PROXY = "http://127.0.0.1:9"
@@ -43,12 +43,14 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
     """
     bristol = Location.bristol()
     WeatherCache(cache_dir=pytester.path / DEFAULT_CACHE_DIR).put(_clear_sky_tmy(bristol), "tmy", bristol)
-    # Deliberately replaces any proxy the offline guard sets for child processes: the inner session's PVGIS fetches
-    # are expected, so they must fail at the dead proxy instead of counting against this test.
+    # Deliberately replaces any proxy the offline guard sets for child processes, and unsets the weather cache directory
+    # it names, as the lane's pvgis job has none: the inner session's PVGIS fetches are expected, so they must fail at
+    # the dead proxy instead of counting against this test, and a test that read a cache would read the one above.
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         monkeypatch.setenv(name, _DEAD_PROXY)
     for name in ("NO_PROXY", "no_proxy"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
 
     result = pytester.runpytest_subprocess(
         project_root / _PVGIS_CONTRACT_TESTS, "-p", "no:cacheprovider", timeout=120
@@ -58,7 +60,7 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
     assert outcomes.get("passed", 0) == 0 and outcomes.get("failed", 0) + outcomes.get("errors", 0) > 0, (
         f"with PVGIS behind a dead proxy, the PVGIS contract tests ended {outcomes}. A test that passes either "
         "checked the TMY cached in its working directory, not PVGIS's current response: fetch it with "
-        "get_tmy_data(..., use_cache=False), as test_pvgis.py's bristol_tmy fixture does. Or it reached PVGIS "
+        "PvgisTmy(None).get(...), as test_pvgis.py's bristol_tmy fixture does. Or it reached PVGIS "
         "around the dead proxy, because requests no longer honours HTTP(S)_PROXY, and this probe needs "
         "another way to keep PVGIS out of reach\n"
         f"stdout tail:\n{result.stdout.str()[-5000:]}"

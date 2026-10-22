@@ -1,50 +1,86 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Pins that tests/conftest.py runs every test not marked slow or e2e offline, with every fixture it sets up or tears down.
 
+Each such test also runs on a weather cache of its own, which default_weather()
+reads in the test and in a child process that inherits its environment.
+
 The guard decides outcomes at teardown, so the scenarios run in a session of
 their own under a copy of tests/conftest.py. They need no session apiece, so
 they share one (tests/_scenario_session.py).
 """
 
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
 import pandas as pd
 import pytest
 
 from solar_challenge.location import Location
-from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, get_tmy_data
+from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, PVGIS_API_URL, WeatherCache, default_weather
 from tests._scenario_session import ScenarioSession
 from tests._synthetic_weather import synthetic_june_weather
 
 
 @pytest.fixture
-def suite(pytester_under_root_conftest: pytest.Pytester) -> pytest.Pytester:
-    """pytester, whose sessions run under a copy of tests/conftest.py, whose guard refuses and names each scenario test's network access, its child processes' included."""
+def suite(pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
+    """pytester, whose sessions run under a copy of tests/conftest.py, whose guard refuses and names each scenario test's network access, its child processes' included.
+
+    Its sessions start with no weather cache directory named, as the lanes' shells do, not with the variable of the window that runs them.
+    """
+    monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
     return pytester_under_root_conftest
 
 
-def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache(weather_cache: WeatherCache) -> None:
+def test_default_weather_reads_the_tmy_a_test_seeds_into_weather_cache(weather_cache: WeatherCache) -> None:
     seeded = synthetic_june_weather("2024-06-21")
     weather_cache.put(seeded, "tmy", Location.bristol())
 
-    pd.testing.assert_frame_equal(get_tmy_data(Location.bristol()), seeded, check_exact=True)
+    pd.testing.assert_frame_equal(default_weather().get(Location.bristol()), seeded, check_exact=True)
 
 
-FETCHES_A_TMY = """
-    from solar_challenge.location import Location
-    from solar_challenge.weather import get_tmy_data
+def test_a_child_process_of_a_fast_test_reads_the_tmy_the_test_seeds_into_weather_cache(
+    weather_cache: WeatherCache, tmp_path: Path
+) -> None:
+    """`home quick 4 --days 1`, run as a child with this test's environment in an empty working directory, simulates offline on the TMY seeded here, and leaves no cache there."""
+    weather_cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
+    working = tmp_path / "working"
+    working.mkdir()
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from solar_challenge.cli import app; app()", "home", "quick", "4", "--days", "1"],
+        cwd=working,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert not (working / DEFAULT_CACHE_DIR).exists()
 
 
-    def test_fetches_bristols_tmy():
-        get_tmy_data(Location.bristol())
+RUNS_A_ROOT_UNSEEDED = """
+    from typer.testing import CliRunner
+
+    from solar_challenge.cli import app
+
+
+    def test_runs_home_quick():
+        CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
     """
 
 
-def test_a_fast_test_that_fetches_a_tmy_fails_and_leaves_no_weather_cache_behind(
+def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_and_leaves_no_weather_cache_behind(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
+    """CliRunner keeps the refused fetch's error in its result, so the test itself passes and only the guard can catch it."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes("test_fetches_a_tmy") == {"failed": 1, "errors": 1}
-    run.result.stdout.fnmatch_lines(["*test_fetches_bristols_tmy reached the network*"])
+    assert run.outcomes("test_runs_a_root_unseeded") == {"passed": 1, "errors": 1}
+    run.result.stdout.fnmatch_lines(
+        [f"*test_runs_home_quick reached the network ({urlsplit(PVGIS_API_URL).hostname}:443)*"]
+    )
     assert not (run.session_dir / DEFAULT_CACHE_DIR).exists()
 
 
@@ -109,12 +145,12 @@ MODULE_FIXTURE_FETCHES = """
     import pytest
 
     from solar_challenge.location import Location
-    from solar_challenge.weather import get_tmy_data
+    from solar_challenge.weather import default_weather
 
 
     @pytest.fixture(scope="module")
     def bristols_tmy():
-        return get_tmy_data(Location.bristol())
+        return default_weather().get(Location.bristol())
 
 
     def test_sets_up_bristols_tmy(bristols_tmy):
@@ -167,33 +203,41 @@ def test_a_module_fixture_that_reaches_the_network_at_teardown_fails_the_fast_te
     run.result.stdout.fnmatch_lines(["*test_tears_down_the_fixture reached the network (example.invalid:443)*"])
 
 
-MODULE_FIXTURE_INSTALLS_A_CACHE = """
+MODULE_FIXTURE_PASSES_ITS_PROVIDER = """
+    import pandas as pd
     import pytest
 
     from solar_challenge.location import Location
-    from solar_challenge.weather import WeatherCache, get_tmy_data, set_weather_cache
+    from solar_challenge.weather import PvgisTmy, WeatherCache, default_weather
     from tests._synthetic_weather import synthetic_june_weather
 
 
     @pytest.fixture(scope="module")
-    def installs_a_weather_cache_of_its_own(tmp_path_factory):
-        set_weather_cache(WeatherCache(cache_dir=tmp_path_factory.mktemp("weather")))
+    def module_weather(tmp_path_factory):
+        cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
+        cache.put(synthetic_june_weather("2024-06-20"), "tmy", Location.bristol())
+        return PvgisTmy(cache)
 
 
-    def test_reads_the_tmy_it_seeds(installs_a_weather_cache_of_its_own, weather_cache):
+    def test_reads_each_tmy_from_its_own_provider(module_weather, weather_cache):
         weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
-        get_tmy_data(Location.bristol())
+        pd.testing.assert_frame_equal(
+            module_weather.get(Location.bristol()), synthetic_june_weather("2024-06-20"), check_exact=True
+        )
+        pd.testing.assert_frame_equal(
+            default_weather().get(Location.bristol()), synthetic_june_weather("2024-06-21"), check_exact=True
+        )
     """
 
 
-def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache_after_a_module_fixture_installs_a_cache_of_its_own(
+def test_a_broader_scoped_fixture_passes_its_weather_provider_explicitly_and_default_weather_stays_the_tests_own(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
-    """pytest sets the module fixture up first, inside the test's window, so weather_cache must install the test's cache over the fixture's."""
+    """pytest sets the module fixture up first, inside the test's window; it hands its weather over as a provider, so default_weather() still reads the test's weather_cache."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes("test_module_fixture_installs_a_cache") == {"passed": 1}
+    assert run.outcomes("test_module_fixture_passes_its_provider") == {"passed": 1}
 
 
 CACHE_DIRECTORY_CANNOT_BE_REMOVED = """
@@ -242,10 +286,11 @@ def test_a_slow_test_that_requests_weather_cache_errors_at_setup(
 
 
 SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE = """
+    import pandas as pd
     import pytest
 
     from solar_challenge.location import Location
-    from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, get_tmy_data
+    from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, default_weather
     from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -257,34 +302,42 @@ SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE = """
         monkeypatch.chdir(tmp_path)
 
 
+    def test_a_fast_test_runs_first(weather_cache):
+        pass
+
+
     @pytest.mark.slow
     def test_a_slow_test_reads_bristols_tmy():
-        get_tmy_data(Location.bristol())
+        pd.testing.assert_frame_equal(
+            default_weather().get(Location.bristol()), synthetic_june_weather("2024-06-21"), check_exact=True
+        )
 
 
     @pytest.mark.e2e
     def test_an_e2e_test_reads_bristols_tmy():
-        get_tmy_data(Location.bristol())
+        pd.testing.assert_frame_equal(
+            default_weather().get(Location.bristol()), synthetic_june_weather("2024-06-21"), check_exact=True
+        )
     """
 
 
 def test_slow_and_e2e_tests_read_the_weather_cache_in_their_working_directory(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
-    """Neither is guarded, so each reads the cache its working directory holds, not an empty one of its own."""
+    """Neither is guarded, so each reads the cache its working directory holds, not an empty one of its own, even after a fast test's window has closed."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes("test_slow_and_e2e_read_their_working_directory_cache") == {"passed": 2}
+    assert run.outcomes("test_slow_and_e2e_read_their_working_directory_cache") == {"passed": 3}
 
 
 SCENARIOS = {
-    "test_fetches_a_tmy": FETCHES_A_TMY,
+    "test_runs_a_root_unseeded": RUNS_A_ROOT_UNSEEDED,
     "test_submits_a_home_job": SUBMITS_A_HOME_JOB,
     "fetches_and_carries_on": FETCHES_AND_CARRIES_ON,
     "test_runs_a_child_that_fetches": RUNS_A_CHILD_THAT_FETCHES,
     "test_module_fixture_fetches": MODULE_FIXTURE_FETCHES,
     "test_module_fixture_looks_up_at_teardown": MODULE_FIXTURE_LOOKS_UP_AT_TEARDOWN,
-    "test_module_fixture_installs_a_cache": MODULE_FIXTURE_INSTALLS_A_CACHE,
+    "test_module_fixture_passes_its_provider": MODULE_FIXTURE_PASSES_ITS_PROVIDER,
     "test_cache_directory_cannot_be_removed": CACHE_DIRECTORY_CANNOT_BE_REMOVED,
     "test_slow_requests_weather_cache": SLOW_REQUESTS_WEATHER_CACHE,
     "test_slow_and_e2e_read_their_working_directory_cache": SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE,

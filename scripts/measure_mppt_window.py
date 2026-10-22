@@ -44,10 +44,10 @@ from solar_challenge.pv import (
     usable_cec_inverters,
 )
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
     DEFAULT_CACHE_DIR,
+    PvgisTmy,
     WeatherCache,
-    get_tmy_data,
-    set_weather_cache,
 )
 
 DC_CAPACITIES_KW = tuple(tenths / 10 for tenths in range(3, 251))
@@ -580,7 +580,13 @@ def _show(title: str, body: Union[pd.DataFrame, pd.Series, str]) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
-        "--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="weather cache holding the TMY"
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "weather cache holding the TMY "
+            f"(default: the directory {CACHE_DIR_VARIABLE} names, else {DEFAULT_CACHE_DIR})"
+        ),
     )
     parser.add_argument(
         "--csv", type=Path, help="write one row per sizing and configuration here"
@@ -608,9 +614,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         category=RuntimeWarning,
         module=r"scipy\.optimize\._chandrupatla",
     )
-    set_weather_cache(WeatherCache(args.cache_dir))
     location = Location.bristol()
-    weather = get_tmy_data(location)
+    weather = PvgisTmy(WeatherCache(args.cache_dir)).get(location)
     module = create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters
     _show(
         "Weather",

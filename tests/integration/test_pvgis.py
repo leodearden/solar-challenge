@@ -1,4 +1,4 @@
-"""Contract tests of PVGIS's TMY for Bristol, as get_tmy_data returns it.
+"""Contract tests of PVGIS's TMY for Bristol, as PvgisTmy returns it.
 
 Each test checks PVGIS's live response, fetched once for the module.
 """
@@ -9,7 +9,7 @@ import numpy as np
 from pvlib.solarposition import get_solarposition
 
 from solar_challenge.location import Location
-from solar_challenge.weather import get_tmy_data
+from solar_challenge.weather import PvgisTmy
 
 
 BRISTOL = Location.bristol()
@@ -21,7 +21,7 @@ def bristol_tmy() -> pd.DataFrame:
 
     It is never read from or written to a weather cache, whose copy may be months old.
     """
-    return get_tmy_data(BRISTOL, use_cache=False)
+    return PvgisTmy(None).get(BRISTOL)
 
 
 @pytest.mark.slow

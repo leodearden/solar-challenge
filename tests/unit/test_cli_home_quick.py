@@ -87,9 +87,9 @@ def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
 def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_names(tmp_path: Path) -> None:
     """`home quick 4 --days 1`, run as a child in an empty working directory, simulates offline from the cache the variable names.
 
-    The child runs solar_challenge.cli.app, the object the solar-challenge console script runs. It
-    sees none of this process's weather, only the directory the variable names. It leaves no cache
-    in its working directory.
+    The child runs solar_challenge.cli.app, the object the solar-challenge console script runs. Its
+    environment names a cache of this test's making in the variable, in place of the test's own
+    weather_cache. It leaves no cache in its working directory.
     """
     cache_dir = tmp_path / "weather"
     _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir=cache_dir))
