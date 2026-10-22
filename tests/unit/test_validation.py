@@ -11,9 +11,7 @@ from pvlib.pvsystem import PVSystem
 from solar_challenge import pv
 from solar_challenge.home import SimulationResults
 from solar_challenge.pv import (
-    DEFAULT_CEC_MODULE,
     PVConfig,
-    cec_module_params,
     create_pv_system,
     create_simple_module_params,
     wired_dc_capacity_kw,
@@ -32,6 +30,7 @@ from solar_challenge.validation import (
     validate_self_consumption_with_battery,
     validate_simulation,
 )
+from tests._pv_modules import default_module_beyond_every_mppt_window, pvwatts_300_w_module
 
 
 def _create_minute_index(days: int = 7) -> pd.DatetimeIndex:
@@ -180,10 +179,10 @@ _PVWATTS_250_W_AT_1_1_KW = PVConfig(
     capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
 )
 
-# Wires thirteen 300 W modules, 3.9 kWp, counted by its pdc0.
-_PVWATTS_300_W_WITHOUT_STC_AT_4_KW = PVConfig(
-    capacity_kw=4.0, custom_module_params={"pdc0": 300.0, "gamma_pdc": -0.004}
-)
+
+def _pvwatts_300_w_without_stc_at_4_kw() -> PVConfig:
+    """A 4 kW PVConfig of pvwatts_300_w_module(): it wires thirteen 300 W modules, 3.9 kWp, each rated at its pdc0."""
+    return PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module())
 
 
 class TestValidationResult:
@@ -325,8 +324,7 @@ class TestValidatePVGeneration:
     def test_a_config_create_pv_system_refuses_is_refused_with_its_error(self) -> None:
         """No CEC inverter's MPPT window admits that module's string voltage."""
         config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params={**cec_module_params(DEFAULT_CEC_MODULE), "V_mp_ref": 1e6},
+            capacity_kw=4.0, custom_module_params=default_module_beyond_every_mppt_window()
         )
 
         with pytest.raises(ValueError) as building:
@@ -464,7 +462,7 @@ class TestAnnualYieldPerWiredKwp:
 
         result = _annual_yield_check(
             validate_pv_generation(
-                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=True
+                generation, _pvwatts_300_w_without_stc_at_4_kw(), check_annual=True
             )
         )
 
@@ -549,7 +547,7 @@ class TestPeakWithinWiredCapacity:
 
         result = _peak_check(
             validate_pv_generation(
-                generation, _PVWATTS_300_W_WITHOUT_STC_AT_4_KW, check_annual=False
+                generation, _pvwatts_300_w_without_stc_at_4_kw(), check_annual=False
             )
         )
 
