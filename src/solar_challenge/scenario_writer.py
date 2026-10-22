@@ -13,6 +13,7 @@ from typing import Any, Optional
 import yaml
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import BATTERY_BLOCK
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
@@ -160,11 +161,15 @@ def _battery_block(battery: BatteryConfig) -> dict[str, Any]:
         "max_charge_kw": battery.max_charge_kw,
         "max_discharge_kw": battery.max_discharge_kw,
         "name": battery.name,
-        "dispatch_strategy": _dispatch_strategy_block(battery),
+        "dispatch_strategy": (
+            None
+            if battery.dispatch_strategy is None
+            else BATTERY_BLOCK.sub_blocks["dispatch_strategy"].write(battery.dispatch_strategy)
+        ),
         "grid_charging": (
             None
             if battery.grid_charging is None
-            else {"target_soc_fraction": battery.grid_charging.target_soc_fraction}
+            else BATTERY_BLOCK.sub_blocks["grid_charging"].write(battery.grid_charging)
         ),
         "min_soc_fraction": battery.min_soc_fraction,
         "max_soc_fraction": battery.max_soc_fraction,
@@ -174,19 +179,6 @@ def _battery_block(battery: BatteryConfig) -> dict[str, Any]:
         "cycle_fade_per_equivalent_full_cycle": battery.cycle_fade_per_equivalent_full_cycle,
         "soh_floor": battery.soh_floor,
         "soh": battery.soh,
-    }
-
-
-def _dispatch_strategy_block(battery: BatteryConfig) -> Optional[dict[str, Any]]:
-    """The dispatch_strategy: block parse_dispatch_strategy_config reads back as *battery*'s."""
-    strategy = battery.dispatch_strategy
-    if strategy is None:
-        return None
-    peak_hours = strategy.peak_hours
-    return {
-        "strategy_type": strategy.strategy_type,
-        "peak_hours": None if peak_hours is None else [[start, end] for start, end in peak_hours],
-        "import_limit_kw": strategy.import_limit_kw,
     }
 
 

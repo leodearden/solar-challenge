@@ -10,10 +10,22 @@ import math
 import random
 import re
 import warnings
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Collection, Generic, Iterator, Mapping, Optional, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Collection,
+    Generic,
+    Iterator,
+    Mapping,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+)
 
 import pandas as pd
 import yaml
@@ -33,6 +45,9 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.weather import default_weather
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 
 #: Dispatch strategy names recognised by the simulation engine.
@@ -762,6 +777,45 @@ class _BlockType(Generic[_Built]):
     build: Callable[[dict[str, Any], str], _Built]
 
 
+class _SubBlockReader(Protocol):
+    """Reads a nested block's value, given its path in its file, as the config the block describes."""
+
+    def __call__(self, data: Any, *, block_path: str) -> object: ...
+
+
+@dataclass(frozen=True)
+class SubBlock:
+    """A key whose value is a nested block, with its grammar's reader and writer.
+
+    *read* reads the key's non-null value at its block path; *write* writes the field's non-None
+    value as the block *read* reads back as it.
+    """
+
+    read: _SubBlockReader
+    write: Callable[[Any], dict[str, Any]]
+
+
+_Component = TypeVar("_Component", bound="DataclassInstance")
+
+
+@dataclass(frozen=True)
+class ComponentBlock(Generic[_Component]):
+    """A component's block in the scenario grammar, stated against the dataclass it builds.
+
+    *config_type* is the dataclass. *keys* are the block's keys, the fields it carries, in field
+    order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
+    holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
+    reads as, for each key where that is not the dataclass's declared default.
+    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields (T1).
+    """
+
+    config_type: type[_Component]
+    keys: tuple[str, ...]
+    outside_grammar: Mapping[str, str]
+    sub_blocks: Mapping[str, SubBlock]
+    when_omitted: Mapping[str, object]
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     """Coerce *value* to a float, keeping a null as None."""
     return None if value is None else float(value)
@@ -844,6 +898,11 @@ def _parse_grid_charge_config(
     return GridChargeConfig(**_refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS))
 
 
+def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
+    """The grid_charging: block _parse_grid_charge_config reads back as *grid_charging*."""
+    return {"target_soc_fraction": grid_charging.target_soc_fraction}
+
+
 _BATTERY_BLOCK_KEYS: frozenset[str] = frozenset({
     "capacity_kwh", "max_charge_kw", "max_discharge_kw", "name", "dispatch_strategy",
     "grid_charging", "min_soc_fraction", "max_soc_fraction", "charge_efficiency",
@@ -922,6 +981,85 @@ def parse_dispatch_strategy_config(
         peak_hours=peak_hours,
         import_limit_kw=data.get("import_limit_kw"),
     )
+
+
+def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]:
+    """The dispatch_strategy: block parse_dispatch_strategy_config reads back as *strategy*."""
+    peak_hours = strategy.peak_hours
+    return {
+        "strategy_type": strategy.strategy_type,
+        "peak_hours": None if peak_hours is None else [[start, end] for start, end in peak_hours],
+        "import_limit_kw": strategy.import_limit_kw,
+    }
+
+
+PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
+    config_type=PVConfig,
+    keys=(
+        "capacity_kw", "azimuth", "tilt", "name", "module_efficiency", "temperature_coefficient",
+        "inverter_efficiency", "inverter_capacity_kw", "system_age_years",
+        "degradation_rate_per_year", "system_losses",
+    ),
+    outside_grammar=MappingProxyType({
+        "custom_module_params": "custom pvlib module parameters have no YAML form",
+        "custom_inverter_params": "custom pvlib inverter parameters have no YAML form",
+    }),
+    sub_blocks=MappingProxyType({}),
+    when_omitted=MappingProxyType({"capacity_kw": 4.0}),
+)
+
+BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
+    config_type=BatteryConfig,
+    keys=(
+        "capacity_kwh", "max_charge_kw", "max_discharge_kw", "name", "dispatch_strategy",
+        "grid_charging", "min_soc_fraction", "max_soc_fraction", "charge_efficiency",
+        "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
+        "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
+    ),
+    outside_grammar=MappingProxyType({}),
+    sub_blocks=MappingProxyType({
+        "dispatch_strategy": SubBlock(parse_dispatch_strategy_config, _dispatch_strategy_block),
+        "grid_charging": SubBlock(_parse_grid_charge_config, _grid_charging_block),
+    }),
+    when_omitted=MappingProxyType({"capacity_kwh": 5.0}),
+)
+
+LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
+    config_type=LoadConfig,
+    keys=("annual_consumption_kwh", "household_occupants", "name", "use_stochastic", "seed"),
+    outside_grammar=MappingProxyType({}),
+    sub_blocks=MappingProxyType({}),
+    when_omitted=MappingProxyType({}),
+)
+
+HEAT_PUMP_BLOCK: ComponentBlock[HeatPumpConfig] = ComponentBlock(
+    config_type=HeatPumpConfig,
+    keys=("heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh", "name"),
+    outside_grammar=MappingProxyType({}),
+    sub_blocks=MappingProxyType({}),
+    when_omitted=MappingProxyType({}),
+)
+
+EV_BLOCK: ComponentBlock[EVConfig] = ComponentBlock(
+    config_type=EVConfig,
+    keys=(
+        "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
+        "smart_charging_mode", "name",
+    ),
+    outside_grammar=MappingProxyType({}),
+    sub_blocks=MappingProxyType({}),
+    when_omitted=MappingProxyType({}),
+)
+
+LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
+    config_type=Location,
+    keys=("latitude", "longitude", "timezone", "altitude", "name"),
+    outside_grammar=MappingProxyType({}),
+    sub_blocks=MappingProxyType({}),
+    when_omitted=MappingProxyType(
+        {key: value for key, value in asdict(Location.bristol()).items() if key != "name"}
+    ),
+)
 
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
