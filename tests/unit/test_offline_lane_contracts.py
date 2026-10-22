@@ -11,7 +11,7 @@ that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -63,7 +63,7 @@ LANE_JOBS: tuple[LaneJob, ...] = (
         "e2e",
         "tests/e2e",
         if_unrun="e2e regressions go unseen",
-        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE, LaneContract.NEVER_IN_A_DEFAULT_COLLECTION}),
     ),
     LaneJob(
         "pvgis",
@@ -160,6 +160,29 @@ def test_the_job_collects_its_suite_and_nothing_else(
     assert not outside, (
         f"the {job.name!r} lane job {collection.command!r} collected tests outside {job.suite}, the one suite it "
         f"exists to run, so after every merge it runs them beside that suite: {outside}"
+    )
+
+
+def test_every_row_whose_suite_lies_directly_under_tests_lists_never_in_a_default_collection() -> None:
+    """Every LANE_JOBS row whose suite lies directly under tests/ lists NEVER_IN_A_DEFAULT_COLLECTION.
+
+    A suite directly under tests/ is lane-only through tests/conftest.py's
+    collect_ignore, which this contract's check keeps honest. pvgis's suite is a
+    file under tests/integration and stays out of the per-task verify through
+    its tests' slow mark.
+    """
+    unchecked = [
+        f"{job.name} ({job.suite})"
+        for job in LANE_JOBS
+        if PurePosixPath(job.suite).parent == PurePosixPath("tests")
+        and LaneContract.NEVER_IN_A_DEFAULT_COLLECTION not in job.checked
+    ]
+
+    assert not unchecked, (
+        f"the LANE_JOBS rows {unchecked} run a suite directly under tests/ without listing "
+        "NEVER_IN_A_DEFAULT_COLLECTION, so nothing checks that a default collection never reaches it; list "
+        "NEVER_IN_A_DEFAULT_COLLECTION in each row, and name the suite's directory in tests/conftest.py's "
+        "collect_ignore, so that plain `pytest` and dark-factory's `-o addopts=` reruns never reach it"
     )
 
 
