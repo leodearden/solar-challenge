@@ -56,9 +56,9 @@ def start(
       solar-challenge web start --host 0.0.0.0 --port 8080
       solar-challenge web start --debug
     """
-    from solar_challenge.web.reloader import is_reloader_watcher, run_reloader_watcher
+    from solar_challenge.web.reloader import run_reloader_watcher, started_by_reloader_watcher
 
-    if debug and is_reloader_watcher():
+    if debug and not started_by_reloader_watcher():
         run_reloader_watcher(host, port)
     else:
         _serve(host, port, debug)

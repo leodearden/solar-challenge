@@ -13,9 +13,9 @@ from wsgiref.types import StartResponse, WSGIEnvironment
 from werkzeug.serving import is_running_from_reloader, run_simple
 
 
-def is_reloader_watcher() -> bool:
-    """Whether this process would be the --debug reloader's watcher: true unless the watcher started it as the serving process."""
-    return not is_running_from_reloader()
+def started_by_reloader_watcher() -> bool:
+    """Whether the --debug reloader's watcher started this process, as the process that serves the dashboard."""
+    return is_running_from_reloader()
 
 
 def run_reloader_watcher(host: str, port: int) -> None:
