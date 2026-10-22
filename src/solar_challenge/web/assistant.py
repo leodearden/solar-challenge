@@ -28,6 +28,13 @@ from uuid import uuid4
 from flask import Blueprint, Response, jsonify, render_template, session
 from flask.typing import ResponseReturnValue
 
+from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.validation import (
+    BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
+    UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_YIELD_BENCHMARK_KWH_PER_KWP,
+)
 from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
@@ -61,22 +68,72 @@ from solar_challenge.web.storage import RunStorage
 bp = Blueprint("assistant", __name__)
 
 # ---------------------------------------------------------------------------
+# The engine's facts — formatted once, at import, from its constants, so the
+# cached prompt prefix stays byte-stable between requests
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Unit:
+    """A unit the assistant states the engine's figures in: its *symbol*, and the format *spec* of its numbers."""
+
+    symbol: str
+    spec: str
+
+    def value(self, number: float) -> str:
+        """*number* in this unit, e.g. ``1,800 kWh``."""
+        return f"{number:{self.spec}} {self.symbol}"
+
+    def band(self, ends: tuple[float, float]) -> str:
+        """The band from *ends*' low to its high in this unit, e.g. ``10–45 %``."""
+        low, high = ends
+        return f"{low:{self.spec}}–{high:{self.spec}} {self.symbol}"
+
+
+_KWH = _Unit("kWh", ",g")
+_PERCENT = _Unit("%", "g")
+_KWH_PER_KWP = _Unit("kWh/kWp", "g")
+
+
+def _occupants(count: int) -> str:
+    """*count* occupants, e.g. ``1 occupant`` or ``3 occupants``."""
+    return f"{count} occupant" if count == 1 else f"{count} occupants"
+
+
+_DEFAULT_CONSUMPTION_BY_HOUSEHOLD_SIZE = (
+    "The simulator's default annual consumption by household size, excluding electric heating: "
+    + ", ".join(
+        f"{_occupants(count)} {_KWH.value(kwh)}" for count, kwh in sorted(OFGEM_TDCV_BY_OCCUPANTS.items())
+    )
+)
+
+
+def _default_household_consumption() -> str:
+    """The annual consumption of LoadConfig(), the simulator's default household, and that household's size."""
+    household = LoadConfig()
+    return (
+        f"{_KWH.value(household.get_annual_consumption())}, which the simulator assumes "
+        f"for its default household of {_occupants(household.household_occupants)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # System prompt — cached at module level for prompt-cache efficiency
 # ---------------------------------------------------------------------------
-SIMULATOR_SYSTEM_PROMPT = """You are the AI assistant for the Solar Challenge web dashboard.
+SIMULATOR_SYSTEM_PROMPT = f"""You are the AI assistant for the Solar Challenge web dashboard.
 You help users understand and analyse their domestic solar PV and battery simulation results
 for the Bristol community energy project.
 
 You have expert knowledge of:
 - Solar PV generation (pvlib/PVGIS TMY data, 1-minute resolution simulation)
 - Battery storage systems (state of charge, charging/discharging power limits, round-trip efficiency)
-- Household energy consumption profiles (UK CREST / Ofgem TDCV benchmarks)
+- Household energy consumption profiles (UK CREST model)
 - Energy flow dispatch: self-consumption priority → battery charge → grid export
 - Grid import/export and time-of-use (TOU) tariffs
 - Fleet-level aggregation across 100-home Bristol scenarios
 
-When discussing simulation parameters use these UK reference bands:
-- Typical annual consumption: 2,900 kWh (Ofgem TDCV low), 3,100 kWh (medium), 4,200 kWh (high)
+When discussing simulation parameters use these reference figures:
+- {_DEFAULT_CONSUMPTION_BY_HOUSEHOLD_SIZE}
 - Small PV system: 2–3 kWp; medium: 3–5 kWp; large: 5–8 kWp
 - Battery capacity: 5–15 kWh residential; discharge rate: 0.5–1C typical
 
@@ -99,10 +156,13 @@ MAX_TOOL_ITERATIONS = 10
 TOOL_CALL_LIMIT_NOTICE = "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
 
 # ---------------------------------------------------------------------------
-# Grounded metric table — canonical UK benchmark bands
+# Grounded metric table — the benchmark bands explain_metric quotes
 # Keyed by normalized metric id (lowercase, spaces/hyphens → underscores).
 # explain_metric answers from this table so the model quotes these benchmark
-# numbers instead of hallucinating them.
+# numbers instead of hallucinating them.  The self_consumption_ratio,
+# grid_import, annual_consumption and pv_generation bands are formatted at
+# import from load's and validation's constants, which name their sources;
+# the other bands carry their external citation.
 # ---------------------------------------------------------------------------
 METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
     "self_consumption_ratio": MappingProxyType({
@@ -113,9 +173,9 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
             "as cheap grid export."
         ),
         "uk_benchmark_band": (
-            "Typical UK domestic PV without storage: 30–40 %. "
-            "With a 5–10 kWh battery: 55–70 %. "
-            "Source: Solar Energy UK / BEIS smart export data 2022–2024."
+            "The UK benchmark the simulator's validation applies: "
+            f"{_PERCENT.band(UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT)} without storage, "
+            f"{_PERCENT.band(UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT)} with a battery."
         ),
     }),
     "self_sufficiency": MappingProxyType({
@@ -147,8 +207,9 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
             "simulation period, i.e. demand not met by on-site generation or battery."
         ),
         "uk_benchmark_band": (
-            "Ofgem TDCV benchmarks: low 1,900 kWh/yr, medium 2,700 kWh/yr, "
-            "high 4,100 kWh/yr (net of solar for a typical 3-4 kWp system)."
+            "No fixed benchmark: grid import is the demand that PV and battery do not cover, "
+            "so unless the battery charges from the grid it is at most the home's annual demand. "
+            f"{_DEFAULT_CONSUMPTION_BY_HOUSEHOLD_SIZE}."
         ),
     }),
     "grid_export": MappingProxyType({
@@ -180,10 +241,7 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
             "Total household electricity consumption (kWh) over a full year, "
             "covering all appliances, heating, and lighting."
         ),
-        "uk_benchmark_band": (
-            "Ofgem Typical Domestic Consumption Values (TDCVs) 2023: "
-            "low 1,900 kWh/yr, medium 2,900 kWh/yr, high 4,200 kWh/yr."
-        ),
+        "uk_benchmark_band": f"{_DEFAULT_CONSUMPTION_BY_HOUSEHOLD_SIZE}.",
     }),
     "pv_generation": MappingProxyType({
         "definition": (
@@ -191,9 +249,9 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
             "simulation period, after inverter losses."
         ),
         "uk_benchmark_band": (
-            "UK average yield: ~850–950 kWh/kWp/yr (south-facing, 35° tilt, no shading). "
-            "Bristol latitude (~51.5°N) typically 900–970 kWh/kWp/yr. "
-            "Source: PVGIS TMY data, EC JRC."
+            f"The simulator accepts {_KWH_PER_KWP.band(UK_YIELD_BENCHMARK_KWH_PER_KWP)} a year "
+            "as plausible for an unshaded UK array. Its default PV system yields "
+            f"{_KWH_PER_KWP.value(BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP)} a year in Bristol."
         ),
     }),
 })
@@ -667,8 +725,9 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "type": "number",
                         "description": (
                             "Household annual electricity consumption in kWh "
-                            "({:g}–{:g}; e.g. 3100 for an Ofgem medium user)."
-                        ).format(*FLEET_COMPONENTS["load"].fixed_range),
+                            "({:g}–{:g}; ".format(*FLEET_COMPONENTS["load"].fixed_range)
+                            + f"e.g. {_default_household_consumption()})."
+                        ),
                     },
                     "goal": {
                         "type": "string",
