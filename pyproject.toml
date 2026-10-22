@@ -46,6 +46,7 @@ dev = [
     "packaging>=26.2",
     "pytest-rerunfailures>=16.7",
     "ruff>=0.16.10",
+    "requests>=2.34.2",  # used directly by tests/unit/test_network_guard_helper.py
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
