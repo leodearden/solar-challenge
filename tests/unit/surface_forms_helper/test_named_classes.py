@@ -920,6 +920,57 @@ def test_a_class_constructed_in_c_whose_metaclass_holds_a_signature_raises_type_
     assert "metas.PropertySigned" in str(overriding.value)
 
 
+def test_a_class_constructed_in_c_whose_metaclass_defines_getattribute_raises_type_error_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "lookup_metas",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('meta', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class PlainSigned(type):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Intercepting(type):\n"
+        "    def __getattribute__(cls, name):\n"
+        "        if name == '__signature__':\n"
+        "            return signature\n"
+        "        return super().__getattribute__(name)\n",
+    )
+    lookup_users = imported_module(
+        tmp_path,
+        monkeypatch,
+        "lookup_users",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from lookup_metas import Intercepting, PlainSigned\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Shadowed(dict, metaclass=PlainSigned):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Intercepted(dict, metaclass=Intercepting):\n"
+        "    __signature__ = signature\n",
+    )
+
+    with pytest.raises(TypeError) as intercepted:
+        named_classes(lookup_users.Intercepted)
+
+    assert "lookup_users.Intercepted" in str(intercepted.value)
+    assert "lookup_metas.Intercepting" in str(intercepted.value)
+    assert named_classes(lookup_users.Shadowed) == {decimal.Decimal}
+
+
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
