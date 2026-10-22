@@ -348,7 +348,6 @@ def _usable_cec_inverter_numbers() -> pd.DataFrame:
     return numbers[((numbers > 0) & np.isfinite(numbers)).all(axis=1)]
 
 
-@pytest.fixture
 def clear_june_daytime() -> pd.DataFrame:
     """Hourly weather for a cloudless midsummer day, 06:00-17:00 London time."""
     index = pd.date_range("2024-06-21 06:00", periods=12, freq="1h", tz="Europe/London")
@@ -364,7 +363,6 @@ def clear_june_daytime() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
 def overcast_january_daytime() -> pd.DataFrame:
     """Hourly weather for a dull midwinter day, 08:00-16:00 London time, diffuse light only."""
     index = pd.date_range("2024-01-15 08:00", periods=9, freq="1h", tz="Europe/London")
