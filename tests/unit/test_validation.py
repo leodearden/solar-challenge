@@ -20,6 +20,9 @@ from solar_challenge.pv import (
 )
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.validation import (
+    UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
+    UK_YIELD_BENCHMARK_KWH_PER_KWP,
     ValidationReport,
     ValidationResult,
     validate_consumption,
@@ -130,6 +133,12 @@ def _with_generation_over_demand(results: SimulationResults, ratio: float) -> Si
         results,
         demand=results.demand * (results.generation.sum() / (ratio * results.demand.sum())),
     )
+
+
+def _edges_and_whether_inside(band: tuple[float, float]) -> list[tuple[float, bool]]:
+    """Each edge of band, 0.1 percentage point either side, with whether it lies inside band."""
+    low, high = band
+    return [(low - 0.1, False), (low + 0.1, True), (high - 0.1, True), (high + 0.1, False)]
 
 
 def _minute_index_over(first_day: str, last_day: str) -> pd.DatetimeIndex:
@@ -407,6 +416,7 @@ class TestAnnualYieldPerWiredKwp:
         )
 
         assert result.passed is passed
+        assert result.expected_range == UK_YIELD_BENCHMARK_KWH_PER_KWP
 
     @pytest.mark.parametrize(
         "kwh_per_wired_kwp",
@@ -669,70 +679,85 @@ class TestValidateConsumption:
 class TestSelfConsumptionBenchmarks:
     """Tests for self-consumption benchmark validation, PV-only and with a battery."""
 
-    def test_pv_only_in_range(self) -> None:
-        """Test PV-only self-consumption within benchmark range."""
-        index = _create_minute_index(30)  # 30 days
+    @pytest.mark.parametrize(
+        ("percent", "passed"),
+        _edges_and_whether_inside(UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT) + [(30.0, True)],
+    )
+    def test_the_pv_only_check_passes_exactly_inside_its_band(
+        self, percent: float, passed: bool
+    ) -> None:
         results = _create_simulation_results(
-            index,
-            pv_capacity_kw=4.0,
-            self_consumption_ratio=0.30,  # 30% - in range
-            has_battery=False,
+            _create_minute_index(30), self_consumption_ratio=percent / 100
+        )
+
+        validation = validate_self_consumption_pv_only(results)
+
+        low, high = UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+        assert validation.passed is passed
+        assert validation.value == pytest.approx(percent)
+        assert validation.expected_range == UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+        assert f"({low:g}-{high:g}%)" in validation.message
+
+    @pytest.mark.parametrize(
+        ("percent", "passed"),
+        _edges_and_whether_inside(UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT) + [(70.0, True)],
+    )
+    def test_the_battery_check_passes_exactly_inside_its_band(
+        self, percent: float, passed: bool
+    ) -> None:
+        results = _create_simulation_results(
+            _create_minute_index(30), self_consumption_ratio=percent / 100, has_battery=True
+        )
+
+        validation = validate_self_consumption_with_battery(
+            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
+        )
+
+        low, high = UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+        assert validation.passed is passed
+        assert validation.value == pytest.approx(percent)
+        assert validation.expected_range == UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+        assert f"({low:g}-{high:g}%)" in validation.message
+
+    @pytest.mark.parametrize(
+        "percent",
+        [
+            pytest.param(13.0, id="mgd003-table-7-22-out-during-the-day-4500-4799-kwh"),
+            pytest.param(43.0, id="mgd003-table-7-4-home-all-day-1500-1799-kwh"),
+        ],
+    )
+    def test_the_mgd003_ratios_that_set_the_pv_only_band_pass(self, percent: float) -> None:
+        """docs/self-consumption-benchmark.md §2 sources each and rounds it outward to its edge."""
+        results = _create_simulation_results(
+            _create_minute_index(30), self_consumption_ratio=percent / 100
         )
 
         validation = validate_self_consumption_pv_only(results)
 
         assert validation.passed is True
-        assert "benchmark" in validation.check_name
 
-    def test_pv_only_below_range(self) -> None:
-        """Test PV-only self-consumption below benchmark."""
-        index = _create_minute_index(30)
+    @pytest.mark.parametrize(
+        "percent",
+        [
+            pytest.param(
+                36.0, id="mgd003-table-7-22-out-during-the-day-4500-4799-kwh-3.1-4.1-kwh-usable"
+            ),
+            pytest.param(
+                89.0, id="mgd003-table-7-4-home-all-day-1500-1799-kwh-4.1-5.1-kwh-usable"
+            ),
+        ],
+    )
+    def test_the_mgd003_ratios_that_set_the_battery_band_pass(self, percent: float) -> None:
+        """docs/self-consumption-benchmark.md §2 sources each and rounds it outward to its edge."""
         results = _create_simulation_results(
-            index,
-            pv_capacity_kw=4.0,
-            self_consumption_ratio=0.10,  # 10% - too low
-            has_battery=False,
-        )
-
-        validation = validate_self_consumption_pv_only(results)
-
-        assert validation.passed is False
-
-    def test_with_battery_in_range(self) -> None:
-        """Test PV+battery self-consumption within benchmark range."""
-        index = _create_minute_index(30)
-        results = _create_simulation_results(
-            index,
-            pv_capacity_kw=4.0,
-            self_consumption_ratio=0.70,  # 70% - in range
-            has_battery=True,
+            _create_minute_index(30), self_consumption_ratio=percent / 100, has_battery=True
         )
 
         validation = validate_self_consumption_with_battery(
-            results,
-            battery_kwh=5.0,
-            annual_consumption_kwh=3400,
+            results, battery_kwh=5.0, annual_consumption_kwh=3400.0
         )
 
         assert validation.passed is True
-
-    def test_with_battery_below_range(self) -> None:
-        """Test PV+battery self-consumption below benchmark."""
-        index = _create_minute_index(30)
-        results = _create_simulation_results(
-            index,
-            pv_capacity_kw=4.0,
-            self_consumption_ratio=0.30,  # 30% - too low for battery system
-            has_battery=True,
-        )
-
-        validation = validate_self_consumption_with_battery(
-            results,
-            battery_kwh=5.0,
-            annual_consumption_kwh=3400,
-        )
-
-        assert validation.passed is False
 
 
 class TestSelfConsumptionSizeNotes:
