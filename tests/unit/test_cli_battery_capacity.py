@@ -14,24 +14,24 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
-from solar_challenge.weather import WeatherCache
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
 _DAY = "2024-06-01"
 
+bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).bristol_tmy_fixture()
+
 
 @pytest.fixture(autouse=True)
 def _bristol_june_tmy_in_tmp_path(
-    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serve a clear _DAY, the day `home quick` starts on, as Bristol's TMY, and work in tmp_path.
+    """Work in tmp_path on the clear _DAY, the day `home quick` starts on, that bristol_june_tmy serves as Bristol's TMY.
 
     Before the fix, a command reads the capacity as no battery and simulates,
     so it fails its assertion instead of reaching PVGIS.
     """
-    ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1).seed_as_bristol_tmy(weather_cache)
     monkeypatch.chdir(tmp_path)
 
 
