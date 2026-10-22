@@ -6,8 +6,9 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import timedelta, timezone
+from datetime import timedelta, timezone, tzinfo
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 import pandas as pd
@@ -106,6 +107,21 @@ def _interrupted_half_way(frame):
     return frame.assign(temp_air=temp_air)
 
 
+class _ZonePandasCannotLocalizeIn(tzinfo):
+    """Europe/London in a tzinfo type pandas can convert an index to but cannot localize wall times in; its str names no timezone."""
+
+    _london = ZoneInfo("Europe/London")
+
+    def utcoffset(self, dt):
+        return self._london.utcoffset(dt)
+
+    def dst(self, dt):
+        return self._london.dst(dt)
+
+    def tzname(self, dt):
+        return self._london.tzname(dt)
+
+
 class TestWeatherCache:
     """Test weather data caching (LOC-004)."""
 
@@ -194,12 +210,14 @@ class TestWeatherCache:
         [
             pytest.param("dateutil/Europe/London", id="a dateutil zone"),
             pytest.param(timezone(timedelta(hours=1), "BST"), id="a named fixed offset"),
+            pytest.param(_ZonePandasCannotLocalizeIn(), id="a zone pandas can convert to but not localize in"),
         ],
     )
     def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
         """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
-        ValueError names that str, and put leaves no file, so a get finds no entry."""
-        index = pd.date_range("2024-06-21", periods=48, freq="h", tz=tz)
+        ValueError names that str, and put leaves no file, so a get finds no entry. The index is built at UTC
+        and converted to tz, because pandas cannot localize wall times in some such zones."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert(tz)
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
 
         with pytest.raises(ValueError, match=re.escape(str(index.tz))):
