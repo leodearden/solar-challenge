@@ -1038,13 +1038,13 @@ class TestContentDispositionHeader:
 def _store_home_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
     """Save a home run of _A_HOME as *run_id*, and return the path of its results page."""
     _store_home_run(storage, run_id, _A_HOME)
-    return f"/results/home/{run_id}"
+    return f"/results/{run_id}"
 
 
 def _store_fleet_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
     """Save a fleet run of two _A_HOMEs as *run_id*, and return the path of its results page."""
     _store_fleet_run(storage, run_id, [_A_HOME, _A_HOME])
-    return f"/results/fleet/{run_id}"
+    return f"/results/{run_id}"
 
 
 class TestResultsPageExportLinks:

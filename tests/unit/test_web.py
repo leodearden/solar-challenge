@@ -268,7 +268,7 @@ class TestSidebarCurrentPage:
     ) -> None:
         """A saved home run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
         run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
 
@@ -278,13 +278,13 @@ class TestSidebarCurrentPage:
         """A saved fleet run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
         results = make_sinusoidal_sim_results(days=1)
         run_id = _save_fleet_run(storage, "Community Fleet", [results, results])
-        response = client.get(f"/results/fleet/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
 
 
 class TestHomeResultsRoute:
-    """Tests for the GET /results/home/<run_id> route."""
+    """Tests for the GET /results/<run_id> route, of a home run."""
 
     @pytest.mark.parametrize(
         "run_id",
@@ -298,7 +298,7 @@ class TestHomeResultsRoute:
 
         'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
         """
-        response = client.get(f"/results/home/{run_id}", follow_redirects=True)
+        response = client.get(f"/results/{run_id}", follow_redirects=True)
 
         assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
         assert "Run not found." in texts(response.get_data(as_text=True))
@@ -313,7 +313,7 @@ class TestHomeResultsRoute:
         run_id = _save_home_run(storage, "Test Run", results)
         summary = calculate_summary(results)
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         assert {"chart-sankey", "chart-daily-balance"} <= element_ids(page)
@@ -337,7 +337,7 @@ class TestHomeResultsRoute:
             "North Roof",
             make_sim_results(self_kwh=10.0, export_kwh=9.046, import_kwh=5.749, days=1),
         )
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         expected_cards = {
@@ -365,7 +365,7 @@ class TestHomeResultsRoute:
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         page = response.get_data(as_text=True)
@@ -379,7 +379,7 @@ class TestHomeResultsRoute:
         run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
         storage.update_run_labels(run_id, {"name": None})
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
@@ -397,7 +397,7 @@ class TestHomeResultsRoute:
             ),
         )
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]

@@ -31,7 +31,7 @@ def test_home_results_page_of_a_run_with_a_heat_pump_has_a_container_for_each_he
     run_id = str(uuid.uuid4())
     store_home_run(run_storage_of(app), run_id, make_home_config(), results)
 
-    response = app.test_client().get(f"/results/home/{run_id}")
+    response = app.test_client().get(f"/results/{run_id}")
 
     assert response.status_code == 200
     assert {"chart-hp-load-share", "chart-hp-load-profile"} <= element_ids(
