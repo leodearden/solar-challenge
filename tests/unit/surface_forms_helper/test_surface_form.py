@@ -789,6 +789,24 @@ def test_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_namin
         named_classes(routine)
 
 
+def test_a_routine_that_wraps_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_both_and_their_kinds() -> None:
+    def settle(self: object, rate: int) -> None: ...
+
+    half = functools.partialmethod(settle, rate=1)
+
+    @functools.wraps(half)
+    def halved(self: object) -> None: ...
+
+    naming_both_and_their_kinds = (
+        rf"\.halved\b.*\bbuiltins\.function\b.*{re.escape(repr(half))}"
+        r".*\bfunctools\.partialmethod\b"
+    )
+    with pytest.raises(TypeError, match=naming_both_and_their_kinds):
+        surface_form(halved)
+    with pytest.raises(TypeError, match=naming_both_and_their_kinds):
+        named_classes(halved)
+
+
 def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"

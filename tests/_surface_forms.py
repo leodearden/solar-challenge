@@ -74,8 +74,9 @@ def surface_form(obj: object) -> str:
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
-    functools.singledispatchmethod is, or a descriptor defined in Python that neither
-    wraps a callable, as functools.wraps records one, nor carries a signature.
+    functools.singledispatchmethod is; a descriptor defined in Python that neither
+    wraps a callable, as functools.wraps records one, nor carries a signature; or a
+    routine that wraps such a descriptor, which the TypeError names too, with its kind.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -528,11 +529,12 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
     """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature.
 
-    A routine _is_unreadable_routine holds of raises TypeError naming it and its kind
-    before anything else is read.
+    A routine whose signature inspect cannot read, as _unreadable_link finds one, raises
+    the TypeError _unreadable_routine_error gives for it, before anything else is read.
     """
-    if _is_unreadable_routine(obj):
-        raise _unreadable_routine_error(_label(obj), obj)
+    link = _unreadable_link(obj)
+    if link is not None:
+        raise _unreadable_routine_error(_label(obj), obj, link)
     end = _chain_end(obj, stop=_carries_signature)
     if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
@@ -562,29 +564,38 @@ def _carries_signature(obj: object) -> bool:
     return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
 
 
-def _is_unreadable_routine(obj: object) -> bool:
-    """Whether *obj* is a routine whose signature inspect cannot read.
+def _unreadable_link(obj: object) -> object | None:
+    """The link of the chain inspect follows from *obj* at which it fails to read a signature, if *obj* is a routine whose signature it cannot read; None otherwise.
 
-    That is one that is not callable, as no functools.partialmethod or
-    functools.singledispatchmethod is; or a callable whose chain, as _chain_end follows
-    it, ends at a routine whose class defines __get__ in Python and that carries no
-    signature, which inspect reads as a builtin, by a text signature only a routine
-    defined in C gives.
+    That link is *obj* itself if it is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is, since inspect checks that before it follows any
+    chain. Else it is the end of the chain, as _chain_end follows it, if that is a
+    routine whose class defines __get__ in Python and that carries no signature, which
+    inspect reads as a builtin, by a text signature only a routine defined in C gives.
     """
     if not _is_routine(obj):
-        return False
+        return None
     if not callable(obj):
-        return True
+        return obj
     end = _chain_end(obj, stop=_carries_signature)
     getter = inspect.getattr_static(type(end), "__get__", None)
-    return _is_routine(end) and isinstance(getter, types.FunctionType) and not _carries_signature(end)
+    if _is_routine(end) and isinstance(getter, types.FunctionType) and not _carries_signature(end):
+        return end
+    return None
 
 
-def _unreadable_routine_error(label: str, routine: object) -> TypeError:
-    """The error for *routine*, a routine _is_unreadable_routine holds of, which *label* names."""
+def _unreadable_routine_error(label: str, routine: object, link: object) -> TypeError:
+    """The error for *routine*, which *label* names and whose signature inspect fails to read at *link*, the link _unreadable_link gives for it."""
+    kind = _label(type(routine))
+    if link is routine:
+        return TypeError(
+            f"{label} is a {kind}, a routine whose signature inspect cannot read, so no "
+            "form spells it: make the name private, or define it with def"
+        )
     return TypeError(
-        f"{label} is a {_label(type(routine))}, a routine whose signature inspect cannot "
-        "read, so no form spells it: make the name private, or define it with def"
+        f"{label} is a {kind} that wraps {_label(link)}, a {_label(type(link))} whose "
+        "signature inspect cannot read, so no form spells it: make the name private, or "
+        "define what it wraps with def"
     )
 
 
@@ -1024,8 +1035,9 @@ class _AnnotatedAttribute:
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
-    A member that _spelled_function has no rule for and that _is_unreadable_routine
-    holds of raises TypeError naming *cls*, the member and its kind.
+    A member that _spelled_function has no rule for and whose signature inspect cannot
+    read, as _unreadable_link finds one, raises the TypeError _unreadable_routine_error
+    gives for it, naming *cls* and the member.
     """
     pinned = _pinned_by_class_form(cls)
     members = {
@@ -1034,8 +1046,9 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
-        if _spelled_function(member) is None and _is_unreadable_routine(member):
-            raise _unreadable_routine_error(f"{_label(cls)}.{name}", member)
+        link = _unreadable_link(member)
+        if link is not None and _spelled_function(member) is None:
+            raise _unreadable_routine_error(f"{_label(cls)}.{name}", member, link)
     return members
 
 
