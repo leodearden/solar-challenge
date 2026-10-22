@@ -146,9 +146,10 @@ def named_classes(obj: object) -> set[type]:
     surface_form reads as such a class, or a routine whose signature inspect cannot read
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
-    A class's signature is spelled where its constructor is, as
-    _constructor_spelling_modules describes, whether or not the class carries a signature
-    in the constructor's place; one its metaclass or a descriptor gives raises TypeError.
+    A class's signature is spelled where its constructor is, the __call__ its metaclass
+    resolves if inspect reads that, as _constructor_spelling_modules describes, whether
+    or not the class carries a signature in the constructor's place; one its metaclass
+    or a descriptor gives raises TypeError.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
@@ -710,10 +711,12 @@ def _constructor_spelling_modules(
 ) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled.
 
-    That constructor is the one _constructor_as_read gives for the nearest class in
-    *cls*'s MRO that holds one, which may be a base defined in another module. It is
-    spelled where _spelling_modules spells the end of its chain, so a function the class
-    body assigns from another module, or that wraps one there as functools.wraps records
+    That constructor is the __call__ *cls*'s metaclass resolves, if
+    _metaclass_call_as_read gives one, which inspect reads before any __new__ or
+    __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
+    MRO that holds one, which may be a base defined in another module. It is spelled
+    where _spelling_modules spells the end of its chain, so a function the class body
+    assigns from another module, or that wraps one there as functools.wraps records
     one, is spelled in that other module. One compiled outside the class body and
     renamed into it, as the dataclass decorator generates an __init__ and
     collections.namedtuple a __new__, is spelled as _generated_constructor_modules
@@ -724,8 +727,11 @@ def _constructor_spelling_modules(
     _signature_holder checks every class that carries a signature before the
     constructor is read.
     """
-    holder = _constructor_holder(cls)
     signature_holder = _signature_holder(cls) if _carries_signature(cls) else None
+    call = _metaclass_call_as_read(cls)
+    if call is not None:
+        return _spelling_modules(call, names)
+    holder = _constructor_holder(cls)
     end = _chain_end(_constructor_as_read(cls, holder))
     if isinstance(end, _C_CONSTRUCTOR_KINDS):
         spelling_class = holder if signature_holder is None else signature_holder
@@ -760,12 +766,28 @@ def _refuse_constructor_generated_for_another_class(
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls* through its type's __get__."""
+    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
     kind, constructor = _first_read_constructor(holder)
-    get = getattr(type(constructor), "__get__", None)
-    if kind == "__new__" or get is None or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+    if kind == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return constructor
-    bound: object = get(constructor, cls, type(cls))
+    return _bound_to(constructor, cls)
+
+
+def _metaclass_call_as_read(cls: type) -> object | None:
+    """The __call__ *cls*'s metaclass resolves, as inspect reads it in place of any __new__ or __init__: bound to the metaclass, as _bound_to binds it; None if it is defined in C, as type.__call__ is, which inspect skips, or wraps a callable defined in C, which only some minors read."""
+    metaclass = type(cls)
+    call = inspect.getattr_static(metaclass, "__call__")
+    if isinstance(inspect.unwrap(call, stop=_carries_signature), _C_CONSTRUCTOR_KINDS):
+        return None
+    return _bound_to(call, metaclass)
+
+
+def _bound_to(descriptor: object, owner: object) -> object:
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__."""
+    get = getattr(type(descriptor), "__get__", None)
+    if get is None:
+        return descriptor
+    bound: object = get(descriptor, owner, type(owner))
     return bound
 
 
