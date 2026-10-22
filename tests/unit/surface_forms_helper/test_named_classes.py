@@ -5,6 +5,7 @@ Gauge is defined at module level, where its forward reference to itself resolves
 module's namespace.
 """
 
+import collections
 import collections.abc
 import datetime
 import decimal
@@ -12,6 +13,7 @@ import enum
 import fractions
 import functools
 import gc
+import inspect
 import pathlib
 import sys
 import types
@@ -554,6 +556,25 @@ def test_a_method_bound_to_a_callable_object_whose_module_has_since_left_sys_mod
 
     assert "auditing.Caller.__call__" in str(raised.value)
     assert "'auditing'" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        pytest.param(types.FunctionType, id="types.FunctionType"),
+        pytest.param(type(reversed(collections.deque())), id="deque_reverse_iterator"),
+    ],
+)
+def test_a_partial_that_carries_a_signature_over_an_immutable_type_its_module_does_not_bind_under_its_qualified_name_names_that_signatures_classes(
+    cls: type,
+) -> None:
+    """types.FunctionType is a static type; the deque reverse iterator is a heap type from Python 3.12."""
+    made = functools.partial(cls)
+    made.__signature__ = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    assert named_classes(made) == {int}
 
 
 def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
