@@ -75,7 +75,15 @@ class ValidationReport:
         return "\n".join(lines)
 
 
-_UK_YIELD_BENCHMARK_KWH_PER_KWP = (300.0, 1200.0)
+UK_YIELD_BENCHMARK_KWH_PER_KWP: tuple[float, float] = (300.0, 1200.0)
+"""A year's AC energy per wired kWp that PVGIS and MCS give an unshaded UK array facing within 90° of south: docs/pv-annual-yield-benchmark.md §2."""
+
+UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT: tuple[float, float] = (10.0, 45.0)
+"""The share of its PV generation, in percent, that MCS MGD 003 gives a home using 3,000-3,499 kWh a year with 4 kWp of PV and no battery: docs/self-consumption-benchmark.md §2."""
+
+UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT: tuple[float, float] = (35.0, 90.0)
+"""The same share with a 5 kWh battery: docs/self-consumption-benchmark.md §2."""
+
 _YIELD_BENCHMARK_MIN_DAYS = 365
 
 
@@ -100,7 +108,7 @@ def _check_annual_yield(
     if window.days < _YIELD_BENCHMARK_MIN_DAYS:
         return None
     yield_per_kwp = _annual_equivalent_kwh(generation, window) / wired_kw
-    low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
+    low, high = UK_YIELD_BENCHMARK_KWH_PER_KWP
     passed = low <= yield_per_kwp <= high
     placement = "within" if passed else "outside"
     return ValidationResult(
@@ -355,68 +363,77 @@ def _generation_over_demand(summary: SummaryStatistics) -> float:
     return math.inf if summary.total_generation_kwh > 0 else 0.0
 
 
-def validate_self_consumption_pv_only(results: SimulationResults) -> ValidationResult:
-    """Validate self-consumption ratio for PV-only home against benchmarks.
+def _self_consumption_benchmark(
+    *, check_name: str, subject: str, sc_percent: float, band: tuple[float, float], note: str
+) -> ValidationResult:
+    """A self-consumption check's result: sc_percent, the run's ratio in percent, passes inside band, edges included; the message states band, then note."""
+    low, high = band
+    passed = low <= sc_percent <= high
+    placement = "within" if passed else "outside"
+    return ValidationResult(
+        passed=passed,
+        check_name=check_name,
+        message=(
+            f"{subject} ({sc_percent:.1f}%) {placement} UK benchmark range "
+            f"({low:g}-{high:g}%){note}"
+        ),
+        value=sc_percent,
+        expected_range=band,
+    )
 
-    UK benchmark for PV-only self-consumption: ~25-35%
-    With typical 4 kW system and 3,400 kWh/year consumption.
+
+def _pv_only_size_note(
+    sc_percent: float, band: tuple[float, float], generation_over_demand: float
+) -> str:
+    """For a ratio outside band, whether generation_over_demand makes the run's PV small or large relative to its consumption; "" otherwise."""
+    low, high = band
+    if sc_percent > high and generation_over_demand < 1.0:
+        return " (Note: PV small relative to consumption)"
+    if sc_percent < low and generation_over_demand > 1.5:
+        return " (Note: PV large relative to consumption)"
+    return ""
+
+
+def validate_self_consumption_pv_only(results: SimulationResults) -> ValidationResult:
+    """Judge a PV-only run's self-consumption ratio against UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT, the band MCS MGD 003 gives a home using 3,000-3,499 kWh a year with 4 kWp of PV (docs/self-consumption-benchmark.md).
+
+    Outside it, a note says whether the run's PV is large or small relative to its
+    consumption, from its own generation and demand totals.
 
     Args:
         results: Simulation results
 
     Returns:
-        ValidationResult indicating if within benchmark range
+        ValidationResult whose expected_range is the band
     """
     summary = calculate_summary(results)
+    sc_percent = summary.self_consumption_ratio * 100
+    band = UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+    return _self_consumption_benchmark(
+        check_name="pv_only_self_consumption_benchmark",
+        subject="Self-consumption ratio",
+        sc_percent=sc_percent,
+        band=band,
+        note=_pv_only_size_note(sc_percent, band, _generation_over_demand(summary)),
+    )
 
-    # Self-consumption ratio
-    sc_ratio = summary.self_consumption_ratio * 100  # As percentage
 
-    # Expected range for PV-only (UK benchmark)
-    expected_min = 20.0  # Slightly wider than strict 25%
-    expected_max = 45.0  # Slightly wider than strict 35%
-
-    # Check if within benchmark
-    if expected_min <= sc_ratio <= expected_max:
-        return ValidationResult(
-            passed=True,
-            check_name="pv_only_self_consumption_benchmark",
-            message=(
-                f"Self-consumption ratio ({sc_ratio:.1f}%) "
-                f"within UK benchmark range ({expected_min}-{expected_max}%)"
-            ),
-            value=sc_ratio,
-            expected_range=(expected_min, expected_max),
-        )
-    else:
-        # Check for documented exceptions
-        # Higher ratios can occur with:
-        # - Large consumption relative to PV
-        # - Consumption well-aligned with generation
-        # Lower ratios can occur with:
-        # - Small consumption relative to PV
-        # - Consumption misaligned with generation
-
-        generation_over_demand = _generation_over_demand(summary)
-        exception_msg = ""
-
-        if sc_ratio > expected_max:
-            if generation_over_demand < 1.0:
-                exception_msg = " (Note: PV small relative to consumption)"
-        elif sc_ratio < expected_min:
-            if generation_over_demand > 1.5:
-                exception_msg = " (Note: PV large relative to consumption)"
-
-        return ValidationResult(
-            passed=False,
-            check_name="pv_only_self_consumption_benchmark",
-            message=(
-                f"Self-consumption ratio ({sc_ratio:.1f}%) "
-                f"outside UK benchmark range ({expected_min}-{expected_max}%){exception_msg}"
-            ),
-            value=sc_ratio,
-            expected_range=(expected_min, expected_max),
-        )
+def _battery_size_note(
+    sc_percent: float,
+    band: tuple[float, float],
+    generation_over_demand: float,
+    battery_kwh: float,
+    annual_consumption_kwh: float,
+) -> str:
+    """For a ratio outside band, whether generation_over_demand makes the run's PV small or very large relative to its consumption, or battery_kwh is small against a day of annual_consumption_kwh; "" otherwise."""
+    low, high = band
+    if sc_percent > high and generation_over_demand < 0.8:
+        return " (Note: PV small relative to consumption)"
+    if sc_percent < low and generation_over_demand > 2.0:
+        return " (Note: PV very large relative to consumption)"
+    if sc_percent < low and battery_kwh / (annual_consumption_kwh / 365) < 0.3:
+        return " (Note: Battery small relative to daily consumption)"
+    return ""
 
 
 def validate_self_consumption_with_battery(
@@ -424,10 +441,11 @@ def validate_self_consumption_with_battery(
     battery_kwh: float,
     annual_consumption_kwh: float,
 ) -> ValidationResult:
-    """Validate self-consumption ratio for home with battery against benchmarks.
+    """Judge a run's self-consumption ratio with a battery against UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT, the band MCS MGD 003 gives a home using 3,000-3,499 kWh a year with 4 kWp of PV and a 5 kWh battery (docs/self-consumption-benchmark.md).
 
-    UK benchmark for PV + battery self-consumption: ~60-80%
-    With typical 4 kW PV, 5 kWh battery, and 3,400 kWh/year consumption.
+    Outside it, a note says whether the run's PV is large or small relative to its
+    consumption, from its own generation and demand totals, or instead that the battery
+    is small against a day of annual_consumption_kwh.
 
     Args:
         results: Simulation results
@@ -435,55 +453,21 @@ def validate_self_consumption_with_battery(
         annual_consumption_kwh: Target annual consumption, which only the battery-size note reads
 
     Returns:
-        ValidationResult indicating if within benchmark range
+        ValidationResult whose expected_range is the band
     """
     summary = calculate_summary(results)
-
-    # Self-consumption ratio
-    sc_ratio = summary.self_consumption_ratio * 100  # As percentage
-
-    # Expected range for PV + battery (UK benchmark)
-    # Slightly wider to account for simulation variations
-    expected_min = 50.0  # Wider than strict 60%
-    expected_max = 90.0  # Wider than strict 80%
-
-    # Check if within benchmark
-    if expected_min <= sc_ratio <= expected_max:
-        return ValidationResult(
-            passed=True,
-            check_name="battery_self_consumption_benchmark",
-            message=(
-                f"Self-consumption ratio with battery ({sc_ratio:.1f}%) "
-                f"within UK benchmark range ({expected_min}-{expected_max}%)"
-            ),
-            value=sc_ratio,
-            expected_range=(expected_min, expected_max),
-        )
-    else:
-        # Document potential exceptions
-        generation_over_demand = _generation_over_demand(summary)
-        battery_to_daily = battery_kwh / (annual_consumption_kwh / 365)
-        exception_msg = ""
-
-        if sc_ratio > expected_max:
-            if generation_over_demand < 0.8:
-                exception_msg = " (Note: PV small relative to consumption)"
-        elif sc_ratio < expected_min:
-            if generation_over_demand > 2.0:
-                exception_msg = " (Note: PV very large relative to consumption)"
-            elif battery_to_daily < 0.3:
-                exception_msg = " (Note: Battery small relative to daily consumption)"
-
-        return ValidationResult(
-            passed=False,
-            check_name="battery_self_consumption_benchmark",
-            message=(
-                f"Self-consumption ratio with battery ({sc_ratio:.1f}%) "
-                f"outside UK benchmark range ({expected_min}-{expected_max}%){exception_msg}"
-            ),
-            value=sc_ratio,
-            expected_range=(expected_min, expected_max),
-        )
+    sc_percent = summary.self_consumption_ratio * 100
+    band = UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT
+    note = _battery_size_note(
+        sc_percent, band, _generation_over_demand(summary), battery_kwh, annual_consumption_kwh
+    )
+    return _self_consumption_benchmark(
+        check_name="battery_self_consumption_benchmark",
+        subject="Self-consumption ratio with battery",
+        sc_percent=sc_percent,
+        band=band,
+        note=note,
+    )
 
 
 def validate_simulation(

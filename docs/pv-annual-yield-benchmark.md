@@ -1,7 +1,7 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203), #324, #282, #749, #781, #812
-**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`, `_module_rating_w`); [`src/solar_challenge/timebase.py`](../src/solar_challenge/timebase.py) (`SimulationWindow.annualisation_scale`)
+**Task:** #239 (follow-up from #203), #324, #282, #749, #781, #812, #818
+**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`, `_module_rating_w`); [`src/solar_challenge/timebase.py`](../src/solar_challenge/timebase.py) (`SimulationWindow.annualisation_scale`)
 
 ---
 
@@ -59,8 +59,9 @@ seasons.
 - The band is 300–1200 kWh per wired kWp: the range two external references give an
   unshaded UK array facing east, west or anywhere between them through south, at any
   pitch, in a typical year, rounded outward to the next hundred.
-- `_UK_YIELD_BENCHMARK_KWH_PER_KWP` in `validation.py` is the single source of the
-  numbers; this note transcribes them.
+- `UK_YIELD_BENCHMARK_KWH_PER_KWP` in `validation.py` is the single source of the
+  numbers; this note transcribes them. It is public, so other modules read it rather
+  than restate it.
 - **Scope.** The check knows neither the site nor, in `validate results`, the
   orientation, so the band must hold every array it may be given. Facing within 90° of
   south covers MCS's orientations up to east and west, and any pitch avoids an
@@ -301,3 +302,6 @@ This is a dated record. Re-query before relying on it.
 - Validation gains the in-plane irradiation. A performance-ratio check, a year's AC over
   the in-plane irradiation times the wired kWp, against MCS's 0.8, would then judge a
   run independently of its site and orientation.
+- [self-consumption-benchmark.md](self-consumption-benchmark.md) §2 takes its 4 kWp
+  generation range from this note's scope and §5's Kk extremes, so a change to either
+  moves that range too.
