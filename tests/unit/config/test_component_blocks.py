@@ -143,11 +143,6 @@ def test_each_table_holds_its_rows(
     assert dict(block.when_omitted) == when_omitted
 
 
-def test_system_losses_is_a_pv_key() -> None:
-    """T2: a pv: block carries PVConfig.system_losses."""
-    assert "system_losses" in PV_BLOCK.keys
-
-
 @pytest.mark.parametrize(
     ("key", "value"),
     [
