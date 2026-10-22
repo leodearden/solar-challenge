@@ -1314,6 +1314,114 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
 
 
+def test_a_constructor_spelled_in_another_module_than_its_class_body_names_the_classes_that_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "building",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def build(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "def make(cls, share: 'Share'): ...\n"
+        "\n"
+        "class Builder:\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n",
+    )
+    rebuilding = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rebuilding",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from building import Builder, build, make\n"
+        "\n"
+        "class Assigned:\n"
+        "    __init__ = build\n"
+        "\n"
+        "class Called:\n"
+        "    __init__ = Builder()\n"
+        "\n"
+        "class Made:\n"
+        "    __new__ = make\n"
+        "\n"
+        "class Wrapping:\n"
+        "    @wraps(build)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n",
+    )
+
+    assert named_classes(rebuilding.Assigned) == {fractions.Fraction}
+    assert named_classes(rebuilding.Called) == {fractions.Fraction}
+    assert named_classes(rebuilding.Made) == {fractions.Fraction}
+    assert named_classes(rebuilding.Wrapping) == {fractions.Fraction}
+
+
+def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_module_of_that_class_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "pointing",
+        "from decimal import Decimal as Share\n"
+        "from typing import NamedTuple\n"
+        "\n"
+        "class Point(NamedTuple):\n"
+        "    share: 'Share'\n",
+    )
+
+    class Subpoint(pointing.Point):
+        pass
+
+    assert named_classes(Subpoint) == {decimal.Decimal}
+
+
+def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_class_holding_it_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "wrapping",
+        "from fractions import Fraction as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "class Created:\n"
+        "    @wraps(object.__new__)\n"
+        "    def __new__(cls, *args, **kwargs):\n"
+        "        return object.__new__(cls)\n"
+        "\n"
+        "class Initialised:\n"
+        "    @wraps(object.__init__)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n",
+    )
+    signing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "signing",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from wrapping import Created, Initialised\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Recreated(Created):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class Reinitialised(Initialised):\n"
+        "    __signature__ = signature\n",
+    )
+
+    assert named_classes(signing.Recreated) == {decimal.Decimal}
+    assert named_classes(signing.Reinitialised) == {decimal.Decimal}
+
+
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
