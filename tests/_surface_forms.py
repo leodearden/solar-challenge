@@ -71,6 +71,12 @@ def surface_form(obj: object) -> str:
     __signature__ counts as none for these refusals, since Python 3.12 and 3.13 convert a
     string or call a callable given there and 3.11 and 3.14 refuse either.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
+
+    A routine whose signature inspect cannot read raises TypeError naming it and its
+    kind: one that is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is; a descriptor defined in Python that neither
+    wraps a callable, as functools.wraps records one, nor carries a signature; or a
+    routine that wraps such a descriptor, which the TypeError names too, with its kind.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -102,9 +108,9 @@ def member_forms(cls: type) -> dict[str, str]:
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
     module does not bind raises NameError, and a module another of the same name has
-    replaced in sys.modules raises LookupError. A public member that is a
-    functools.partialmethod, which no member rule spells, raises TypeError naming *cls*,
-    the member and its kind.
+    replaced in sys.modules raises LookupError. A public member that no member rule
+    spells and that is a routine whose signature inspect cannot read, as surface_form
+    describes one, raises TypeError naming *cls*, the member and its kind.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -136,10 +142,10 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type; a class whose constructor surface_form refuses, or a
-    routine surface_form reads as such a class, raises the TypeError surface_form raises
-    for it, and a class with a member member_forms refuses, the TypeError member_forms
-    raises for it.
+    naming it and its type; a class whose constructor surface_form refuses, a routine
+    surface_form reads as such a class, or a routine whose signature inspect cannot read
+    raises the TypeError surface_form raises for it, and a class with a member
+    member_forms refuses, the TypeError member_forms raises for it.
     A class's constructor is spelled in the module of the class in its MRO whose own body
     defines __init__ or __new__, which may be a base defined in another module; a
     parameter of an __init__ the dataclass decorator generated, in the module of the
@@ -521,7 +527,14 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature."""
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature.
+
+    A routine whose signature inspect cannot read, as _unreadable_link finds one, raises
+    the TypeError _unreadable_routine_error gives for it, before anything else is read.
+    """
+    link = _unreadable_link(obj)
+    if link is not None:
+        raise _unreadable_routine_error(_label(obj), obj, link)
     end = _chain_end(obj, stop=_carries_signature)
     if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
@@ -549,6 +562,41 @@ def _carries_signature(obj: object) -> bool:
     and 3.13 convert or call and 3.11 and 3.14 refuse.
     """
     return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
+
+
+def _unreadable_link(obj: object) -> object | None:
+    """The link of the chain inspect follows from *obj* at which it fails to read a signature, if *obj* is a routine whose signature it cannot read; None otherwise.
+
+    That link is *obj* itself if it is not callable, as no functools.partialmethod or
+    functools.singledispatchmethod is, since inspect checks that before it follows any
+    chain. Else it is the end of the chain, as _chain_end follows it, if that is a
+    routine whose class defines __get__ in Python and that carries no signature, which
+    inspect reads as a builtin, by a text signature only a routine defined in C gives.
+    """
+    if not _is_routine(obj):
+        return None
+    if not callable(obj):
+        return obj
+    end = _chain_end(obj, stop=_carries_signature)
+    getter = inspect.getattr_static(type(end), "__get__", None)
+    if _is_routine(end) and isinstance(getter, types.FunctionType) and not _carries_signature(end):
+        return end
+    return None
+
+
+def _unreadable_routine_error(label: str, routine: object, link: object) -> TypeError:
+    """The error for *routine*, which *label* names and whose signature inspect fails to read at *link*, the link _unreadable_link gives for it."""
+    kind = _label(type(routine))
+    if link is routine:
+        return TypeError(
+            f"{label} is a {kind}, a routine whose signature inspect cannot read, so no "
+            "form spells it: make the name private, or define it with def"
+        )
+    return TypeError(
+        f"{label} is a {kind} that wraps {_label(link)}, a {_label(type(link))} whose "
+        "signature inspect cannot read, so no form spells it: make the name private, or "
+        "define what it wraps with def"
+    )
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
@@ -985,7 +1033,12 @@ class _AnnotatedAttribute:
 
 
 def _public_members(cls: type) -> dict[str, object]:
-    """The members member_forms(cls) spells, by name, once _refuse_partialmethod has passed each: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins."""
+    """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
+
+    A member that _spelled_function has no rule for and whose signature inspect cannot
+    read, as _unreadable_link finds one, raises the TypeError _unreadable_routine_error
+    gives for it, naming *cls* and the member.
+    """
     pinned = _pinned_by_class_form(cls)
     members = {
         name: member
@@ -993,18 +1046,10 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
-        _refuse_partialmethod(cls, name, member)
+        link = _unreadable_link(member)
+        if link is not None and _spelled_function(member) is None:
+            raise _unreadable_routine_error(f"{_label(cls)}.{name}", member, link)
     return members
-
-
-def _refuse_partialmethod(cls: type, name: str, member: object) -> None:
-    """Raise TypeError naming *cls*'s member *name*, its kind and the rule if *member* is a functools.partialmethod, which no member rule spells."""
-    if isinstance(member, functools.partialmethod):
-        kind = _label(type(member))
-        raise TypeError(
-            f"{_label(cls)}.{name} is a {kind}, which member_forms has no rule for: define "
-            f"{name} with def"
-        )
 
 
 def _own_members(cls: type) -> dict[str, object]:

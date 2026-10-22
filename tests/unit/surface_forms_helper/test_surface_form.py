@@ -13,6 +13,7 @@ import fractions
 import functools
 import inspect
 import pathlib
+import re
 import sys
 import types
 import typing
@@ -43,7 +44,12 @@ from typing import (
 import pytest
 
 from tests._surface_forms import named_classes, surface_form
-from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    UNREADABLE_ROUTINES,
+    Outer,
+    Preset,
+    imported_module,
+)
 
 
 class Wrapper:
@@ -770,6 +776,35 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
         surface_form(Counted)
     with pytest.raises(TypeError, match=naming_counted_and_its_call):
         named_classes(Counted)
+
+
+@pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
+def test_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_it_and_its_kind(
+    routine: object, kind: str
+) -> None:
+    naming_it_and_its_kind = rf"{re.escape(repr(routine))}.*\b{re.escape(kind)}\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_kind):
+        surface_form(routine)
+    with pytest.raises(TypeError, match=naming_it_and_its_kind):
+        named_classes(routine)
+
+
+def test_a_routine_that_wraps_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_both_and_their_kinds() -> None:
+    def settle(self: object, rate: int) -> None: ...
+
+    half = functools.partialmethod(settle, rate=1)
+
+    @functools.wraps(half)
+    def halved(self: object) -> None: ...
+
+    naming_both_and_their_kinds = (
+        rf"\.halved\b.*\bbuiltins\.function\b.*{re.escape(repr(half))}"
+        r".*\bfunctools\.partialmethod\b"
+    )
+    with pytest.raises(TypeError, match=naming_both_and_their_kinds):
+        surface_form(halved)
+    with pytest.raises(TypeError, match=naming_both_and_their_kinds):
+        named_classes(halved)
 
 
 def test_a_constant_form_is_its_type_qualified_name() -> None:
