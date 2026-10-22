@@ -35,7 +35,7 @@ OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
     2: 2700.0,
     3: 3200.0,
     4: 3900.0,
-    5: 4500.0,  # 5 or more occupants: LoadConfig.get_annual_consumption adds 400 kWh for each above 5
+    5: 4500.0,  # 5 or more occupants: LoadConfig.get_annual_consumption extrapolates above 5
 }
 
 
