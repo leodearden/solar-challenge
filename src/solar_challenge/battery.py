@@ -4,12 +4,10 @@
 import dataclasses
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Literal, Optional
 
+from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
-
-if TYPE_CHECKING:
-    from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
 
 
 def _validate_soc_and_efficiency(
@@ -126,7 +124,8 @@ class BatteryConfig:
         max_charge_kw: Maximum charging power in kilowatts
         max_discharge_kw: Maximum discharging power in kilowatts
         name: Optional identifier for the battery
-        dispatch_strategy: Optional dispatch strategy configuration
+        dispatch_strategy: Optional dispatch strategy configuration, one of
+            dispatch.DispatchStrategyConfig's variants
         grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
         min_soc_fraction: Minimum state of charge as fraction of capacity (default 0.1)
         max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
@@ -164,8 +163,8 @@ class BatteryConfig:
     max_charge_kw: float = 2.5
     max_discharge_kw: float = 2.5
     name: str = ""
-    dispatch_strategy: Optional["DispatchStrategyConfig"] = None
-    grid_charging: Optional["GridChargeConfig"] = None
+    dispatch_strategy: Optional[DispatchStrategyConfig] = None
+    grid_charging: Optional[GridChargeConfig] = None
     min_soc_fraction: float = 0.1
     max_soc_fraction: float = 0.9
     charge_efficiency: float = 0.975

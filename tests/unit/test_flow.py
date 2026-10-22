@@ -21,10 +21,10 @@ from solar_challenge.flow import (
 )
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-from solar_challenge.config import GridChargeConfig
 from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
+    GridChargeConfig,
     GridChargeContext,
     TOUOptimizedStrategy,
 )

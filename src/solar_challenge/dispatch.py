@@ -4,16 +4,23 @@
 This module provides an abstract framework for battery dispatch strategies,
 allowing different algorithms to decide when and how to charge/discharge
 batteries based on generation, demand, tariffs, and other factors.
+
+It also defines the configuration a battery names its strategy and its grid
+charging with: the variants of DispatchStrategyConfig, and GridChargeConfig;
+build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import List, Literal, Optional, Tuple
+from types import MappingProxyType
+from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
@@ -218,6 +225,114 @@ def _grid_power_to_target_kw(
     )
 
 
+@dataclass(frozen=True)
+class GridChargeConfig:
+    """Configuration for grid-charging (battery arbitrage) mode.
+
+    Attributes:
+        target_soc_fraction: Target state-of-charge to reach via grid charging,
+            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+    """
+
+    target_soc_fraction: float = 0.9
+
+    def __post_init__(self) -> None:
+        """Validate grid-charge configuration."""
+        if not (0 < self.target_soc_fraction <= 1):
+            raise ConfigurationError(
+                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
+            )
+
+
+def _require_valid_peak_hours(peak_hours: Sequence[tuple[int, int]]) -> None:
+    """Refuse peak_hours unless it holds at least one (start, end) window, each with 0 <= start < end <= 24.
+
+    Raises:
+        ConfigurationError: Naming peak_hours, and the first window that breaks the rule.
+    """
+    if not peak_hours:
+        raise ConfigurationError("peak_hours must hold at least one (start, end) window; it is empty")
+    for start, end in peak_hours:
+        if not 0 <= start < end <= 24:
+            raise ConfigurationError(
+                f"peak_hours windows must satisfy 0 <= start < end <= 24, got ({start}, {end})"
+            )
+
+
+def _require_valid_import_limit(import_limit_kw: float) -> None:
+    """Refuse an import_limit_kw that is not positive.
+
+    Raises:
+        ConfigurationError: Naming import_limit_kw and its value.
+    """
+    if import_limit_kw <= 0:
+        raise ConfigurationError(f"import_limit_kw must be positive, got {import_limit_kw} kW")
+
+
+@dataclass(frozen=True)
+class SelfConsumptionStrategyConfig:
+    """The configuration of a SelfConsumptionStrategy, which has no setting."""
+
+    strategy_type: Literal["self_consumption"] = field(default="self_consumption", init=False)
+
+
+@dataclass(frozen=True)
+class TOUOptimizedStrategyConfig:
+    """The configuration of a TOUOptimizedStrategy.
+
+    Attributes:
+        peak_hours: The (start, end) hours of the peak periods the strategy discharges the
+            battery in: at least one, each with 0 <= start < end <= 24.
+
+    Raises:
+        ConfigurationError: If peak_hours breaks that rule, with the refusal
+            TOUOptimizedStrategy gives.
+    """
+
+    peak_hours: tuple[tuple[int, int], ...]
+    strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
+
+    def __post_init__(self) -> None:
+        """Refuse peak_hours as TOUOptimizedStrategy does."""
+        _require_valid_peak_hours(self.peak_hours)
+
+
+@dataclass(frozen=True)
+class PeakShavingStrategyConfig:
+    """The configuration of a PeakShavingStrategy.
+
+    Attributes:
+        import_limit_kw: The grid import, in kW, the strategy discharges the battery to keep
+            at or below: positive.
+
+    Raises:
+        ConfigurationError: If import_limit_kw is not positive, with the refusal
+            PeakShavingStrategy gives.
+    """
+
+    import_limit_kw: float
+    strategy_type: Literal["peak_shaving"] = field(default="peak_shaving", init=False)
+
+    def __post_init__(self) -> None:
+        """Refuse import_limit_kw as PeakShavingStrategy does."""
+        _require_valid_import_limit(self.import_limit_kw)
+
+
+DispatchStrategyConfig: TypeAlias = (
+    SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig
+)
+"""The configuration of a battery's dispatch strategy: one variant per strategy.
+
+A variant's strategy_type, which its constructor does not take, is its tag: the name of the
+strategy it configures, and the strategy_type key of the block the scenario grammar reads it from.
+"""
+
+STRATEGY_CONFIG_BY_TYPE: Mapping[str, type[DispatchStrategyConfig]] = MappingProxyType(
+    {variant.strategy_type: variant for variant in get_args(DispatchStrategyConfig)}
+)
+"""Each variant of DispatchStrategyConfig by its tag, read-only."""
+
+
 class DispatchStrategy(ABC):
     """Abstract base class for battery dispatch strategies.
 
@@ -404,26 +519,17 @@ class TOUOptimizedStrategy(DispatchStrategy):
         """Initialize TOU-optimized strategy with tariff period definitions.
 
         Args:
-            peak_hours: List of (start_hour, end_hour) tuples defining peak periods.
-                Hours are in 24-hour format (0-23). For example, [(17, 20)]
-                represents peak period from 5 PM to 8 PM. Every hour outside
-                these ranges is off-peak.
+            peak_hours: List of (start_hour, end_hour) tuples defining peak periods,
+                at least one, each with 0 <= start_hour < end_hour <= 24. For
+                example, [(17, 20)] represents peak period from 5 PM to 8 PM.
+                Every hour outside these ranges is off-peak.
 
         Raises:
-            ValueError: If hour ranges are invalid (not 0-23, start >= end)
+            ConfigurationError: If peak_hours holds no period, or a period
+                breaks 0 <= start_hour < end_hour <= 24
         """
+        _require_valid_peak_hours(peak_hours)
         self._peak_hours = peak_hours
-
-        # Validate peak hours
-        for start, end in peak_hours:
-            if not (0 <= start < 24 and 0 <= end <= 24):
-                raise ValueError(
-                    f"Peak hours must be in range 0-23, got ({start}, {end})"
-                )
-            if start >= end:
-                raise ValueError(
-                    f"Peak period start must be before end, got ({start}, {end})"
-                )
 
     def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
         """Determine tariff period for given timestamp.
@@ -561,12 +667,9 @@ class PeakShavingStrategy(DispatchStrategy):
                 discharge to keep grid import at or below this level.
 
         Raises:
-            ValueError: If import_limit_kw is not positive
+            ConfigurationError: If import_limit_kw is not positive
         """
-        if import_limit_kw <= 0:
-            raise ValueError(
-                f"Import limit must be positive, got {import_limit_kw} kW"
-            )
+        _require_valid_import_limit(import_limit_kw)
         self._import_limit_kw = import_limit_kw
 
     def decide_action(
@@ -658,6 +761,24 @@ class PeakShavingStrategy(DispatchStrategy):
             discharge_kw=discharge_kw,
             grid_charge_kw=grid_charge_kw,
         )
+
+
+def build_dispatch_strategy(
+    config: DispatchStrategyConfig,
+    *,
+    grid_charging: GridChargeConfig | None,
+    tariff: TariffConfig | None,
+) -> DispatchStrategy:
+    """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff."""
+    match config:
+        case SelfConsumptionStrategyConfig():
+            return SelfConsumptionStrategy()
+        case TOUOptimizedStrategyConfig():
+            return TOUOptimizedStrategy(list(config.peak_hours))
+        case PeakShavingStrategyConfig():
+            return PeakShavingStrategy(config.import_limit_kw)
+        case _:
+            assert_never(config)
 
 
 _ONE_DAY = timedelta(days=1)

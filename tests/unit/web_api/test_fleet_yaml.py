@@ -13,11 +13,11 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.config import (
-    DispatchStrategyConfig,
     load_fleet_config,
     parse_fleet_distribution_config,
     parse_seg_rate,
 )
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
@@ -86,7 +86,7 @@ class TestExportFleetYAML:
         batteries = [home.battery_config for home in homes if home.battery_config is not None]
         assert 0 < len(batteries) < len(homes)
         assert all(
-            battery.dispatch_strategy == DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 21)])
+            battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
             for battery in batteries
         )
         assert all(

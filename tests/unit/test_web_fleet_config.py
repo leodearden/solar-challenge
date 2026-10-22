@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -95,9 +95,7 @@ class TestApplyFleetOverlay:
     def test_dispatch_applied_only_to_homes_with_battery(self) -> None:
         """dispatch_strategy is set on BatteryConfig only when battery_config is not None."""
         home_a, home_b = _make_test_homes()
-        dispatch = DispatchStrategyConfig(
-            strategy_type="tou_optimized", peak_hours=[(16, 21)]
-        )
+        dispatch = TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
 
         result = apply_fleet_overlay([home_a, home_b], dispatch_strategy=dispatch)
 

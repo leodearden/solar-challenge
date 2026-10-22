@@ -10,7 +10,12 @@ import pytest
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.dispatch import (
+    DispatchStrategyConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.home import (
     HomeConfig,
     SimulationResults,
@@ -55,7 +60,7 @@ class TestSelfConsumptionStrategy:
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
             name="Self-consumption home",
         )
 
@@ -97,10 +102,7 @@ class TestTOUOptimizedStrategy:
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 20)],
-            ),
+            TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
             name="TOU-optimized home",
         )
 
@@ -141,10 +143,7 @@ class TestPeakShavingStrategy:
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.1,
-            ),
+            PeakShavingStrategyConfig(import_limit_kw=0.1),
             name="Peak-shaving home",
         )
 
@@ -184,27 +183,21 @@ class TestStrategyComparison:
     @pytest.fixture
     def self_consumption_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
         )
         return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
     @pytest.fixture
     def tou_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 20)],
-            ),
+            TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
         )
         return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
     @pytest.fixture
     def peak_shaving_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.1,
-            ),
+            PeakShavingStrategyConfig(import_limit_kw=0.1),
         )
         return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
@@ -319,7 +312,7 @@ class TestDefaultStrategyBackwardCompatibility:
             name="No strategy",
         )
         explicit_sc_config = _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
         )
 
         no_strategy = simulate_home(

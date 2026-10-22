@@ -16,10 +16,14 @@ from solar_challenge.config import (
     LOCATION_BLOCK,
     PV_BLOCK,
     ComponentBlock,
-    DispatchStrategyConfig,
-    GridChargeConfig,
     parse_home_block,
     parse_location_block,
+)
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -147,13 +151,16 @@ def test_each_table_holds_its_rows(
     ("key", "value"),
     [
         pytest.param(
+            "dispatch_strategy", SelfConsumptionStrategyConfig(), id="dispatch_strategy-self_consumption"
+        ),
+        pytest.param(
             "dispatch_strategy",
-            DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+            TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))),
             id="dispatch_strategy-tou_optimized",
         ),
         pytest.param(
             "dispatch_strategy",
-            DispatchStrategyConfig("peak_shaving", import_limit_kw=3.0),
+            PeakShavingStrategyConfig(import_limit_kw=3.0),
             id="dispatch_strategy-peak_shaving",
         ),
         pytest.param(
@@ -166,6 +173,29 @@ def test_each_battery_sub_block_reads_back_what_it_writes(key: str, value: objec
     sub_block = BATTERY_BLOCK.sub_blocks[key]
 
     assert sub_block.read(sub_block.write(value), block_path=f"home.battery.{key}") == value
+
+
+@pytest.mark.parametrize(
+    ("strategy", "keys"),
+    [
+        pytest.param(SelfConsumptionStrategyConfig(), ["strategy_type"], id="self_consumption"),
+        pytest.param(
+            TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+            ["strategy_type", "peak_hours"],
+            id="tou_optimized",
+        ),
+        pytest.param(
+            PeakShavingStrategyConfig(import_limit_kw=3.0),
+            ["strategy_type", "import_limit_kw"],
+            id="peak_shaving",
+        ),
+    ],
+)
+def test_a_written_dispatch_strategy_block_holds_its_tag_and_only_its_strategys_keys(
+    strategy: object, keys: list[str]
+) -> None:
+    """The writer writes no key of another strategy, null or not."""
+    assert list(BATTERY_BLOCK.sub_blocks["dispatch_strategy"].write(strategy)) == keys
 
 
 def _home_component(home_key: str, attribute: str) -> Callable[[dict[str, Any]], object]:

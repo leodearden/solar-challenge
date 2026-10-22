@@ -12,12 +12,16 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
-    DispatchStrategyConfig,
-    GridChargeConfig,
     load_fleet_config,
     load_home_config,
     parse_dispatch_strategy_config,
     parse_home_block,
+)
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -38,137 +42,6 @@ def _refusal(build: Callable[[], object]) -> tuple[type[BaseException], str]:
     with pytest.raises(Exception) as raised:
         build()
     return type(raised.value), str(raised.value)
-
-
-class TestDispatchStrategyConfig:
-    """Tests for DispatchStrategyConfig class."""
-
-    def test_self_consumption_strategy(self) -> None:
-        """Test self-consumption strategy configuration."""
-        config = DispatchStrategyConfig(strategy_type="self_consumption")
-        assert config.strategy_type == "self_consumption"
-        assert config.peak_hours is None
-        assert config.import_limit_kw is None
-
-    def test_tou_optimized_strategy(self) -> None:
-        """Test TOU optimized strategy configuration."""
-        config = DispatchStrategyConfig(
-            strategy_type="tou_optimized",
-            peak_hours=[(16, 20), (7, 9)],
-        )
-        assert config.strategy_type == "tou_optimized"
-        assert config.peak_hours == [(16, 20), (7, 9)]
-
-    def test_peak_shaving_strategy(self) -> None:
-        """Test peak-shaving strategy configuration."""
-        config = DispatchStrategyConfig(
-            strategy_type="peak_shaving",
-            import_limit_kw=5.0,
-        )
-        assert config.strategy_type == "peak_shaving"
-        assert config.import_limit_kw == 5.0
-
-    def test_invalid_strategy_type_raises(self) -> None:
-        """Test invalid strategy type raises error."""
-        with pytest.raises(ConfigurationError, match="Invalid strategy_type"):
-            DispatchStrategyConfig(strategy_type="invalid_strategy")
-
-    def test_tou_without_peak_hours_raises(self) -> None:
-        """Test TOU strategy without peak_hours raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            DispatchStrategyConfig(strategy_type="tou_optimized")
-
-    def test_tou_with_invalid_hour_range_raises(self) -> None:
-        """Test TOU strategy with invalid hour range raises error."""
-        with pytest.raises(ConfigurationError, match="must be in range"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 25)],  # 25 is invalid
-            )
-
-    def test_tou_with_negative_hour_raises(self) -> None:
-        """Test TOU strategy with negative hour raises error."""
-        with pytest.raises(ConfigurationError, match="must be in range"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(-1, 10)],
-            )
-
-    def test_tou_with_start_after_end_raises(self) -> None:
-        """Test TOU strategy with start_hour >= end_hour raises error."""
-        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(20, 16)],
-            )
-
-    def test_tou_with_equal_start_end_raises(self) -> None:
-        """Test TOU strategy with equal start and end hours raises error."""
-        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 16)],
-            )
-
-    def test_peak_shaving_without_limit_raises(self) -> None:
-        """Test peak-shaving strategy without import_limit_kw raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'import_limit_kw'"):
-            DispatchStrategyConfig(strategy_type="peak_shaving")
-
-    def test_peak_shaving_with_negative_limit_raises(self) -> None:
-        """Test peak-shaving strategy with negative limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=-5.0,
-            )
-
-    def test_peak_shaving_with_zero_limit_raises(self) -> None:
-        """Test peak-shaving strategy with zero limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.0,
-            )
-
-
-class TestGridChargeConfig:
-    """Tests for GridChargeConfig class."""
-
-    def test_default_target_soc_fraction(self) -> None:
-        """GridChargeConfig() default target_soc_fraction is 0.9."""
-        config = GridChargeConfig()
-        assert config.target_soc_fraction == 0.9
-
-    def test_custom_target_soc_fraction(self) -> None:
-        """GridChargeConfig accepts custom target_soc_fraction."""
-        config = GridChargeConfig(target_soc_fraction=0.8)
-        assert config.target_soc_fraction == 0.8
-
-    def test_boundary_value_one_accepted(self) -> None:
-        """GridChargeConfig accepts target_soc_fraction == 1.0."""
-        config = GridChargeConfig(target_soc_fraction=1.0)
-        assert config.target_soc_fraction == 1.0
-
-    def test_small_positive_value_accepted(self) -> None:
-        """GridChargeConfig accepts small positive target_soc_fraction."""
-        config = GridChargeConfig(target_soc_fraction=0.01)
-        assert config.target_soc_fraction == 0.01
-
-    def test_zero_raises(self) -> None:
-        """target_soc_fraction == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=0.0)
-
-    def test_negative_raises(self) -> None:
-        """target_soc_fraction < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=-0.1)
-
-    def test_above_one_raises(self) -> None:
-        """target_soc_fraction > 1 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=1.5)
 
 
 class TestBatteryGridChargeParsing:
@@ -453,63 +326,153 @@ class TestOmittedAndNullKeys:
             _parsed_home(battery=battery)
 
 
+_DISPATCH_STRATEGY_PATH = "home.battery.dispatch_strategy"
+"""The path parse_home_block names a home battery's dispatch_strategy: block by."""
+
+
+def _parsed_strategy(block: object) -> object:
+    """The dispatch strategy a home battery's dispatch_strategy: block reads as, through parse_home_block."""
+    battery_config = _parsed_home(battery={"dispatch_strategy": block}).battery_config
+    assert battery_config is not None
+    return battery_config.dispatch_strategy
+
+
 class TestDispatchStrategyParsing:
-    """Tests for parse_dispatch_strategy_config function."""
+    """A battery's dispatch_strategy: block reads as the variant its strategy_type names.
+
+    The block's other keys are that variant's fields. A null key another variant reads, as the
+    writer before the union wrote every key, reads as absent; any other key the variant does not
+    read is refused.
+    """
 
     def test_parse_none(self) -> None:
-        """Test parsing None returns None."""
-        result = parse_dispatch_strategy_config(None)
-        assert result is None
+        """A null block is no strategy."""
+        assert parse_dispatch_strategy_config(None) is None
 
-    def test_parse_self_consumption(self) -> None:
-        """Test parsing self-consumption strategy."""
-        data = {"strategy_type": "self_consumption"}
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "self_consumption"
-        assert result.peak_hours is None
-        assert result.import_limit_kw is None
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption"}, SelfConsumptionStrategyConfig(), id="self_consumption"
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 20], [7, 9]]},
+                TOUOptimizedStrategyConfig(((16, 20), (7, 9))),
+                id="tou_optimized",
+            ),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "import_limit_kw": 5.0},
+                PeakShavingStrategyConfig(5.0),
+                id="peak_shaving",
+            ),
+        ],
+    )
+    def test_a_block_reads_as_the_variant_its_strategy_type_names(self, block: dict[str, Any], expected: object) -> None:
+        """Its peak_hours lists read as tuples, so the variant is a hashable value."""
+        strategy = _parsed_strategy(block)
 
-    def test_parse_tou_optimized(self) -> None:
-        """Test parsing TOU optimized strategy."""
-        data = {
-            "strategy_type": "tou_optimized",
-            "peak_hours": [[16, 20], [7, 9]],
-        }
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "tou_optimized"
-        assert result.peak_hours == [(16, 20), (7, 9)]
+        assert strategy == expected
+        assert hash(strategy) == hash(expected)
 
-    def test_parse_peak_shaving(self) -> None:
-        """Test parsing peak-shaving strategy."""
-        data = {
-            "strategy_type": "peak_shaving",
-            "import_limit_kw": 5.0,
-        }
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "peak_shaving"
-        assert result.import_limit_kw == 5.0
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption", "peak_hours": None, "import_limit_kw": None},
+                SelfConsumptionStrategyConfig(),
+                id="self_consumption",
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": None},
+                TOUOptimizedStrategyConfig(((16, 19),)),
+                id="tou_optimized",
+            ),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "peak_hours": None, "import_limit_kw": 3.0},
+                PeakShavingStrategyConfig(3.0),
+                id="peak_shaving",
+            ),
+        ],
+    )
+    def test_a_block_the_writer_wrote_before_the_union_reads_as_its_variant(
+        self, block: dict[str, Any], expected: object
+    ) -> None:
+        """That writer wrote all three keys, the ones a strategy does not read null."""
+        assert _parsed_strategy(block) == expected
 
-    def test_parse_missing_strategy_type_raises(self) -> None:
-        """Test parsing without strategy_type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            parse_dispatch_strategy_config({})
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"strategy_type": "tou_optimised"}, id="misspelt"),
+            pytest.param({"strategy_type": ""}, id="empty"),
+            pytest.param({"strategy_type": 42}, id="number"),
+            pytest.param({"strategy_type": ["tou_optimized"]}, id="list"),
+            pytest.param({}, id="missing"),
+        ],
+    )
+    def test_a_strategy_type_outside_the_table_is_refused_naming_its_path_and_the_tags(
+        self, block: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy(block)
 
-    def test_parse_empty_strategy_type_raises(self) -> None:
-        """Test parsing with empty strategy_type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            parse_dispatch_strategy_config({"strategy_type": ""})
+        message = str(raised.value)
+        assert f"{_DISPATCH_STRATEGY_PATH}.strategy_type" in message
+        assert repr(block.get("strategy_type")) in message
+        assert "['peak_shaving', 'self_consumption', 'tou_optimized']" in message
 
-    def test_parse_tou_with_null_peak_hours(self) -> None:
-        """Test parsing TOU strategy with null peak_hours raises error."""
-        data = {
-            "strategy_type": "tou_optimized",
-            "peak_hours": None,
-        }
-        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            parse_dispatch_strategy_config(data)
+    @pytest.mark.parametrize(
+        ("block", "unrecognised", "recognised"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption", "peak_hours": [[16, 19]]},
+                "'peak_hours'",
+                "strategy_type",
+                id="self_consumption-peak_hours",
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": 3.5},
+                "'import_limit_kw'",
+                "peak_hours, strategy_type",
+                id="tou_optimized-import_limit_kw",
+            ),
+            pytest.param(
+                {"strategy_type": "self_consumption", "turbo": None},
+                "'turbo'",
+                "strategy_type",
+                id="a-null-key-no-variant-reads",
+            ),
+        ],
+    )
+    def test_a_key_its_variant_does_not_read_is_refused_naming_the_block(
+        self, block: dict[str, Any], unrecognised: str, recognised: str
+    ) -> None:
+        """A key no variant reads is refused even when null: it is a typo, not the old writer's output."""
+        expected = f"Unrecognised keys in {_DISPATCH_STRATEGY_PATH}: {unrecognised}; recognised keys: {recognised}"
+
+        with pytest.raises(ConfigurationError, match=re.escape(expected)):
+            _parsed_strategy(block)
+
+    @pytest.mark.parametrize(
+        ("block", "required_key"),
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, "peak_hours", id="tou_optimized-absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, "peak_hours", id="tou_optimized-null"),
+            pytest.param({"strategy_type": "peak_shaving"}, "import_limit_kw", id="peak_shaving-absent"),
+        ],
+    )
+    def test_a_required_key_left_out_or_null_is_refused_by_its_path(
+        self, block: dict[str, Any], required_key: str
+    ) -> None:
+        expected = f"Missing required keys in {_DISPATCH_STRATEGY_PATH}: {_DISPATCH_STRATEGY_PATH}.{required_key}"
+
+        with pytest.raises(ConfigurationError, match=re.escape(expected)):
+            _parsed_strategy(block)
+
+    def test_a_window_its_variant_refuses_is_refused_as_constructing_the_variant_refuses_it(self) -> None:
+        block = {"strategy_type": "tou_optimized", "peak_hours": [[20, 16]]}
+
+        assert _refusal(lambda: _parsed_strategy(block)) == _refusal(lambda: TOUOptimizedStrategyConfig(((20, 16),)))
 
 
 class TestLoadHomeConfig:

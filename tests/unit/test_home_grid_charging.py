@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -53,10 +53,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             battery_config=BatteryConfig(
                 capacity_kwh=5.0,
                 max_charge_kw=2.5,
-                dispatch_strategy=DispatchStrategyConfig(
-                    strategy_type="tou_optimized",
-                    peak_hours=[(7, 24)],
-                ),
+                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
                 grid_charging=GridChargeConfig(target_soc_fraction=0.9),
             ),
             tariff_config=TariffConfig(
@@ -140,10 +137,7 @@ class TestSimulateHomeStrategyPathGridCharging:
             battery_config=BatteryConfig(
                 capacity_kwh=5.0,
                 max_charge_kw=2.5,
-                dispatch_strategy=DispatchStrategyConfig(
-                    strategy_type="tou_optimized",
-                    peak_hours=[(7, 24)],
-                ),
+                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
                 grid_charging=GridChargeConfig(target_soc_fraction=0.9),
             ),
             tariff_config=None,
@@ -185,10 +179,7 @@ def tou_grid_charge_home_config(economy7_tariff_config: TariffConfig) -> HomeCon
             capacity_kwh=5.0,
             max_charge_kw=2.5,
             max_discharge_kw=2.5,
-            dispatch_strategy=DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(7, 24)],
-            ),
+            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         ),
         tariff_config=economy7_tariff_config,

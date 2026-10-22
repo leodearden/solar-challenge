@@ -14,11 +14,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.config import GridChargeConfig
 from solar_challenge.dispatch import (
     ChargeWindow,
     DispatchDecision,
     DispatchStrategy,
+    GridChargeConfig,
     GridChargeContext,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,

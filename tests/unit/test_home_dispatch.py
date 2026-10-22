@@ -11,8 +11,7 @@ import dataclasses
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig
-from solar_challenge.dispatch import SelfConsumptionStrategy
+from solar_challenge.dispatch import PeakShavingStrategyConfig, SelfConsumptionStrategy, TOUOptimizedStrategyConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
@@ -60,7 +59,7 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
                 _TOU_HOME,
                 battery_config=BatteryConfig(
                     capacity_kwh=5.0,
-                    dispatch_strategy=DispatchStrategyConfig(strategy_type="peak_shaving", import_limit_kw=0.1),
+                    dispatch_strategy=PeakShavingStrategyConfig(import_limit_kw=0.1),
                 ),
             ),
             "peak_shaving",
@@ -72,7 +71,7 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
                 dispatch_strategy="greedy",
                 battery_config=BatteryConfig(
                     capacity_kwh=5.0,
-                    dispatch_strategy=DispatchStrategyConfig(strategy_type="tou_optimized", peak_hours=[(16, 20)]),
+                    dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
                 ),
             ),
             "tou_optimized",

@@ -17,12 +17,16 @@ from solar_challenge.config import (
     LOCATION_BLOCK,
     PV_BLOCK,
     ComponentBlock,
-    DispatchStrategyConfig,
-    GridChargeConfig,
     load_fleet_config,
     load_home_config,
     load_scenarios,
     parse_seg_rate,
+)
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -44,11 +48,7 @@ def _setting_every_key(block: ComponentBlock[Any], **values: Any) -> Any:
 
 
 def _every_grammar_field_home() -> HomeConfig:
-    """A Dublin home with every key of every component block table set away from what an omitted key reads as.
-
-    Only the TOU dispatch strategy's import_limit_kw, inside the battery's dispatch_strategy
-    sub-block, stays at its default: only peak shaving uses it.
-    """
+    """A Dublin home with every key of every component block table set away from what an omitted key reads as."""
     return HomeConfig(
         pv_config=_setting_every_key(
             PV_BLOCK,
@@ -70,7 +70,7 @@ def _every_grammar_field_home() -> HomeConfig:
             max_charge_kw=3.0,
             max_discharge_kw=3.5,
             name="Wall",
-            dispatch_strategy=DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
             grid_charging=GridChargeConfig(target_soc_fraction=0.8),
             min_soc_fraction=0.15,
             max_soc_fraction=0.95,
@@ -278,6 +278,30 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
     )
 
     loaded = _load_through_home_run(home_scenario(home, name="Split efficiencies"), tmp_path)
+
+    assert loaded == home
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        pytest.param(SelfConsumptionStrategyConfig(), id="self_consumption"),
+        pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))), id="tou_optimized"),
+        pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), id="peak_shaving"),
+    ],
+)
+def test_a_battery_with_each_dispatch_strategy_loads_back_equal(strategy: object, tmp_path: Path) -> None:
+    """Each strategy's dispatch_strategy: block, grid charging beside it, survives the round trip."""
+    home = HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(),
+        battery_config=BatteryConfig(
+            capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=GridChargeConfig(0.8)
+        ),
+        tariff_config=TariffConfig.economy_7(),
+    )
+
+    loaded = _load_through_home_run(home_scenario(home, name="Dispatching home"), tmp_path)
 
     assert loaded == home
 

@@ -7,7 +7,8 @@ import math
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import GridChargeConfig, ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
