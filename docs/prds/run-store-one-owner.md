@@ -176,15 +176,19 @@ asserts its keys equal `get_args(RunType)`. `storage.RunRecord.kind` returns the
 which places the table "on `storage.RunRecord`" (D20). A `RunKind` names:
 - `summary_type`;
 - `read(run_dir, run_id) -> StoredRun` (the loader);
-- `results_template`;
 - `home_configs(config_document)`;
+- `scenario_document(home_configs, name)` (the YAML export's scenario);
 - (ζ) `default_name(home_configs)`.
 
+A `RunKind` names no template: the page layer picks it (below).
+
 `StoredHomeRun`/`StoredFleetRun` (frozen) carry the loaded objects and implement `export_frame()`
-(CSV) and `scenario_document(name)` (YAML). `RunStorage.load_run(run_id)` reads the record and
-dispatches through `record.kind`. `main.run_results` (`/results/<run_id>`) renders
-`kind.results_template` with charts built in `routes` by a `match` on the `StoredRun` variant with
-`assert_never`. The page layer stays above storage, and mypy flags a new kind left unhandled.
+(CSV) only. The History YAML export builds its scenario from `runs.config_json` through
+`run.kind.home_configs` and `run.kind.scenario_document`, and never calls `load_run`, which reads
+every parquet time series. `RunStorage.load_run(run_id)` reads the record and
+dispatches through `record.kind`. `main.run_results` (`/results/<run_id>`) picks the template, the
+unnamed title and the page values, and builds the charts, in one `match` on the `StoredRun` variant
+in `routes` with `assert_never`. The page layer stays above storage, and mypy flags a new kind left unhandled.
 `/results/home/<run_id>` and `/results/fleet/<run_id>` answer 301 to `/results/<run_id>`.
 
 Every link uses the one route:
@@ -354,13 +358,13 @@ class StoredRunUnreadable(Exception):     # deliberately NOT a ValueError: S17's
 class StoredHomeRun:  run_id: str; config: HomeConfig; results: SimulationResults; summary: SummaryStatistics
 @dataclass(frozen=True)
 class StoredFleetRun: run_id: str; fleet_results: FleetResults; summary: FleetSummary; home_summaries: tuple[SummaryStatistics, ...]
-StoredRun = StoredHomeRun | StoredFleetRun          # each: export_frame() -> pd.DataFrame; scenario_document(name) -> dict
+StoredRun = StoredHomeRun | StoredFleetRun          # each: export_frame() -> pd.DataFrame
 @dataclass(frozen=True)
 class RunKind:
     summary_type: type[SummaryStatistics] | type[FleetSummary]
-    results_template: str
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
+    scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
     default_name: Callable[[Sequence[HomeConfig]], str]          # ζ
 RUN_KINDS: Mapping[RunType, RunKind]                              # keys == get_args(RunType)
 @dataclass(frozen=True)
