@@ -505,12 +505,10 @@ class TestInverterMatchesStringVoltage:
         with pytest.raises(ValueError, match="MPPT window"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module))
 
-    def test_a_sapm_module_needs_an_explicit_inverter(
-        self, rated_sapm_module: dict[str, float]
-    ) -> None:
+    def test_a_sapm_module_needs_an_explicit_inverter(self) -> None:
         """A SAPM module has no V_mp_ref to voltage-match a CEC inverter to, and no pdc0 and gamma_pdc for a PVWatts inverter."""
         with pytest.raises(ValueError, match="custom_inverter_params"):
-            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module))
+            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module()))
 
 
 class TestBatteryInverterChargersAreNotPicked:
@@ -901,11 +899,11 @@ class TestWiredDcCapacity:
         ids=["voltage-matched-inverter", "custom-sandia-inverter"],
     )
     def test_a_module_with_neither_pdc0_nor_stc_is_refused(
-        self, custom_inverter_params: dict[str, float] | None, sapm_module: dict[str, float]
+        self, custom_inverter_params: dict[str, float] | None
     ) -> None:
         config = PVConfig(
             capacity_kw=4.0,
-            custom_module_params=sapm_module,
+            custom_module_params=sapm_library_module(),
             custom_inverter_params=custom_inverter_params,
         )
 
@@ -916,13 +914,20 @@ class TestWiredDcCapacity:
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
 
     @pytest.mark.parametrize(
-        "module", ["sapm_module", "rated_sapm_module", "module_beyond_every_mppt_window"]
+        "module",
+        [
+            pytest.param(sapm_library_module, id="sapm_module"),
+            pytest.param(rated_sapm_module, id="rated_sapm_module"),
+            pytest.param(
+                default_module_beyond_every_mppt_window, id="module_beyond_every_mppt_window"
+            ),
+        ],
     )
     def test_refuses_a_config_create_pv_system_refuses(
-        self, request: pytest.FixtureRequest, module: str
+        self, module: Callable[[], dict[str, float]]
     ) -> None:
         """The wired DC is that of the system create_pv_system builds, so there is none where it builds none."""
-        config = PVConfig(capacity_kw=4.0, custom_module_params=request.getfixturevalue(module))
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module())
 
         with pytest.raises(ValueError) as building:
             create_pv_system(config)
