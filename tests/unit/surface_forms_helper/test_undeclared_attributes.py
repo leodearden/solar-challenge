@@ -7,6 +7,7 @@ import functools
 import pathlib
 import re
 import types
+from collections.abc import Callable
 from dataclasses import InitVar, dataclass
 
 import pytest
@@ -261,6 +262,7 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
     assert later.__file__ in str(unset.value)
 
 
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
 @pytest.mark.parametrize(
     ("cls", "naming_it"),
     [
@@ -278,8 +280,7 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
     ],
 )
 def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read_from_undeclared_attributes_and_unset_attributes(
-    cls: type, naming_it: str
+    scan: Callable[[type], set[str]], cls: type, naming_it: str
 ) -> None:
-    for scan in (undeclared_attributes, unset_attributes):
-        with pytest.raises(TypeError, match=naming_it):
-            scan(cls)
+    with pytest.raises(TypeError, match=naming_it):
+        scan(cls)
