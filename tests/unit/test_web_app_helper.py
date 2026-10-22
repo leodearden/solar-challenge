@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app and finds the RunStorage it keeps its runs in, and for the app, client and storage fixtures tests/unit/conftest.py builds with it."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, finds the RunStorage it keeps its runs in and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
 
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,9 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.store_lock import acquire_store_lock
 from tests._finance_builders import make_home_config, make_sim_results
-from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, run_storage_of
+from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
 
 
@@ -53,6 +55,44 @@ def test_the_app_serves_a_run_saved_to_its_run_storage_after_its_store_config_na
     response = app.test_client().get("/api/history/runs/north-roof")
     assert response.status_code == 200
     assert response.get_json()["name"] == "North Roof"
+
+
+def test_after_its_store_lock_is_released_an_app_builds_on_the_same_directory_and_reads_the_store_the_first_left(
+    tmp_path: Path,
+) -> None:
+    first = build_test_app(tmp_path)
+    store_home_run(run_storage_of(first), "north-roof", make_home_config(), make_sim_results(days=1), name="North Roof")
+
+    release_store_lock(first)
+
+    response = build_test_app(tmp_path).test_client().get("/api/history/runs/north-roof")
+    assert response.status_code == 200
+    assert response.get_json()["name"] == "North Roof"
+
+
+def test_a_test_may_release_the_app_fixtures_store_lock_itself(app: Flask, tmp_path: Path) -> None:
+    """The app fixture's teardown then releases the lock again, which must be harmless."""
+    release_store_lock(app)
+
+    release_store_lock(build_test_app(tmp_path))
+
+
+@pytest.fixture
+def store_locked_after_the_app_fixture(tmp_path: Path) -> Iterator[None]:
+    """After the test, take and release the lock on the store in tmp_path.
+
+    A test that requests it before app tears it down after the app fixture, so a lock the
+    app fixture kept raises StoreLocked here and errors the test at teardown.
+    """
+    yield
+    acquire_store_lock(tmp_path).release()
+
+
+def test_the_app_fixture_releases_its_store_lock_at_teardown(
+    store_locked_after_the_app_fixture: None, app: Flask, tmp_path: Path
+) -> None:
+    """store_locked_after_the_app_fixture, before app here, locks the app's store after the app fixture's teardown."""
+    assert Path(app.config["DATA_DIR"]) == tmp_path
 
 
 def test_the_app_fixture_keeps_its_data_under_the_tests_own_tmp_path(app: Flask, tmp_path: Path) -> None:
