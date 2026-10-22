@@ -29,24 +29,16 @@ _CEC_SINGLE_DIODE_KEYS = ("alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref",
 _PVWATTS_KEYS = ("pdc0", "gamma_pdc")
 
 
-@pytest.fixture
-def sapm_module() -> dict[str, float]:
-    return sapm_library_module()
-
-
-@pytest.fixture
 def pdc0_module_without_gamma_pdc() -> dict[str, float]:
     """A module rated by its pdc0 and STC that lacks gamma_pdc, so is not in PVWatts form."""
     return {"STC": 450.0, "pdc0": 450.0}
 
 
-@pytest.fixture
 def cec_module_without_alpha_sc() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row with no short-circuit current temperature coefficient: Adjust scales only alpha_sc, so no Adjust moves the modelled coefficient."""
     return {**default_module(), "alpha_sc": 0.0}
 
 
-@pytest.fixture
 def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row at a 3.0 eV band gap: the Adjusts that keep its photocurrent positive from -40 to 85 °C reach a modelled coefficient only from -0.0908 to -3.1151 %/K (measured), so not -0.05 %/K."""
     return {**default_module(), "EgRef": 3.0}
