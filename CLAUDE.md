@@ -148,6 +148,13 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   re-locking it. A dependency edit to `pyproject.toml` must commit its `uv lock`
   re-lock in the same change, or verify fails with uv's "The lockfile at
   `uv.lock` needs to be updated" error.
+- Merge verifies run on `leo-laptop` first, and on this workstation when the
+  laptop is busy, benched or unreachable (`verify_runners` and
+  `verify_host_policy` in `dark-factory-orchestrator.yaml`). A merge-verify red
+  whose `merge_verify` event names runner `laptop`, and which does not
+  reproduce here, may come from the laptop's environment.
+  `docs/laptop-merge-verify.md` says how to reproduce it there and how to send
+  merge verifies back to this host.
 - After every merge, the offline lane re-runs the verify suite on each admitted
   Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
   files names the interpreter in its failing node-id, e.g.
