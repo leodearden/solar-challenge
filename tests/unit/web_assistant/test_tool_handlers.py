@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
-import re
 import time
 from datetime import date
 from pathlib import Path
@@ -30,6 +29,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._job_manager_double import autospecced_job_manager
 from tests._web_app import run_storage_of
 from tests.unit.web_assistant._fakes import seed_run
+from tests.unit.web_assistant._number_tokens import numbers_in
 
 
 class TestExplainMetric:
@@ -206,8 +206,7 @@ class TestSuggestConfig:
         assert result["recommended_pv_kwp"] == expected_pv_kwp, (
             f"Expected {expected_pv_kwp} kWp for 3100 kWh a year; got {result['recommended_pv_kwp']}"
         )
-        note_numbers = re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", result["note"])
-        assert f"{BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}" in note_numbers, (
+        assert f"{BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}" in numbers_in(result["note"]), (
             f"Expected the note to quote {BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}; got {result['note']!r}"
         )
 

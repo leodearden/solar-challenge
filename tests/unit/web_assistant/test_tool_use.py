@@ -9,7 +9,6 @@ the chat tells the model.
 
 import json
 import math
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from functools import partial
@@ -65,6 +64,7 @@ from tests.unit.web_assistant._fakes import (
     thinking_block,
     tool_use_block,
 )
+from tests.unit.web_assistant._number_tokens import numbers_in
 
 
 def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
@@ -1182,11 +1182,6 @@ class TestMalformedToolInput:
         assert dispatch_tool(tool_name, tool_input, tool_context(tmp_path)) == {"error": str(refusal.value)}
 
 
-def _numbers_in(text: str) -> set[str]:
-    """Every number in *text* as it is written, so "1,800" is one number and "10.0" is not "10"."""
-    return set(re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", text))
-
-
 # The engine's facts as the model should read them: kWh with thousands separators,
 # percentages and kWh/kWp in their shortest form.
 _DEFAULT_CONSUMPTIONS_KWH = {f"{kwh:,g}" for kwh in OFGEM_TDCV_BY_OCCUPANTS.values()}
@@ -1239,7 +1234,7 @@ class TestTheModelIsToldTheEnginesFacts:
         }
         for metric, numbers in expected_numbers.items():
             result = results[f"toolu_fact_{metric}"]
-            missing = numbers - _numbers_in(result)
+            missing = numbers - numbers_in(result)
             assert not missing, f"Expected {metric}'s result to carry {sorted(missing)}; got {result!r}"
         attributed = [tool_use_id for tool_use_id, result in results.items() if "Ofgem" in result]
         assert not attributed, f"Expected no result to mention Ofgem; these do: {attributed}"
@@ -1254,7 +1249,7 @@ class TestTheModelIsToldTheEnginesFacts:
         client.post("/assistant/chat", json={"message": "hi"}).get_data(as_text=True)
 
         system_text = anthropic_api.calls[0]["system"][0]["text"]
-        missing = _DEFAULT_CONSUMPTIONS_KWH - _numbers_in(system_text)
+        missing = _DEFAULT_CONSUMPTIONS_KWH - numbers_in(system_text)
         assert not missing, f"Expected the system block to carry {sorted(missing)}; got {system_text!r}"
         assert "Ofgem" not in system_text, f"Expected the system block not to mention Ofgem; got {system_text!r}"
 
@@ -1266,7 +1261,7 @@ class TestTheModelIsToldTheEnginesFacts:
         missing = {
             f"{default_household.get_annual_consumption():,g}",
             str(default_household.household_occupants),
-        } - _numbers_in(description)
+        } - numbers_in(description)
 
         assert not missing, f"Expected the description to carry {sorted(missing)}; got {description!r}"
         assert "Ofgem" not in description, f"Expected the description not to mention Ofgem; got {description!r}"
