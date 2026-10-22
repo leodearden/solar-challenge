@@ -8,8 +8,6 @@ menu opens, and key pages remain usable on small screens.
 import pytest
 from playwright.sync_api import Page, expect
 
-pytestmark = pytest.mark.e2e
-
 MOBILE_WIDTH = 375
 MOBILE_HEIGHT = 812
 

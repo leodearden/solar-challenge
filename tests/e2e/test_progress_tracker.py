@@ -27,8 +27,6 @@ from tests.e2e._job_requests import (
     sse_event,
 )
 
-pytestmark = pytest.mark.e2e
-
 
 @dataclass(frozen=True)
 class _SimulatePage:

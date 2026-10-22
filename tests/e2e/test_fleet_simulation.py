@@ -5,10 +5,7 @@ fleet-wide Dispatch Strategy select is named by its label, and detects
 Bug B1 (Alpine race condition) and Bug B2 (wrong results URL).
 """
 
-import pytest
 from playwright.sync_api import Page, expect
-
-pytestmark = pytest.mark.e2e
 
 
 # ── Page loading ─────────────────────────────────────────────────────

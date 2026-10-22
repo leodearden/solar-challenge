@@ -16,8 +16,6 @@ from playwright.sync_api import Page, expect
 
 from tests.e2e._chart_tabs import open_chart_tab
 
-pytestmark = pytest.mark.e2e
-
 
 def _enable_dark_mode_and_reload(page: Page, url: str) -> None:
     """Navigate to url, set localStorage theme to dark, then reload."""

@@ -8,8 +8,6 @@ regressions in routing, template rendering, and static-asset delivery.
 import pytest
 from playwright.sync_api import Page
 
-pytestmark = pytest.mark.e2e
-
 
 # ── Individual page-load tests ─────────────────────────────────────────
 

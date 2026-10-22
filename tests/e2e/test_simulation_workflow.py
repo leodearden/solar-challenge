@@ -12,8 +12,6 @@ from playwright.sync_api import Page, expect
 
 from tests.e2e._home_form import submit_two_day_run
 
-pytestmark = pytest.mark.e2e
-
 
 # -- Submit home simulation via API ----------------------------------------
 

@@ -12,8 +12,6 @@ from playwright.sync_api import Page, expect
 from tests.e2e._chart_tabs import show_chart_tab
 from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
 
-pytestmark = pytest.mark.e2e
-
 
 # -- The page's chart tabs --------------------------------------------------
 

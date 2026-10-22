@@ -12,8 +12,6 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
-pytestmark = pytest.mark.e2e
-
 
 # -- Search filter updates table -------------------------------------------
 
