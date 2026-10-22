@@ -88,7 +88,13 @@ instead, and the warm-up must move into it.
   - `drift_check_deferred` when the check could not get both hosts.
   - `verify_env_parity_ok` or `verify_env_divergence`. A divergence files one deduped L1 and never quarantines. Every
     probe printed the same on both hosts when the runner was enabled, so a divergence means a tool has changed on one
-    host since.
+    host since, or that the laptop clone lags a pin change (next bullet).
+- The interpreter probes, `uv-python` and `uv-run-python`, follow the pin, so the yaml names no Python version. They
+  read `.python-version` from each host's checkout at `project_root` and report the interpreter a fresh verify would
+  get. `--system` and `--isolated` keep the checkout's own `.venv` out of the answer, and `--no-python-downloads` stops
+  a probe from installing an interpreter. Each merge verify sent to the laptop first pushes `main` to the clone, but
+  the drift check runs its env probes before its own dispatch. So the first drift check after a `.python-version`
+  change can see the two hosts on different interpreters: that divergence is the clone's lag, not a skew.
 - tzdata is deliberately not an env probe: it updates on the two hosts at different times, and the suite uses only
   zones whose rules have long been stable. When a red involves time zones, compare `dpkg-query -W tzdata` on both
   hosts by hand. The versions when the runner was enabled are in the 606 commits.
