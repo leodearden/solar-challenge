@@ -2,7 +2,7 @@
 # Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
 # overrides only what is project-specific.
 
-project_root: "/home/leo/src/solar-challenge"
+project_root: &project_root "/home/leo/src/solar-challenge"
 
 # Orchestrator-level daily cost ceiling. The package default ($200,
 # defaults.yaml:330) is a pre-failover backstop that trips during normal
@@ -70,6 +70,30 @@ verify_use_cgroup_scope: true
 # here), so a hung task verify takes about 3 h to fail (3 x 3600 s).
 # Restart tier: takes effect at the next orchestrator restart.
 verify_command_timeout_secs: 3600
+
+# Merge verifies run on leo-laptop first and on this host when the laptop is busy,
+# benched or unreachable. docs/laptop-merge-verify.md says why, what lives on the
+# laptop, what the env probes compare, which of these keys take effect when, and
+# how to roll back.
+verify_runners:
+  - name: laptop
+    ssh_host: leo-laptop
+    git_remote: leo-laptop
+    config_path: /home/leo/.config/orchestrator/solar-challenge-laptop.yaml
+    df_checkout_path: /home/leo/src/dark-factory
+    enabled: true
+verify_host_policy: prefer_remote
+verify_drift_check_every_n_lands: 10
+verify_cross_check_remote_green: false
+verify_env_probes:
+  - key: uv
+    argv: ["uv", "--version"]
+  - key: uv-python
+    argv: ["uv", "python", "find", "--system", "--directory", *project_root]
+  - key: uv-run-python
+    argv: ["uv", "run", "--directory", *project_root, "--no-project", "--isolated", "--no-python-downloads", "python", "-c", "import sqlite3, sys; print(sys.version.split()[0], sqlite3.sqlite_version)"]
+  - key: git
+    argv: ["git", "--version"]
 
 git:
   main_branch: "main"
