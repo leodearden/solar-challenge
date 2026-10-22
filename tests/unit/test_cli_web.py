@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -57,7 +58,7 @@ import sys
 
 from solar_challenge.cli import app
 
-app(["web", "start", "--port", sys.argv[1]])
+app(["web", "start", *sys.argv[1:]])
 """
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -109,7 +110,8 @@ def _accepts_connections(port: int) -> bool:
         return False
 
 
-def _submit_home_job(port: int, pv_kw: float) -> None:
+def _submit_home_job(port: int, pv_kw: float) -> str:
+    """Submit a home job of pv_kw to the server on port, and return its run's id."""
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/simulate/home",
         data=json.dumps({"pv_kw": pv_kw, "days": 1}).encode(),
@@ -117,6 +119,15 @@ def _submit_home_job(port: int, pv_kw: float) -> None:
     )
     with _LOCALHOST.open(request, timeout=30) as response:
         assert response.status == 201
+        run_id: str = json.load(response)["run_id"]
+        return run_id
+
+
+def _run_status(port: int, run_id: str) -> str:
+    """The status of run run_id, as the server on port reports it."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/api/history/runs/{run_id}", timeout=30) as response:
+        status: str = json.load(response)["status"]
+        return status
 
 
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
@@ -144,7 +155,7 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
     port = _free_port()
 
-    with _server(tmp_path, WEB_START, str(port)) as server:
+    with _server(tmp_path, WEB_START, "--port", str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
 
     status = (tmp_path / "stderr.log").read_text().splitlines()
@@ -153,3 +164,33 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     start = status.index(status_line)
     assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
     assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
+
+
+def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_holder_and_the_first_servers_run_stays_running(
+    tmp_path: Path,
+) -> None:
+    """COLUMNS keeps Rich from folding the long lock path at 80 columns on the second server's stderr, which is not a terminal."""
+    started_dir = tmp_path / "started"
+    started_dir.mkdir()
+    port = _free_port()
+    lock_path = str(tmp_path / ".solar-challenge" / "dashboard.lock")
+
+    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+        run_id = _submit_home_job(port, 1.0)
+        _wait_until(server, lambda: (started_dir / "1.0").exists(), "its job's simulation starts")
+
+        second = subprocess.run(
+            [sys.executable, "-c", WEB_START, "--port", str(_free_port())],
+            cwd=tmp_path,
+            env={**os.environ, "HOME": str(tmp_path), "COLUMNS": "1000"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert second.returncode == 1, second.stderr
+        assert lock_path in second.stderr
+        assert re.search(rf"(?<!\d){server.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
+        assert "Traceback" not in second.stderr
+        assert _run_status(port, run_id) == "running"
