@@ -38,7 +38,9 @@ def _write_import_guard(path: Path, *body_lines: str) -> Path:
 def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distribution(
     tmp_path: Path,
 ) -> None:
-    """A file is flagged with every distribution it requires that is not declared."""
+    """A file is flagged with every distribution it requires that is not declared, including each
+    whose module it names to pytest.importorskip.
+    """
     undeclared_top_level = _write_module(
         tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
     )
@@ -47,6 +49,18 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "def load():",
         "    from yaml import safe_load",
         "    return safe_load",
+    )
+    undeclared_importorskip = _write_module(
+        tmp_path / "undeclared_importorskip.py", "import pytest", 'pytest.importorskip("yaml")'
+    )
+    undeclared_importorskip_in_test = _write_module(
+        tmp_path / "undeclared_importorskip_in_test.py",
+        "from pytest import importorskip",
+        "def test_solves():",
+        '    importorskip(minversion="2", modname="numpy.linalg")',
+    )
+    undeclared_importorskip_in_guard = _write_import_guard(
+        tmp_path / "undeclared_importorskip_in_guard.py", 'pytest.importorskip("yaml")'
     )
     declared_only = _write_module(
         tmp_path / "declared_only.py", "import pytest", "from _pytest.monkeypatch import MonkeyPatch"
@@ -61,31 +75,78 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     )
     relative_only = _write_module(tmp_path / "relative_only.py", "from . import sibling")
     guarded_only = _write_import_guard(tmp_path / "guarded_only.py", "import yaml")
+    declared_importorskip = _write_module(
+        tmp_path / "declared_importorskip.py",
+        "import pytest",
+        'pytest.importorskip("_pytest.pytester")',
+        'pytest.importorskip("sqlite3")',
+    )
+    non_literal_importorskip = _write_module(
+        tmp_path / "non_literal_importorskip.py",
+        "import pytest",
+        'MODULE = "yaml"',
+        "pytest.importorskip(MODULE)",
+    )
 
     undeclared = undeclared_distributions(
         [
             undeclared_top_level,
             undeclared_function_local,
+            undeclared_importorskip,
+            undeclared_importorskip_in_test,
+            undeclared_importorskip_in_guard,
             declared_only,
             first_party_only,
             standard_library_only,
             relative_only,
             guarded_only,
+            declared_importorskip,
+            non_literal_importorskip,
         ],
         declared={"pytest"},
     )
 
     assert undeclared == [
         (undeclared_function_local, ["pyyaml"]),
+        (undeclared_importorskip, ["pyyaml"]),
+        (undeclared_importorskip_in_guard, ["pyyaml"]),
+        (undeclared_importorskip_in_test, ["numpy"]),
         (undeclared_top_level, ["numpy", "pyyaml"]),
     ], (
         "the undeclared-distributions detector misjudged a synthetic file: each undeclared_* file "
         "requires distributions beside the declared pytest, named canonically (pyyaml provides "
-        "yaml), at top level or inside a function. declared_only imports only modules the "
-        "declared pytest provides, first_party_only only solar_challenge and tests, "
-        "standard_library_only only the standard library and relative_only only a sibling, and "
-        "guarded_only imports yaml only inside a try that handles ImportError, so none of those "
-        "may be flagged"
+        "yaml), at top level or inside a function, or as a module it names to "
+        "pytest.importorskip. The undeclared_importorskip* files do that as pytest.importorskip "
+        "or by the bare name from pytest, positionally or as modname= beside another keyword, "
+        "at module level, inside a test, or inside a try that handles ImportError, which cannot "
+        "catch the skip; a dotted name's top-level module counts. declared_only imports only "
+        "modules the declared pytest provides, first_party_only only solar_challenge and tests, "
+        "standard_library_only only the standard library and relative_only only a sibling, "
+        "guarded_only imports yaml only inside a try that handles ImportError, "
+        "declared_importorskip names to pytest.importorskip only a module the declared pytest "
+        "provides and a standard-library one, and non_literal_importorskip passes it a name, "
+        "not a string literal, so none of those may be flagged"
+    )
+
+
+def test_undeclared_distributions_fails_naming_a_file_that_importorskips_a_module_no_installed_distribution_provides(
+    tmp_path: Path,
+) -> None:
+    """A module that no installed distribution provides fails the detector, naming the file and the
+    module, when the file names it to pytest.importorskip, because that file's test skips in every run.
+    """
+    unprovided = "no_installed_distribution_provides_this_module"
+    skips_always = _write_module(
+        tmp_path / "skips_always.py", "import pytest", f'pytest.importorskip("{unprovided}")'
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        undeclared_distributions([skips_always], declared={"pytest"})
+
+    message = str(failure.value)
+    assert str(skips_always) in message and unprovided in message, (
+        f"the failure does not name {skips_always}, nor the module {unprovided} it names to "
+        f"pytest.importorskip that no installed distribution provides: {message}"
     )
 
 
