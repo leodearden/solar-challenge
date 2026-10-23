@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Final, NoReturn, TypeVar
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.whole_numbers import whole_number
+from solar_challenge.whole_numbers import is_boolean, whole_number
 
 _Number = TypeVar("_Number", int, float)
 
@@ -65,16 +65,17 @@ def as_finite_float(value: Any, field: str, within: Interval = Interval()) -> fl
     """Return *value* read as float() reads it, refusing a boolean, one that is not a finite number, or one *within* does not admit.
 
     Raises:
-        ConfigurationError: If *value* is a boolean, which float() reads as 1.0 or 0.0,
-            float() cannot read it (not a number or numeric string), it is an integer too
-            large for a float, or it is infinite or NaN; or if *within* does not admit it.
-            The error names *field* and *value*, and *within* when it does not admit *value*.
+        ConfigurationError: If *value* is a boolean, Python's or numpy's, which float() reads
+            as 1.0 or 0.0, float() cannot read it (not a number or numeric string), it is an
+            integer too large for a float, or it is infinite or NaN; or if *within* does not
+            admit it. The error names *field* and *value*, and *within* when it does not
+            admit *value*.
     """
     try:
         number = float(value)
     except (ValueError, TypeError, OverflowError) as exc:
         _refuse(field, "a finite number", value, cause=exc)
-    if isinstance(value, bool) or not math.isfinite(number):
+    if is_boolean(value) or not math.isfinite(number):
         _refuse(field, "a finite number", value)
     return _admitted(number, within, field, value)
 
