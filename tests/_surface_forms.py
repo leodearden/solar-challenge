@@ -77,8 +77,9 @@ def surface_form(obj: object) -> str:
     3.13 convert or call and 3.11 and 3.14 refuse, raises TypeError naming it and what
     carries it. That applies on the routine or class itself, on the link of a routine's
     chain where inspect stops, and on the constructor inspect reads for a class, its
-    metaclass __call__ included. _refuse_minor_dependent_constructor lists the
-    constructors it refuses.
+    metaclass __call__ included. A routine that wraps an Enum, whose signature inspect
+    reads differently on each minor, raises TypeError naming it and that Enum.
+    _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -537,6 +538,9 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
 
     - for a routine whose signature inspect cannot read, as _unreadable_link finds one,
       the TypeError _unreadable_routine_error gives for it, before anything else is read;
+    - for an end that is an Enum, as _refuse_wrapped_enum finds one; it comes before the
+      next, which would refuse the Enum.__signature__ that Python 3.12 and 3.13 give,
+      naming that value in place of the Enum;
     - for an end that carries a __signature__ inspect reads differently by minor, as
       _refuse_minor_dependent_signature finds one;
     - for a class at that end that carries no signature, whatever
@@ -546,6 +550,7 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
     if link is not None:
         raise _unreadable_routine_error(_label(obj), obj, link)
     end = _chain_end(obj, stop=_gives_signature)
+    _refuse_wrapped_enum(obj, end)
     _refuse_minor_dependent_signature(obj, end)
     if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
@@ -667,6 +672,23 @@ def _unreadable_routine_error(label: str, routine: object, link: object) -> Type
         "signature inspect cannot read, so no form spells it: make the name private, or "
         "define what it wraps with def"
     )
+
+
+def _refuse_wrapped_enum(obj: object, end: object) -> None:
+    """Raise TypeError naming *obj* and *end*, the end of the chain inspect follows from *obj*, if *end* is an Enum.
+
+    inspect reads an Enum's signature from EnumType.__call__ on Python 3.11, from
+    Enum.__signature__ on 3.12 and 3.13, and from EnumType.__signature__ on 3.14. An Enum
+    is spelled by its members and never reaches here as *obj*; a routine that wraps one
+    does.
+    """
+    if inspect.isclass(end) and issubclass(end, enum.Enum):
+        raise TypeError(
+            f"{_label(obj)} wraps {_label(end)}, an {_label(enum.Enum)}, whose signature "
+            "inspect reads from EnumType.__call__ on Python 3.11, from Enum.__signature__ "
+            "on 3.12 and 3.13, and from EnumType.__signature__ on 3.14: make the name "
+            "private, or wrap a function defined with def"
+        )
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
