@@ -141,6 +141,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   descriptive `agent_id`.
 - Config lives at the repo root: `dark-factory-orchestrator.yaml` (+ `.mcp.json`, `.envrc`).
   Escalation MCP runs on port **8106**; fused-memory is shared on 8002.
+  The reason for each of its settings is in `docs/orchestrator-config.md`.
 - Orchestrator verify uses `uv run --locked --extra dev …` (worktree-safe; the
   local `venv/` is not present inside task worktrees). Every uv command the
   orchestrator runs, verify and offline lane alike, passes `--locked`, so it
