@@ -254,6 +254,13 @@ def test_import_guards_guard_an_undeclared_dependency(
     )
 
 
+def _write_module(path: Path, *lines: str) -> Path:
+    """Write *path* as a module of *lines*, creating its parent directories, and return *path*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
 def _write_import_guard(path: Path, *body_lines: str) -> Path:
     """Write *path* as a module whose one function runs *body_lines* in a try that handles
     ImportError, and return *path*. The try is on line 2.
@@ -264,6 +271,64 @@ def _write_import_guard(path: Path, *body_lines: str) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distribution(
+    tmp_path: Path,
+) -> None:
+    """A file is flagged with every distribution it requires that is not declared.
+
+    Once scripts/ and tests/ hold no undeclared import, test_sources_import_only_declared_dependencies
+    passes for a detector that flags nothing, so this checks the detector on files of known verdict.
+    """
+    undeclared_top_level = _write_module(
+        tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
+    )
+    undeclared_function_local = _write_module(
+        tmp_path / "undeclared_function_local.py",
+        "def load():",
+        "    from yaml import safe_load",
+        "    return safe_load",
+    )
+    declared_only = _write_module(
+        tmp_path / "declared_only.py", "import pytest", "from _pytest.monkeypatch import MonkeyPatch"
+    )
+    first_party_only = _write_module(
+        tmp_path / "first_party_only.py",
+        "import solar_challenge",
+        "from tests._pyproject import load_project_table",
+    )
+    standard_library_only = _write_module(
+        tmp_path / "standard_library_only.py", "import json", "from collections.abc import Iterator"
+    )
+    relative_only = _write_module(tmp_path / "relative_only.py", "from . import sibling")
+    guarded_only = _write_import_guard(tmp_path / "guarded_only.py", "import yaml")
+
+    undeclared = _undeclared_distributions(
+        [
+            undeclared_top_level,
+            undeclared_function_local,
+            declared_only,
+            first_party_only,
+            standard_library_only,
+            relative_only,
+            guarded_only,
+        ],
+        declared={"pytest"},
+    )
+
+    assert undeclared == [
+        (undeclared_function_local, ["pyyaml"]),
+        (undeclared_top_level, ["numpy", "pyyaml"]),
+    ], (
+        "the undeclared-distributions detector misjudged a synthetic file: each undeclared_* file "
+        "requires distributions beside the declared pytest, named canonically (pyyaml provides "
+        "yaml), at top level or inside a function. declared_only imports only modules the "
+        "declared pytest provides, first_party_only only solar_challenge and tests, "
+        "standard_library_only only the standard library and relative_only only a sibling, and "
+        "guarded_only imports yaml only inside a try that handles ImportError, so none of those "
+        "may be flagged"
+    )
 
 
 def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions(
