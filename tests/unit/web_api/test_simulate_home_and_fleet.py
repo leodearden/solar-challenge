@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.pv import PVConfig
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._html_page import element_attributes
@@ -681,6 +682,30 @@ class TestParseHomeConfigPVAge:
             json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
         )
         assert resp.status_code == 400
+
+
+class TestSimulateHomeSystemLosses:
+    """A home body's system_losses reaches the submitted home's PVConfig; one PVConfig refuses is a 400 carrying its refusal."""
+
+    def test_endpoint_threads_system_losses_to_pv_config(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with system_losses=0.05 returns 201, and the submitted home's PVConfig carries it."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "system_losses": 0.05})
+        assert resp.status_code == 201
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.pv_config.system_losses == 0.05
+
+    def test_system_losses_pvconfig_refuses_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a system_losses PVConfig refuses is a 400 whose error is PVConfig's own refusal; nothing is submitted."""
+        with pytest.raises(ValueError) as pv_refusal:
+            PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=1.0)
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "system_losses": 1.0})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == str(pv_refusal.value)
+        mock_job_manager.submit_home_job.assert_not_called()
 
 
 class TestParseHomeConfigSEG:
