@@ -840,6 +840,49 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     assert named_classes(submetering.settled) == {fractions.Fraction}
 
 
+def test_a_routine_that_wraps_another_callable_but_carries_a_signature_of_none_names_the_classes_the_annotations_it_holds_name_read_where_they_are_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n",
+    )
+    auditing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "auditing",
+        "from datetime import date as Share\n"
+        "\n"
+        "from metering import settle\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n"
+        "\n"
+        "audit.__wrapped__ = settle\n"
+        "audit.__signature__ = None\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from auditing import audit\n"
+        "\n"
+        "@wraps(audit)\n"
+        "def reaudit(share: 'Share', extra: 'Share') -> 'Share': ...\n"
+        "\n"
+        "reaudit.__signature__ = None\n",
+    )
+
+    assert named_classes(auditing.audit) == {datetime.date}
+    assert named_classes(submetering.reaudit) == {datetime.date}
+
+
 def test_a_class_names_the_classes_its_signature_names_read_where_its_constructor_is_spelled_though_the_class_carries_one(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
