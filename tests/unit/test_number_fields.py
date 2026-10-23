@@ -7,6 +7,7 @@ import math
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -22,6 +23,7 @@ from solar_challenge.number_fields import (
     as_finite_floats,
     as_whole_number,
     as_whole_numbers,
+    read_field,
 )
 
 _IMPORT_PROBE = """\
@@ -477,3 +479,52 @@ class TestListReaders:
         with pytest.raises(ConfigurationError) as exc_info:
             read(value, field)
         assert str(exc_info.value) == f"{field} must be a list of {kind}, got {value!r}"
+
+
+@dataclasses.dataclass(frozen=True)
+class _Settings:
+    """A frozen input type that reads each number field with read_field, as the package's input types do."""
+
+    number: Any
+    count: Any = 1
+    numbers: Any = (1,)
+    optional_number: Any = None
+
+    def __post_init__(self) -> None:
+        read_field(self, "number", as_finite_float, POSITIVE)
+        read_field(self, "count", as_whole_number)
+        read_field(self, "numbers", as_whole_numbers)
+        read_field(self, "optional_number", as_finite_float, optional=True)
+
+
+class TestReadField:
+    """read_field reads a field of an instance under construction with a reader, and stores in it what the reader returns."""
+
+    def test_what_each_reader_returns_is_stored_in_the_frozen_instance(self) -> None:
+        settings = _Settings(number="4", count=7.0, numbers=[1, 2.0])
+
+        assert (settings.number, settings.count, settings.numbers) == (4.0, 7, (1, 2))
+        assert type(settings.number) is float
+        assert type(settings.count) is int
+        assert [type(number) for number in settings.numbers] == [int, int]
+
+    def test_the_interval_is_passed_to_the_reader(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=0)
+        assert str(exc_info.value) == "number must be greater than 0, got 0"
+
+    def test_none_is_refused_where_the_field_is_not_optional(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=None)
+        assert str(exc_info.value) == "number must be a finite number, got None"
+
+    def test_an_optional_field_left_none_stays_none(self) -> None:
+        assert _Settings(number=1).optional_number is None
+
+    def test_an_optional_field_given_a_value_stores_what_was_read(self) -> None:
+        assert _Settings(number=1, optional_number="2.5").optional_number == 2.5
+
+    def test_an_optional_field_given_a_value_that_is_not_a_finite_number_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=1, optional_number=math.nan)
+        assert str(exc_info.value) == "optional_number must be a finite number, got nan"
