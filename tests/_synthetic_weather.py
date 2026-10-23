@@ -6,16 +6,19 @@ with its irradiance scaled, so a test can put a sunny day next to a sunless one.
 ``sunless_weather`` is one day with no sun at a constant air temperature, on any date.
 Both index their hours from midnight of the day they are given, in Europe/London, the
 timezone of the simulated demand. ``weather_for`` gives such a frame to simulate_home as
-one home's weather.
+one home's weather. ``synthetic_tmy`` is a whole TMY year of clear June days, in the
+shape PvgisTmy fetches from PVGIS, for seeding a WeatherCache.
 
 Usage::
 
-    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
+    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, synthetic_tmy, weather_for
 
     sunny_then_sunless = synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(1.0, 0.0))
     results = simulate_home(config, start, end, weather=weather_for(config, sunny_then_sunless))
 
     no_pv_in_january = sunless_weather("2024-01-15", temp_air=8.0)
+
+    WeatherCache(cache_dir=cache_dir).put(synthetic_tmy(), "tmy", location)
 """
 
 from __future__ import annotations
@@ -26,12 +29,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from solar_challenge.weather import PrefetchedWeather
+from solar_challenge.weather import TMY_HOURS, PrefetchedWeather
 
 if TYPE_CHECKING:
     from solar_challenge.home import HomeConfig
 
 _HOURS_PER_DAY = 24
+_TMY_YEAR_START = "1990-01-01"
 _TIMEZONE = "Europe/London"
 _IRRADIANCE_COLUMNS = ["ghi", "dni", "dhi"]
 
@@ -74,6 +78,14 @@ def synthetic_june_weather(
     clear_days = {column: np.tile(np.asarray(hours, dtype=float), days) for column, hours in _CLEAR_JUNE_DAY.items()}
     scaled_irradiance = {column: clear_days[column] * hour_scales for column in _IRRADIANCE_COLUMNS}
     return pd.DataFrame(clear_days | scaled_irradiance, index=_hourly_index(first_day, days))
+
+
+def synthetic_tmy() -> pd.DataFrame:
+    """A TMY year of clear June days, shaped as PVGIS's: TMY_HOURS hourly rows from 1990-01-01 00:00 UTC, each UTC day the clear June day."""
+    utc_year = pd.date_range(_TMY_YEAR_START, periods=TMY_HOURS, freq="h", tz="UTC")
+    return synthetic_june_weather(
+        _TMY_YEAR_START, irradiance_scale_per_day=(1.0,) * (TMY_HOURS // _HOURS_PER_DAY)
+    ).set_axis(utc_year)
 
 
 def sunless_weather(day: str | pd.Timestamp, *, temp_air: float) -> pd.DataFrame:
