@@ -193,6 +193,24 @@ class TestGetJobStatusEndpoint:
         }
 
 
+def _status_and_name_while_running_and_once_completed(
+    app: Flask, blocking_simulation: BlockingSimulation, endpoint: str, request_body: dict[str, Any]
+) -> list[tuple[str, str]]:
+    """The status and name Run History reads for the run *request_body*'s POST to *endpoint* submits, while its job is held in *blocking_simulation*, then once it completes."""
+    manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
+    client = client_using(app, manager)
+
+    response = client.post(endpoint, json=request_body)
+    assert response.status_code == 201
+    run_id = response.get_json()["run_id"]
+    blocking_simulation.wait_until_started()
+    running = client.get(f"/api/history/runs/{run_id}").get_json()
+    blocking_simulation.release()
+    assert manager.wait_until_idle(timeout=30)
+    completed = client.get(f"/api/history/runs/{run_id}").get_json()
+    return [(running["status"], running["name"]), (completed["status"], completed["name"])]
+
+
 class TestASubmittedJobsRunInRunHistory:
     """A submitted job's run shows in Run History from its submit on: running, then completed or failed.
 
@@ -214,20 +232,32 @@ class TestASubmittedJobsRunInRunHistory:
         endpoint: str,
         request_body: dict[str, Any],
     ) -> None:
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
-        client = client_using(app, manager)
+        assert _status_and_name_while_running_and_once_completed(app, blocking_simulation, endpoint, request_body) == [
+            ("running", request_body["name"]),
+            ("completed", request_body["name"]),
+        ]
 
-        response = client.post(endpoint, json=request_body)
-        assert response.status_code == 201
-        run_id = response.get_json()["run_id"]
-        blocking_simulation.wait_until_started()
-        running = client.get(f"/api/history/runs/{run_id}").get_json()
-        blocking_simulation.release()
-        assert manager.wait_until_idle(timeout=30)
-        completed = client.get(f"/api/history/runs/{run_id}").get_json()
-
-        assert (running["status"], running["name"]) == ("running", request_body["name"])
-        assert (completed["status"], completed["name"]) == ("completed", request_body["name"])
+    @pytest.mark.parametrize(
+        ("endpoint", "request_body", "default_name"),
+        [
+            ("/api/simulate/home", A_HOME_JOB_REQUEST, "Web Simulation"),
+            ("/api/simulate/fleet", {"homes": [A_HOME_JOB_REQUEST]}, "Fleet Simulation"),
+        ],
+        ids=["home", "fleet"],
+    )
+    def test_a_job_submitted_without_a_name_runs_under_its_run_kinds_default_name(
+        self,
+        app: Flask,
+        blocking_simulation: BlockingSimulation,
+        endpoint: str,
+        request_body: dict[str, Any],
+        default_name: str,
+    ) -> None:
+        """The run lists under the name its kind gives a run created with none (RunKind.default_name)."""
+        assert _status_and_name_while_running_and_once_completed(app, blocking_simulation, endpoint, request_body) == [
+            ("running", default_name),
+            ("completed", default_name),
+        ]
 
     def test_a_failed_jobs_run_reads_failed_with_the_jobs_message(self, app: Flask) -> None:
         client = _client_of_a_finished_job(app, a_failing_simulation)
