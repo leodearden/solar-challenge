@@ -751,15 +751,6 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
 
         def __init__(self, rate: int) -> None: ...
 
-    class Texted:
-        @functools.wraps(object.__new__)
-        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
-            return object.__new__(cls)
-
-        __new__.__signature__ = "(cls, rate)"
-
-        def __init__(self, rate: int) -> None: ...
-
     naming_created_and_its_new = r"\.Created\b.*\.Created\.__new__\b.*\bobject\.__new__\b"
     with pytest.raises(TypeError, match=naming_created_and_its_new):
         surface_form(Created)
@@ -778,10 +769,6 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
         TypeError, match=r"\.Keyed\b.*\.Keyed\.__new__\b.*\bdict\.__new__\b"
     ):
         surface_form(Keyed)
-    with pytest.raises(
-        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*\bobject\.__new__\b"
-    ):
-        surface_form(Texted)
 
 
 @pytest.mark.skipif(
@@ -861,6 +848,87 @@ def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it
         surface_form(Made)
     with pytest.raises(TypeError, match=naming_made_and_its_call):
         named_classes(Made)
+
+
+def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value() -> None:
+    class Initialised:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = "(self, rate)"
+
+    class Priced:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = lambda: "(self, rate)"
+
+    class Created:
+        def __new__(cls, rate: int) -> "Created":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+    class Recreated(Created):
+        pass
+
+    class Texted:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Counting(type):
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Counted(metaclass=Counting):
+        pass
+
+    class Wrapping(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Wrapped(metaclass=Wrapping):
+        pass
+
+    naming_initialised_its_init_and_the_text = (
+        r"\.Initialised\b.*\.Initialised\.__init__\b.*'\(self, rate\)'"
+        r".*\bbuiltins\.str\b.*\binspect\.Signature\b"
+    )
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        named_classes(Initialised)
+    with pytest.raises(
+        TypeError, match=r"\.Priced\b.*\.Priced\.__init__\b.*\bbuiltins\.function\b"
+    ):
+        surface_form(Priced)
+    with pytest.raises(
+        TypeError, match=r"\.Created\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Created)
+    with pytest.raises(
+        TypeError, match=r"\.Recreated\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Recreated)
+    with pytest.raises(
+        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Texted)
+    with pytest.raises(
+        TypeError, match=r"\.Counted\b.*\.Counting\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Counted)
+    with pytest.raises(
+        TypeError, match=r"\.Wrapped\b.*\.Wrapping\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Wrapped)
 
 
 def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
