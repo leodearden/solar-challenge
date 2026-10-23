@@ -28,6 +28,8 @@ from tests._working_tree import working_tree_files
 
 _PACKAGE_DIR = PurePosixPath("src/solar_challenge")
 
+_UNSCANNED = tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
+
 _POINTER = re.compile(
     r"""
     (?<![\w./-])
@@ -63,6 +65,15 @@ class _Pointer:
         parts = self.names if self.path is None else (str(self.path), *self.names)
         dotted = "".join(f".{name}" for name in self.dotted_names)
         return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
+
+
+def _scanned_files(root: Path) -> list[PurePosixPath]:
+    """Return the files working_tree_files lists in *root*, but those under an _UNSCANNED directory."""
+    return [
+        path
+        for path in working_tree_files(root)
+        if not any(path.is_relative_to(directory) for directory in _UNSCANNED)
+    ]
 
 
 def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
