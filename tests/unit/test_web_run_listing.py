@@ -6,20 +6,22 @@ and RunRecord.home_configs(): a home run's summary is a SummaryStatistics and a 
 a FleetSummary, and each run's config is its homes' HomeConfigs, in order. A run with no
 document yet answers None, and a document that does not decode is refused with a
 ValueError naming the run and the column. run_headline maps a summary of either kind to
-the generation and self-consumption ratio a run list shows.
+the generation and self-consumption ratio a run list shows, and refuses a summary whose
+figure for either is not a finite number.
 
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
 query matches; RunQuery refuses a query no page answers.
 
 readable_headline is the headline a run list shows for a run's record: None while the run
-has no summary, and None, with a warning naming the run, when its summary does not decode.
-RunStorage.totals counts the completed runs and their homes and sums the generation of
-those whose headline reads.
+has no summary, and None, with a warning naming the run, when its summary is damaged: it
+does not decode, or run_headline refuses it. RunStorage.totals counts the completed runs
+and their homes and sums the generation of those whose headline reads.
 """
 
 import dataclasses
 import logging
+import math
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -29,8 +31,8 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-from solar_challenge.home import calculate_summary
+from solar_challenge.fleet import FleetResults, FleetSummary, calculate_fleet_summary
+from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_TYPES, init_db
 from solar_challenge.web.storage import (
     RUN_SORTS,
@@ -44,7 +46,7 @@ from solar_challenge.web.storage import (
     run_headline,
 )
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
-from tests._run_summaries import fleet_summary, home_summary
+from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -203,6 +205,32 @@ class TestRunHeadline:
             generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
         )
 
+    @pytest.mark.parametrize(
+        ("summary", "figure", "value"),
+        [
+            pytest.param(home_summary(total_generation_kwh=None), "generation_kwh", None, id="home-generation-null"),
+            pytest.param(home_summary(self_consumption_ratio="0.6"), "self_consumption_ratio", "0.6", id="home-ratio-text"),
+            pytest.param(fleet_summary(total_generation_kwh=math.nan), "generation_kwh", math.nan, id="fleet-generation-nan"),
+            pytest.param(fleet_summary(total_generation_kwh=math.inf), "generation_kwh", math.inf, id="fleet-generation-inf"),
+            pytest.param(
+                fleet_summary(fleet_self_consumption_ratio=True), "self_consumption_ratio", True, id="fleet-ratio-bool"
+            ),
+        ],
+    )
+    def test_a_summary_whose_headline_figure_is_not_a_finite_number_is_refused_naming_the_figure_and_its_value(
+        self, summary: SummaryStatistics | FleetSummary, figure: str, value: object
+    ) -> None:
+        with pytest.raises(ValueError) as refusal:
+            run_headline(summary)
+
+        assert f"{figure} is {value!r}" in str(refusal.value)
+
+    def test_a_figure_a_summary_holds_as_a_whole_number_is_a_headline_figure(self) -> None:
+        """A stored summary's JSON may hold a figure as a whole number, 100 rather than 100.0, which decodes as an int."""
+        summary = home_summary(total_generation_kwh=100, self_consumption_ratio=0)
+
+        assert run_headline(summary) == RunHeadline(generation_kwh=100, self_consumption_ratio=0)
+
 
 def _ids(page: RunPage) -> list[str]:
     """The id of each run *page* lists, in its order."""
@@ -349,10 +377,10 @@ def _storage_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     ]
 
 
-def _garble_summary(storage: RunStorage, run_id: str) -> None:
-    """Overwrite run *run_id*'s summary_json with text that is not JSON."""
+def _damage_summary(storage: RunStorage, run_id: str, damaged_summary_json: str) -> None:
+    """Overwrite run *run_id*'s summary_json with *damaged_summary_json*."""
     with storage.database.transaction() as conn:
-        conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", run_id))
+        conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, run_id))
 
 
 class TestReadableHeadline:
@@ -369,16 +397,23 @@ class TestReadableHeadline:
 
         assert readable_headline(_record(storage, "running-1")) is None
 
-    def test_a_run_whose_summary_does_not_decode_has_no_headline_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(summary_json(home_summary(total_generation_kwh=None)), id="generation-null"),
+        ],
+    )
+    def test_a_run_whose_summary_is_damaged_has_no_headline_and_a_warning_names_it(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
-        _store_a_home_run(storage, "garbled-run")
-        _garble_summary(storage, "garbled-run")
+        _store_a_home_run(storage, "damaged-run")
+        _damage_summary(storage, "damaged-run", damaged_summary_json)
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
-        assert readable_headline(_record(storage, "garbled-run")) is None
+        assert readable_headline(_record(storage, "damaged-run")) is None
         warnings = _storage_warnings(caplog)
-        assert len(warnings) == 1 and "garbled-run" in warnings[0], warnings
+        assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
 
 
 class TestRunTotals:
@@ -411,13 +446,20 @@ class TestRunTotals:
 
         assert storage.totals().home_count == 1
 
-    def test_a_completed_run_whose_summary_does_not_decode_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(summary_json(fleet_summary(total_generation_kwh=None)), id="generation-null"),
+        ],
+    )
+    def test_a_completed_run_whose_summary_is_damaged_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
         results = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
         store_home_run(storage, "home-1", make_home_config(), results)
-        _store_a_fleet_run(storage, "garbled-run")
-        _garble_summary(storage, "garbled-run")
+        _store_a_fleet_run(storage, "damaged-run")
+        _damage_summary(storage, "damaged-run", damaged_summary_json)
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         totals = storage.totals()
@@ -425,4 +467,4 @@ class TestRunTotals:
         assert (totals.run_count, totals.home_count) == (2, 3)
         assert totals.generation_kwh == pytest.approx(calculate_summary(results).total_generation_kwh)
         warnings = _storage_warnings(caplog)
-        assert len(warnings) == 1 and "garbled-run" in warnings[0], warnings
+        assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings

@@ -11,6 +11,7 @@ Storage structure:
 
 import json
 import logging
+import math
 import re
 import shutil
 import sqlite3
@@ -129,10 +130,25 @@ def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
 
 @dataclass(frozen=True)
 class RunHeadline:
-    """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed."""
+    """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed.
+
+    Raises:
+        ValueError: A figure is not a finite number, e.g. None, a text, a bool, NaN or an
+            infinity; the message names the figure and its value.
+    """
 
     generation_kwh: float
     self_consumption_ratio: float
+
+    def __post_init__(self) -> None:
+        _require_finite_number("generation_kwh", self.generation_kwh)
+        _require_finite_number("self_consumption_ratio", self.self_consumption_ratio)
+
+
+def _require_finite_number(figure: str, value: object) -> None:
+    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is a finite int or float; a bool is neither."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number")
 
 
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
@@ -140,6 +156,10 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
 
     It is the one place the web maps a fleet summary's names, such as fleet_self_consumption_ratio,
     to a run list's (D-S19-8 in docs/prds/run-store-one-owner.md).
+
+    Raises:
+        ValueError: The summary's figure for the generation or the ratio is not a finite number,
+            as RunHeadline refuses it.
     """
     match summary:
         case SummaryStatistics():
@@ -155,18 +175,20 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
 
 
 def readable_headline(record: RunRecord) -> RunHeadline | None:
-    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary does not decode.
+    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary is damaged.
 
-    A summary that does not decode is logged as a warning naming the run, which the run lists
-    then show without figures and the dashboard's totals without its generation, rather than
-    fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15, D-S19-9).
+    A summary is damaged when it does not decode, or run_headline refuses it for a figure that
+    is not a finite number. A damaged summary is logged as a warning naming the run, which the
+    run lists then show without figures and the dashboard's totals without its generation,
+    rather than fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15,
+    D-S19-9).
     """
     try:
         summary = record.summary()
-    except ValueError as unreadable:
-        logger.warning("Run %r shows no figures, as its summary does not decode: %s", record.id, unreadable)
+        return None if summary is None else run_headline(summary)
+    except ValueError as damaged:
+        logger.warning("Run %r shows no figures, as its summary is damaged: %s", record.id, damaged)
         return None
-    return None if summary is None else run_headline(summary)
 
 
 RunSort = Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
