@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for scripts/outage_probe.py, run in-process against stand-ins on this machine for the services it asks."""
+"""Unit tests for scripts/outage_probe.py, run in-process against stand-ins on this machine for the services it asks, or with every request off this machine refused."""
 
 import json
 import os
@@ -22,6 +22,7 @@ import requests
 
 from solar_challenge.location import Location
 from solar_challenge.weather import CLIMATE_YEARS
+from tests._network_guard import refusing_network
 from tests._scripts import load_script
 
 _THIS_MACHINE = "127.0.0.1"
@@ -290,3 +291,22 @@ def test_a_lock_naming_nothing_to_ask_raises_naming_the_lock(
 
     with pytest.raises(ValueError, match=re.escape(str(lock))):
         probe.main([service, option, str(lock)])
+
+
+@pytest.mark.parametrize(
+    ("service", "outage_line_start", "registry"),
+    [
+        pytest.param("pypi", "PyPI: index: ", "pypi.org:443", id="pypi"),
+        pytest.param("npm", "npm registry: tarball: ", "registry.npmjs.org:443", id="npm"),
+    ],
+)
+def test_by_default_the_probe_asks_the_registry_the_repositorys_own_lock_names(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], service: str, outage_line_start: str, registry: str
+) -> None:
+    """The probe builds every request it derives from the lock before it sends the first, so a lock it no longer reads fails here, at verify time, rather than when the lane runs the probe after a red run."""
+    with refusing_network() as refused:
+        exit_status = probe.main([service])
+
+    outage_line = capsys.readouterr().out
+    assert (exit_status, refused) == (os.EX_TEMPFAIL, [registry]), outage_line
+    assert outage_line.startswith(outage_line_start)
