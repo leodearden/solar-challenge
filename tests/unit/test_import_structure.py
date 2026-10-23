@@ -182,7 +182,7 @@ def _stale(
 
 @pytest.fixture(scope="module")
 def real_tree_imports() -> tuple[_ImportSite, ...]:
-    """The import sites of src/solar_challenge, at any scope, scanned once for the module's three real-tree tests."""
+    """The import sites of src/solar_challenge, at any scope, scanned once for every real-tree test."""
     return tuple(_import_sites(_SRC_DIR))
 
 
@@ -442,12 +442,18 @@ def test_an_import_of_the_test_suite_is_reported_with_its_file_line_and_module(
             [],
             id="not-the-test-suite",
         ),
+        pytest.param(
+            "finance.py",
+            "def f():\n    from .. import tests\n    from ..tests import fixtures\n",
+            [],
+            id="relative-past-the-top-package",
+        ),
     ],
 )
 def test_the_scan_finds_imports_of_the_test_suite_at_any_scope(
     tmp_path: Path, module: str, source: str, expected: list[tuple[str, int]]
 ) -> None:
-    """The scan finds an import of the tests package at any scope, inside an ImportError guard too, and no module of the package that is merely named tests."""
+    """The scan finds an import of the tests package at any scope, inside an ImportError guard too, and neither a module of the package merely named tests nor a relative import that climbs past the package, which Python rejects."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
     found = _test_suite_imports(_import_sites(src_dir))
