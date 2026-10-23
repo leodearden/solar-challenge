@@ -16,6 +16,8 @@ from tests._declared_dependencies import (
     web_subpackage_imports,
 )
 
+_UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
+
 
 def _write_module(path: Path, *lines: str) -> Path:
     """Write *path* as a module of *lines*, creating its parent directories, and return *path*."""
@@ -26,14 +28,16 @@ def _write_module(path: Path, *lines: str) -> Path:
 
 def _write_import_guard(path: Path, *body_lines: str) -> Path:
     """Write *path* as a module whose one function runs *body_lines* in a try that handles
-    ImportError, and return *path*. The try is on line 2.
+    ImportError, creating its parent directories, and return *path*. The try is on line 2.
     """
-    body = "".join(f"        {line}\n" for line in body_lines)
-    path.write_text(
-        f"def render():\n    try:\n{body}    except ImportError:\n        return None\n",
-        encoding="utf-8",
+    return _write_module(
+        path,
+        "def render():",
+        "    try:",
+        *(f"        {line}" for line in body_lines),
+        "    except ImportError:",
+        "        return None",
     )
-    return path
 
 
 def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distribution(
@@ -42,6 +46,9 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     """A file is flagged with every distribution it requires that is not declared, including each
     whose module it names to pytest.importorskip, and each whose plugin module a pytest_plugins
     entry names. A built-in plugin's short name, such as pytester, names a module of pytest itself.
+
+    A module named to pytest.importorskip counts even inside a try of the package that handles
+    ImportError, where such a try makes its imports optional: the handler cannot catch the skip.
     """
     undeclared_top_level = _write_module(
         tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
@@ -62,7 +69,7 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         '    importorskip(minversion="2", modname="numpy.linalg")',
     )
     undeclared_importorskip_in_guard = _write_import_guard(
-        tmp_path / "undeclared_importorskip_in_guard.py", 'pytest.importorskip("yaml")'
+        tmp_path / "src" / "solar_challenge" / "undeclared_importorskip_in_guard.py", 'pytest.importorskip("yaml")'
     )
     declared_only = _write_module(
         tmp_path / "declared_only.py", "import pytest", "from _pytest.monkeypatch import MonkeyPatch"
@@ -76,7 +83,6 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         tmp_path / "standard_library_only.py", "import json", "from collections.abc import Iterator"
     )
     relative_only = _write_module(tmp_path / "relative_only.py", "from . import sibling")
-    guarded_only = _write_import_guard(tmp_path / "guarded_only.py", "import yaml")
     declared_importorskip = _write_module(
         tmp_path / "declared_importorskip.py",
         "import pytest",
@@ -107,7 +113,6 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
             first_party_only,
             standard_library_only,
             relative_only,
-            guarded_only,
             declared_importorskip,
             non_literal_importorskip,
             undeclared_pytest_plugin,
@@ -118,9 +123,9 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     )
 
     assert undeclared == [
+        (undeclared_importorskip_in_guard, ["pyyaml"]),
         (undeclared_function_local, ["pyyaml"]),
         (undeclared_importorskip, ["pyyaml"]),
-        (undeclared_importorskip_in_guard, ["pyyaml"]),
         (undeclared_importorskip_in_test, ["numpy"]),
         (undeclared_pytest_plugin, ["pytest-rerunfailures"]),
         (undeclared_top_level, ["numpy", "pyyaml"]),
@@ -130,11 +135,11 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "yaml), at top level or inside a function, or as a module it names to "
         "pytest.importorskip. The undeclared_importorskip* files do that as pytest.importorskip "
         "or by the bare name from pytest, positionally or as modname= beside another keyword, "
-        "at module level, inside a test, or inside a try that handles ImportError, which cannot "
-        "catch the skip; a dotted name's top-level module counts. declared_only imports only "
+        "at module level, inside a test, or inside a try of src/solar_challenge that handles "
+        "ImportError, which makes the package's imports optional but cannot catch the skip; a "
+        "dotted name's top-level module counts. declared_only imports only "
         "modules the declared pytest provides, first_party_only only solar_challenge and tests, "
         "standard_library_only only the standard library and relative_only only a sibling, "
-        "guarded_only imports yaml only inside a try that handles ImportError, "
         "declared_importorskip names to pytest.importorskip only a module the declared pytest "
         "provides and a standard-library one, and non_literal_importorskip passes it a name, "
         "not a string literal, so none of those may be flagged. undeclared_pytest_plugin names "
@@ -142,6 +147,76 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "beside the built-in pytester. builtin_pytest_plugin names only pytester, which pytest "
         "imports from its own _pytest package. empty_pytest_plugins sets pytest_plugins to an "
         "empty string, which names no plugin. So neither of the last two may be flagged"
+    )
+
+
+def test_undeclared_distributions_counts_an_import_inside_an_import_error_guard_outside_the_package_only(
+    tmp_path: Path,
+) -> None:
+    """Outside the package, an import inside a try that handles ImportError or ModuleNotFoundError
+    is required like any other, so a guarded module the scope does not declare is flagged, even one
+    another declared requirement installs. A guard over a declared or standard-library module is not.
+
+    In the package, src/solar_challenge, such a try makes its imports optional, and
+    dead_import_guards judges it instead.
+    """
+    optional_yaml = _write_import_guard(
+        tmp_path / "src" / "solar_challenge" / "optional_yaml.py", "import yaml", f"import {_UNPROVIDED_MODULE}"
+    )
+    test_skips_without_yaml = _write_module(
+        tmp_path / "tests" / "test_skips_without_yaml.py",
+        "import pytest",
+        "try:",
+        "    import yaml",
+        "except ImportError:",
+        '    pytest.skip("needs yaml", allow_module_level=True)',
+    )
+    falls_back_without_yaml = _write_module(
+        tmp_path / "scripts" / "falls_back_without_yaml.py",
+        "def load():",
+        "    try:",
+        "        from yaml import safe_load",
+        "    except ModuleNotFoundError:",
+        "        return None",
+        "    return safe_load",
+    )
+    test_skips_without_pluggy = _write_import_guard(tmp_path / "tests" / "test_skips_without_pluggy.py", "import pluggy")
+    guards_a_declared_module = _write_import_guard(
+        tmp_path / "tests" / "guards_a_declared_module.py", "import _pytest.pytester"
+    )
+    guards_the_standard_library = _write_import_guard(
+        tmp_path / "scripts" / "guards_the_standard_library.py", "import tomllib"
+    )
+
+    undeclared = undeclared_distributions(
+        tmp_path,
+        [
+            optional_yaml,
+            test_skips_without_yaml,
+            falls_back_without_yaml,
+            test_skips_without_pluggy,
+            guards_a_declared_module,
+            guards_the_standard_library,
+        ],
+        declared={"pytest"},
+    )
+
+    assert undeclared == [
+        (falls_back_without_yaml, ["pyyaml"]),
+        (test_skips_without_pluggy, ["pluggy"]),
+        (test_skips_without_yaml, ["pyyaml"]),
+    ], (
+        "the undeclared-distributions detector misjudged a synthetic import guard, a try that handles "
+        "ImportError or ModuleNotFoundError. Outside src/solar_challenge such a guard makes no import "
+        "optional. test_skips_without_yaml skips at module level unless yaml imports, and "
+        "falls_back_without_yaml returns None inside a function unless it does, so each must be "
+        "flagged with the undeclared pyyaml. test_skips_without_pluggy guards pluggy, which only the "
+        "declared pytest's own requirements install, so it must be flagged with the undeclared pluggy. "
+        "guards_a_declared_module guards a module of the declared pytest and "
+        "guards_the_standard_library one of the standard library, so neither may be flagged. "
+        "optional_yaml, in src/solar_challenge, guards yaml and a module no installed distribution "
+        "provides; in the package a guard makes its imports optional, so it may be neither flagged "
+        "nor fail the detector"
     )
 
 
@@ -174,24 +249,38 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_call_of_pytests_
     )
 
 
-def test_undeclared_distributions_fails_naming_a_file_that_importorskips_a_module_no_installed_distribution_provides(
+@pytest.mark.parametrize(
+    "skip_lines",
+    [
+        pytest.param((f'pytest.importorskip("{_UNPROVIDED_MODULE}")',), id="named-to-importorskip"),
+        pytest.param(
+            (
+                "try:",
+                f"    import {_UNPROVIDED_MODULE}",
+                "except ImportError:",
+                f'    pytest.skip("needs {_UNPROVIDED_MODULE}", allow_module_level=True)',
+            ),
+            id="imported-inside-an-import-error-guard",
+        ),
+    ],
+)
+def test_undeclared_distributions_fails_naming_a_file_whose_test_skips_without_a_module_no_installed_distribution_provides(
     tmp_path: Path,
+    skip_lines: tuple[str, ...],
 ) -> None:
     """A module that no installed distribution provides fails the detector, naming the file and the
-    module, when the file names it to pytest.importorskip, because that file's test skips in every run.
+    module, when a file outside the package names it to pytest.importorskip or imports it inside a
+    try that handles ImportError by skipping, because that file's test skips in every run.
     """
-    unprovided = "no_installed_distribution_provides_this_module"
-    skips_always = _write_module(
-        tmp_path / "skips_always.py", "import pytest", f'pytest.importorskip("{unprovided}")'
-    )
+    skips_always = _write_module(tmp_path / "skips_always.py", "import pytest", *skip_lines)
 
     with pytest.raises(AssertionError) as failure:
         undeclared_distributions(tmp_path, [skips_always], declared={"pytest"})
 
     message = str(failure.value)
-    assert str(skips_always) in message and unprovided in message, (
-        f"the failure does not name {skips_always}, nor the module {unprovided} it names to "
-        f"pytest.importorskip that no installed distribution provides: {message}"
+    assert str(skips_always) in message and _UNPROVIDED_MODULE in message, (
+        f"the failure does not name {skips_always}, nor the module {_UNPROVIDED_MODULE} that its test "
+        f"skips without, which no installed distribution provides: {message}"
     )
 
 
@@ -204,16 +293,15 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
     tests/unit/test_dependency_declarations.py::test_import_guards_guard_an_undeclared_dependency
     passes for a detector that flags nothing, so this checks the detector on guards of known verdict.
     """
-    unprovided = "no_installed_distribution_provides_this_module"
     dead_import = _write_import_guard(tmp_path / "dead_import.py", "import yaml")
     dead_nested_from_import = _write_import_guard(
         tmp_path / "dead_nested_from_import.py",
         "if sys.version_info >= (3, 11):",
         "    from yaml import safe_load",
     )
-    live_unprovided = _write_import_guard(tmp_path / "live_unprovided.py", f"import {unprovided}")
+    live_unprovided = _write_import_guard(tmp_path / "live_unprovided.py", f"import {_UNPROVIDED_MODULE}")
     live_partly_declared = _write_import_guard(
-        tmp_path / "live_partly_declared.py", "import yaml", f"import {unprovided}"
+        tmp_path / "live_partly_declared.py", "import yaml", f"import {_UNPROVIDED_MODULE}"
     )
     not_judged_stdlib_only = _write_import_guard(tmp_path / "not_judged_stdlib_only.py", "import json")
 
@@ -241,8 +329,9 @@ def test_web_subpackage_imports_flags_each_file_whose_imports_run_a_module_of_th
 ) -> None:
     """A file is flagged with each file of the package's web subpackage that its imports run, however
     it names the subpackage: a module of it, the subpackage from its parent package, a name of it
-    inside a function or for type checking, a module named to pytest.importorskip, or a
-    pytest_plugins entry.
+    inside a function, for type checking or inside a try that handles ImportError, which outside the
+    package makes no import optional, a module named to pytest.importorskip, or a pytest_plugins
+    entry.
     """
     package_dir = tmp_path / "src" / "solar_challenge"
     _write_module(package_dir / "__init__.py")
@@ -303,6 +392,7 @@ def test_web_subpackage_imports_flags_each_file_whose_imports_run_a_module_of_th
     )
 
     assert flagged == [
+        (guards_the_import, [web_init, web_app]),
         (importorskips, [web_init, web_app]),
         (imports_a_module, [web_init, web_jobs]),
         (imports_a_name_in_a_function, [web_init, web_app]),
@@ -312,14 +402,13 @@ def test_web_subpackage_imports_flags_each_file_whose_imports_run_a_module_of_th
     ], (
         "the web-subpackage detector misjudged a synthetic file. Each flagged file runs "
         "web/__init__.py, and the module of src/solar_challenge/web it names, by importing a module of "
-        "the subpackage, the subpackage from its parent package, or a name of it inside a function or "
-        "under TYPE_CHECKING, or by naming a module of it to pytest.importorskip or in pytest_plugins. "
+        "the subpackage, the subpackage from its parent package, or a name of it inside a function, "
+        "under TYPE_CHECKING or inside a try that handles ImportError, which outside the package makes "
+        "no import optional, or by naming a module of it to pytest.importorskip or in pytest_plugins. "
         "imports_the_package_only imports solar_challenge and its weather module only. "
-        "guards_the_import imports the subpackage only inside a try that handles ImportError, which "
-        "makes the import optional by construction. imports_another_web imports modules named web "
-        "elsewhere, a third-party one and tests/web, neither of which is the package's subpackage. "
-        "names_it_in_a_string names it in a string only, which is no import. So none of those four may "
-        "be flagged"
+        "imports_another_web imports modules named web elsewhere, a third-party one and tests/web, "
+        "neither of which is the package's subpackage. names_it_in_a_string names it in a string only, "
+        "which is no import. So none of those three may be flagged"
     )
 
 
@@ -338,6 +427,7 @@ _OWN_FILES_OF_EACH_SCOPE = {
         "tests/_plugin_fixtures.py",
         "tests/_plugin_hooks.py",
         "tests/_uv.py",
+        "tests/_web_double.py",
         "tests/conftest.py",
         "tests/css_build/test_build.py",
         "tests/integration/__init__.py",
@@ -350,7 +440,6 @@ _OWN_FILES_OF_EACH_SCOPE = {
     ),
     "tests-verify": (
         "tests/_helpers.py",
-        "tests/_web_double.py",
         "tests/integration/test_fleet.py",
         "tests/unit/conftest.py",
         "tests/unit/test_simulate.py",
@@ -381,8 +470,9 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
         "from tests._helpers import build",
         "from tests._uv import isolated_env",
     ),
-    # the guarded import is not followed; the function-local from-package submodule is, and so is
-    # the module the test names to pytest.importorskip
+    # the module named inside a try that handles ImportError is followed, since outside the package
+    # such a try makes no import optional; so are the function-local from-package submodule and the
+    # module the test names to pytest.importorskip
     "tests/newest_releases/test_newest.py": (
         "try:",
         "    from tests._web_double import app",
@@ -432,11 +522,11 @@ def test_each_source_scope_selects_only_its_own_files(
     transitively: at module level, inside a function, as a submodule a from-import names,
     relatively (from the package directory or from one above it), or through a package's
     __init__.py. Modules that import each other are selected once each. tests-verify owns none
-    of them. A module named only inside a try that handles ImportError is not imported for
-    certain, so it stays with tests-verify. A module named to pytest.importorskip as a string
-    literal counts as imported: the test imports it or skips. The dev-only lanes' closure selects
-    tests modules only, so a module of the package that a lane file imports stays with the
-    package's own scope.
+    of them. A module named inside a try that handles ImportError counts as imported too, since
+    outside the package such a try makes no import optional. A module named to
+    pytest.importorskip as a string literal counts as imported: the test imports it or skips.
+    The dev-only lanes' closure selects tests modules only, so a module of the package that a
+    lane file imports stays with the package's own scope.
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
