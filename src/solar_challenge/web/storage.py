@@ -356,7 +356,7 @@ def _now() -> str:
 def _saved_run_row(
     *,
     run_id: str,
-    name: str,
+    name: str | None,
     run_type: RunType,
     config: dict[str, Any],
     summary: dict[str, Any],
@@ -570,7 +570,9 @@ class RunStorage:
             config: Home configuration
             results: Simulation results with time series
             summary: Summary statistics
-            name: Optional run name (defaults to config.name)
+            name: The name the save records a run it records for the first time under, None
+                for none. A run already recorded, as a job's submit records it through
+                create_run, keeps its name (_upsert_run_row).
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -588,7 +590,7 @@ class RunStorage:
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
-            name=name or config.name or "Unnamed Run",
+            name=name,
             run_type="home",
             config=config_document,
             summary=summary_document,
@@ -651,7 +653,9 @@ class RunStorage:
             fleet_results: Fleet simulation results with per-home data
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
-            name: Optional run name
+            name: The name the save records a run it records for the first time under, None
+                for none. A run already recorded, as a job's submit records it through
+                create_run, keeps its name (_upsert_run_row).
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -675,7 +679,7 @@ class RunStorage:
         # Build the row first, so a save RunRecord refuses has written no file.
         row = _saved_run_row(
             run_id=run_id,
-            name=name or "Unnamed Fleet Run",
+            name=name,
             run_type="fleet",
             config=config_document,
             summary=summary_document,
