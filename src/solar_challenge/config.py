@@ -44,6 +44,7 @@ from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, household_occupant_count
 from solar_challenge.location import Location
+from solar_challenge.number_fields import as_finite_float
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
@@ -2347,12 +2348,24 @@ class _Placeholder:
 
 
 def _read_placeholder(path: str, text: str) -> Optional[_Placeholder]:
-    """The placeholder that *text*, the string value at *path*, is; None if *text* is not one."""
+    """The placeholder that *text*, the string value at *path*, is; None if *text* holds none.
+
+    Raises:
+        ConfigurationError: naming the key path and the variable, for a placeholder inside a
+            longer string, or for a default that is not a finite number.
+    """
     whole = _PLACEHOLDER_PATTERN.fullmatch(text)
-    if whole is None:
-        return None
-    default = whole["default"]
-    return _Placeholder(path, whole["name"], None if default is None else float(default))
+    if whole is not None:
+        name, default = whole["name"], whole["default"]
+        default_field = f"{_block_label(path)}: the default of variable {name!r}"
+        return _Placeholder(path, name, None if default is None else as_finite_float(default, default_field))
+    inside = _PLACEHOLDER_PATTERN.search(text)
+    if inside is not None:
+        raise ConfigurationError(
+            f"{_block_label(path)}: variable {inside['name']!r} is inside the longer string {text!r}; "
+            "a placeholder must be the whole value"
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -2434,9 +2447,11 @@ def substitute_config_variables(
         Configuration with variables substituted
 
     Raises:
-        ConfigurationError: listing the document's placeholders, for a supplied variable none of
-            them names; then, naming its key path and its variable, for a placeholder neither
-            supplied nor defaulted.
+        ConfigurationError: naming its key path and its variable, for a placeholder inside a
+            longer string or a default that is not a finite number, as the document is read, in
+            document order; then, listing the document's placeholders, for a supplied variable
+            none of them names; then, naming its key path and its variable, for a placeholder
+            neither supplied nor defaulted.
     """
     supplied = variables or {}
     substitution = _substitute_variables(config, supplied, "")
