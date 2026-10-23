@@ -34,7 +34,7 @@ def read_fleet_size(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
+        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming *field* and the value sent.
     """
     return as_whole_number(value, field, within=Interval(1, MAX_FLEET_HOMES))
@@ -49,7 +49,7 @@ def read_fleet_seed(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
+        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming *field* and the value sent.
     """
     return as_whole_number(value, field, within=Interval(-MAX_FLEET_SEED, MAX_FLEET_SEED))
@@ -59,10 +59,10 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list
     """Read *counts*, each count of the *pool_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming a count's field and the value sent; or, when the counts total more than
-            MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
-            *pool_field* and the total.
+        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
+            naming a count's field and the value sent.
+        ValueError: When the counts total more than MAX_FLEET_HOMES, more values than a
+            dashboard fleet has homes to take, naming *pool_field* and the total.
     """
     read_counts = [
         as_whole_number(value, field, within=Interval(0, MAX_FLEET_HOMES)) for field, value in counts
@@ -139,11 +139,11 @@ def sample_distribution(
         List of sampled values, each a finite float.
 
     Raises:
-        ValueError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.number_fields.as_whole_number`), params are
-            not a dict (see :func:`_require_dict`), :func:`distribution_grammar_spec`
-            refuses the distribution, naming type or the field under ``params``, params
-            leave out what the type is drawn from (see
+        ConfigurationError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES
+            (see :func:`~solar_challenge.number_fields.as_whole_number`).
+        ValueError: If params are not a dict (see :func:`_require_dict`),
+            :func:`distribution_grammar_spec` refuses the distribution, naming type or the
+            field under ``params``, params leave out what the type is drawn from (see
             :func:`_refuse_a_preview_without_what_its_type_is_drawn_from`),
             :func:`_draw_samples` cannot draw from them, or they draw a sample that is not
             a finite number, as finite params whose draws overflow a float can; that error
