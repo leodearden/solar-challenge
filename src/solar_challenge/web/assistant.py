@@ -19,7 +19,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Generator, assert_never
@@ -63,7 +63,7 @@ from solar_challenge.web.sse import (
     event_stream,
     sse_frame,
 )
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage, headline_figures
 
 bp = Blueprint("assistant", __name__)
 
@@ -411,83 +411,70 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
 
     Returns:
         Dict with keys ``run_id``, ``name``, ``type``, ``status``,
-        ``created_at``, ``n_homes``, and ``summary`` (parsed dict).
-        Returns ``{"error": "<reason>"}`` when not found or on any DB error.
-        Never raises.
+        ``created_at``, ``n_homes``, and ``summary``, the field tree of the
+        run's summary, {} while it has none. Returns ``{"error": "<reason>"}``
+        when not found, on any DB error, or when the run's summary does not
+        decode, the reason then RunRecord.summary's refusal naming the run and
+        runs.summary_json. Never raises.
     """
     try:
         run = storage.run_record(run_id_or_name) or storage.latest_run_named(run_id_or_name)
-        if run is None:
-            return {"error": f"Run not found: {run_id_or_name!r}"}
-
-        summary: dict[str, Any] = json.loads(run.summary_json) if run.summary_json else {}
-
-        return {
-            "run_id": run.id,
-            "name": run.name,
-            "type": run.type,
-            "status": run.status,
-            "created_at": run.created_at,
-            "n_homes": run.n_homes,
-            "summary": summary,
-        }
     except Exception as exc:
         return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
+    if run is None:
+        return {"error": f"Run not found: {run_id_or_name!r}"}
+    try:
+        summary = run.summary()
+    except ValueError as unreadable:
+        return {"error": str(unreadable)}
+    return {
+        "run_id": run.id,
+        "name": run.name,
+        "type": run.type,
+        "status": run.status,
+        "created_at": run.created_at,
+        "n_homes": run.n_homes,
+        "summary": {} if summary is None else asdict(summary),
+    }
 
 
-def list_recent_runs(limit: int, database: Database) -> dict[str, Any]:
+def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
     """Return a list of recent simulation runs, newest first.
 
-    Read-only SELECT on the runs table; a limit above _LIST_RUNS_MAX_LIMIT is
-    clamped to it, so callers cannot request an unbounded result set.  Returns
-    identifying fields plus key summary metrics for each run.
+    Reads the first page of *storage*'s run list; a limit above _LIST_RUNS_MAX_LIMIT
+    is clamped to it, so callers cannot request an unbounded result set.  Returns
+    identifying fields plus each run's headline figures.
 
     Args:
-        limit:    Maximum number of runs to return (at most
-                  _LIST_RUNS_MAX_LIMIT; _LIST_RUNS_DEFAULT_LIMIT when <= 0).
-        database: The Database whose runs table is read.
+        limit:   Maximum number of runs to return (at most
+                 _LIST_RUNS_MAX_LIMIT; _LIST_RUNS_DEFAULT_LIMIT when <= 0).
+        storage: The RunStorage whose runs are listed.
 
     Returns:
-        ``{"runs": [...]}`` where each entry has ``run_id``, ``name``, ``type``,
-        ``status``, ``created_at``, ``n_homes``, ``total_generation_kwh``, and
-        ``self_consumption_ratio``.  Returns ``{"runs": []}`` on an empty table.
-        On any DB error returns ``{"runs": [], "error": "<reason>"}``.
-        Never raises.
+        ``{"runs": [...]}``, _recent_run_entry's entry for each run.  Returns
+        ``{"runs": []}`` when there are no runs.  On any DB error returns
+        ``{"runs": [], "error": "<reason>"}``.  Never raises.
     """
     effective_limit = min(limit if limit > 0 else _LIST_RUNS_DEFAULT_LIMIT, _LIST_RUNS_MAX_LIMIT)
 
     try:
-        with database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, name, type, status, created_at, n_homes, summary_json "
-                "FROM runs ORDER BY created_at DESC LIMIT ?",
-                (effective_limit,),
-            )
-            rows = cursor.fetchall()
-
-        runs: list[dict[str, Any]] = []
-        for row in rows:
-            summary_raw: Any = row["summary_json"]
-            summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
-
-            entry: dict[str, Any] = {
-                "run_id": row["id"],
-                "name": row["name"],
-                "type": row["type"],
-                "status": row["status"],
-                "created_at": row["created_at"],
-                "n_homes": row["n_homes"],
-                # Key summary metrics (omit raw summary_json blob)
-                "total_generation_kwh": summary.get("total_generation_kwh"),
-                "self_consumption_ratio": summary.get("self_consumption_ratio"),
-            }
-            runs.append(entry)
-
-        return {"runs": runs}
-
+        records = storage.page_runs(RunQuery(per_page=effective_limit)).records
     except Exception as exc:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
+    return {"runs": [_recent_run_entry(record) for record in records]}
+
+
+def _recent_run_entry(record: RunRecord) -> dict[str, Any]:
+    """list_recent_runs' entry for *record*'s run: its identifying fields and its headline_figures."""
+    return {
+        "run_id": record.id,
+        "name": record.name,
+        "type": record.type,
+        "status": record.status,
+        "created_at": record.created_at,
+        "n_homes": record.n_homes,
+        **headline_figures(record),
+    }
 
 
 def run_home_simulation(
@@ -668,7 +655,7 @@ def _call_get_run_results(tool_input: Mapping[str, Any], context: ToolContext) -
 
 def _call_list_recent_runs(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a list_recent_runs call: list *context*'s latest runs, up to the limit *tool_input* sends."""
-    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.storage.database)
+    return list_recent_runs(as_whole_number(tool_input["limit"], "limit"), context.storage)
 
 
 def _call_run_home_simulation(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:

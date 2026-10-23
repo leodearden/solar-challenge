@@ -10,19 +10,24 @@ Storage structure:
 """
 
 import json
+import logging
+import math
 import re
 import shutil
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
 from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.text_options import one_of
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,8 +53,10 @@ class RunRecord:
     notes: str | None
 
     def __post_init__(self) -> None:
-        _require_one_of("type", self.type, RUN_TYPES)
-        _require_one_of("status", self.status, RUN_STATUSES)
+        if self.type is not None:
+            one_of(self.type, RUN_TYPES, "RunRecord.type")
+        if self.status is not None:
+            one_of(self.status, RUN_STATUSES, "RunRecord.status")
 
     @property
     def kind(self) -> RunKind:
@@ -58,38 +65,246 @@ class RunRecord:
         Raises:
             ValueError: The record has no type, so it names no kind; the message names its run.
         """
-        if self.type is None:
-            raise ValueError(f"Run {self.id!r} is recorded with no type, so it is of no run kind")
-        return RUN_KINDS[self.type]
+        return _run_kind(self.id, self.type)
 
-    def decoded_config(self) -> Any:
-        """The value config_json encodes; {} when the run has no config text or it is not JSON."""
-        return _decoded_or_empty(self.config_json)
+    def summary(self) -> SummaryStatistics | FleetSummary | None:
+        """The run's summary, decoded from summary_json as its kind's summary_type; None while the run has none.
 
-    def decoded_summary(self) -> Any:
-        """The value summary_json encodes; {} when the run has no summary text or it is not JSON."""
-        return _decoded_or_empty(self.summary_json)
+        Raises:
+            ValueError: The record has no type, as RunRecord.kind refuses it, or summary_json does
+                not decode as its kind's summary; then the message names the run and
+                runs.summary_json, and the decoder's refusal is the cause.
+        """
+        return _run_summary(self.id, self.type, self.summary_json)
+
+    def home_configs(self) -> tuple[HomeConfig, ...] | None:
+        """Each home's HomeConfig, in order, decoded from config_json as the run's kind decodes it; None while the run has none.
+
+        Raises:
+            ValueError: The record has no type, as RunRecord.kind refuses it, or config_json does
+                not decode as its kind's config; then the message names the run and
+                runs.config_json, and the decoder's refusal is the cause.
+        """
+        if self.config_json is None:
+            return None
+        return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
 
 
-def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]) -> None:
-    """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
-    if value is not None and value not in allowed:
-        raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
+def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
+    """The kind of run that *run_type*, run *run_id*'s type, names: its entry in RUN_KINDS.
+
+    Raises:
+        ValueError: *run_type* is None, so it names no kind; the message names the run.
+    """
+    if run_type is None:
+        raise ValueError(f"Run {run_id!r} is recorded with no type, so it is of no run kind")
+    return RUN_KINDS[run_type]
 
 
-def _decoded_or_empty(text: str | None) -> Any:
-    """The value JSON *text* encodes; {} when *text* is None, empty or not JSON."""
-    if not text:
-        return {}
+def _run_summary(
+    run_id: str, run_type: RunType | None, summary_json: str | None
+) -> SummaryStatistics | FleetSummary | None:
+    """Run *run_id*'s summary, decoded from its *summary_json* as the kind *run_type* names decodes it; None while it has none.
+
+    Raises:
+        ValueError: As RunRecord.summary() raises.
+    """
+    if summary_json is None:
+        return None
+    return _decoded_document(run_id, "summary_json", summary_json, _run_kind(run_id, run_type).summary)
+
+
+_DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
+_Decoded = TypeVar("_Decoded")
+
+
+def _decoded_document(
+    run_id: str, column: _DocumentColumn, text: str, decode: Callable[[Mapping[str, Any]], _Decoded]
+) -> _Decoded:
+    """What *decode* reads from the document JSON *text* holds, run *run_id*'s runs.*column*.
+
+    Raises:
+        ValueError: *text* is not JSON, or *decode* refuses the document it holds; the message
+            names the run and the column, and the refusal is the cause.
+    """
     try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return {}
+        return decode(json.loads(text))
+    except (ValueError, TypeError, KeyError, AttributeError) as refusal:
+        raise ValueError(
+            f"The runs.{column} of run {run_id!r} is not a document its kind decodes: {type(refusal).__name__}: {refusal}"
+        ) from refusal
+
+
+def _record_of(row: sqlite3.Row) -> RunRecord:
+    """The RunRecord of a runs row read with SELECT *."""
+    return RunRecord(**dict(row))
 
 
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
-    return None if row is None else RunRecord(**dict(row))
+    return None if row is None else _record_of(row)
+
+
+@dataclass(frozen=True)
+class RunHeadline:
+    """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed.
+
+    Raises:
+        ValueError: A figure is not a finite number, e.g. None, a text, a bool, NaN or an
+            infinity; the message names the figure and its value.
+    """
+
+    generation_kwh: float
+    self_consumption_ratio: float
+
+    def __post_init__(self) -> None:
+        _require_finite_number("generation_kwh", self.generation_kwh)
+        _require_finite_number("self_consumption_ratio", self.self_consumption_ratio)
+
+
+def _require_finite_number(figure: str, value: object) -> None:
+    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is a finite int or float; a bool is neither."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number")
+
+
+def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
+    """The headline of the run whose summary is *summary*, a home run's or a fleet run's.
+
+    It is the one place the web maps a fleet summary's names, such as fleet_self_consumption_ratio,
+    to a run list's (D-S19-8 in docs/prds/run-store-one-owner.md).
+
+    Raises:
+        ValueError: The summary's figure for the generation or the ratio is not a finite number,
+            as RunHeadline refuses it.
+    """
+    match summary:
+        case SummaryStatistics():
+            return RunHeadline(
+                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.self_consumption_ratio
+            )
+        case FleetSummary():
+            return RunHeadline(
+                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
+            )
+        case _:
+            assert_never(summary)
+
+
+def readable_headline(record: RunRecord) -> RunHeadline | None:
+    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary is damaged.
+
+    A summary is damaged when it does not decode, or run_headline refuses it for a figure that
+    is not a finite number. A damaged summary is logged as a warning naming the run, which the
+    run lists then show without figures and the dashboard's totals without its generation,
+    rather than fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15,
+    D-S19-9).
+    """
+    return _readable_headline(record.id, record.type, record.summary_json)
+
+
+def _readable_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> RunHeadline | None:
+    """readable_headline of run *run_id*, read from the only columns of its row it needs: its type and its summary_json."""
+    try:
+        summary = _run_summary(run_id, run_type, summary_json)
+        return None if summary is None else run_headline(summary)
+    except ValueError as damaged:
+        logger.warning("Run %r shows no figures, as its summary is damaged: %s", run_id, damaged)
+        return None
+
+
+class HeadlineFigures(TypedDict):
+    """The figures a run list's row shows for a run, under the names the History list and the assistant's run list give them; None where it has none."""
+
+    total_generation_kwh: float | None
+    self_consumption_ratio: float | None
+
+
+def headline_figures(record: RunRecord) -> HeadlineFigures:
+    """The figures a run list's row shows for *record*'s run: its readable_headline's figures, each None when it has no headline to read."""
+    headline = readable_headline(record)
+    if headline is None:
+        return {"total_generation_kwh": None, "self_consumption_ratio": None}
+    return {"total_generation_kwh": headline.generation_kwh, "self_consumption_ratio": headline.self_consumption_ratio}
+
+
+RunSort =Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
+RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
+
+_MAX_RUNS_PER_PAGE = 100
+
+
+@dataclass(frozen=True)
+class RunQuery:
+    """A page of the run list: the runs it keeps, the order it sorts them in, and which page of them it is.
+
+    run_type keeps the runs of that type; text the runs whose name or notes hold it, in any ASCII
+    case; created_from and created_to the runs created on or after the one date and on or before
+    the other. A filter that is None keeps every run. The runs are sorted by the sort column, then
+    by id, descending or not, and page numbers from 1 the pages of per_page runs.
+
+    Raises:
+        ValueError: sort is not one of RUN_SORTS, run_type is not one of RUN_TYPES, page is below
+            1, or per_page is not from 1 to 100; the message names the field and its value.
+    """
+
+    run_type: RunType | None = None
+    text: str | None = None
+    created_from: date | None = None
+    created_to: date | None = None
+    sort: RunSort = "created_at"
+    descending: bool = True
+    page: int = 1
+    per_page: int = 20
+
+    def __post_init__(self) -> None:
+        one_of(self.sort, RUN_SORTS, "sort")
+        if self.run_type is not None:
+            one_of(self.run_type, RUN_TYPES, "run_type")
+        if self.page < 1:
+            raise ValueError(f"page is {self.page!r}, not a page number: pages are numbered from 1")
+        if not 1 <= self.per_page <= _MAX_RUNS_PER_PAGE:
+            raise ValueError(f"per_page is {self.per_page!r}, not from 1 to {_MAX_RUNS_PER_PAGE} runs a page")
+
+
+@dataclass(frozen=True)
+class RunPage:
+    """A page of the run list: the records of its runs, in order, and the count of every run the list's query keeps."""
+
+    records: tuple[RunRecord, ...]
+    total: int
+
+
+@dataclass(frozen=True)
+class RunTotals:
+    """The dashboard's totals: the count of the completed runs, of their homes, and the energy they generated."""
+
+    run_count: int
+    home_count: int
+    generation_kwh: float
+
+
+_RUN_QUERY_CONDITION = (
+    "(:run_type IS NULL OR type = :run_type)"
+    " AND (:text IS NULL OR instr(lower(name), lower(:text)) > 0 OR instr(lower(notes), lower(:text)) > 0)"
+    " AND (:created_from IS NULL OR created_at >= :created_from)"
+    " AND (:created_before IS NULL OR created_at < :created_before)"
+)
+
+
+def _run_query_values(query: RunQuery) -> dict[str, str | None]:
+    """The values _RUN_QUERY_CONDITION binds to keep the runs *query* keeps; None where it keeps every run.
+
+    A run created on created_to is created before the next day starts. The text is found
+    anywhere in a name or notes, each character as itself (no % or _ is a wildcard), in any
+    ASCII case: SQLite's lower() folds ASCII letters only, as LIKE does.
+    """
+    return {
+        "run_type": query.run_type,
+        "text": query.text,
+        "created_from": None if query.created_from is None else query.created_from.isoformat(),
+        "created_before": None if query.created_to is None else (query.created_to + timedelta(days=1)).isoformat(),
+    }
 
 
 RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
@@ -98,6 +313,7 @@ RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 _COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
+_COMPLETED_RUN_STATUS: RunStatus = "completed"
 _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
 
@@ -162,7 +378,7 @@ def _saved_run_row(
         status=status,
         error_message=error_message,
         created_at=now if created_at is None else created_at,
-        completed_at=now if status == "completed" else None,
+        completed_at=now if status == _COMPLETED_RUN_STATUS else None,
         duration_seconds=duration_seconds,
         n_homes=n_homes,
         notes=None,
@@ -557,60 +773,43 @@ class RunStorage:
                 conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
         return self.run_record(run_id)
 
-    def list_runs(
-        self,
-        run_type: RunType | None = None,
-        status: RunStatus | None = None,
-        limit: int | None = None,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """List simulation runs with optional filtering.
+    def page_runs(self, query: RunQuery) -> RunPage:
+        """The records of the runs on *query*'s page of the run list, in its order, and the count of every run *query* keeps.
 
-        Queries SQLite database for run metadata with optional filters.
-
-        Args:
-            run_type: Filter by run type, None for all
-            status: Filter by status, None for all
-            limit: Maximum number of results to return, None for all
-            offset: Number of results to skip (for pagination)
-
-        Returns:
-            List of run metadata dictionaries with keys matching the database schema
+        A page past the last lists no runs.
         """
+        values = _run_query_values(query)
+        direction = "DESC" if query.descending else "ASC"
+        order = f"{one_of(query.sort, RUN_SORTS, 'sort')} {direction}, id {direction}"
         with self.database.transaction() as conn:
-            cursor = conn.cursor()
+            total = conn.execute(f"SELECT COUNT(*) FROM runs WHERE {_RUN_QUERY_CONDITION}", values).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT * FROM runs WHERE {_RUN_QUERY_CONDITION} ORDER BY {order} LIMIT :limit OFFSET :offset",
+                {**values, "limit": query.per_page, "offset": (query.page - 1) * query.per_page},
+            ).fetchall()
+        return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
 
-            # Build query with optional filters
-            query = "SELECT * FROM runs WHERE 1=1"
-            params: list[Any] = []
+    def totals(self) -> RunTotals:
+        """The count of the completed runs and of their homes, and the generation of those whose readable_headline reads.
 
-            if run_type is not None:
-                query += " AND type = ?"
-                params.append(run_type)
-
-            if status is not None:
-                query += " AND status = ?"
-                params.append(status)
-
-            # Order by created_at descending (most recent first)
-            query += " ORDER BY created_at DESC"
-
-            # Add limit and offset
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
-
-            if offset > 0:
-                if limit is None:
-                    query += " LIMIT -1"
-                query += " OFFSET ?"
-                params.append(offset)
-
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-
-            # Convert Row objects to dictionaries
-            return [dict(row) for row in rows]
+        A run whose row records no count of homes counts as one home. A run whose summary is
+        damaged still counts, with its homes, but adds no generation; readable_headline logs it.
+        The generation is read from each run's type and summary alone, never its config.
+        """
+        completed = {"completed": _COMPLETED_RUN_STATUS}
+        with self.database.transaction() as conn:
+            run_count, home_count = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN n_homes > 0 THEN n_homes ELSE 1 END), 0) "
+                "FROM runs WHERE status = :completed",
+                completed,
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT id, type, summary_json FROM runs WHERE status = :completed AND summary_json IS NOT NULL",
+                completed,
+            ).fetchall()
+        headlines = (_readable_headline(row["id"], row["type"], row["summary_json"]) for row in rows)
+        generation_kwh = sum((headline.generation_kwh for headline in headlines if headline is not None), 0.0)
+        return RunTotals(run_count=run_count, home_count=home_count, generation_kwh=generation_kwh)
 
     def delete_run(self, run_id: str) -> None:
         """Delete a simulation run from storage.

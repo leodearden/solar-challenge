@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.web.database import RunType, init_db
-from solar_challenge.web.storage import RunRecord, RunStorage
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
 from tests._web_runs import store_home_run
@@ -94,7 +94,7 @@ class TestCreateRun:
         with pytest.raises(ValueError, match=re.escape(repr(run_id))):
             _create_north_roof_run(storage, run_id)
 
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     def test_create_run_of_a_type_that_is_not_a_run_type_raises_value_error_naming_it_and_writes_nothing(
         self, storage: RunStorage
@@ -102,7 +102,7 @@ class TestCreateRun:
         with pytest.raises(ValueError, match=re.escape("type is 'sweeep'")):
             storage.create_run("run-1", run_type="sweeep", name="North Roof", n_homes=1, created_at=_CREATED_AT)
 
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     def test_create_run_of_the_id_of_a_stored_run_raises_integrity_error_and_leaves_that_run_as_it_was(
         self, storage: RunStorage
@@ -161,7 +161,7 @@ class TestMarkRunFailed:
     def test_marking_failed_an_id_no_run_has_raises_nothing_and_writes_nothing(self, storage: RunStorage) -> None:
         storage.mark_run_failed("run-1", "the simulation failed")
 
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestFailInterruptedRuns:

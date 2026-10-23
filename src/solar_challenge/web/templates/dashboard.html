@@ -53,9 +53,9 @@
 
 <!-- Aggregate stats -->
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-    {{ stat_card("Total Runs", stats.total_runs, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><polygon points="5,3 19,10 5,17" /></svg>') }}
-    {{ stat_card("Homes Simulated", stats.total_homes, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>') }}
-    {{ stat_card("Energy Modelled", stats.total_energy_mwh, unit="MWh", icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clip-rule="evenodd" /></svg>') }}
+    {{ stat_card("Total Runs", totals.run_count, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><polygon points="5,3 19,10 5,17" /></svg>') }}
+    {{ stat_card("Homes Simulated", totals.home_count, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>') }}
+    {{ stat_card("Energy Modelled", (totals.generation_kwh / 1000) | round(2), unit="MWh", icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clip-rule="evenodd" /></svg>') }}
 </div>
 
 <!-- Recent runs table -->
@@ -79,7 +79,7 @@
                            class="text-primary-600 dark:text-primary-400 hover:underline">{{ run.name }}</a>
                     </td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.type }}</td>
-                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.date }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.created_at[:10] if run.created_at else '' }}</td>
                     <td class="px-4 py-3 text-sm whitespace-nowrap">{{ run_status_badge(run.status) }}</td>
                 </tr>
                 {% endfor %}

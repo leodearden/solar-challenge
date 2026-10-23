@@ -14,6 +14,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.database import Database, get_chat_history, init_db, save_chat_message
+from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
@@ -844,7 +845,7 @@ class TestRunContextInjection:
             name="ctx-signal-run",
             status="completed",
             created_at="2026-06-01T09:00:00+00:00",
-            summary={"total_generation_kwh": summary_marker},
+            summary=home_summary(total_generation_kwh=summary_marker),
         )
 
         anthropic_api.set_chunks(["ok"])
@@ -882,7 +883,7 @@ class TestRunContextInjection:
             name="ctx-persist-run",
             status="completed",
             created_at="2026-06-01T10:00:00+00:00",
-            summary={"total_generation_kwh": 123.0},
+            summary=home_summary(total_generation_kwh=123.0),
         )
 
         with client.session_transaction() as sess:
@@ -925,7 +926,7 @@ class TestRunContextInjection:
             name="ctx-cache-run",
             status="completed",
             created_at="2026-06-01T11:00:00+00:00",
-            summary={"total_generation_kwh": 456.0},
+            summary=home_summary(total_generation_kwh=456.0),
         )
         anthropic_api.set_chunks(["ok"])
 

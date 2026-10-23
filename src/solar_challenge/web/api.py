@@ -12,6 +12,7 @@ import math
 import time
 from collections.abc import Mapping
 from dataclasses import asdict
+from datetime import date
 from types import MappingProxyType
 from typing import Any, Generator, assert_never
 
@@ -19,13 +20,12 @@ import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, stream_with_context, url_for
 
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import PresetType
+from solar_challenge.web.database import RUN_TYPES, PresetType
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -49,7 +49,8 @@ from solar_challenge.web.request_boundary import NotAJsonObject, request_json_ob
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
-from solar_challenge.web.storage import RUN_LABELS
+from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
+from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +256,9 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         job_id: Unique job identifier.
 
     Returns:
-        JSON with summary data, or 404/409 on error.
+        JSON with the job's run's id, name, type and creation time, and as ``summary`` its
+        summary's field tree, {} while it has none; or 404/409 on error. A run whose summary
+        does not decode fails the request, with RunRecord.summary's refusal.
     """
     job_manager = get_job_manager()
     state = job_manager.job_state(job_id)
@@ -274,14 +277,14 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
-    summary = json.loads(run.summary_json) if run.summary_json else {}
+    summary = run.summary()
 
     return jsonify({
         "run_id": run_id,
         "name": run.name,
         "type": run.type,
         "created_at": run.created_at,
-        "summary": summary,
+        "summary": {} if summary is None else asdict(summary),
     }), 200
 
 # ---------------------------------------------------------------------------
@@ -609,141 +612,133 @@ def simulate_sweep() -> tuple[Response, int]:
 
 
 @api_bp.route("/history/runs")
-def history_list_runs() -> Response:
-    """Paginated, filterable run list API.
+def history_list_runs() -> Response | tuple[Response, int]:
+    """One page of the run list, filtered and sorted as the query parameters ask.
 
-    Query parameters:
-        page: Page number (default 1)
-        per_page: Items per page (default 20)
-        sort: Sort column (default 'created_at')
-        order: Sort order 'asc' or 'desc' (default 'desc')
-        type: Filter by run type (home, fleet)
-        q: Search query (searches name and notes)
-        date_from: Filter runs created on or after this date
-        date_to: Filter runs created on or before this date
+    Query parameters, each optional:
+        page: The page, numbered from 1 (default 1).
+        per_page: The runs a page lists, from 1 to 100 (default 20).
+        sort: The column the runs are sorted by, one of RUN_SORTS (default 'created_at').
+        order: 'asc' or 'desc' (default 'desc').
+        type: Keep only the runs of this type, one of RUN_TYPES.
+        q: Keep only the runs whose name or notes hold this text, in any ASCII case.
+        date_from: Keep only the runs created on or after this date, YYYY-MM-DD.
+        date_to: Keep only the runs created on or before this date, YYYY-MM-DD.
+    A filter sent empty keeps every run.
 
     Returns:
-        JSON response with ``runs`` list, each row carrying the path of its run's results
-        page as ``results_url``, and ``pagination`` metadata.
+        JSON with ``runs``, the row _history_row answers for each run on the page, and
+        ``pagination``. HTTP 400 with the refusal as ``error`` when a value is not one the run
+        list answers: a page below 1, a per_page outside 1 to 100, a page or per_page that is
+        not a whole number, a sort, order or type that is none of its options, or a date_from
+        or date_to that is not a date.
     """
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 20, type=int)
-    sort_col = request.args.get("sort", "created_at")
-    order = request.args.get("order", "desc")
-    run_type = request.args.get("type")
-    search_q = request.args.get("q")
-    date_from = request.args.get("date_from")
-    date_to = request.args.get("date_to")
-
-    # Clamp per_page
-    per_page = max(1, min(per_page, 100))
-    page = max(1, page)
-
-    # Whitelist sort columns to prevent injection
-    allowed_sorts = {"created_at", "name", "type", "status", "duration_seconds", "n_homes"}
-    if sort_col not in allowed_sorts:
-        sort_col = "created_at"
-
-    order_dir = "ASC" if order.lower() == "asc" else "DESC"
-
-    with get_storage().database.transaction() as conn:
-        cursor = conn.cursor()
-
-        # Build WHERE clause
-        conditions: list[str] = []
-        params: list[Any] = []
-
-        if run_type:
-            conditions.append("type = ?")
-            params.append(run_type)
-
-        if search_q:
-            conditions.append("(name LIKE ? OR notes LIKE ?)")
-            like_q = f"%{search_q}%"
-            params.extend([like_q, like_q])
-
-        if date_from:
-            conditions.append("created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("created_at <= ?")
-            params.append(date_to + "T23:59:59")
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-        # Count total matching rows
-        count_query = f"SELECT COUNT(*) as cnt FROM runs WHERE {where_clause}"
-        cursor.execute(count_query, params)
-        total = cursor.fetchone()["cnt"]
-
-        # Fetch paginated results
-        offset = (page - 1) * per_page
-        data_query = (
-            f"SELECT id, name, type, status, created_at, completed_at, "
-            f"duration_seconds, n_homes, notes, summary_json "
-            f"FROM runs WHERE {where_clause} "
-            f"ORDER BY {sort_col} {order_dir} "
-            f"LIMIT ? OFFSET ?"
-        )
-        cursor.execute(data_query, params + [per_page, offset])
-        rows = cursor.fetchall()
-
-    # Build response
-    runs_list: list[dict[str, Any]] = []
-    for row in rows:
-        run_dict = dict(row)
-        # Parse summary_json to extract key metrics for the table
-        summary = {}
-        if run_dict.get("summary_json"):
-            try:
-                summary = json.loads(run_dict["summary_json"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        run_dict["total_generation_kwh"] = summary.get("total_generation_kwh")
-        run_dict["self_consumption_ratio"] = summary.get("self_consumption_ratio")
-        run_dict["results_url"] = url_for("main.run_results", run_id=run_dict["id"])
-        # Remove the full JSON from the list response to save bandwidth
-        run_dict.pop("summary_json", None)
-        runs_list.append(run_dict)
-
-    total_pages = max(1, (total + per_page - 1) // per_page)
-
+    try:
+        query = _run_query_from(request.args)
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal)}), 400
+    page = get_storage().page_runs(query)
     return jsonify({
-        "runs": runs_list,
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_prev": page > 1,
-        },
+        "runs": [_history_row(record) for record in page.records],
+        "pagination": _pagination(query, page.total),
     })
+
+
+def _run_query_from(args: Mapping[str, str]) -> RunQuery:
+    """The page of the run list the History list's query parameters *args* ask for, as history_list_runs reads them.
+
+    Raises:
+        ValueError: A parameter's value is not one the run list answers; the message names the
+            parameter and the value sent.
+    """
+    run_type = args.get("type")
+    return RunQuery(
+        run_type=one_of(run_type, RUN_TYPES, "type") if run_type else None,
+        text=args.get("q") or None,
+        created_from=_date_parameter(args, "date_from"),
+        created_to=_date_parameter(args, "date_to"),
+        sort=one_of(args.get("sort", "created_at"), RUN_SORTS, "sort"),
+        descending=one_of(args.get("order", "desc"), ("asc", "desc"), "order") == "desc",
+        page=as_whole_number(args.get("page", 1), "page"),
+        per_page=as_whole_number(args.get("per_page", 20), "per_page"),
+    )
+
+
+def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
+    """The date the query parameter *name* of *args* sends as YYYY-MM-DD; None when it is not sent or sent empty.
+
+    Raises:
+        ValueError: The value sent is not a date; the message names *name* and the value.
+    """
+    value = args.get(name)
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as refusal:
+        raise ValueError(f"{name} is {value!r}, not a date in the form YYYY-MM-DD") from refusal
+
+
+def _history_row(record: RunRecord) -> dict[str, Any]:
+    """The History list's row for *record*'s run: its columns but its documents and error, its headline_figures, and its results page's path."""
+    return {
+        "id": record.id,
+        "name": record.name,
+        "type": record.type,
+        "status": record.status,
+        "created_at": record.created_at,
+        "completed_at": record.completed_at,
+        "duration_seconds": record.duration_seconds,
+        "n_homes": record.n_homes,
+        "notes": record.notes,
+        **headline_figures(record),
+        "results_url": url_for("main.run_results", run_id=record.id),
+    }
+
+
+def _pagination(query: RunQuery, total: int) -> dict[str, int | bool]:
+    """Where *query*'s page sits among the pages of the *total* runs it keeps, at least one page however few runs there are."""
+    total_pages = max(1, math.ceil(total / query.per_page))
+    return {
+        "page": query.page,
+        "per_page": query.per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_next": query.page < total_pages,
+        "has_prev": query.page > 1,
+    }
 
 
 @api_bp.route("/history/runs/<run_id>")
 def history_get_run(run_id: str) -> Response | tuple[Response, int]:
-    """Get full run detail including summary and config.
+    """A run's detail: each column of its row, with its summary and its homes decoded through its kind.
 
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with full run detail, or 404 if not found.
+        JSON of each column of the run's row, plus, once the run has them, ``summary``, its
+        summary's field tree, and ``home_configs``, the HomeConfig field tree of each of its
+        homes, in order. 404 if no run has the id; 409 {error, run_id} if its summary or its
+        config does not decode, the error naming the run and the column.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    run_dict = asdict(run)
-    if run.config_json:
-        run_dict["config"] = run.decoded_config()
-    if run.summary_json:
-        run_dict["summary"] = run.decoded_summary()
+    try:
+        summary = run.summary()
+        homes = run.home_configs()
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal), "run_id": run_id}), 409
 
-    return jsonify(run_dict)
+    detail = asdict(run)
+    if summary is not None:
+        detail["summary"] = asdict(summary)
+    if homes is not None:
+        detail["home_configs"] = [asdict(home) for home in homes]
+    return jsonify(detail)
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["DELETE"])
@@ -846,13 +841,12 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    if not run.config_json:
-        return jsonify({"error": "No config data available"}), 404
-
     try:
-        homes = run.kind.home_configs(run.decoded_config())
-    except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
+        homes = run.home_configs()
+    except ValueError as exc:
         return jsonify({"error": f"Invalid run data: {exc}"}), 500
+    if homes is None:
+        return jsonify({"error": "No config data available"}), 404
 
     run_name = run.name or "run"
     try:

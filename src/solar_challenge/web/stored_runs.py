@@ -10,8 +10,9 @@ field tree in JSON.
 
 StoredHomeRun and StoredFleetRun are the runs as their directories store them: each
 writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
-behaviour table, one RunKind per RunType; a kind also decodes the HomeConfigs a run's
-record holds, and builds from them the scenario its YAML export answers with. Where a
+behaviour table, one RunKind per RunType; a kind also decodes the summary and the
+HomeConfigs a run's record holds, and builds from the HomeConfigs the scenario its YAML
+export answers with. Where a
 run's directory lives, and the runs table that records each run's type, are RunStorage's:
 nothing here reads SQL or Flask.
 """
@@ -451,6 +452,15 @@ class RunKind:
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
     scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
+
+    def summary(self, summary_document: Mapping[str, Any]) -> SummaryStatistics | FleetSummary:
+        """The summary *summary_document* holds: the field tree of a summary_type, rebuilt as one.
+
+        Raises:
+            TypeError, ValueError: The document is not a summary_type's field tree, e.g. lacks
+                a field summary_type requires, or summary_type refuses the figures it holds.
+        """
+        return _deserialize_dataclass(self.summary_type, dict(summary_document))
 
 
 RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
