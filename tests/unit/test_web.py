@@ -1,5 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
+import logging
 import uuid
 from pathlib import Path
 
@@ -212,6 +213,30 @@ class TestDashboardRoute:
         assert texts_after(page, "Total Runs", 1) == ["2"]
         assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
+
+    def test_dashboard_stats_count_a_completed_run_whose_summary_does_not_decode_but_leave_out_its_generation(
+        self, storage: RunStorage, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One damaged run does not fail the dashboard: it counts in Total Runs and Homes Simulated, Energy Modelled leaves its generation out, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
+        results = make_sinusoidal_sim_results(days=1)
+        _save_home_run(storage, "North Roof", results)
+        _save_fleet_run(storage, "Community Fleet", [results, results])
+        damaged_run_id = _save_home_run(storage, "Damaged Roof", results)
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", damaged_run_id))
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        response = client.get("/")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        readable_homes_generation_mwh = 3 * calculate_summary(results).total_generation_kwh / 1000
+        assert texts_after(page, "Total Runs", 1) == ["3"]
+        assert texts_after(page, "Homes Simulated", 1) == ["4"]
+        assert texts_after(page, "Energy Modelled", 2) == [str(round(readable_homes_generation_mwh, 2)), "MWh"]
+        assert [record.levelno for record in caplog.records if damaged_run_id in record.getMessage()] == [
+            logging.WARNING
+        ]
 
 
 class TestSidebarCurrentPage:
