@@ -479,6 +479,44 @@ def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_liter
 
 
 @pytest.mark.parametrize(
+    ("assigned", "defect"),
+    [
+        pytest.param("[1]", "names 1, not a module name", id="an-int-entry"),
+        pytest.param("['tests._plugin', None]", "names None, not a module name", id="none-beside-a-module-name"),
+        pytest.param("(['tests._plugin'],)", "names ['tests._plugin'], not a module name", id="a-nested-list-entry"),
+        pytest.param("5", "is neither a str nor a list or tuple", id="an-int-for-the-whole-value"),
+        pytest.param("{}", "is neither a str nor a list or tuple", id="an-empty-dict-is-no-empty-value"),
+    ],
+)
+def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_str_nor_list_or_tuple_of_str(
+    tmp_path: Path,
+    assigned: str,
+    defect: str,
+) -> None:
+    """A pytest_plugins value that is no str, list or tuple, or that holds an entry that is no str,
+    fails the detector, naming the file, the line, the expression and what is wrong with it.
+
+    pytest imports each entry as a module name, which it requires to be text, and accepts None,
+    a str or a sequence only. An int read as a module name would otherwise fail on its first
+    string method, naming no file. Only None and the empty str name no plugin, so an empty dict
+    fails like any other value of the wrong type.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import pytest", f"pytest_plugins = {assigned}")
+
+    with pytest.raises(AssertionError) as failure:
+        undeclared_distributions([plugin], declared={"pytest"})
+
+    message = str(failure.value)
+    assert f"{plugin}:2 sets pytest_plugins to {assigned}, which {defect}" in message, (
+        f"the failure does not name line 2 of {plugin}, the pytest_plugins expression `{assigned}` on "
+        f"it and what is wrong with it, `which {defect}`: {message}"
+    )
+    assert "list or tuple of module names" in message, (
+        f"the failure does not say how to write pytest_plugins: {message}"
+    )
+
+
+@pytest.mark.parametrize(
     "level",
     [pytest.param(3, id="out-of-the-project"), pytest.param(100, id="above-the-filesystem-root")],
 )
