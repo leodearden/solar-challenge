@@ -437,6 +437,77 @@ class TestRunLabelsEditedWhileItsJobRuns:
         assert (run.status, run.name, run.notes) == ("completed", "Renamed by user", "my note")
 
 
+def _names_while_running_and_once_completed(
+    manager: JobManager, job_id: str, blocking_simulation: BlockingSimulation, storage: RunStorage
+) -> list[tuple[str | None, str | None]]:
+    """The status and name of job *job_id*'s run, held in *blocking_simulation*, before and after it is released to complete."""
+    running = _run_of_job(manager, job_id, storage)
+    blocking_simulation.release()
+    assert manager.wait_until_idle(timeout=30)
+    completed = _run_of_job(manager, job_id, storage)
+    return [(running.status, running.name), (completed.status, completed.name)]
+
+
+class TestRunNames:
+    """A JobManager names a job's run once, when its submit creates it: the submit's name, or the run kind's default name when the submit gives none or a blank one."""
+
+    @pytest.mark.parametrize(
+        ("name", "home_name", "run_name"),
+        [
+            (None, "North Roof", "North Roof"),
+            (None, "", "Web Simulation"),
+            ("", "", "Web Simulation"),
+            ("   ", "", "Web Simulation"),
+            (None, "   ", "Web Simulation"),
+            ("Street", "North Roof", "Street"),
+        ],
+        ids=[
+            "no-name-a-named-home",
+            "no-name-an-unnamed-home",
+            "an-empty-name",
+            "a-blank-name",
+            "no-name-a-home-of-a-blank-name",
+            "a-name-a-named-home",
+        ],
+    )
+    def test_a_home_jobs_run_is_named_at_its_submit_and_keeps_that_name_once_completed(
+        self,
+        name: str | None,
+        home_name: str,
+        run_name: str,
+        blocking_simulation: BlockingSimulation,
+        storage: RunStorage,
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+
+        job_id, _ = manager.submit_home_job(
+            config=replace(_A_HOME, name=home_name), start_date=_JUNE_1, end_date=_JUNE_2, name=name
+        )
+
+        assert _names_while_running_and_once_completed(manager, job_id, blocking_simulation, storage) == [
+            ("running", run_name),
+            ("completed", run_name),
+        ]
+
+    @pytest.mark.parametrize(
+        ("name", "run_name"),
+        [(None, "Fleet Simulation"), ("   ", "Fleet Simulation"), ("Street", "Street")],
+        ids=["no-name", "a-blank-name", "a-name"],
+    )
+    def test_a_fleet_jobs_run_is_named_at_its_submit_and_keeps_that_name_once_completed(
+        self, name: str | None, run_name: str, blocking_simulation: BlockingSimulation, storage: RunStorage
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        homes = [replace(_A_HOME, name="Home 1"), replace(_A_HOME, name="Home 2")]
+
+        job_id, _ = manager.submit_fleet_job(configs=homes, start_date=_JUNE_1, end_date=_JUNE_2, name=name)
+
+        assert _names_while_running_and_once_completed(manager, job_id, blocking_simulation, storage) == [
+            ("running", run_name),
+            ("completed", run_name),
+        ]
+
+
 _A_MINUTE = 60.0
 _A_DAY = 24 * 60 * 60.0
 
