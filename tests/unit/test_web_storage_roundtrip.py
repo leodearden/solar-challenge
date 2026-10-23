@@ -1,7 +1,6 @@
 """Storage regression tests for RunStorage roundtrip, corruption, and edge cases.
 
 Tests cover:
-- C3 regression: list_runs with offset but no limit
 - C4 regression: heat_pump_load survives home and fleet roundtrips
 - grid_charge_cost survives home and fleet roundtrips, and a run saved without it
   reloads it as None
@@ -36,7 +35,6 @@ import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
-from flask import Flask
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import (
@@ -203,49 +201,6 @@ def _read_json(path: Path) -> Any:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-
-class TestListRunsOffsetWithoutLimit:
-    """C3 regression: list_runs(offset=5) without limit must not crash."""
-
-    def test_list_runs_offset_without_limit(self, app: Flask, storage: RunStorage) -> None:
-        """Call list_runs(offset=5) without limit; verify no SQLite syntax error."""
-        # Insert a few runs so the DB is not empty
-        config = _make_home_config()
-        results = _make_simulation_results()
-        summary = _make_summary()
-
-        for i in range(3):
-            storage.save_home_run(
-                run_id=f"run-{i}",
-                config=config,
-                results=results,
-                summary=summary,
-            )
-
-        # This should not raise a sqlite3.OperationalError about syntax
-        runs = storage.list_runs(offset=5)
-        # With only 3 runs and offset=5, we should get an empty list
-        assert isinstance(runs, list)
-        assert len(runs) == 0
-
-    def test_list_runs_offset_within_range(self, app: Flask, storage: RunStorage) -> None:
-        """list_runs with offset within range returns remaining runs."""
-        config = _make_home_config()
-        results = _make_simulation_results()
-        summary = _make_summary()
-
-        for i in range(5):
-            storage.save_home_run(
-                run_id=f"run-{i}",
-                config=config,
-                results=results,
-                summary=summary,
-            )
-
-        runs = storage.list_runs(offset=3)
-        assert isinstance(runs, list)
-        assert len(runs) == 2
 
 
 class TestHeatPumpHomeRoundtrip:
@@ -428,16 +383,15 @@ class TestCompletedAtTimestamp:
             created_at=created_at,
         )
 
-        runs = storage.list_runs()
-        assert len(runs) == 1
-        run = runs[0]
+        run = storage.run_record("ts-test-001")
+        assert run is not None
 
-        assert run["created_at"] == created_at
-        assert run["completed_at"] is not None
-        assert run["completed_at"] != run["created_at"]
+        assert run.created_at == created_at
+        assert run.completed_at is not None
+        assert run.completed_at != run.created_at
 
         # completed_at should be parseable as a timestamp
-        completed_ts = pd.Timestamp(run["completed_at"])
+        completed_ts = pd.Timestamp(run.completed_at)
         assert completed_ts is not None
 
 
@@ -500,11 +454,11 @@ class TestFullHomeRoundtrip:
         assert loaded_summary.peak_heat_pump_load_kw == summary.peak_heat_pump_load_kw
 
         # DB record check
-        runs = storage.list_runs()
-        assert len(runs) == 1
-        assert runs[0]["name"] == "Full Home Test"
-        assert runs[0]["type"] == "home"
-        assert runs[0]["duration_seconds"] == 42.5
+        run = storage.run_record("full-home-001")
+        assert run is not None
+        assert run.name == "Full Home Test"
+        assert run.type == "home"
+        assert run.duration_seconds == 42.5
 
 
 class TestFullFleetRoundtrip:
@@ -574,11 +528,11 @@ class TestFullFleetRoundtrip:
             assert loaded_fleet.home_configs[i].pv_config.capacity_kw == home_configs[i].pv_config.capacity_kw
 
         # DB record check
-        runs = storage.list_runs()
-        assert len(runs) == 1
-        assert runs[0]["name"] == "Full Fleet Test"
-        assert runs[0]["type"] == "fleet"
-        assert runs[0]["n_homes"] == n_homes
+        run = storage.run_record("full-fleet-001")
+        assert run is not None
+        assert run.name == "Full Fleet Test"
+        assert run.type == "fleet"
+        assert run.n_homes == n_homes
 
 
 class TestTupleFieldRoundtrip:
@@ -696,11 +650,12 @@ class TestPersistedJson:
         )
 
         run_dir = stored_run_dir(storage, "json-home-001")
-        [run] = storage.list_runs()
+        run = storage.run_record("json-home-001")
+        assert run is not None and run.config_json is not None and run.summary_json is not None
         assert _read_json(run_dir / "config.json") == _json_field_tree(config)
-        assert json.loads(run["config_json"]) == _json_field_tree(config)
+        assert json.loads(run.config_json) == _json_field_tree(config)
         assert _read_json(run_dir / "summary.json") == _json_field_tree(summary)
-        assert json.loads(run["summary_json"]) == _json_field_tree(summary)
+        assert json.loads(run.summary_json) == _json_field_tree(summary)
 
     def test_fleet_run_writes_configs_and_summaries_as_field_trees(
         self, storage: RunStorage
@@ -723,15 +678,16 @@ class TestPersistedJson:
         )
 
         run_dir = stored_run_dir(storage, "json-fleet-001")
-        [run] = storage.list_runs()
+        run = storage.run_record("json-fleet-001")
+        assert run is not None and run.config_json is not None and run.summary_json is not None
         expected_config = {
             "homes": [_json_field_tree(config) for config in home_configs],
             "n_homes": 2,
         }
         assert _read_json(run_dir / "config.json") == expected_config
-        assert json.loads(run["config_json"]) == expected_config
+        assert json.loads(run.config_json) == expected_config
         assert _read_json(run_dir / "summary.json") == _json_field_tree(fleet_summary)
-        assert json.loads(run["summary_json"]) == _json_field_tree(fleet_summary)
+        assert json.loads(run.summary_json) == _json_field_tree(fleet_summary)
         for i, home_summary in enumerate(home_summaries):
             home_summary_path = run_dir / "homes" / f"home_{i}_summary.json"
             assert _read_json(home_summary_path) == _json_field_tree(home_summary)
@@ -976,8 +932,7 @@ class TestMissingRunDirectory:
         shutil.rmtree(run_dir)
 
         # The DB record still exists, but the filesystem is gone
-        runs = storage.list_runs()
-        assert len(runs) == 1
+        assert storage.run_record("missing-dir-001") is not None
 
         # Loading should raise FileNotFoundError
         with pytest.raises(FileNotFoundError):
@@ -1003,15 +958,13 @@ class TestDeleteRun:
         # Verify it exists
         run_dir = stored_run_dir(storage, "delete-me-001")
         assert run_dir.exists()
-        runs = storage.list_runs()
-        assert len(runs) == 1
+        assert storage.run_record("delete-me-001") is not None
 
         # Delete it
         storage.delete_run("delete-me-001")
 
         # Verify DB record is gone
-        runs = storage.list_runs()
-        assert len(runs) == 0
+        assert storage.run_record("delete-me-001") is None
 
         # Verify filesystem is gone
         assert not run_dir.exists()
@@ -1043,5 +996,4 @@ class TestDeleteRun:
         storage.delete_run("delete-fleet-001")
 
         assert not run_dir.exists()
-        runs = storage.list_runs()
-        assert len(runs) == 0
+        assert storage.run_record("delete-fleet-001") is None

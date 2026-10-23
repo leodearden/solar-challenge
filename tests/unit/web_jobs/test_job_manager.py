@@ -29,7 +29,7 @@ from solar_challenge.web.jobs import (
     live_managers,
     shutdown_all_managers,
 )
-from solar_challenge.web.storage import RunRecord, RunStorage
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from tests._web_app import run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
@@ -359,7 +359,7 @@ class TestJobManagerIds:
         assert state is not None
         run_id = state.run_id
         assert {job_id, run_id} == set(ids.issued)
-        assert [run["id"] for run in storage.list_runs()] == [run_id]
+        assert [record.id for record in storage.page_runs(RunQuery()).records] == [run_id]
 
 
 class TestJobManagerState:
@@ -625,7 +625,7 @@ class TestJobManagerRefusedRows:
 
         assert ids.issued
         assert _ids_tracked_by(manager, ids.issued) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestJobManagerUnrecordedFailures:
@@ -819,7 +819,7 @@ class TestJobManagerShutdown:
 
         assert ids.issued
         assert _ids_tracked_by(manager, ids.issued) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     def test_a_job_dropped_by_shutdown_keeps_the_state_it_was_queued_in_and_logs_no_error(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage, caplog: pytest.LogCaptureFixture

@@ -1,7 +1,6 @@
 """Tests for the web database and storage modules."""
 
 import dataclasses
-import json
 import re
 import sqlite3
 import tempfile
@@ -20,7 +19,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import CHAT_ROLES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
-from solar_challenge.web.storage import RunRecord, RunStorage
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
 
@@ -542,7 +541,7 @@ class TestFleetRunRoundTrip:
             )
 
         assert list(storage.data_dir.iterdir()) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestSavedRunRow:
@@ -715,144 +714,7 @@ class TestSavedRunRow:
             saves[kind]("bad-status", status="complete")
 
         assert list(storage.data_dir.iterdir()) == []
-        assert storage.list_runs() == []
-
-
-class TestListRuns:
-    """Tests for listing and filtering runs."""
-
-    def test_list_runs_empty_database(self, storage):
-        """Test list_runs returns empty list for empty database."""
-        runs = storage.list_runs()
-        assert runs == []
-
-    def test_list_runs_returns_all_runs(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test list_runs returns all saved runs."""
-        for i in range(3):
-            storage.save_home_run(
-                run_id=f"run-{i}",
-                config=sample_home_config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-                name=f"Run {i}",
-            )
-
-        runs = storage.list_runs()
-        assert len(runs) == 3
-
-    def test_list_runs_filter_by_type(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary, sample_fleet_data
-    ):
-        """Test list_runs filters by run type."""
-        # Save 2 home runs
-        for i in range(2):
-            storage.save_home_run(
-                run_id=f"home-{i}",
-                config=sample_home_config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-            )
-
-        # Save 1 fleet run
-        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
-        storage.save_fleet_run(
-            run_id="fleet-0",
-            fleet_results=fleet_results,
-            fleet_summary=fleet_summary,
-            per_home_summaries=per_home_summaries,
-        )
-
-        # Filter by home type
-        home_runs = storage.list_runs(run_type="home")
-        assert len(home_runs) == 2
-        assert all(run["type"] == "home" for run in home_runs)
-
-        # Filter by fleet type
-        fleet_runs = storage.list_runs(run_type="fleet")
-        assert len(fleet_runs) == 1
-        assert fleet_runs[0]["type"] == "fleet"
-
-    def test_list_runs_filter_by_status(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test list_runs filters by status."""
-        # Save completed runs
-        for i in range(2):
-            storage.save_home_run(
-                run_id=f"completed-{i}",
-                config=sample_home_config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-                status="completed",
-            )
-
-        # Save failed run
-        storage.save_home_run(
-            run_id="failed-0",
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            status="failed",
-            error_message="Test error",
-        )
-
-        # Filter by completed status
-        completed_runs = storage.list_runs(status="completed")
-        assert len(completed_runs) == 2
-        assert all(run["status"] == "completed" for run in completed_runs)
-
-        # Filter by failed status
-        failed_runs = storage.list_runs(status="failed")
-        assert len(failed_runs) == 1
-        assert failed_runs[0]["status"] == "failed"
-
-    def test_list_runs_limit_and_offset(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test list_runs pagination with limit and offset."""
-        # Save 5 runs
-        for i in range(5):
-            storage.save_home_run(
-                run_id=f"run-{i}",
-                config=sample_home_config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-                name=f"Run {i}",
-            )
-
-        # Get first 2 runs
-        runs = storage.list_runs(limit=2)
-        assert len(runs) == 2
-
-        # Get next 2 runs with offset
-        runs = storage.list_runs(limit=2, offset=2)
-        assert len(runs) == 2
-
-        # Get last run with offset (SQLite requires LIMIT when using OFFSET)
-        runs = storage.list_runs(limit=10, offset=4)
-        assert len(runs) == 1
-
-    def test_list_runs_ordered_by_created_at(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test list_runs returns results ordered by created_at DESC."""
-        # Save runs with different IDs
-        for i in range(3):
-            storage.save_home_run(
-                run_id=f"run-{i}",
-                config=sample_home_config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-                name=f"Run {i}",
-            )
-
-        runs = storage.list_runs()
-        # Most recent should be first (run-2)
-        assert runs[0]["id"] == "run-2"
-        assert runs[1]["id"] == "run-1"
-        assert runs[2]["id"] == "run-0"
+        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestDeleteRun:
@@ -871,16 +733,11 @@ class TestDeleteRun:
             summary=sample_summary,
         )
 
-        # Verify it exists
-        runs = storage.list_runs()
-        assert len(runs) == 1
+        assert storage.run_record(run_id) is not None
 
-        # Delete it
         storage.delete_run(run_id)
 
-        # Verify it's gone
-        runs = storage.list_runs()
-        assert len(runs) == 0
+        assert storage.run_record(run_id) is None
 
     def test_delete_run_removes_files(
         self, storage, sample_home_config, sample_simulation_results, sample_summary
@@ -986,7 +843,7 @@ class TestRunRecord:
 
 @pytest.fixture
 def north_roof_record():
-    """A completed home run's record, with no config or summary text until a test gives it some."""
+    """A completed home run's record, with no config or summary text."""
     return RunRecord(
         id="north-roof",
         name="North Roof",
@@ -1001,32 +858,6 @@ def north_roof_record():
         n_homes=1,
         notes=None,
     )
-
-
-class TestRunRecordDecoding:
-    """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
-
-    def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
-        """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
-        record = dataclasses.replace(
-            north_roof_record,
-            config_json='{"pv_config": {"capacity_kw": 4.0}}',
-            summary_json='{"total_generation_kwh": 100.0}',
-        )
-
-        assert (record.decoded_config(), record.decoded_summary()) == (
-            {"pv_config": {"capacity_kw": 4.0}},
-            {"total_generation_kwh": 100.0},
-        )
-
-    @pytest.mark.parametrize("text", [None, "", "{not json"], ids=["null", "empty", "not-json"])
-    def test_decoded_config_and_summary_are_empty_when_their_text_is_null_empty_or_not_json(
-        self, north_roof_record, text
-    ):
-        """A text that is NULL, empty or not JSON decodes as {}."""
-        record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
-
-        assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
 
 
 class TestRunRecordTypeAndStatus:
@@ -1276,7 +1107,7 @@ class TestRunIdValidation:
             )
 
         assert list(storage.data_dir.iterdir()) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
     def test_a_fleet_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
@@ -1294,7 +1125,7 @@ class TestRunIdValidation:
             )
 
         assert list(storage.data_dir.iterdir()) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
     def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(self, storage, run_id):
@@ -1343,7 +1174,7 @@ class TestRunIdValidation:
             )
 
         assert list(outside.iterdir()) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     def test_a_fleet_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_writes_nothing(
         self, storage, outside, linked_run_id, sample_fleet_data
@@ -1360,7 +1191,7 @@ class TestRunIdValidation:
             )
 
         assert list(outside.iterdir()) == []
-        assert storage.list_runs() == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     def test_a_load_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_file_not_found_error(
         self, storage, linked_run_id
