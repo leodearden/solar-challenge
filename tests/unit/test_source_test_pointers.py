@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every pointer from a file git lists under src/solar_challenge into tests/ resolves, and names a test only by its node-id.
+"""Every pointer into tests/ from a file git lists outside tests/, docs/, plans/ and review/ resolves, and names a test only by its node-id.
 
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
@@ -26,9 +26,7 @@ import yaml
 
 from tests._working_tree import working_tree_files
 
-_PACKAGE_DIR = PurePosixPath("src/solar_challenge")
-
-_UNSCANNED = tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
+_UNSCANNED =tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
 
 _POINTER = re.compile(
     r"""
@@ -257,12 +255,12 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
     }
 
 
-def test_every_pointer_from_the_package_into_tests_resolves(project_root: Path) -> None:
-    sources = [path for path in working_tree_files(project_root) if path.is_relative_to(_PACKAGE_DIR)]
-    pointers = _pointers(project_root, sources)
+def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
+    pointers = _pointers(project_root, _scanned_files(project_root))
+    unscanned = ", ".join(f"{directory}/" for directory in _UNSCANNED)
     assert pointers, (
-        f"found no pointer into tests/ in any file git lists under {_PACKAGE_DIR}, so this gate would pass vacuously;"
-        " fix the listing or the grammar"
+        f"found no pointer into tests/ in any file git lists outside the unscanned directories ({unscanned}), so this"
+        " gate would pass vacuously; fix the listing or the grammar"
     )
 
     dangling = _dangling(project_root, pointers)
