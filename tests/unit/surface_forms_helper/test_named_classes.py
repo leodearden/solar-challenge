@@ -772,6 +772,32 @@ def test_a_partial_that_wraps_another_callable_as_functools_wraps_records_one_na
     assert named_classes(audited) == {decimal.Decimal}
 
 
+def test_a_partial_that_wraps_another_callable_as_functools_wraps_records_one_but_carries_a_signature_of_none_names_the_classes_its_func_names_read_where_its_func_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    billing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "billing",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n",
+    )
+    reconciling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reconciling",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n",
+    )
+
+    audited = functools.update_wrapper(functools.partial(billing.settle, rate=1), reconciling.audit)
+    audited.__signature__ = None
+
+    assert named_classes(audited) == {fractions.Fraction, int}
+
+
 def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_names_read_where_that_callable_is_spelled_though_the_routine_carries_a_signature(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -812,6 +838,49 @@ def test_a_routine_that_wraps_another_callable_names_the_classes_that_callable_n
     )
 
     assert named_classes(submetering.settled) == {fractions.Fraction}
+
+
+def test_a_routine_that_wraps_another_callable_but_carries_a_signature_of_none_names_the_classes_the_annotations_it_holds_name_read_where_they_are_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(share: 'Share', rate: int) -> None: ...\n",
+    )
+    auditing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "auditing",
+        "from datetime import date as Share\n"
+        "\n"
+        "from metering import settle\n"
+        "\n"
+        "def audit(share: 'Share') -> None: ...\n"
+        "\n"
+        "audit.__wrapped__ = settle\n"
+        "audit.__signature__ = None\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from auditing import audit\n"
+        "\n"
+        "@wraps(audit)\n"
+        "def reaudit(share: 'Share', extra: 'Share') -> 'Share': ...\n"
+        "\n"
+        "reaudit.__signature__ = None\n",
+    )
+
+    assert named_classes(auditing.audit) == {datetime.date}
+    assert named_classes(submetering.reaudit) == {datetime.date}
 
 
 def test_a_class_names_the_classes_its_signature_names_read_where_its_constructor_is_spelled_though_the_class_carries_one(
@@ -1446,6 +1515,89 @@ def test_a_constructor_spelled_in_another_module_than_its_class_body_names_the_c
     )
 
     assert named_classes(getattr(rebuilding, name)) == {fractions.Fraction}
+
+
+def test_a_constructor_that_wraps_another_callable_but_carries_a_signature_of_none_names_the_classes_the_annotations_it_holds_name_read_where_they_are_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Meter:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from metering import Meter\n"
+        "\n"
+        "class Rewrapped(Meter):\n"
+        "    @wraps(Meter.__new__)\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __new__.__signature__ = None\n"
+        "\n"
+        "class Relinked(Meter):\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __new__.__wrapped__ = Meter.__new__\n"
+        "    __new__.__signature__ = None\n"
+        "\n"
+        "class Initialised:\n"
+        "    @wraps(object.__init__)\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __init__.__signature__ = None\n",
+    )
+
+    assert named_classes(submetering.Rewrapped) == {fractions.Fraction}
+    assert named_classes(submetering.Relinked) == {decimal.Decimal}
+    assert named_classes(submetering.Initialised) == {decimal.Decimal}
+
+
+def test_a_wrapper_carrying_a_signature_of_none_over_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    share: 'Share'\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from metering import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    pass\n"
+        "\n"
+        "@wraps(Submeter.__init__)\n"
+        "def rewrapped(self, share) -> None: ...\n"
+        "\n"
+        "rewrapped.__signature__ = None\n"
+        "Submeter.__init__ = rewrapped\n",
+    )
+
+    assert named_classes(submetering.Submeter) == {fractions.Fraction}
 
 
 @pytest.mark.parametrize(

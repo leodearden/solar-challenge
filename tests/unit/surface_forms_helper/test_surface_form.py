@@ -617,6 +617,24 @@ def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that
     assert named_classes(zipped) == {int}
 
 
+def test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps() -> None:
+    def settle(self: object, rate: int) -> None: ...
+
+    def zipping(share: decimal.Decimal) -> None: ...
+
+    zipping.__wrapped__ = zip
+    zipping.__signature__ = None
+
+    @functools.wraps(functools.partialmethod(settle, rate=1))
+    def halved(self: object) -> None: ...
+
+    halved.__signature__ = None
+
+    assert surface_form(zipping) == "(share: Decimal) -> None"
+    assert named_classes(zipping) == {decimal.Decimal}
+    assert surface_form(halved) == "(self: object) -> None"
+
+
 def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:
     signature = inspect.Signature(
         [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
@@ -792,6 +810,34 @@ def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it
         surface_form(Made)
     with pytest.raises(TypeError, match=naming_made_and_its_call):
         named_classes(Made)
+
+
+def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
+    class Created:
+        @functools.wraps(object.__new__)
+        def __new__(cls, rate: int) -> object:
+            return object.__new__(cls)
+
+        __new__.__signature__ = None
+
+    class Initialised:
+        @functools.wraps(object.__init__)
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = None
+
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = None
+
+    class Counted(metaclass=Counting):
+        pass
+
+    assert surface_form(Created) == "(rate: int) -> object"
+    assert surface_form(Initialised) == "(rate: int) -> None"
+    assert surface_form(Counted) == "(rate: int) -> object"
 
 
 def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by_that_call_whatever_its_constructor() -> None:

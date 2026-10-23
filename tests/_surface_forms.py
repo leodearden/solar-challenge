@@ -69,10 +69,14 @@ def surface_form(obj: object) -> str:
     inspect reads in that constructor's place; so does a routine that wraps such a
     class, through a functools.partial, a bound method or a functools.wraps wrapper,
     unless the class or one of the routine's links carries one. A signature is an
-    inspect.Signature as __signature__, which inspect reads as given. Any other
-    __signature__ counts as none for these refusals, since Python 3.12 and 3.13 convert a
-    string or call a callable given there and 3.11 and 3.14 refuse either.
-    _refuse_minor_dependent_constructor lists the constructors it refuses.
+    inspect.Signature as __signature__, which inspect reads as given. inspect reads a
+    wrapper whose __signature__ is None, whether one of a routine's links or a class's
+    constructor, as the callable it is, not as what it wraps, so no refusal here looks
+    past it; a functools.partial whose __signature__ is None is still read through its
+    func. A string or a callable as __signature__ counts as none for these refusals,
+    since Python 3.12 and 3.13 convert a string or call a callable given there and 3.11
+    and 3.14 refuse either. _refuse_minor_dependent_constructor lists the constructors it
+    refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -132,7 +136,9 @@ def named_classes(obj: object) -> set[type]:
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
-    whatever __signature__ the wrapper carries; an object its class makes callable,
+    whatever __signature__ the wrapper carries, but a wrapper that is no partial and
+    carries a __signature__ of None, where _annotations_author says its annotations were
+    spelled; an object its class makes callable,
     where the __call__ that class resolves is, which may be a base's in another module;
     and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
@@ -538,18 +544,28 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(obj)
 
 
-def _chain_end(obj: object, stop: Callable[[object], bool] | None = None) -> object:
-    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of."""
+def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, as _unwrapped follows them, else a functools.partial's func, ending early at the first object *stop* holds of."""
     if not callable(obj):
         return obj
     if isinstance(obj, types.MethodType):
         return _chain_end(obj.__func__, stop)
-    unwrapped = inspect.unwrap(obj, stop=stop)
+    unwrapped = _unwrapped(obj, stop)
     if unwrapped is not obj:
         return _chain_end(unwrapped, stop)
-    if isinstance(obj, functools.partial) and (stop is None or not stop(obj)):
+    if isinstance(obj, functools.partial) and not stop(obj):
         return _chain_end(obj.func, stop)
     return obj
+
+
+_ABSENT = object()
+
+
+def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> object:
+    """The callable reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
+    return inspect.unwrap(
+        obj, stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link)
+    )
 
 
 def _carries_signature(obj: object) -> bool:
@@ -602,7 +618,8 @@ _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    The constructors it refuses, in the order it checks them:
+    The constructors it refuses, in the order it checks them; a constructor wraps a
+    callable defined in C here if _wrapped_c_callable gives one for it:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it wraps a callable defined in C or is a
@@ -678,10 +695,10 @@ def _refuse_wrapper_of_c_callable(
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if inspect.unwrap, stopped at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
-    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    wrapped = _unwrapped(constructor, _carries_signature)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
@@ -712,19 +729,35 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
 def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
 
-    A routine's is that of the end of its chain, which _chain_end follows through to
-    where inspect.get_annotations finds the namespace of a wrapper's annotations. If
-    that end is an object its class makes callable, it is read as the __call__ its
-    class resolves, from which inspect derives its signature. A __signature__ a wrapper
-    carries does not change that: it records no module. A class's is that of
-    _constructor_spelling_modules.
+    A routine's is that of the callable _annotations_author gives for the end of its
+    chain, as _chain_end follows it. If that end is an object its class makes callable,
+    it is read as the __call__ its class resolves, from which inspect derives its
+    signature. A signature a wrapper carries does not change that: it records no module.
+    A class's is that of _constructor_spelling_modules.
     """
     end = _chain_end(obj)
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
     if not _is_routine(end):
         return _spelling_modules(type(end).__call__, names)
-    return dict.fromkeys(names, _defining_module(end))
+    return dict.fromkeys(names, _defining_module(_annotations_author(end)))
+
+
+def _annotations_author(routine: object) -> object:
+    """The callable that spelled the annotations *routine* holds: *routine* itself, unless it holds those of the callable it records as __wrapped__, as functools.wraps copies them, and then that callable's author in turn."""
+    if not callable(routine):
+        return routine
+    return inspect.unwrap(
+        routine, stop=lambda link: not _holds_annotations_of(link, getattr(link, "__wrapped__"))
+    )
+
+
+def _holds_annotations_of(wrapper: object, wrapped: object) -> bool:
+    """Whether *wrapper* holds *wrapped*'s annotations, as functools.wraps copies them, by reference: the same __annotate__ function, which Python 3.14 copies, else the same __annotations__ dict, which earlier minors copy; never by equality, since equal strings in two modules can name two classes."""
+    annotate = getattr(wrapper, "__annotate__", None)
+    if annotate is not None:
+        return annotate is getattr(wrapped, "__annotate__", None)
+    return getattr(wrapper, "__annotations__", None) is getattr(wrapped, "__annotations__", _ABSENT)
 
 
 def _constructor_spelling_modules(
@@ -738,15 +771,16 @@ def _constructor_spelling_modules(
     MRO that holds one, which may be a base defined in another module. It is spelled
     where _spelling_modules spells the end of its chain, so a function the class body
     assigns from another module, or that wraps one there as functools.wraps records
-    one, is spelled in that other module. One compiled outside the class body and
+    one, is spelled in that other module. If the function whose annotations that end
+    holds, as _annotations_author gives it, was compiled outside the class body and
     renamed into it, as the dataclass decorator generates an __init__ and
-    collections.namedtuple a __new__, is spelled as _generated_constructor_modules
-    spells it; one renamed into another class and assigned here raises TypeError naming
-    *cls* and the function. A constructor defined in C, or one that wraps a callable
-    defined in C, spells no annotation, so the class's is that of the class
-    _signature_holder gives if *cls* carries a signature, else the holder's;
-    _signature_holder checks every class that carries a signature before the
-    constructor is read.
+    collections.namedtuple a __new__, the constructor is spelled as
+    _generated_constructor_modules spells it; if that function was renamed into another
+    class and assigned here, TypeError names *cls* and the function. A constructor
+    defined in C, or one that wraps a callable defined in C, spells no annotation, so
+    the class's is that of the class _signature_holder gives if *cls* carries a
+    signature, else the holder's; _signature_holder checks every class that carries a
+    signature before the constructor is read.
     """
     signature_holder = _signature_holder(cls) if _carries_signature(cls) else None
     call = _metaclass_call_as_read(cls)
@@ -757,8 +791,9 @@ def _constructor_spelling_modules(
     if isinstance(end, _C_CONSTRUCTOR_KINDS):
         spelling_class = holder if signature_holder is None else signature_holder
         return dict.fromkeys(names, _defining_module(spelling_class))
-    if _is_generated(end):
-        _refuse_constructor_generated_for_another_class(cls, holder, end)
+    author = _annotations_author(end)
+    if _is_generated(author):
+        _refuse_constructor_generated_for_another_class(cls, holder, author)
         return _generated_constructor_modules(holder, names)
     return _spelling_modules(end, names)
 
@@ -766,7 +801,7 @@ def _constructor_spelling_modules(
 def _refuse_constructor_generated_for_another_class(
     cls: type, holder: type, generated: types.FunctionType
 ) -> None:
-    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds at the end of the constructor *holder* holds, unless it was renamed into *holder*.
+    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds as the _annotations_author of the end of the constructor *holder* holds, unless it was renamed into *holder*.
 
     The dataclass decorator renames a function into a class by the class's qualified
     name, collections.namedtuple by its name. A function renamed into another class and
@@ -888,10 +923,13 @@ def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
     """Whether *routine* is a function compiled outside a class body and renamed into a class, as the dataclass decorator generates __init__ and collections.namedtuple __new__.
 
     The code of such a function keeps another qualified name than the function; one the
-    body defines, or one assigned from elsewhere, keeps its own.
+    body defines, or one assigned from elsewhere, keeps its own. A function that records
+    __wrapped__ is none, though its code keeps another name: functools.wraps renamed it
+    after what it wraps, not into a class.
     """
     return (
         isinstance(routine, types.FunctionType)
+        and not hasattr(routine, "__wrapped__")
         and routine.__code__.co_qualname != routine.__qualname__
     )
 
