@@ -1011,14 +1011,14 @@ SPREAD_FREE_TARIFFS = [
         TariffConfig.economy_7(off_peak_rate=0.25, peak_rate=0.25),
         id="two_periods_one_rate",
     ),
-    # The float mean of these six rates is 0.10000000000000002, above the shared rate.
+    # Six periods at one rate: no minute's rate is below the peak rate, so none is cheap.
     pytest.param(
         TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
         id="six_periods_one_rate",
     ),
 ]
 
-# Mean rate 0.25, so the 0.30 day rate sits above it.
+# Its duration-weighted mean rate is 0.2583, so the 0.30 day rate sits above it.
 THREE_TIER_TARIFF = TariffConfig(
     periods=(
         TariffPeriod(start_time="00:00", end_time="07:00", rate_per_kwh=0.10, name="Night"),
@@ -1127,8 +1127,8 @@ class TestTouDispatchOnSpreadFreeTariff:
 
 
 class TestTouDispatchOnTieredTariff:
-    """Tariffs with a rate spread keep the mean-rate classification: TOU holds the
-    battery in cheap windows and discharges elsewhere.
+    """Tariffs with a rate spread keep the duration-weighted mean-rate classification:
+    TOU holds the battery in cheap windows and discharges elsewhere.
     """
 
     @pytest.mark.parametrize(

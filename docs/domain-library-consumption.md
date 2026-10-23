@@ -694,8 +694,21 @@ and 0 or more, need no change when they re-pin.
 whose rate is below `peak_rate` and at or below the tariff's duration-weighted
 mean rate, the mean of its 1,440 per-minute rates, and `is_cheap_at(timestamp)`,
 whether the wall-clock minute of `timestamp` is one of them; a tariff whose
-minutes share one rate has none. The 0.5.0 tag has neither. Consumers need no
-change when they re-pin.
+minutes share one rate has none. The 0.5.0 tag has neither.
+`simulate_timestep_tou`, and the `GridChargeContext` that `simulate_timestep`
+builds from a tariff for a grid-charging battery (its `is_cheap_period`),
+classify each minute with `is_cheap_at`. The tag compares the minute's rate
+with `mean_period_rate`, which counts each period once whatever its length, so
+one schedule written as different period lists could dispatch differently.
+Dispatch changes only on tariffs with three or more distinct rates: night 0.10
+(00:00-07:00), day 0.20 (07:00-16:00), peak 0.35 (16:00-19:00) and day 0.20
+(19:00-00:00) as four periods holds the battery and grid-charges at the 0.20 day
+rate on the tag (`mean_period_rate` 0.2125) and now does not (duration-weighted
+mean 0.1896), as the same schedule with the night split at 03:00 already did.
+Every two-rate tariff (Economy 7, Economy 10) and every flat tariff dispatches
+as on the tag, and `mean_period_rate` is unchanged. Consumers on tariffs with
+three or more distinct rates re-baseline the figures built on them when they
+re-pin; other consumers need no change.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

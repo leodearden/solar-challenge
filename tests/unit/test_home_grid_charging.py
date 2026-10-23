@@ -46,7 +46,8 @@ class TestSimulateHomeStrategyPathGridCharging:
         - BatteryConfig.dispatch_strategy is set → use_tariff_tou = False → else branch.
         - GridChargeConfig(target_soc_fraction=0.9) enables arbitrage charging.
         - Tariff: 0.10 £/kWh overnight (00:00-07:00, off-peak) + 0.30 £/kWh during day
-          (07:00-00:00, peak). rt_eff ≈ 0.9506 → is_cheap (0.10 ≤ 0.20 avg) ✓;
+          (07:00-00:00, peak). rt_eff ≈ 0.9506 → is_cheap (0.10 ≤ 0.242, the
+          duration-weighted mean (0.10 × 420 + 0.30 × 1020) / 1440) ✓;
           spread gate (0.30 > 0.10/0.9506 ≈ 0.1052) ✓.
         """
         off_peak = TariffPeriod("00:00", "07:00", 0.10, "Off-peak")
