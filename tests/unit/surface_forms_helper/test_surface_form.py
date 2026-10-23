@@ -812,6 +812,34 @@ def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it
         named_classes(Made)
 
 
+def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
+    class Created:
+        @functools.wraps(object.__new__)
+        def __new__(cls, rate: int) -> object:
+            return object.__new__(cls)
+
+        __new__.__signature__ = None
+
+    class Initialised:
+        @functools.wraps(object.__init__)
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = None
+
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = None
+
+    class Counted(metaclass=Counting):
+        pass
+
+    assert surface_form(Created) == "(rate: int) -> object"
+    assert surface_form(Initialised) == "(rate: int) -> None"
+    assert surface_form(Counted) == "(rate: int) -> object"
+
+
 def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by_that_call_whatever_its_constructor() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
