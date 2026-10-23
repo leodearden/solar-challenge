@@ -135,20 +135,55 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "web": ("src/solar_challenge/web/views.py",),
     "scripts": ("scripts/measure.py",),
     "tests-dev-only-lanes": (
+        "tests/__init__.py",
+        "tests/_lock.py",
+        "tests/_network.py",
+        "tests/_newest.py",
+        "tests/_uv.py",
         "tests/conftest.py",
         "tests/css_build/test_build.py",
         "tests/integration/__init__.py",
+        "tests/integration/_pvgis_probe.py",
         "tests/integration/test_pvgis.py",
         "tests/interpreter_matrix/test_matrix.py",
         "tests/newest_releases/test_newest.py",
+        "tests/unit/__init__.py",
+        "tests/unit/_css.py",
     ),
     "tests-verify": (
         "tests/_helpers.py",
+        "tests/_web_double.py",
         "tests/integration/test_fleet.py",
         "tests/unit/conftest.py",
         "tests/unit/test_simulate.py",
     ),
     "tests-e2e": ("tests/e2e/test_pages.py",),
+}
+_LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
+    # a conftest every run loads
+    "tests/conftest.py": ("from tests._network import refusing_network",),
+    # module level; the trailing name is an attribute of the module
+    "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
+    # transitive
+    "tests/_uv.py": ("import tests._lock",),
+    # _uv is shared with the verify and still goes to the dev-only scope; _helpers stays with the verify
+    "tests/unit/test_simulate.py": (
+        "from tests._helpers import build",
+        "from tests._uv import isolated_env",
+    ),
+    # the guarded import is not followed; the function-local from-package submodule is
+    "tests/newest_releases/test_newest.py": (
+        "try:",
+        "    from tests._web_double import app",
+        "except ImportError:",
+        "    app = None",
+        "def test_newest():",
+        "    from tests import _newest",
+    ),
+    # the package __init__.py on the way is run too
+    "tests/css_build/test_build.py": ("from tests.unit._css import classes",),
+    # relative, with no module
+    "tests/integration/test_pvgis.py": ("from . import _pvgis_probe",),
 }
 
 
@@ -161,16 +196,24 @@ def test_each_source_scope_selects_only_its_own_files(
     scope: SourceScope,
     own_files: tuple[str, ...],
 ) -> None:
-    """A source scope selects exactly its own files of the project root it is given."""
+    """A source scope selects exactly its own files of the project root it is given.
+
+    tests-dev-only-lanes also owns every module of the tests package that its files import,
+    transitively: at module level, inside a function, as a submodule a from-import names,
+    relatively, or through a package's __init__.py. tests-verify owns none of them. A module
+    named only inside a try that handles ImportError is not imported for certain, so it
+    stays with tests-verify.
+    """
     project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
     for relative_path in project_files:
-        _write_module(tmp_path / relative_path)
+        _write_module(tmp_path / relative_path, *_LINES_OF_EACH_IMPORTING_FILE.get(relative_path, ()))
 
     selected = sorted(path.relative_to(tmp_path).as_posix() for path in scope.select(tmp_path))
 
     assert selected == sorted(own_files), (
-        f"in a project holding each scope's own files, {project_files}, this scope selected "
-        f"{selected}, but it owns exactly {sorted(own_files)}"
+        f"in a project holding each scope's own files, {project_files}, which import as "
+        f"{_LINES_OF_EACH_IMPORTING_FILE} gives, this scope selected {selected}, "
+        f"but it owns exactly {sorted(own_files)}"
     )
 
 
