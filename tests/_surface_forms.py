@@ -57,14 +57,16 @@ def surface_form(obj: object) -> str:
     functools.partial is a routine on every admitted minor, as inspect counts one from
     3.14. Any other class's or routine's is its signature, a class's being its
     constructor's without self and a partial's the one it leaves of the callable it wraps.
-    A dataclass's signature follows its kind: dataclass, then in brackets those of eq,
-    order, unsafe_hash and frozen that are on, whether set on the class or on the base it
-    inherits them from. An annotation in that signature which it has no rule for, such as
-    a type alias, raises TypeError naming it and its type.
+    A class's constructor is the __call__ its metaclass resolves if that is not defined
+    in C, which inspect reads before any __new__ or __init__, else the __new__ or
+    __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
+    brackets those of eq, order, unsafe_hash and frozen that are on, whether set on the
+    class or on the base it inherits them from. An annotation in that signature which it
+    has no rule for, such as a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class in its MRO holding that constructor, unless it carries a signature,
-    which inspect reads in that constructor's place; so does a routine that wraps such a
+    it and the class holding that constructor, unless it carries a signature, which
+    inspect reads in that constructor's place; so does a routine that wraps such a
     class, through a functools.partial, a bound method or a functools.wraps wrapper,
     unless the class or one of the routine's links carries one. A signature is an
     inspect.Signature as __signature__, which inspect reads as given. Any other
@@ -146,9 +148,10 @@ def named_classes(obj: object) -> set[type]:
     surface_form reads as such a class, or a routine whose signature inspect cannot read
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
-    A class's signature is spelled where its constructor is, as
-    _constructor_spelling_modules describes, whether or not the class carries a signature
-    in the constructor's place; one its metaclass or a descriptor gives raises TypeError.
+    A class's signature is spelled where its constructor is, the __call__ its metaclass
+    resolves if inspect reads that, as _constructor_spelling_modules describes, whether
+    or not the class carries a signature in the constructor's place; one its metaclass
+    or a descriptor gives raises TypeError.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
@@ -601,8 +604,10 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
 
     The constructors it refuses, in the order it checks them:
 
-    - the __call__ *cls*'s metaclass resolves, which inspect looks up before any __new__
-      or __init__, if it wraps a callable defined in C;
+    - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
+      __new__ or __init__, if it wraps a callable defined in C or is a
+      functools.partial. inspect reads any other __call__ _metaclass_call gives in
+      their place, so none of the constructors below is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -611,19 +616,16 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
-    metaclass = type(cls)
-    _refuse_wrapper_of_c_callable(
-        cls, metaclass, "__call__", inspect.getattr_static(metaclass, "__call__")
-    )
+    call = _metaclass_call(cls)
+    if call is not None:
+        _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
+        _refuse_partial_bound_as_method(cls, type(cls), "__call__", call)
+        return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
-    if name == "__init__" and isinstance(constructor, functools.partial):
-        raise TypeError(
-            f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
-            "functools.partial, which Python 3.14 binds to the instance as a method and "
-            "earlier minors call without it: define __init__ with def"
-        )
+    if name == "__init__":
+        _refuse_partial_bound_as_method(cls, holder, name, constructor)
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
@@ -657,21 +659,41 @@ def _first_read_constructor(holder: type) -> tuple[str, object]:
 def _refuse_wrapper_of_c_callable(
     cls: type, owner: type, name: str, constructor: object
 ) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps one.
+    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C that *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps, if _wrapped_c_callable gives one.
 
     inspect reads such a wrapper through that callable on some Python releases, and skips
     it as defined in C on others, reading the next constructor instead.
     """
-    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
-        return
-    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
-    if isinstance(wrapped, _C_CONSTRUCTOR_KINDS):
+    wrapped = _wrapped_c_callable(constructor)
+    if wrapped is not None:
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(owner)}.{name}, which wraps "
             f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
             "that callable on some Python releases and skips it as defined in C on "
             f"others: make the name private, or define {name} with def, wrapping no "
             "callable defined in C"
+        )
+
+
+def _wrapped_c_callable(
+    constructor: object,
+) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
+    """The callable defined in C that *constructor* wraps, if inspect.unwrap, stopped at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+        return None
+    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
+
+
+def _refuse_partial_bound_as_method(
+    cls: type, owner: type, name: str, constructor: object
+) -> None:
+    """Raise TypeError naming *cls* and *owner*'s *name* if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial: Python 3.14 binds one to the instance as a method, and earlier minors call it without one."""
+    if isinstance(constructor, functools.partial):
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(owner)}.{name}, a "
+            "functools.partial, which Python 3.14 binds to the instance as a method and "
+            f"earlier minors call without it: define {name} with def"
         )
 
 
@@ -710,10 +732,12 @@ def _constructor_spelling_modules(
 ) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled.
 
-    That constructor is the one _constructor_as_read gives for the nearest class in
-    *cls*'s MRO that holds one, which may be a base defined in another module. It is
-    spelled where _spelling_modules spells the end of its chain, so a function the class
-    body assigns from another module, or that wraps one there as functools.wraps records
+    That constructor is the __call__ *cls*'s metaclass resolves, if
+    _metaclass_call_as_read gives one, which inspect reads before any __new__ or
+    __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
+    MRO that holds one, which may be a base defined in another module. It is spelled
+    where _spelling_modules spells the end of its chain, so a function the class body
+    assigns from another module, or that wraps one there as functools.wraps records
     one, is spelled in that other module. One compiled outside the class body and
     renamed into it, as the dataclass decorator generates an __init__ and
     collections.namedtuple a __new__, is spelled as _generated_constructor_modules
@@ -724,8 +748,11 @@ def _constructor_spelling_modules(
     _signature_holder checks every class that carries a signature before the
     constructor is read.
     """
-    holder = _constructor_holder(cls)
     signature_holder = _signature_holder(cls) if _carries_signature(cls) else None
+    call = _metaclass_call_as_read(cls)
+    if call is not None:
+        return _spelling_modules(call, names)
+    holder = _constructor_holder(cls)
     end = _chain_end(_constructor_as_read(cls, holder))
     if isinstance(end, _C_CONSTRUCTOR_KINDS):
         spelling_class = holder if signature_holder is None else signature_holder
@@ -760,12 +787,33 @@ def _refuse_constructor_generated_for_another_class(
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls* through its type's __get__."""
+    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
     kind, constructor = _first_read_constructor(holder)
-    get = getattr(type(constructor), "__get__", None)
-    if kind == "__new__" or get is None or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+    if kind == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return constructor
-    bound: object = get(constructor, cls, type(cls))
+    return _bound_to(constructor, cls)
+
+
+def _metaclass_call(cls: type) -> object | None:
+    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if it is defined in C, as type.__call__ is, which inspect skips on every minor."""
+    call = inspect.getattr_static(type(cls), "__call__")
+    return None if isinstance(call, _C_CONSTRUCTOR_KINDS) else call
+
+
+def _metaclass_call_as_read(cls: type) -> object | None:
+    """The __call__ _metaclass_call gives for *cls*, as inspect reads it in place of any __new__ or __init__: bound to the metaclass, as _bound_to binds it; None if it gives none, or one that wraps a callable defined in C, as _wrapped_c_callable finds one, which only some minors read."""
+    call = _metaclass_call(cls)
+    if call is None or _wrapped_c_callable(call) is not None:
+        return None
+    return _bound_to(call, type(cls))
+
+
+def _bound_to(descriptor: object, owner: object) -> object:
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__."""
+    get = getattr(type(descriptor), "__get__", None)
+    if get is None:
+        return descriptor
+    bound: object = get(descriptor, owner, type(owner))
     return bound
 
 
