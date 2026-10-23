@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every pointer into tests/ from a file git lists outside tests/, docs/, plans/ and review/ resolves, and names a test only by its node-id.
+"""Every pointer into tests/ from a scanned file resolves, and names a test only by its node-id.
+
+The scanned files are those git lists outside tests/, docs/prds/, docs/research/, plans/ and review/. The PRDs and
+research notes under docs/, like plans/ and review/, are records that name tests as they were when written.
 
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
@@ -11,9 +14,9 @@ A test function or class named any other way is refused: as test_<name> or Test<
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
 alone, as test_<name>.py. The settled form is the node-id, which pytest runs as written and this gate resolves. A name
 a file uses itself is no pointer: a name the Python module's own code uses, such as a parameter called test_config, or
-a key of the YAML file's own mappings, such as test_command. Nor, outside a node-id, is a name written straight after
-a dot, so a third-party name that reads as a test, such as Werkzeug's TestResponse, is written after its module:
-werkzeug.test.TestResponse.
+a key of the YAML file's own mappings, such as test_command. In any other file, such a key is written in words, as in
+"the verify's test command". Nor, outside a node-id, is a name written straight after a dot, so a third-party name
+that reads as a test, such as Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
 """
 
 import ast
@@ -28,7 +31,9 @@ import yaml
 
 from tests._working_tree import working_tree_files
 
-_UNSCANNED = tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
+_UNSCANNED = tuple(
+    PurePosixPath(directory) for directory in ("tests", "docs/prds", "docs/research", "plans", "review")
+)
 
 _POINTER = re.compile(
     r"""
@@ -314,9 +319,17 @@ def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
     return PurePosixPath(source)
 
 
-def test_scans_every_file_git_lists_outside_tests_docs_plans_and_review(project: Path) -> None:
-    scanned = {"CLAUDE.md", "pyproject.toml", "scenarios/fleet.yaml", "scripts/measure.py", "src/pkg/module.py"}
-    for source in [*scanned, "docs/guide.md", "docs/prds/record.md", "plans/plan.md", "review/briefing.yaml"]:
+def test_scans_every_file_git_lists_outside_tests_docs_prds_docs_research_plans_and_review(project: Path) -> None:
+    scanned = {
+        "CLAUDE.md",
+        "docs/guide.md",
+        "pyproject.toml",
+        "scenarios/fleet.yaml",
+        "scripts/measure.py",
+        "src/pkg/module.py",
+    }
+    unscanned = ["docs/prds/record.md", "docs/research/survey.md", "plans/plan.md", "review/briefing.yaml"]
+    for source in [*scanned, *unscanned]:
         _write_source(project, source, "")
 
     assert set(_scanned_files(project)) == {PurePosixPath(source) for source in scanned}
