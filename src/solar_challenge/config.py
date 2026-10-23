@@ -2372,10 +2372,26 @@ _Document = TypeVar("_Document")
 
 @dataclass(frozen=True)
 class _Substitution(Generic[_Document]):
-    """A document with each placeholder that has a value replaced by it, and every placeholder the document held, in document order."""
+    """A document with each placeholder that has a value replaced by it, read whole through document().
 
-    document: _Document
+    *partial* is that document, in which a placeholder with no value stays as its text.
+    *placeholders* is every placeholder the document held, in document order.
+    """
+
+    partial: _Document
     placeholders: tuple[_Placeholder, ...] = ()
+
+    def document(self, variables: Mapping[str, float]) -> _Document:
+        """*partial*, once a placeholder names each of *variables*, the variables it was substituted with, and each placeholder has a value.
+
+        Raises:
+            ConfigurationError: listing the placeholders, for a supplied variable none of them
+                names; then, naming its key path and its variable, for a placeholder neither
+                supplied nor defaulted.
+        """
+        _refuse_unmatched_variables(variables, self.placeholders)
+        _refuse_placeholders_without_a_value(variables, self.placeholders)
+        return self.partial
 
 
 def _placeholders_of(parts: Iterable[_Substitution[Any]]) -> tuple[_Placeholder, ...]:
@@ -2399,7 +2415,7 @@ def _substitute_variables(data: Any, variables: Mapping[str, float], path: str) 
         return _substitute_mapping(data, variables, path)
     if isinstance(data, list):
         items = [_substitute_variables(item, variables, f"{path}[{index}]") for index, item in enumerate(data)]
-        return _Substitution([each.document for each in items], _placeholders_of(items))
+        return _Substitution([each.partial for each in items], _placeholders_of(items))
     return _Substitution(data)
 
 
@@ -2415,7 +2431,7 @@ def _substitute_mapping(
         for key, child in data.items()
     }
     return _Substitution(
-        {key: entry.document for key, entry in entries.items()}, _placeholders_of(entries.values())
+        {key: entry.partial for key, entry in entries.items()}, _placeholders_of(entries.values())
     )
 
 
@@ -2467,9 +2483,7 @@ def substitute_config_variables(
     """
     supplied = variables or {}
     substitution = _substitute_mapping(config, supplied, "")
-    _refuse_unmatched_variables(supplied, substitution.placeholders)
-    _refuse_placeholders_without_a_value(supplied, substitution.placeholders)
-    return substitution.document
+    return substitution.document(supplied)
 
 
 def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
