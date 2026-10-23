@@ -381,7 +381,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "TariffConfig": {
         "peak_rate": "cached_property (self) -> float",
         "mean_period_rate": "cached_property (self) -> float",
+        "cheap_minutes_of_day": "cached_property (self) -> frozenset[int]",
         "get_rate": "(self, timestamp: Timestamp) -> float",
+        "is_cheap_at": "(self, timestamp: datetime) -> bool",
         "flat_rate": "classmethod (cls, rate_per_kwh: float, name: str = '') -> TariffConfig",
         "economy_7": "classmethod (cls, off_peak_rate: float = 0.09, peak_rate: float = 0.25, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
         "economy_10": "classmethod (cls, off_peak_rate: float = 0.08, peak_rate: float = 0.27, night_start: str = '00:00', night_end: str = '05:00', afternoon_start: str = '13:00', afternoon_end: str = '16:00', evening_start: str = '20:00', evening_end: str = '22:00') -> TariffConfig",

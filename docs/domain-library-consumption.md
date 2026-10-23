@@ -689,6 +689,14 @@ format '9'`. `validate config` reports a `.nan` or `.inf` rate as an ERROR row.
 Consumers that catch `ValueError`, whose tariffs tile and whose rates are finite
 and 0 or more, need no change when they re-pin.
 
+**Unreleased on main** (task 838): `TariffConfig` gains two read-only members,
+`cheap_minutes_of_day`, the frozenset of minutes of the local day (0 to 1439)
+whose rate is below `peak_rate` and at or below the tariff's duration-weighted
+mean rate, the mean of its 1,440 per-minute rates, and `is_cheap_at(timestamp)`,
+whether the wall-clock minute of `timestamp` is one of them; a tariff whose
+minutes share one rate has none. The 0.5.0 tag has neither. Consumers need no
+change when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

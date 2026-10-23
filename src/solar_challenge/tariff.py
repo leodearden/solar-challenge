@@ -234,6 +234,16 @@ class TariffConfig:
         rates = [period.rate_per_kwh for period in self.periods]
         return sum(rates) / len(rates)
 
+    @cached_property
+    def cheap_minutes_of_day(self) -> frozenset[int]:
+        """The minutes of the local day, 0 to 1439, whose rate is below peak_rate and at or below the duration-weighted mean rate; a tariff whose minutes share one rate has none."""
+        weighted_mean_rate = math.fsum(self._rate_by_minute) / _MINUTES_PER_DAY
+        return frozenset(
+            minute
+            for minute, rate in enumerate(self._rate_by_minute)
+            if rate < self.peak_rate and rate <= weighted_mean_rate
+        )
+
     def get_rate(self, timestamp: pd.Timestamp) -> float:
         """Get the electricity rate at the timestamp's wall-clock minute, from the minute table built at construction.
 
@@ -244,6 +254,10 @@ class TariffConfig:
             Rate in £/kWh
         """
         return self._rate_by_minute[_minute_of_day(timestamp)]
+
+    def is_cheap_at(self, timestamp: datetime) -> bool:
+        """Whether the timestamp's wall-clock minute is one of cheap_minutes_of_day."""
+        return _minute_of_day(timestamp) in self.cheap_minutes_of_day
 
     @classmethod
     def flat_rate(cls, rate_per_kwh: float, name: str = "") -> "TariffConfig":
