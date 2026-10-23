@@ -1084,6 +1084,14 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 "No sweep spec found in config. Use --param for CLI sweep or add type: sweep to multiplier.",
                 id="fleet-distribution-without-a-sweep",
             ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n  battery:\n"
+                "    capacity_kwh: {type: proportional_to, source: pv.capacity_kw, multiplier: '${BATTERY_RATIO:1.0}'}\n",
+                ("--param", "BATTERY_RATI0", "--min", "0.5", "--max", "2", "--steps", "2"),
+                "Variables with no placeholder in the document: 'BATTERY_RATI0'; "
+                "its placeholders: 'BATTERY_RATIO' at fleet_distribution.battery.capacity_kwh.multiplier",
+                id="param-sweep-of-a-variable-no-placeholder-names",
+            ),
         ],
     )
     def test_a_file_it_cannot_sweep_is_refused(
