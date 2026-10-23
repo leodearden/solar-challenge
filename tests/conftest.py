@@ -45,6 +45,12 @@ def test_data_dir(project_root: Path) -> Path:
 
 
 @pytest.fixture
+def e2e_conftest(project_root: Path) -> Path:
+    """Return the e2e suite's conftest, tests/e2e/conftest.py, which a pytester session copies to run its tests as that suite runs them."""
+    return project_root / "tests" / "e2e" / "conftest.py"
+
+
+@pytest.fixture
 def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set UV_FROZEN=1 in this process's environment for the test, as the shell running the suite may.
 

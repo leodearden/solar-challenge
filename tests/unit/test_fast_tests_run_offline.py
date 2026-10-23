@@ -24,8 +24,6 @@ from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, PVGIS
 from tests._scenario_session import ScenarioSession
 from tests._synthetic_weather import synthetic_june_weather
 
-E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
-
 
 @pytest.fixture
 def suite(pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
@@ -400,7 +398,7 @@ HOME_JOBS_AT_EVERY_LOCATION_PRESET = """
 
 
 def test_the_live_servers_jobs_at_every_location_preset_complete_offline_and_leave_no_weather_cache_behind(
-    suite: pytest.Pytester,
+    suite: pytest.Pytester, e2e_conftest: Path
 ) -> None:
     """A heat pump shares its annual heat demand out over a whole year of weather, so its job completes only on a whole TMY year.
 
@@ -410,7 +408,7 @@ def test_the_live_servers_jobs_at_every_location_preset_complete_offline_and_lea
     pytest.importorskip("flask")
     suite.makepyfile(
         **{
-            "e2e/conftest": E2E_CONFTEST.read_text(encoding="utf-8"),
+            "e2e/conftest": e2e_conftest.read_text(encoding="utf-8"),
             "e2e/test_home_jobs_at_every_location_preset": HOME_JOBS_AT_EVERY_LOCATION_PRESET,
         }
     )
