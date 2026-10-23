@@ -12,7 +12,8 @@ StoredHomeRun and StoredFleetRun are the runs as their directories store them: e
 writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
 behaviour table, one RunKind per RunType; a kind also decodes the summary and the
 HomeConfigs a run's record holds, and builds from the HomeConfigs the scenario its YAML
-export answers with. Where a
+export answers with. A kind also names the run created without a name, and is_run_name
+and require_run_name say which texts can name a run. Where a
 run's directory lives, and the runs table that records each run's type, are RunStorage's:
 nothing here reads SQL or Flask.
 """
@@ -23,7 +24,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Type, TypeGuard, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -215,6 +216,33 @@ def _fleet_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[s
         ValueError: The scenario grammar cannot express the homes, as fleet_scenario refuses them.
     """
     return fleet_scenario(home_configs, name=name)
+
+
+def is_run_name(name: object) -> TypeGuard[str]:
+    """Whether *name* can name a run: a str holding a character other than whitespace."""
+    return isinstance(name, str) and name.strip() != ""
+
+
+def require_run_name(name: object) -> str:
+    """*name*, unchanged, when it can name a run (is_run_name).
+
+    Raises:
+        ValueError: *name* cannot name a run; the message starts "name is <name!r>".
+    """
+    if is_run_name(name):
+        return name
+    raise ValueError(f"name is {name!r}, not a run's name: a run's name holds a character other than whitespace")
+
+
+def _home_run_default_name(home_configs: Sequence[HomeConfig]) -> str:
+    """The name a home run of *home_configs* given none is created under: its first home's name when that can name a run, else "Web Simulation"."""
+    first_home_name = home_configs[0].name if home_configs else None
+    return first_home_name if is_run_name(first_home_name) else "Web Simulation"
+
+
+def _fleet_run_default_name(home_configs: Sequence[HomeConfig]) -> str:
+    """The name a fleet run given none is created under, whatever its *home_configs*: "Fleet Simulation"."""
+    return "Fleet Simulation"
 
 
 @dataclass(frozen=True)
@@ -446,12 +474,15 @@ class RunKind:
         scenario_document: The scenario, under a name, that a run of the type with those
             HomeConfigs exports as YAML; it raises ValueError when the scenario grammar cannot
             express them.
+        default_name: The name a run of the type with those HomeConfigs is created under
+            when it is given none; is_run_name holds for it.
     """
 
     summary_type: type[SummaryStatistics] | type[FleetSummary]
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
     scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
+    default_name: Callable[[Sequence[HomeConfig]], str]
 
     def summary(self, summary_document: Mapping[str, Any]) -> SummaryStatistics | FleetSummary:
         """The summary *summary_document* holds: the field tree of a summary_type, rebuilt as one.
@@ -470,12 +501,14 @@ RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
             read=_read_home_run,
             home_configs=_home_run_configs,
             scenario_document=_home_run_scenario,
+            default_name=_home_run_default_name,
         ),
         "fleet": RunKind(
             summary_type=FleetSummary,
             read=_read_fleet_run,
             home_configs=_fleet_run_configs,
             scenario_document=_fleet_run_scenario,
+            default_name=_fleet_run_default_name,
         ),
     }
 )
