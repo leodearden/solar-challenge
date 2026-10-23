@@ -217,6 +217,22 @@ def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
     )
 
 
+def test_no_import_statement_of_the_package_names_the_test_suite(
+    real_tree_imports: tuple[_FunctionLocalImport, ...],
+) -> None:
+    """No import statement of the package, at any scope, imports the tests package, which the wheel does not ship."""
+    found = _test_suite_imports(real_tree_imports)
+
+    sites = "\n".join(str(site) for site in found)
+    assert not found, (
+        "these import statements of src/solar_challenge import the tests package, and the wheel "
+        "ships only the packages under src/ (pyproject.toml, [tool.setuptools.packages.find]), "
+        f"so each fails with ModuleNotFoundError in every installed copy:\n{sites}\n"
+        "Move what the package needs from tests/ into src/solar_challenge, or move the code "
+        "that needs the tests package into tests/"
+    )
+
+
 def _write_package(src_dir: Path, modules: dict[str, str]) -> Path:
     """Write each of *modules*, keyed by its path in the package, under src_dir/solar_challenge, and return *src_dir*."""
     for relative_path, source in modules.items():
@@ -334,3 +350,85 @@ def test_the_scan_finds_only_package_imports_nested_in_a_function(
     found = _function_local_package_imports(src_dir)
 
     assert [(site.importer, site.imported, site.line) for site in found] == expected
+
+
+def test_an_import_of_the_test_suite_is_reported_with_its_file_line_and_module(
+    tmp_path: Path,
+) -> None:
+    """The report names a seeded import of the tests package by its file, line and module; the real-tree test passes for a scan that finds nothing."""
+    src_dir = _write_package(
+        tmp_path / "src",
+        {
+            "__init__.py": "",
+            "gridservices.py": (
+                "import json\n"
+                "\n"
+                "\n"
+                "def refuse(path):\n"
+                "    from tests._pyproject import load_project_table\n"
+                "    return load_project_table(path)\n"
+            ),
+        },
+    )
+
+    found = _test_suite_imports(_import_sites(src_dir))
+
+    assert [(site.path.as_posix(), site.line, site.imported) for site in found] == [
+        ("src/solar_challenge/gridservices.py", 5, "tests._pyproject")
+    ]
+    assert "src/solar_challenge/gridservices.py:5" in str(found[0])
+    assert "tests._pyproject" in str(found[0])
+
+
+@pytest.mark.parametrize(
+    ("module", "source", "expected"),
+    [
+        pytest.param(
+            "finance.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "import tests\n"
+            "from tests._pyproject import load_project_table\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from tests._web_app import build_test_app\n",
+            [("tests", 3), ("tests._pyproject", 4), ("tests._web_app", 7)],
+            id="module-top-and-type-checking",
+        ),
+        pytest.param(
+            "finance.py",
+            "def f():\n"
+            "    import tests.unit.helpers as helpers\n"
+            "\n"
+            "\n"
+            "class C:\n"
+            "    async def g(self):\n"
+            "        try:\n"
+            "            from tests import _seeded_tmy\n"
+            "        except ImportError:\n"
+            "            pass\n",
+            [("tests.unit.helpers", 2), ("tests", 8)],
+            id="in-a-function-a-method-and-an-import-error-guard",
+        ),
+        pytest.param(
+            "web/routes.py",
+            '"""from tests import _web_app, in prose."""\n'
+            "\n"
+            "import tests_helpers\n"
+            "from solar_challenge import tests\n"
+            "from . import tests\n"
+            "from .tests import fixtures\n",
+            [],
+            id="not-the-test-suite",
+        ),
+    ],
+)
+def test_the_scan_finds_imports_of_the_test_suite_at_any_scope(
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int]]
+) -> None:
+    """The scan finds an import of the tests package at any scope, inside an ImportError guard too, and no module of the package that is merely named tests."""
+    src_dir = _write_package(tmp_path / "src", {module: source})
+
+    found = _test_suite_imports(_import_sites(src_dir))
+
+    assert [(site.imported, site.line) for site in found] == expected
