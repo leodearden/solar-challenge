@@ -1,80 +1,33 @@
-# solar_challenge — dark-factory orchestrator configuration.
-# Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
-# overrides only what is project-specific.
-
+# solar_challenge — dark-factory orchestrator configuration. Rationale for each setting: docs/orchestrator-config.md.
+# Overrides only what is project-specific; package defaults live in dark-factory/orchestrator/defaults.yaml.
 project_root: &project_root "/home/leo/src/solar-challenge"
 
-# Orchestrator-level daily cost ceiling. The package default ($200,
-# defaults.yaml:330) is a pre-failover backstop that trips during normal
-# operation now that per-account Max caps are the real spend governor — spend
-# here is notional/imputed across flat-rate Max subscription accounts, not
-# metered API billing. Mirrors dark-factory's own config.yaml:51 (10000.0 =
-# effectively disabled). Without this, the scheduler self-pauses on the stale
-# default during architect-heavy days (the known false-positive pattern).
+# Cost ceiling: effectively disabled; per-account Max caps govern spend.
 orch_daily_cost_ceiling_usd: 10000.0
 
-# Shared fused-memory HTTP server (one server, all projects). Only project_id
-# is per-project; the URL is always 8002.
+# Shared fused-memory server; only project_id is per-project.
 fused_memory:
   url: "http://127.0.0.1:8002"
   project_id: "solar_challenge"
   server_command: []
 
-# Escalation MCP — unique port per project; MUST match .mcp.json so interactive
-# sessions and the orchestrator share one escalation server.
+# Escalation MCP; the port must match .mcp.json.
 escalation:
   queue_dir: "data/escalations"
   port: 8106
 
-# Verification commands — run inside a fresh git worktree, so they must work
-# without anything that isn't committed. This project is editable-installed into
-# a local venv/ (gitignored), which a worktree won't have — so we use `uv run`,
-# which resolves pyproject deps into an ephemeral per-worktree .venv. Validated
-# during factory-init: `uv run --extra dev` builds the package + imports cleanly.
-#
-# Every `uv run` here and in git.offline_lane_commands passes --locked, so uv
-# refuses a uv.lock that pyproject.toml has outgrown, with an error naming the
-# fix (`uv lock`), instead of silently re-locking it in the worktree. That
-# silent re-lock let a commit that forgot `uv lock` pass verify and merge its
-# stale lock (tests/unit/test_stale_uv_lock.py guards this).
-#
-# Tests exclude the `slow` marker (real PVGIS network calls) and tests/e2e
-# (playwright browser tests) — neither belongs in a per-task verify loop; the
-# offline lane's e2e job runs the non-slow e2e suite after every merge instead,
-# and its pvgis job runs the PVGIS contract tests, the slow tests that check
-# PVGIS itself.
-# The `web` extra is required: every test module that needs it calls
-# pytest.importorskip, so without it those modules skip rather than fail and
-# the verify passes while silently losing their coverage
-# (tests/unit/test_per_task_verify.py guards this). `--ignore=tests/e2e` keeps
-# the playwright suite out of collection on a task tree whose collect_ignore
-# predates e2e, as dark-factory runs main's test_command on each task's tree.
+# Verify commands run in a fresh worktree via `uv run --locked`.
 test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e"
-# No-op: the lint runs in the test suite (tests/unit/test_lint.py); docs/lint-gate.md says why.
 lint_command: "true"
-# `--extra web` so web/* modules type-check against their real deps (flask).
 type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
 
-# 2026-10-09 (dark-factory plans/verify-rate-improvement-2026-10-09/MEMO.md §3
-# item 14): run verify legs in `df-verify-<project>-*.scope` systemd units,
-# each weighted by its role (merge, task, background) through dark-factory's
-# verify_cgroup_cpu_weight_* settings, as dark-factory and reify do. Without it
-# this project's task verifies share the service unit's CPU weight with its
-# agents and out-weigh other projects' task legs. Restart tier: takes effect
-# at the next orchestrator restart, not on hot reload.
+# Cgroup scope for verify legs; restart tier.
 verify_use_cgroup_scope: true
 
-# 2026-10-17: the warm per-command verify timeout, which task verifies and the
-# main-tip sweep run under. A pure timeout reruns the whole task verify up to
-# verify_timeout_retries times (dark-factory's default of 2, not overridden
-# here), so a hung task verify takes about 3 h to fail (3 x 3600 s).
-# Restart tier: takes effect at the next orchestrator restart.
+# Warm per-command verify timeout; restart tier.
 verify_command_timeout_secs: 3600
 
-# Merge verifies run on leo-laptop first and on this host when the laptop is busy,
-# benched or unreachable. docs/laptop-merge-verify.md says why, what lives on the
-# laptop, what the env probes compare, which of these keys take effect when, and
-# how to roll back.
+# Merge-verify runners: docs/laptop-merge-verify.md.
 verify_runners:
   - name: laptop
     ssh_host: leo-laptop
@@ -95,47 +48,12 @@ verify_env_probes:
   - key: git
     argv: ["git", "--version"]
 
+# Branch layout and the offline lane, whose jobs never gate a merge.
 git:
   main_branch: "main"
   branch_prefix: "task/"
   remote: "origin"
   worktree_dir: ".worktrees"
-  # Offline lane: after every merge to main it runs each offline_lane_commands
-  # job in order, off the merge path at idle priority; it never gates a merge.
-  # A confirmed red files a fix task naming the failing node-ids, unless the
-  # job's outage_probe reports an outage, which is escalated instead.
-  # - interpreter-matrix: the verify suite on each Python minor requires-python
-  #   admits except the .python-version pin.
-  # - e2e: the non-slow Playwright suite. LaneCommand has no timeout field and
-  #   the lane is single-flight, so without `timeout` a hung browser run would
-  #   stall every later lane run; 1800 s is ~8x the measured 214 s run.
-  # - pvgis: the PVGIS contract tests (tests/integration/test_pvgis.py). They
-  #   check PVGIS's live TMY, so a change in PVGIS or pvlib is seen, and an
-  #   outage is never a silent green. The job's outage_probe,
-  #   scripts/pvgis_outage_probe.py, defines what counts as a PVGIS outage;
-  #   CLAUDE.md says how to triage a red. `timeout` caps a hung request at
-  #   600 s; a run measures ~20 s: uv syncs a fresh .venv, then 11 s of tests.
-  #   outage_probe_timeout_secs is pinned here, not left to dark-factory's
-  #   default, because the probe's request timeout is sized to fit it.
-  # - css-build: rebuilds static/dist/style.css in a scratch copy from the
-  #   committed sources and package-lock.json (tests/css_build), and goes red
-  #   when the committed file differs, e.g. after an unrebuilt
-  #   tailwind.config.js edit, or when the Tailwind license texts beside it are
-  #   not the locked tailwindcss package's. It needs npm and registry.npmjs.org.
-  #   `timeout` caps a hung run at 600 s; a run measures 17-38 s, by host load:
-  #   uv syncs a fresh .venv, then 6-19 s of npm ci and the build.
-  # - newest-releases: re-runs the verify suite in a scratch copy of the tree
-  #   whose uv.lock is upgraded to the newest releases pyproject.toml's ranges
-  #   admit (tests/newest_releases), the releases a consumer that re-locks
-  #   installs, so an upstream release that breaks this code files a fix task.
-  #   It needs PyPI. Like interpreter-matrix it has no `timeout`: its suite
-  #   timeout bounds a hang. A run measures 17-19 min, by host load.
-  # The legacy numeric and infra seams are off: this repo has neither script
-  # they run. The test that keeps them off names both:
-  # tests/unit/test_offline_lane_contracts.py::test_offline_lane_starts_and_skips_the_seams_this_repo_lacks
-  # offline_lane_enabled and persistent_offline_deep_worktree take effect at
-  # orchestrator restart (the fleet redeploy applies them); offline_lane_commands
-  # is hot-reloadable.
   persistent_offline_deep_worktree: true
   offline_lane_enabled: true
   offline_lane_legacy_numeric_enabled: false
@@ -159,26 +77,11 @@ git:
       command: "uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider"
       fix_task_priority: "medium"
 
-# OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
-# rollout, fleet-remainder wave (PRD os-sandbox-worktree-containment in the
-# dark-factory repo), gated on the reify wave. Kernel-enforced whole-
-# filesystem read-only except each task's own writable scope; backend pinned
-# to landlock (the proven fleet backend; bwrap is effectively dead
-# fleet-wide). `sandbox.*` is not in the config hot-reload allowlist, so this
-# edit is inert until the next orchestrator restart — the scheduled fleet
-# redeploy applies it, so no separate deploy task is needed for this project.
+# Landlock filesystem sandbox; restart tier.
 sandbox:
   enabled: true
   backend: landlock
 
-# Task 3546 (mu gate), Leo's ruling of 2026-10-18 on esc-3546-1: enforce strand
-# conversion (task 3539) fleet-wide. Restart-only, so it takes effect at the next
-# scheduled fleet redeploy.
+# Fleet-wide enforcement flags; restart tier.
 convert_to_blocked_enforce: true
-# Task 3546 (mu gate), Leo's ruling E of 2026-10-20 (dark-factory task 7255):
-# enforce the run()-exit contract (task 3542) fleet-wide. Soak clean on
-# 2026-10-22: zero workflow_exit_contract events of any verdict in all 8 fleet
-# run stores since 2026-10-20T01:10Z, after 3113's deploy, with every unit
-# restarted inside the window. Restart-only, so it goes live at the next fleet
-# restart.
 workflow_exit_contract_enforce: true
