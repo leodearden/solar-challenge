@@ -39,6 +39,7 @@ def home_config_for_run(
     battery_kwh: Optional[float] = None,
     consumption_kwh: Optional[float] = None,
     location_str: Optional[str] = None,
+    system_losses: Optional[float] = None,
 ) -> HomeConfig:
     """The HomeConfig `home run` simulates: the file's home: block at its location:,
     with its seg: block and the command-line overrides applied."""
@@ -48,6 +49,7 @@ def home_config_for_run(
         battery_kwh=battery_kwh,
         consumption_kwh=consumption_kwh,
         location_str=location_str,
+        system_losses=system_losses,
     )
     loc = parse_location_block(config_dict.get("location"))
     home_config = parse_home_block(config_dict.get("home", {}), loc)
@@ -127,6 +129,13 @@ def run(
             help="Location preset or 'lat,lon' (e.g., 'bristol' or '51.45,-2.58')",
         ),
     ] = None,
+    system_losses: Annotated[
+        Optional[float],
+        typer.Option(
+            "--system-losses",
+            help="Override PV system losses, the fraction of DC power lost before the inverter (e.g. 0.05)",
+        ),
+    ] = None,
 ) -> None:
     """Run a single home simulation from config file or CLI arguments.
 
@@ -138,6 +147,7 @@ def run(
         battery_kwh=battery_kwh,
         consumption_kwh=consumption_kwh,
         location_str=location,
+        system_losses=system_losses,
     )
     seg_rate = (
         home_config.seg_tariff.rate_pence_per_kwh

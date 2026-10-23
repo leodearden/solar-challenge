@@ -11,6 +11,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.charts import (
     battery_soc_chart,
@@ -56,6 +57,7 @@ def simulate_home_page() -> str:
         "simulate/home.html",
         fleet_components=FLEET_COMPONENTS,
         seg_presets=SEG_PRESETS,
+        default_system_losses=PVWATTS_DEFAULT_SYSTEM_LOSSES,
     ))
 
 

@@ -1,6 +1,9 @@
 {# PV configuration partial for the home simulation form.
    Uses Alpine.js for reactive slider value display.
-   Expected parent x-data must include formData object. #}
+   Expected parent x-data must include formData object and sendsSystemLosses(), whether the form
+   sends System Losses.
+   The page's context holds default_system_losses (PVWATTS_DEFAULT_SYSTEM_LOSSES in pv.py), which the
+   System Losses input shows as its placeholder. #}
 {% from "components/macros.html" import range_input %}
 
 <div class="space-y-6">
@@ -103,5 +106,24 @@
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
         >
         <p class="text-xs text-slate-500 dark:text-slate-400">Annual output loss as a fraction per year (e.g. 0.005 = 0.5%/yr). 0 = no degradation.</p>
+    </div>
+
+    <!-- System Losses input: left blank, the form sends none and the server builds PVConfig's default -->
+    <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+            <label for="system_losses" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">System Losses</label>
+            <span class="text-sm font-medium text-primary-600 dark:text-primary-400" x-text="sendsSystemLosses() ? formData.system_losses : 'PVWatts default'"></span>
+        </div>
+        <input
+            type="number"
+            id="system_losses"
+            name="system_losses"
+            min="0"
+            step="0.01"
+            placeholder="{{ '%.4f'|format(default_system_losses) }}"
+            x-model.number="formData.system_losses"
+            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
+        >
+        <p class="text-xs text-slate-500 dark:text-slate-400">Fraction of DC power lost before the inverter to soiling, shading, mismatch, wiring and availability (e.g. 0.05 = 5%). Leave blank for PVWatts v5's default budget.</p>
     </div>
 </div>

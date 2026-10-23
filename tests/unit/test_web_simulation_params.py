@@ -13,6 +13,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
+from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import LOCATION_PRESETS, NotAJsonObject, resolve_location
@@ -47,6 +48,7 @@ FORM_PAYLOAD_BATTERY_ON: dict = {
     "tilt": 35.0,
     "system_age_years": 5.0,
     "degradation_rate_per_year": 0.005,
+    "system_losses": 0.1,
     "battery_kwh": 5.0,
     "max_charge_kw": 2.5,
     "max_discharge_kw": 2.5,
@@ -707,6 +709,7 @@ class TestParseHomeConfigNumberFields:
             "tilt",
             "system_age_years",
             "degradation_rate_per_year",
+            "system_losses",
             "battery_kwh",
             "max_charge_kw",
             "max_discharge_kw",
@@ -795,6 +798,46 @@ class TestParseHomeConfigPVAge:
         home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
         assert home_config.pv_config.system_age_years == 0.0
         assert home_config.pv_config.degradation_rate_per_year == 0.005
+
+
+class TestParseHomeConfigSystemLosses:
+    """A home body's system_losses: a fraction PVConfig takes as sent; null or not sent leaves PVConfig's default."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="lossless"),
+            pytest.param(0.05, id="five-percent"),
+        ],
+    )
+    def test_a_sent_fraction_is_the_homes_system_losses(self, value: float) -> None:
+        """A fraction sent as system_losses is the home's PV system losses."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "system_losses": value}
+        )
+        assert home_config.pv_config.system_losses == value
+
+    def test_a_null_system_losses_reads_as_not_sent(self) -> None:
+        """A null system_losses builds the home a body that sends none builds."""
+        assert parse_home_config({**VALID_HOME_PAYLOAD, "system_losses": None}) == (
+            parse_home_config(VALID_HOME_PAYLOAD)
+        )
+
+    def test_a_home_that_sends_no_system_losses_has_pvconfigs_default(self) -> None:
+        """A body that sends no system_losses gets PVConfig's default, not a web default of its own."""
+        home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
+        assert home_config.pv_config.system_losses == PVWATTS_DEFAULT_SYSTEM_LOSSES
+
+    @pytest.mark.parametrize("value", [1, 1.5, -0.01])
+    def test_a_value_pvconfig_refuses_is_refused_with_pvconfigs_own_message(
+        self, value: float
+    ) -> None:
+        """A system_losses PVConfig refuses is refused with PVConfig's own message, the only range check."""
+        with pytest.raises(ValueError) as pv_refusal:
+            PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=float(value))
+        with pytest.raises(ValueError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "system_losses": value})
+        assert str(refusal.value) == str(pv_refusal.value)
 
 
 class TestParseHomeConfigSEG:

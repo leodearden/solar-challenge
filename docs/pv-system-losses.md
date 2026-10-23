@@ -19,6 +19,11 @@
 - A scenario file's home `pv:` block sets it as `system_losses`, a fraction:
   `system_losses: 0.05` is 5%. `scenario_writer` writes it back, so an exported home
   loads back with its own losses.
+- The dashboard's home form sets it on its PV tab as System Losses, a fraction sent as
+  the request body's `system_losses`. Left blank, the form sends none and the run takes
+  the default, which the field shows as its placeholder (`pv.PVWATTS_DEFAULT_SYSTEM_LOSSES`).
+  `home run --system-losses` overrides a scenario file's value. Both refuse a value
+  outside [0, 1) with `PVConfig`'s own error, as a scenario file does.
 - **Performance ratio**, as this note and its measurements use it: a year's AC energy
   divided by the in-plane irradiation (kWh/m², before angle-of-incidence losses) times
   the wired DC capacity (`pv.wired_dc_capacity_kw`, the denominator of validation's
@@ -152,9 +157,10 @@ PVGIS-14% 0.793–0.815.
 ## 7. Open Items
 
 - **Exposure:** task 914 makes `system_losses` a home `pv:` key that the reader reads and
-  `scenario_writer` writes. A fleet's `pv:` distribution draws it after task 919 (S7 δ).
-  Web and CLI runs have no input for it (task 610), so they get the default unless they
-  load a scenario file. Parameter sweeps go with S5, which deletes the sweep.
+  `scenario_writer` writes, and task 610 makes it a web home-form input and
+  `home run --system-losses` (§1). A fleet's `pv:` distribution draws it after task 919
+  (S7 δ). The fleet page has no input for it, and `home quick` takes no PV setting but
+  capacity. Parameter sweeps go with S5, which deletes the sweep.
 - **Task 284:** ageing is applied to the AC after clipping, not to the DC.
 
 ## 8. When to Revisit
