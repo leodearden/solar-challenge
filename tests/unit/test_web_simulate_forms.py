@@ -2,8 +2,8 @@
 """Tests of the /simulate/home and /simulate/fleet pages, which web/routes.py serves: the forms that start a home and a fleet simulation.
 
 The optional-settings tests identify a control by its Alpine binding, the form state the page's script builds its
-request from: heat pump, tariff, dispatch, PV age and SEG on /simulate/home, and the fleet-wide tariff, dispatch and
-SEG on /simulate/fleet.
+request from: heat pump, tariff, dispatch, PV age, system losses and SEG on /simulate/home, and the fleet-wide tariff,
+dispatch and SEG on /simulate/fleet.
 """
 
 import pytest
@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from tests._html_page import (
@@ -120,7 +121,7 @@ class TestSimulateHomePageRendering:
 
 
 class TestHomeFormRender:
-    """Smoke test: GET /simulate/home renders the heat pump, tariff, dispatch, PV-age and SEG controls."""
+    """Smoke test: GET /simulate/home renders the heat pump, tariff, dispatch, PV-age, system-losses and SEG controls."""
 
     def test_home_form_shows_heat_pump_tariff_and_dispatch(
         self, client: FlaskClient
@@ -140,6 +141,21 @@ class TestHomeFormRender:
         page = resp.get_data(as_text=True)
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.system_age_years"}) == 1
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.degradation_rate_per_year"}) == 1
+
+    def test_home_form_shows_a_system_losses_input_with_pvconfigs_default_as_its_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home renders one number input for the PV system losses, whose placeholder is PVConfig's default to the four decimal places it shows."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+        [system_losses_input] = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model.number") == "formData.system_losses"
+        ]
+        assert system_losses_input["type"] == "number"
+        assert float(system_losses_input["placeholder"]) == pytest.approx(
+            PVWATTS_DEFAULT_SYSTEM_LOSSES, abs=5e-5
+        )
 
     def test_home_form_shows_seg_section(self, client: FlaskClient) -> None:
         """GET /simulate/home renders the SEG preset select, one option per SEG preset key, and the custom rate number input."""

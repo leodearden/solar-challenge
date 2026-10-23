@@ -9,7 +9,9 @@ outside the fleet load component's fixed range as an error, sending
 nothing, and sends either end of that range. It also checks that the form
 leaves a custom range's dates to the server: it sends a single-day range,
 which the server accepts, and shows the server's refusal of a range that
-ends before it starts.
+ends before it starts. And it checks that a blank System Losses input sends
+no system_losses, leaving the server's default, that a typed one is sent as
+typed, and that the page shows the server's refusal of one PVConfig refuses.
 """
 
 import re
@@ -318,5 +320,61 @@ def test_reversed_custom_range_shows_the_servers_refusal(page: Page, live_server
     page.goto(live_server + "/simulate/home")
     response = submit_custom_range(page, SECOND_DAY, FIRST_DAY)
 
+    assert response.status == 400, response.text()
+    expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
+
+
+# ── PV system losses: blank leaves the server's default ──────────────
+
+
+def _type_system_losses(page: Page, text: str) -> None:
+    """Type `text` into the System Losses input on the PV tab, replacing what it held."""
+    open_tab(page, "PV")
+    page.locator("#system_losses").fill(text)
+
+
+@pytest.mark.parametrize(
+    "typed_then_cleared",
+    [
+        pytest.param(False, id="untouched"),
+        pytest.param(True, id="typed-then-cleared"),
+    ],
+)
+def test_blank_system_losses_is_not_sent_and_the_run_is_accepted(
+    page: Page, live_server: str, typed_then_cleared: bool
+) -> None:
+    """Run with System Losses blank, untouched or typed in and cleared: the form sends no system_losses, and /api/simulate/home accepts the run (201)."""
+    page.goto(live_server + "/simulate/home")
+    if typed_then_cleared:
+        _type_system_losses(page, "0.05")
+        _type_system_losses(page, "")
+    response = submit_two_day_run(page)
+
+    assert "system_losses" not in response.request.post_data_json
+    assert response.status == 201, response.text()
+
+
+def test_typed_system_losses_is_sent_and_accepted(page: Page, live_server: str) -> None:
+    """Run with 0.05 typed as System Losses: the form sends the fraction typed, and /api/simulate/home accepts it (201)."""
+    page.goto(live_server + "/simulate/home")
+    _type_system_losses(page, "0.05")
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["system_losses"] == 0.05
+    assert response.status == 201, response.text()
+
+
+def test_system_losses_pvconfig_refuses_shows_the_servers_refusal(
+    page: Page, live_server: str
+) -> None:
+    """Run with 1 typed as System Losses, a fraction PVConfig refuses: /api/simulate/home refuses it (400), and the page shows the server's error as an alert."""
+    page.goto(live_server + "/simulate/home")
+    _type_system_losses(page, "1")
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["system_losses"] == 1, (
+        "The submitted payload does not carry the typed system losses, "
+        "so a 400 would say nothing about the server's refusal of them."
+    )
     assert response.status == 400, response.text()
     expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
