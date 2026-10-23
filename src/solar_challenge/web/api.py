@@ -769,7 +769,8 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with updated run data, or 404 if not found.
+        JSON response with updated run data, or 404 if not found. 400 with the refusal as
+        ``error``, naming ``name``, for a null or blank name, which update_run_labels refuses.
     """
     data = request_json_object()
     storage = get_storage()
@@ -781,7 +782,10 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     if not labels:
         return jsonify({"error": "No fields to update"}), 400
 
-    updated = storage.update_run_labels(run_id, labels)
+    try:
+        updated = storage.update_run_labels(run_id, labels)
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal)}), 400
     if updated is None:
         return jsonify({"error": "Run not found"}), 404
 
