@@ -32,7 +32,7 @@ One fused-memory server serves every project, so only `project_id` is per-projec
 URL is shared. The escalation MCP server has a port of its own per project, and it must match
 `.mcp.json`, so interactive sessions and the orchestrator share one escalation server.
 
-## 4. Verify Commands (`test_command`, `lint_command`, `type_check_command`)
+## 4. Verify Commands (Test, Lint and Type Check)
 
 The commands run inside a fresh git worktree, so they may use nothing that is not committed.
 The project is editable-installed into a local, gitignored `venv/` that a worktree lacks, so
@@ -49,7 +49,7 @@ per-worktree `.venv`.
 - **`--ignore=tests/e2e`.** The Playwright suite is likewise out of the per-task verify; the
   offline lane's `e2e` job runs it after every merge. The `--ignore` also keeps it out of
   collection on a task tree whose `collect_ignore` predates e2e, because dark-factory runs
-  main's `test_command` on each task's tree.
+  main's test command on each task's tree.
 - **`--extra web`.** Every test module that needs the `web` extra calls `pytest.importorskip`,
   so without the extra those modules skip rather than fail, and the verify passes while
   silently losing their coverage. `tests/unit/test_per_task_verify.py` guards this. The
