@@ -5,6 +5,7 @@ Verifies that setting localStorage theme=dark and reloading causes
 The module also toggles the theme live on a results page, to check what the toggle does to the page's charts.
 It checks that every grid, zero and polar axis line of each chart on the results and compare pages takes the
 dark theme's grid colour, whether the page loads dark or is switched to dark.
+It also checks that no bar a chart draws on those pages is outlined on the dark card.
 """
 
 from collections.abc import Callable
@@ -183,11 +184,43 @@ _EVERY_GRID_AND_ZERO_LINE = r"""charts => charts.flatMap(chart => [...chart.quer
 
 @dataclass(frozen=True)
 class _ChartPage:
-    """A chart page of the runs a seeded-run fixture saves, and selectors of lines its charts must draw, so a check of every line cannot pass vacuously."""
+    """A chart page of the runs a seeded-run fixture saves, and selectors of the lines and bars its charts must draw, so a check of every line or bar cannot pass vacuously."""
 
     runs_fixture: str
     path: Callable[[Any], str]
     drawn_lines: tuple[str, ...]
+    drawn_bars: tuple[str, ...]
+
+
+_CHART_PAGES = (
+    pytest.param(
+        _ChartPage(
+            "seeded_home_run",
+            lambda run: f"/results/home/{run[0]}",
+            drawn_lines=("#chart-financial path.y2grid", "#chart-financial path.yzl", "#chart-financial path.y2zl"),
+            drawn_bars=("#chart-daily-balance .bars .point path", "#chart-financial .bars .point path"),
+        ),
+        id="home-results",
+    ),
+    pytest.param(
+        _ChartPage(
+            "seeded_fleet_run",
+            lambda run: f"/results/fleet/{run[0]}",
+            drawn_lines=("#chart-distribution-histograms path.y2grid", "#chart-distribution-histograms path.y3grid"),
+            drawn_bars=("#chart-distribution-histograms .bars .point path",),
+        ),
+        id="fleet-results",
+    ),
+    pytest.param(
+        _ChartPage(
+            "seeded_home_runs_pair",
+            lambda runs: f"/history/compare?ids={runs[0][0]},{runs[1][0]}",
+            drawn_lines=("#chart-comparison-radar .radial-grid path", "#chart-comparison-radar .angular-grid path"),
+            drawn_bars=("#chart-comparison-bar .bars .point path",),
+        ),
+        id="compare",
+    ),
+)
 
 
 def _show_each_chart_tab(page: Page, theme: str) -> None:
@@ -207,35 +240,7 @@ def _show_each_chart_tab(page: Page, theme: str) -> None:
 
 
 @pytest.mark.parametrize("switched_to_dark", [False, True], ids=["dark-on-load", "switched-to-dark"])
-@pytest.mark.parametrize(
-    "chart_page",
-    [
-        pytest.param(
-            _ChartPage(
-                "seeded_home_run",
-                lambda run: f"/results/home/{run[0]}",
-                ("#chart-financial path.y2grid", "#chart-financial path.yzl", "#chart-financial path.y2zl"),
-            ),
-            id="home-results",
-        ),
-        pytest.param(
-            _ChartPage(
-                "seeded_fleet_run",
-                lambda run: f"/results/fleet/{run[0]}",
-                ("#chart-distribution-histograms path.y2grid", "#chart-distribution-histograms path.y3grid"),
-            ),
-            id="fleet-results",
-        ),
-        pytest.param(
-            _ChartPage(
-                "seeded_home_runs_pair",
-                lambda runs: f"/history/compare?ids={runs[0][0]},{runs[1][0]}",
-                ("#chart-comparison-radar .radial-grid path", "#chart-comparison-radar .angular-grid path"),
-            ),
-            id="compare",
-        ),
-    ],
-)
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
 def test_every_grid_and_zero_line_of_each_chart_takes_the_dark_themes_grid_colour(
     page: Page,
     live_server: str,
@@ -259,6 +264,37 @@ def test_every_grid_and_zero_line_of_each_chart_takes_the_dark_themes_grid_colou
     assert off_theme == [], (
         f"These chart lines are not in the dark theme's grid colour {_CHROME['dark'].grid}: {off_theme}"
     )
+
+
+# -- No bar of any chart is outlined ---------------------------------------
+
+# Each bar of each chart, histogram bars included: its chart's id, and its stroke and stroke width as
+# getComputedStyle reads them.
+_EVERY_BAR = r"""charts => charts.flatMap(chart => [...chart.querySelectorAll('.bars .point path')].map(bar => ({
+    chart: chart.id,
+    stroke: getComputedStyle(bar).stroke,
+    width: getComputedStyle(bar).strokeWidth,
+})))"""
+
+
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+def test_no_bar_of_any_chart_is_outlined_on_the_dark_card(
+    page: Page,
+    live_server: str,
+    request: pytest.FixtureRequest,
+    chart_page: _ChartPage,
+) -> None:
+    """plotly.py's default template outlined every bar 0.5 px in rgb(229, 236, 246), its light plot background, a light rim on the dark card (task 1046)."""
+    url = live_server + chart_page.path(request.getfixturevalue(chart_page.runs_fixture))
+    _open_in_theme(page, url, "dark")
+    _show_each_chart_tab(page, "dark")
+    for selector in chart_page.drawn_bars:
+        expect(page.locator(selector).first).to_be_attached()
+
+    bars = page.locator(".js-plotly-plot").evaluate_all(_EVERY_BAR)
+
+    outlined = [bar for bar in bars if bar["stroke"] != "none" and bar["width"] != "0px"]
+    assert outlined == [], f"These chart bars are outlined on the dark card: {outlined}"
 
 
 # -- Toggling the theme live on a results page -----------------------------

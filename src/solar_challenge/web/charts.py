@@ -60,6 +60,15 @@ def _with_alpha(colour: str, alpha: float) -> str:
     return f"rgba({red},{green},{blue},{alpha})"
 
 
+def _bar(name: str, *, x: Sequence[str], y: Sequence[float], colour: str) -> Any:
+    """A bar trace named *name* of the values *y* at *x*, filled in *colour* with no outline.
+
+    Plotly's default template outlines a bar in its own plot background colour, which no figure draws, so the
+    outline would show on the card in either theme.
+    """
+    return go.Bar(name=name, x=x, y=y, marker=dict(color=colour, line=dict(width=0)))
+
+
 class _ChartElement(Enum):
     """Things a chart draws, each member with its label and the COLOUR_PALETTE role it is drawn in."""
 
@@ -320,7 +329,7 @@ def daily_energy_balance(results: SimulationResults) -> str:
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
     traces: list[Any] = [
-        go.Bar(name=flow.label, x=dates, y=daily[column].round(3).tolist(), marker_color=flow.colour)
+        _bar(flow.label, x=dates, y=daily[column].round(3).tolist(), colour=flow.colour)
         for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
     ]
 
@@ -354,7 +363,7 @@ def monthly_summary(results: SimulationResults) -> str | None:
 
     stacked = frozenset({_EnergyFlow.SELF_CONSUMPTION, _EnergyFlow.GRID_IMPORT, _EnergyFlow.GRID_EXPORT})
     traces: list[Any] = [
-        go.Bar(name=flow.label, x=months, y=monthly[column].round(2).tolist(), marker_color=flow.colour)
+        _bar(flow.label, x=months, y=monthly[column].round(2).tolist(), colour=flow.colour)
         for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
         if flow in stacked
     ]
@@ -428,21 +437,11 @@ def financial_breakdown(results: SimulationResults) -> str:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     fig.add_trace(
-        go.Bar(
-            name="Daily Cost",
-            x=dates,
-            y=daily_cost.tolist(),
-            marker_color=COLOUR_PALETTE["cost"],
-        ),
+        _bar("Daily Cost", x=dates, y=daily_cost.tolist(), colour=COLOUR_PALETTE["cost"]),
         secondary_y=False,
     )
     fig.add_trace(
-        go.Bar(
-            name="Daily Revenue",
-            x=dates,
-            y=daily_revenue.tolist(),
-            marker_color=COLOUR_PALETTE["revenue"],
-        ),
+        _bar("Daily Revenue", x=dates, y=daily_revenue.tolist(), colour=COLOUR_PALETTE["revenue"]),
         secondary_y=False,
     )
     fig.add_trace(
@@ -488,11 +487,11 @@ def _season_bar(name: str, colour_role: str, season: SeasonSummary) -> Any:
         _EnergyFlow.DEMAND: season.demand_kwh,
         _EnergyFlow.SELF_CONSUMPTION: season.self_consumption_kwh,
     })
-    return go.Bar(
-        name=name,
+    return _bar(
+        name,
         x=[f"{flow.label} (kWh)" for flow, _ in flows],
         y=[round(total, 1) for _, total in flows],
-        marker_color=COLOUR_PALETTE[colour_role],
+        colour=COLOUR_PALETTE[colour_role],
     )
 
 
@@ -624,12 +623,7 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         colour = _comparison_run_colour(i)
         values = [round(summary.get(key, 0), 2) for _, key in summary_keys]
-        traces.append(go.Bar(
-            name=label,
-            x=categories,
-            y=values,
-            marker_color=colour,
-        ))
+        traces.append(_bar(label, x=categories, y=values, colour=colour))
 
     fig = go.Figure(data=traces)
     fig.update_layout(
