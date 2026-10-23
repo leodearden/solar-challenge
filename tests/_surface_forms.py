@@ -532,20 +532,7 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once the refusals below have passed the end of the chain inspect follows from *obj*.
-
-    They run in this order, each raising TypeError:
-
-    - for a routine whose signature inspect cannot read, as _unreadable_link finds one,
-      the TypeError _unreadable_routine_error gives for it, before anything else is read;
-    - for an end that is an Enum, as _refuse_wrapped_enum finds one; it comes before the
-      next, which would refuse the Enum.__signature__ that Python 3.12 and 3.13 give,
-      naming that value in place of the Enum;
-    - for an end that carries a __signature__ inspect reads differently by minor, as
-      _refuse_minor_dependent_signature finds one;
-    - for a class at that end that carries no signature, whatever
-      _refuse_minor_dependent_constructor refuses of its constructor.
-    """
+    """The signature inspect reads for *obj*, a class or a routine, once each refusal below has passed the end of the chain inspect follows from it."""
     link = _unreadable_link(obj)
     if link is not None:
         raise _unreadable_routine_error(_label(obj), obj, link)
@@ -592,12 +579,7 @@ def _carries_inspect_signature(obj: object) -> bool:
 
 
 def _minor_dependent_signature(obj: object) -> object | None:
-    """*obj*'s __signature__ if it is neither None nor an inspect.Signature; None otherwise.
-
-    This is the one home of the rule that such a value is refused: inspect converts a
-    string there and calls a callable on Python 3.12 and 3.13, and refuses either on 3.11
-    and 3.14.
-    """
+    """*obj*'s __signature__ if it is neither None, which inspect reads as the callable itself, nor an inspect.Signature, which it reads as given; None otherwise."""
     signature: object = getattr(obj, "__signature__", None)
     if signature is None or isinstance(signature, inspect.Signature):
         return None
@@ -672,12 +654,10 @@ def _unreadable_routine_error(label: str, routine: object, link: object) -> Type
 
 
 def _refuse_wrapped_enum(obj: object, end: object) -> None:
-    """Raise TypeError naming *obj* and *end*, the end of the chain inspect follows from *obj*, if *end* is an Enum.
+    """Raise TypeError naming *obj* and *end*, the end of the chain inspect follows from *obj*, if *end* is an Enum, whose signature inspect reads differently on each minor.
 
-    inspect reads an Enum's signature from EnumType.__call__ on Python 3.11, from
-    Enum.__signature__ on 3.12 and 3.13, and from EnumType.__signature__ on 3.14. An Enum
-    is spelled by its members and never reaches here as *obj*; a routine that wraps one
-    does.
+    An Enum is spelled by its members and never reaches here as *obj*; a routine that
+    wraps one does.
     """
     if inspect.isclass(end) and issubclass(end, enum.Enum):
         raise TypeError(
