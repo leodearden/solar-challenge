@@ -110,6 +110,7 @@ class TestInterval:
             pytest.param(Interval(0, 360), 360, id="closed-high-bound"),
             pytest.param(Interval(0, 1, high_open=True), 0, id="open-above-low-bound"),
             pytest.param(FRACTION, 1, id="fraction-high-bound"),
+            pytest.param(Interval(5, 5), 5, id="closed-at-one-number"),
         ],
     )
     def test_an_interval_admits_a_finite_number_inside_its_bounds(
@@ -166,6 +167,27 @@ class TestInterval:
         assert exc_info.type is ValueError
         assert repr(low) in str(exc_info.value)
         assert repr(high) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("low", "high", "low_open", "high_open"),
+        [
+            pytest.param(math.inf, math.inf, False, False, id="low-bound-at-infinity"),
+            pytest.param(-math.inf, -math.inf, False, False, id="high-bound-at-negative-infinity"),
+            pytest.param(0, 0, True, False, id="equal-bounds-open-below"),
+            pytest.param(0, 0, False, True, id="equal-bounds-open-above"),
+        ],
+    )
+    def test_an_interval_whose_equal_bounds_admit_no_finite_number_is_refused_naming_it(
+        self, low: float, high: float, low_open: bool, high_open: bool
+    ) -> None:
+        """Equal bounds hold one number, so an infinite bound, or one either end leaves out, leaves the interval empty: a defect, refused with a plain ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            Interval(low, high, low_open=low_open, high_open=high_open)
+        assert exc_info.type is ValueError
+        assert (
+            f"Interval(low={low!r}, high={high!r}, low_open={low_open!r}, high_open={high_open!r})"
+            in str(exc_info.value)
+        )
 
 
 class TestAsFiniteFloat:
@@ -460,6 +482,8 @@ class TestListReaders:
             pytest.param("1,2", id="string"),
             pytest.param(b"12", id="bytes"),
             pytest.param({"a": 1}, id="mapping"),
+            pytest.param({1, 2}, id="set"),
+            pytest.param(frozenset({1, 2}), id="frozenset"),
             pytest.param(5, id="int"),
             pytest.param(2.5, id="float"),
             pytest.param(None, id="null"),
@@ -475,7 +499,7 @@ class TestListReaders:
     def test_a_value_that_is_not_a_list_is_refused_naming_the_field_and_the_value(
         self, read: Callable[[object, str], tuple[object, ...]], field: str, kind: str, value: object
     ) -> None:
-        """Text and a mapping are iterable, but neither is a list of numbers, so each is refused as a number is."""
+        """Text, a mapping and a set are iterable, but none is a list of numbers, a set having no order to index its elements by, so each is refused as a number is."""
         with pytest.raises(ConfigurationError) as exc_info:
             read(value, field)
         assert str(exc_info.value) == f"{field} must be a list of {kind}, got {value!r}"

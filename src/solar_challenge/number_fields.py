@@ -10,7 +10,7 @@ truncated or read as 1.
 """
 
 import math
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass
 from typing import Any, Final, NoReturn, TypeVar
 
@@ -22,7 +22,7 @@ _Number = TypeVar("_Number", int, float)
 
 @dataclass(frozen=True)
 class Interval:
-    """The finite numbers from *low* to *high*, each bound included unless it is open; an infinite bound is no bound."""
+    """A non-empty interval of finite numbers, from *low* to *high*, each bound included unless it is open; an infinite bound is no bound."""
 
     low: float = -math.inf
     high: float = math.inf
@@ -33,6 +33,10 @@ class Interval:
         if not self.low <= self.high:
             raise ValueError(
                 f"an Interval's low bound must be at most its high bound, got low={self.low!r} and high={self.high!r}"
+            )
+        if self.low == self.high and not self.admits(self.low):
+            raise ValueError(
+                f"an Interval must admit a finite number, so equal bounds must be finite and neither open, got {self!r}"
             )
 
     def admits(self, number: float) -> bool:
@@ -99,8 +103,8 @@ def as_finite_floats(values: object, field: str, within: Interval = Interval()) 
     """Return *values*, a list, as the tuple of its elements, each read by :func:`as_finite_float` under the name {field}[{i}].
 
     Raises:
-        ConfigurationError: If *values* is text, a mapping or not iterable, naming *field*
-            and *values*; or if :func:`as_finite_float` refuses an element.
+        ConfigurationError: If *values* is text, a mapping, a set or not iterable, naming
+            *field* and *values*; or if :func:`as_finite_float` refuses an element.
     """
     return _read_each(as_finite_float, values, field, within, "finite numbers")
 
@@ -109,8 +113,8 @@ def as_whole_numbers(values: object, field: str, within: Interval = Interval()) 
     """Return *values*, a list, as the tuple of its elements, each read by :func:`as_whole_number` under the name {field}[{i}].
 
     Raises:
-        ConfigurationError: If *values* is text, a mapping or not iterable, naming *field*
-            and *values*; or if :func:`as_whole_number` refuses an element.
+        ConfigurationError: If *values* is text, a mapping, a set or not iterable, naming
+            *field* and *values*; or if :func:`as_whole_number` refuses an element.
     """
     return _read_each(as_whole_number, values, field, within, "whole numbers")
 
@@ -137,8 +141,8 @@ def read_field(
 def _read_each(
     read: Callable[[Any, str, Interval], _Number], values: object, field: str, within: Interval, kind: str
 ) -> tuple[_Number, ...]:
-    """Return each element i of *values* read by *read* as {field}[{i}], refusing *values* unless it is a list of *kind*: iterable, and neither text nor a mapping."""
-    if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
+    """Return each element i of *values* read by *read* as {field}[{i}], refusing *values* unless it is a list of *kind*: iterable, and neither text, a mapping nor a set, whose order is arbitrary."""
+    if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
         _refuse(field, f"a list of {kind}", values)
     return tuple(read(value, f"{field}[{index}]", within) for index, value in enumerate(values))
 
