@@ -15,8 +15,9 @@ query matches; RunQuery refuses a query no page answers.
 
 readable_headline is the headline a run list shows for a run's record: None while the run
 has no summary, and None, with a warning naming the run, when its summary is damaged: it
-does not decode, or run_headline refuses it. RunStorage.totals counts the completed runs
-and their homes and sums the generation of those whose headline reads.
+does not decode, or run_headline refuses it. headline_figures is a run list row's figures
+for a record, named as the run lists name them. RunStorage.totals counts the completed
+runs and their homes and sums the generation of those whose headline reads.
 """
 
 import dataclasses
@@ -42,6 +43,7 @@ from solar_challenge.web.storage import (
     RunRecord,
     RunStorage,
     RunTotals,
+    headline_figures,
     readable_headline,
     run_headline,
 )
@@ -433,6 +435,30 @@ class TestReadableHeadline:
         assert readable_headline(_record(storage, "damaged-run")) is None
         warnings = _storage_warnings(caplog)
         assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
+
+
+class TestHeadlineFigures:
+    """headline_figures: the figures a run list's row shows for a run's record, under the names the run lists give them."""
+
+    def test_a_saved_fleet_run_s_figures_are_its_generation_and_its_fleet_self_consumption_ratio(
+        self, storage: RunStorage
+    ) -> None:
+        fleet = _two_unlike_homes()
+        store_fleet_run(storage, "fleet-1", fleet)
+        summary = calculate_fleet_summary(fleet)
+
+        assert headline_figures(_record(storage, "fleet-1")) == {
+            "total_generation_kwh": summary.total_generation_kwh,
+            "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+        }
+
+    def test_a_run_with_no_headline_to_read_has_neither_figure(self, storage: RunStorage) -> None:
+        storage.create_run("running-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00")
+
+        assert headline_figures(_record(storage, "running-1")) == {
+            "total_generation_kwh": None,
+            "self_consumption_ratio": None,
+        }
 
 
 class TestRunTotals:

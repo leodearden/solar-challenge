@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeVar, assert_never, get_args
+from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
@@ -213,7 +213,22 @@ def _readable_headline(run_id: str, run_type: RunType | None, summary_json: str 
         return None
 
 
-RunSort = Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
+class HeadlineFigures(TypedDict):
+    """The figures a run list's row shows for a run, under the names the History list and the assistant's run list give them; None where it has none."""
+
+    total_generation_kwh: float | None
+    self_consumption_ratio: float | None
+
+
+def headline_figures(record: RunRecord) -> HeadlineFigures:
+    """The figures a run list's row shows for *record*'s run: its readable_headline's figures, each None when it has no headline to read."""
+    headline = readable_headline(record)
+    if headline is None:
+        return {"total_generation_kwh": None, "self_consumption_ratio": None}
+    return {"total_generation_kwh": headline.generation_kwh, "self_consumption_ratio": headline.self_consumption_ratio}
+
+
+RunSort =Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
 RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
 
 _MAX_RUNS_PER_PAGE = 100

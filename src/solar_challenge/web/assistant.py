@@ -63,7 +63,7 @@ from solar_challenge.web.sse import (
     event_stream,
     sse_frame,
 )
-from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage, readable_headline
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage, headline_figures
 
 bp = Blueprint("assistant", __name__)
 
@@ -465,11 +465,7 @@ def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
 
 
 def _recent_run_entry(record: RunRecord) -> dict[str, Any]:
-    """list_recent_runs' entry for *record*'s run: its identifying fields and its headline figures.
-
-    The figures are readable_headline's, None for a run with no summary or one that does not decode.
-    """
-    headline = readable_headline(record)
+    """list_recent_runs' entry for *record*'s run: its identifying fields and its headline_figures."""
     return {
         "run_id": record.id,
         "name": record.name,
@@ -477,8 +473,7 @@ def _recent_run_entry(record: RunRecord) -> dict[str, Any]:
         "status": record.status,
         "created_at": record.created_at,
         "n_homes": record.n_homes,
-        "total_generation_kwh": None if headline is None else headline.generation_kwh,
-        "self_consumption_ratio": None if headline is None else headline.self_consumption_ratio,
+        **headline_figures(record),
     }
 
 

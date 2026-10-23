@@ -49,7 +49,7 @@ from solar_challenge.web.request_boundary import NotAJsonObject, request_json_ob
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
-from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, readable_headline
+from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
@@ -680,11 +680,7 @@ def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
 
 
 def _history_row(record: RunRecord) -> dict[str, Any]:
-    """The History list's row for *record*'s run: its columns but its documents and error, its headline figures, and its results page's path.
-
-    The figures are readable_headline's, null for a run with no summary or one that does not decode.
-    """
-    headline = readable_headline(record)
+    """The History list's row for *record*'s run: its columns but its documents and error, its headline_figures, and its results page's path."""
     return {
         "id": record.id,
         "name": record.name,
@@ -695,8 +691,7 @@ def _history_row(record: RunRecord) -> dict[str, Any]:
         "duration_seconds": record.duration_seconds,
         "n_homes": record.n_homes,
         "notes": record.notes,
-        "total_generation_kwh": None if headline is None else headline.generation_kwh,
-        "self_consumption_ratio": None if headline is None else headline.self_consumption_ratio,
+        **headline_figures(record),
         "results_url": url_for("main.run_results", run_id=record.id),
     }
 
