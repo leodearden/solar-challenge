@@ -62,9 +62,7 @@ class RunRecord:
         Raises:
             ValueError: The record has no type, so it names no kind; the message names its run.
         """
-        if self.type is None:
-            raise ValueError(f"Run {self.id!r} is recorded with no type, so it is of no run kind")
-        return RUN_KINDS[self.type]
+        return _run_kind(self.id, self.type)
 
     def summary(self) -> SummaryStatistics | FleetSummary | None:
         """The run's summary, decoded from summary_json as its kind's summary_type; None while the run has none.
@@ -74,9 +72,7 @@ class RunRecord:
                 not decode as its kind's summary; then the message names the run and
                 runs.summary_json, and the decoder's refusal is the cause.
         """
-        if self.summary_json is None:
-            return None
-        return _decoded_document(self.id, "summary_json", self.summary_json, self.kind.summary)
+        return _run_summary(self.id, self.type, self.summary_json)
 
     def home_configs(self) -> tuple[HomeConfig, ...] | None:
         """Each home's HomeConfig, in order, decoded from config_json as the run's kind decodes it; None while the run has none.
@@ -95,6 +91,30 @@ def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]
     """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
     if value is not None and value not in allowed:
         raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
+
+
+def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
+    """The kind of run that *run_type*, run *run_id*'s type, names: its entry in RUN_KINDS.
+
+    Raises:
+        ValueError: *run_type* is None, so it names no kind; the message names the run.
+    """
+    if run_type is None:
+        raise ValueError(f"Run {run_id!r} is recorded with no type, so it is of no run kind")
+    return RUN_KINDS[run_type]
+
+
+def _run_summary(
+    run_id: str, run_type: RunType | None, summary_json: str | None
+) -> SummaryStatistics | FleetSummary | None:
+    """Run *run_id*'s summary, decoded from its *summary_json* as the kind *run_type* names decodes it; None while it has none.
+
+    Raises:
+        ValueError: As RunRecord.summary() raises.
+    """
+    if summary_json is None:
+        return None
+    return _decoded_document(run_id, "summary_json", summary_json, _run_kind(run_id, run_type).summary)
 
 
 _DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
@@ -183,11 +203,16 @@ def readable_headline(record: RunRecord) -> RunHeadline | None:
     rather than fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15,
     D-S19-9).
     """
+    return _readable_headline(record.id, record.type, record.summary_json)
+
+
+def _readable_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> RunHeadline | None:
+    """readable_headline of run *run_id*, read from the only columns of its row it needs: its type and its summary_json."""
     try:
-        summary = record.summary()
+        summary = _run_summary(run_id, run_type, summary_json)
         return None if summary is None else run_headline(summary)
     except ValueError as damaged:
-        logger.warning("Run %r shows no figures, as its summary is damaged: %s", record.id, damaged)
+        logger.warning("Run %r shows no figures, as its summary is damaged: %s", run_id, damaged)
         return None
 
 
@@ -769,8 +794,9 @@ class RunStorage:
     def totals(self) -> RunTotals:
         """The count of the completed runs and of their homes, and the generation of those whose readable_headline reads.
 
-        A run whose row records no count of homes counts as one home. A run whose summary does
-        not decode still counts, with its homes, but adds no generation; readable_headline logs it.
+        A run whose row records no count of homes counts as one home. A run whose summary is
+        damaged still counts, with its homes, but adds no generation; readable_headline logs it.
+        The generation is read from each run's type and summary alone, never its config.
         """
         completed = {"completed": _COMPLETED_RUN_STATUS}
         with self.database.transaction() as conn:
@@ -780,9 +806,10 @@ class RunStorage:
                 completed,
             ).fetchone()
             rows = conn.execute(
-                "SELECT * FROM runs WHERE status = :completed AND summary_json IS NOT NULL", completed
+                "SELECT id, type, summary_json FROM runs WHERE status = :completed AND summary_json IS NOT NULL",
+                completed,
             ).fetchall()
-        headlines = (readable_headline(_record_of(row)) for row in rows)
+        headlines = (_readable_headline(row["id"], row["type"], row["summary_json"]) for row in rows)
         generation_kwh = sum((headline.generation_kwh for headline in headlines if headline is not None), 0.0)
         return RunTotals(run_count=run_count, home_count=home_count, generation_kwh=generation_kwh)
 
