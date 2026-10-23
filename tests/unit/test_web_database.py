@@ -1056,6 +1056,27 @@ class TestUpdateRunLabels:
 
         assert storage.run_record(north_roof_run_id) == before
 
+    @pytest.mark.parametrize("name", [None, "", " \t"], ids=["none", "empty", "space-and-tab"])
+    def test_update_run_labels_refuses_a_name_that_cannot_name_a_run_naming_it_and_writes_nothing(
+        self, storage, north_roof_run_id, name
+    ):
+        """A run's name is never NULL or blank: such a name raises ValueError naming the field, and the run keeps its name."""
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(ValueError, match=re.escape(f"name is {name!r}")):
+            storage.update_run_labels(north_roof_run_id, {"name": name})
+
+        assert storage.run_record(north_roof_run_id) == before
+
+    def test_update_run_labels_refusing_a_name_writes_no_label_given_beside_it(self, storage, north_roof_run_id):
+        """The notes given beside a refused name are not written either."""
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(ValueError, match=re.escape("name is ''")):
+            storage.update_run_labels(north_roof_run_id, {"name": "", "notes": "Checked"})
+
+        assert storage.run_record(north_roof_run_id) == before
+
 
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
