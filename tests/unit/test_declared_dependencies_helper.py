@@ -273,6 +273,35 @@ def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_liter
     assert "literal" in message, f"the failure does not say that pytest_plugins must be a literal: {message}"
 
 
+@pytest.mark.parametrize(
+    "level",
+    [pytest.param(3, id="out-of-the-project"), pytest.param(100, id="above-the-filesystem-root")],
+)
+def test_a_scope_fails_naming_the_file_and_line_of_a_relative_import_that_leaves_the_project(
+    tmp_path: Path,
+    level: int,
+) -> None:
+    """A scope that follows relative imports fails, naming the file, the line and the import, on one
+    that climbs out of the project root.
+
+    Python rejects a relative import beyond its top-level package, so no working suite holds one.
+    The contract names it, instead of raising an IndexError or resolving against a directory
+    outside the project.
+    """
+    _write_project_of_every_scope(tmp_path)
+    relative_import = f"from {'.' * level} import elsewhere"
+    conftest = _write_module(tmp_path / "tests" / "conftest.py", relative_import)
+
+    with pytest.raises(AssertionError) as failure:
+        _scope_named("tests-dev-only-lanes").select(tmp_path)
+
+    message = str(failure.value)
+    assert f"{conftest}:1" in message and relative_import in message, (
+        f"the failure does not name line 1 of {conftest}, nor the import `{relative_import}` "
+        f"on it that climbs out of the project root: {message}"
+    )
+
+
 def test_assert_imports_only_declared_names_each_file_requiring_a_distribution_its_scope_does_not_declare(
     tmp_path: Path,
 ) -> None:

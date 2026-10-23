@@ -262,6 +262,24 @@ def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
     return names
 
 
+def _directory_of_from_import(project_root: Path, source: Path, node: ast.ImportFrom) -> Path:
+    """Return the directory the from-import *node* of *source* resolves from: *project_root* for
+    an absolute import, else *source*'s package directory, climbed level - 1 times.
+
+    A level that climbs out of *project_root*, even to above the filesystem root, fails naming
+    *source*, the line and the import: Python rejects a relative import beyond its top-level
+    package.
+    """
+    if not node.level:
+        return project_root
+    directory = source.parents[: node.level][-1]
+    assert directory.is_relative_to(project_root), (
+        f"{source}:{node.lineno} imports `{ast.unparse(node)}`, which climbs out of {project_root}; "
+        "a relative import cannot leave its top-level package"
+    )
+    return directory
+
+
 def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, list[str]]]:
     """Yield (directory, dotted-name parts) for each module *source* may import.
 
@@ -269,6 +287,9 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     directory. Imports count as _required_imports counts them, and each pytest_plugins entry
     counts as an absolute import. The last part of a from-import's name may be an attribute of
     the module before it, not a module.
+
+    A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
+    literal, fails naming *source* and the line.
     """
     tree = _parse(source)
     for node in _required_imports([tree]):
@@ -276,7 +297,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             for alias in node.names:
                 yield project_root, alias.name.split(".")
         else:
-            directory = source.parents[node.level - 1] if node.level else project_root
+            directory = _directory_of_from_import(project_root, source, node)
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
