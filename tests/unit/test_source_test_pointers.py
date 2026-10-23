@@ -8,11 +8,12 @@ so a file git ignores is not there to point at. A path in another repository is 
 as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
-prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
-pytest runs as written and this gate resolves. A name a file uses itself is no pointer: a name the Python module's own
-code uses, such as a parameter called test_config, or a key of the YAML file's own mappings, such as test_command. Nor,
-outside a node-id, is a name written straight after a dot, so a third-party name that reads as a test, such as
-Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
+prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
+alone, as test_<name>.py. The settled form is the node-id, which pytest runs as written and this gate resolves. A name
+a file uses itself is no pointer: a name the Python module's own code uses, such as a parameter called test_config, or
+a key of the YAML file's own mappings, such as test_command. Nor, outside a node-id, is a name written straight after
+a dot, so a third-party name that reads as a test, such as Werkzeug's TestResponse, is written after its module:
+werkzeug.test.TestResponse.
 """
 
 import ast
@@ -27,7 +28,7 @@ import yaml
 
 from tests._working_tree import working_tree_files
 
-_UNSCANNED =tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
+_UNSCANNED = tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
 
 _POINTER = re.compile(
     r"""
@@ -41,8 +42,8 @@ _POINTER = re.compile(
 )
 
 _NAMED_WITHOUT_ITS_NODE_ID = (
-    "names a test without its file: point at it by its node-id from the project root,"
-    " tests/<file>.py::[<Class>::]<name>"
+    "names a test or test file without its path: point at it from the project root, by its path tests/<file>.py"
+    " or its node-id tests/<file>.py::[<Class>::]<name>"
 )
 
 
@@ -394,7 +395,7 @@ def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     assert _dangling(project, pointers) == []
 
 
-def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -> None:
+def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Path) -> None:
     source = _write_source(
         project,
         "src/pkg/script.js",
@@ -404,7 +405,8 @@ def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -
         "// tests/unit/test_pointed_at.py's test_top shows it.\n"
         "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
         "// Its response is a werkzeug.test.TestResponse.\n"
-        "// Not a test name: src/tests/test_gone.py\n",
+        "// Not a test name: src/tests/test_gone.py\n"
+        "// test_pointed_at.py holds them.\n",
     )
 
     assert _dangling(project, _pointers(project, [source])) == [
@@ -412,6 +414,7 @@ def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -
         f"src/pkg/script.js:2: TestGroup: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:3: test_member: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:4: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        f"src/pkg/script.js:8: test_pointed_at: {_NAMED_WITHOUT_ITS_NODE_ID}",
     ]
 
 
