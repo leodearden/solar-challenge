@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The typed reads of a run's record, RunRecord.summary() and RunRecord.home_configs().
+"""The typed reads of a run's record, and the headline a run list shows for a run.
 
-A record decodes its summary_json and config_json through its kind: a home run's summary
-is a SummaryStatistics and a fleet run's a FleetSummary, and each run's config is its
-homes' HomeConfigs, in order. A run with no document yet answers None, and a document that
-does not decode is refused with a ValueError naming the run and the column.
+A record decodes its summary_json and config_json through its kind, in RunRecord.summary()
+and RunRecord.home_configs(): a home run's summary is a SummaryStatistics and a fleet run's
+a FleetSummary, and each run's config is its homes' HomeConfigs, in order. A run with no
+document yet answers None, and a document that does not decode is refused with a
+ValueError naming the run and the column. run_headline maps a summary of either kind to
+the generation and self-consumption ratio a run list shows.
 """
 
 import dataclasses
@@ -19,8 +21,9 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import calculate_summary
 from solar_challenge.web.database import init_db
-from solar_challenge.web.storage import RunRecord, RunStorage
+from solar_challenge.web.storage import RunHeadline, RunRecord, RunStorage, run_headline
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
+from tests._run_summaries import fleet_summary, home_summary
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -152,3 +155,25 @@ class TestRunRecordTypedDocuments:
             _READ_OF_COLUMN[column](untyped)
 
         assert str(refusal.value) == str(kind_refusal.value)
+
+
+class TestRunHeadline:
+    """run_headline: the generation and self-consumption ratio a run list shows for a run's summary.
+
+    Each summary's marker figures, its generation and its ratio, are figures no other field of
+    it holds, so a headline read from the wrong field shows.
+    """
+
+    def test_a_home_run_s_headline_is_its_generation_and_its_self_consumption_ratio(self) -> None:
+        summary = home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
+
+        assert run_headline(summary) == RunHeadline(
+            generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.self_consumption_ratio
+        )
+
+    def test_a_fleet_run_s_headline_is_its_total_generation_and_its_fleet_self_consumption_ratio(self) -> None:
+        summary = fleet_summary(total_generation_kwh=1975.3, fleet_self_consumption_ratio=0.43)
+
+        assert run_headline(summary) == RunHeadline(
+            generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
+        )
