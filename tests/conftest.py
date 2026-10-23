@@ -97,12 +97,9 @@ def pytester_under_root_conftest(pytester_importing_test_helpers: pytest.Pyteste
     return pytester_importing_test_helpers
 
 
-_MARKS_OF_TESTS_ALLOWED_ONLINE = ("slow", "e2e")
-
-
 @dataclass(frozen=True)
 class _OfflineWindow:
-    """What a test not marked slow or e2e runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
+    """What a test not marked slow runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
 
     weather_cache: WeatherCache
     refused: list[str]
@@ -131,7 +128,7 @@ def _open_offline_window() -> Iterator[_OfflineWindow]:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object]:
-    """Run each test not marked slow or e2e offline, from the setup of its first fixture to the teardown of its last.
+    """Run each test not marked slow offline, from the setup of its first fixture to the teardown of its last.
 
     Every fixture the test sets up or tears down, whatever its scope, runs in its
     window. There CACHE_DIR_VARIABLE names the test's own empty weather cache, so
@@ -140,7 +137,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     is refused, as is every HTTP(S) request the test's child processes send through
     the standard proxy variables.
     """
-    if any(item.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
+    if item.get_closest_marker("slow"):
         return (yield)
     with _open_offline_window() as window:
         item.stash[_OFFLINE_WINDOW_KEY] = window
@@ -161,7 +158,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, object, object
     if window is not None and window.refused:
         pytest.fail(
             f"{item.nodeid} reached the network ({', '.join(dict.fromkeys(window.refused))}); "
-            "a test not marked slow or e2e runs offline, with every fixture it sets up or tears down: "
+            "a test not marked slow runs offline, with every fixture it sets up or tears down: "
             "pass simulate_home its weather, seed the weather_cache fixture, or mark it slow if it needs a live service",
             pytrace=False,
         )
@@ -174,7 +171,7 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
     window: _OfflineWindow | None = request.node.stash.get(_OFFLINE_WINDOW_KEY, None)
     if window is None:
         pytest.fail(
-            f"{request.node.nodeid} is marked slow or e2e, so default_weather() reads the weather cache its "
+            f"{request.node.nodeid} is marked slow, so default_weather() reads the weather cache its "
             "environment names, else the working directory's; weather_cache serves a test that runs offline",
             pytrace=False,
         )
