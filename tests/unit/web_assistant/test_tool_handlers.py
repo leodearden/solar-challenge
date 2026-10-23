@@ -368,6 +368,22 @@ class TestGetRunResults:
             f"Expected summary=={{}} for NULL summary_json; got {result.get('summary')!r}"
         )
 
+    def test_a_run_whose_summary_does_not_decode_answers_the_refusal_naming_the_run_not_a_database_error(
+        self, tmp_path: Path
+    ) -> None:
+        """The error is RunRecord.summary's refusal, which names the run and runs.summary_json."""
+        db_path = tmp_path / "grr_garbled.db"
+        seed_run(db_path, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
+        with Database(db_path).transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
+        storage = _storage(db_path)
+        record = storage.run_record("garbled-run")
+        assert record is not None
+        with pytest.raises(ValueError) as refusal:
+            record.summary()
+
+        assert get_run_results("garbled-run", storage) == {"error": str(refusal.value)}
+
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
         """get_run_results over a storage whose database cannot be opened returns {'error':...}, no raise."""
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist

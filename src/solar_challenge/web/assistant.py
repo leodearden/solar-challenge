@@ -414,26 +414,28 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         ``created_at``, ``n_homes``, and ``summary``, the field tree of the
         run's summary, {} while it has none. Returns ``{"error": "<reason>"}``
         when not found, on any DB error, or when the run's summary does not
-        decode. Never raises.
+        decode, the reason then RunRecord.summary's refusal naming the run and
+        runs.summary_json. Never raises.
     """
     try:
         run = storage.run_record(run_id_or_name) or storage.latest_run_named(run_id_or_name)
-        if run is None:
-            return {"error": f"Run not found: {run_id_or_name!r}"}
-
-        summary = run.summary()
-
-        return {
-            "run_id": run.id,
-            "name": run.name,
-            "type": run.type,
-            "status": run.status,
-            "created_at": run.created_at,
-            "n_homes": run.n_homes,
-            "summary": {} if summary is None else asdict(summary),
-        }
     except Exception as exc:
         return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
+    if run is None:
+        return {"error": f"Run not found: {run_id_or_name!r}"}
+    try:
+        summary = run.summary()
+    except ValueError as unreadable:
+        return {"error": str(unreadable)}
+    return {
+        "run_id": run.id,
+        "name": run.name,
+        "type": run.type,
+        "status": run.status,
+        "created_at": run.created_at,
+        "n_homes": run.n_homes,
+        "summary": {} if summary is None else asdict(summary),
+    }
 
 
 def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
