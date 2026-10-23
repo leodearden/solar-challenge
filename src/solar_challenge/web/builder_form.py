@@ -20,6 +20,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.fleet_config import (
@@ -27,7 +28,6 @@ from solar_challenge.web.fleet_config import (
     MAX_FLEET_HOMES,
     distribution_grammar_spec,
 )
-from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,

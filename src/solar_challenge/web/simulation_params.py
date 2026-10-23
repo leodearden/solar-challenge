@@ -18,15 +18,10 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.number_fields import (
-    as_finite_float,
-    as_finite_float_within,
-    as_whole_number,
-    as_whole_number_within,
-)
 from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
     require_json_object,
@@ -194,7 +189,7 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     days = sent.pop("days", None)
     _refuse_days_with_dates(days, sent)
     if days is not None:
-        start, end = _days_window(as_whole_number_within(days, "days", 1, MAX_DAYS))
+        start, end = _days_window(as_whole_number(days, "days", within=Interval(1, MAX_DAYS)))
     else:
         start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
         end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
@@ -373,8 +368,8 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:
-        annual_consumption = as_finite_float_within(
-            consumption_kwh_raw, "consumption_kwh", *FLEET_COMPONENTS["load"].fixed_range
+        annual_consumption = as_finite_float(
+            consumption_kwh_raw, "consumption_kwh", within=Interval(*FLEET_COMPONENTS["load"].fixed_range)
         )
 
     load_config = LoadConfig(

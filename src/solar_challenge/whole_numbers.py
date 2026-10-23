@@ -7,12 +7,17 @@ from typing import Optional
 import numpy as np
 
 
+def is_boolean(value: object) -> bool:
+    """Whether *value* is a bool, Python's or numpy's, which is never a number setting though it compares equal to 1 or 0."""
+    return isinstance(value, (bool, np.bool_))
+
+
 def whole_number(value: float) -> Optional[int]:
     """Return the int *value* equals, or None if it is a bool, Python's or numpy's, is not finite, or has a fractional part.
 
     A whole-number float such as 20.0, or a numpy integer, gives the plain int it equals.
     """
-    if isinstance(value, (bool, np.bool_)) or not -math.inf < value < math.inf:
+    if is_boolean(value) or not -math.inf < value < math.inf:
         return None
     whole = int(value)
     return whole if whole == value else None

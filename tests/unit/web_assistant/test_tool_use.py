@@ -22,6 +22,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -44,7 +45,6 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
@@ -1164,7 +1164,7 @@ class TestMalformedToolInput:
                 "suggest_config",
                 {"annual_consumption_kwh": 0, "goal": "bill_savings"},
                 partial(
-                    as_finite_float_within, 0, "annual_consumption_kwh", *FLEET_COMPONENTS["load"].fixed_range
+                    as_finite_float, 0, "annual_consumption_kwh", Interval(*FLEET_COMPONENTS["load"].fixed_range)
                 ),
                 id="consumption-zero",
             ),
@@ -1177,7 +1177,7 @@ class TestMalformedToolInput:
         tool_input: dict[str, Any],
         read_field: Callable[[], object],
     ) -> None:
-        """A number field reads through web/number_fields.py's reader for its kind, so a value that
+        """A number field reads through solar_challenge.number_fields' reader for its kind, so a value that
         reader refuses comes back with that reader's own error. The sizing tool reads consumption
         over the range the trigger tools take, so it refuses zero."""
         with pytest.raises(ValueError) as refusal:

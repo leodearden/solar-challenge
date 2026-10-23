@@ -29,6 +29,7 @@ from flask import Blueprint, Response, current_app, jsonify, render_template, re
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -38,7 +39,6 @@ from solar_challenge.validation import (
 from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (
@@ -650,10 +650,10 @@ def _call_explain_metric(tool_input: Mapping[str, Any], context: ToolContext) ->
 
 def _call_suggest_config(tool_input: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
     """Answer a suggest_config call: size a system for the consumption and goal *tool_input* sends."""
-    annual_kwh = as_finite_float_within(
+    annual_kwh = as_finite_float(
         tool_input["annual_consumption_kwh"],
         "annual_consumption_kwh",
-        *FLEET_COMPONENTS["load"].fixed_range,
+        within=Interval(*FLEET_COMPONENTS["load"].fixed_range),
     )
     return suggest_config(annual_kwh, _as_text(tool_input["goal"], "goal"))
 

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Numbers a web number field refuses, as tests send them: one of each kind solar_challenge.web.number_fields.as_finite_float refuses.
+"""Numbers a web number field refuses, as tests send them: one of each kind solar_challenge.number_fields.as_finite_float refuses.
 
 The kinds are an integer too large for a float, infinity, NaN and a boolean, which float()
-would read as 1.0 or 0.0. as_finite_float's own tests, in tests/unit/test_web_number_fields.py,
+would read as 1.0 or 0.0. as_finite_float's own tests, in tests/unit/test_number_fields.py,
 cover its full matrix, so a field read through it needs only one value of each kind. A field
 that passes a boolean on as given, as a fleet form block's other settings do, takes
 UNUSABLE_NON_BOOLEAN_NUMBERS.
