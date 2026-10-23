@@ -136,7 +136,6 @@ def simulate_fleet_api() -> tuple[Response, int]:
             configs.append(config)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    fleet_name = data.get("name", "Fleet Simulation")
 
     job_manager = get_job_manager()
 
@@ -144,7 +143,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         configs=configs,
         start_date=start_date,
         end_date=end_date,
-        name=fleet_name,
+        name=data.get("name"),
     )
 
     return _submitted_job_answer(job_id, run_id)

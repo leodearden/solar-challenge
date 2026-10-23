@@ -568,7 +568,7 @@ def run_fleet_simulation(
             configs=configs,
             start_date=start_date,
             end_date=end_date,
-            name=name or "Fleet Simulation",
+            name=name,
         )
     except Exception as exc:
         return {"error": f"Failed to submit fleet simulation job: {exc}"}
