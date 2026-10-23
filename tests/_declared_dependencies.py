@@ -14,16 +14,17 @@ declared distributions only, whose handler can never run. Imports map to
 distributions only through installed metadata, so a scope's check skips where
 its extras are not installed.
 
-The package's web subpackage is first-party, yet any of its modules may import
-the web extra at module top, so a file whose run lacks that extra must import
-none of them; web_subpackage_imports finds each file that does.
+The package's web subpackage, WEB_SUBPACKAGE, is first-party, yet any of its
+modules may import the web extra at module top. So no file of
+SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA may import one;
+web_subpackage_imports finds each file that does.
 
 Usage::
 
     from tests._declared_dependencies import (
         PACKAGE_SCOPES,
+        SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA,
         SOURCE_SCOPES,
-        WEB,
         SourceScope,
         assert_imports_only_declared,
         dead_import_guards,
@@ -39,9 +40,8 @@ Usage::
         declared = declared_distributions_or_skip(project_root, scope.extras)
         dead = dead_import_guards(scope.select(project_root), declared)
 
-    for scope in SOURCE_SCOPES:
-        if WEB not in scope.extras and scope not in PACKAGE_SCOPES:
-            reached = web_subpackage_imports(project_root, scope.select(project_root))
+    for scope in SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA:
+        reached = web_subpackage_imports(project_root, scope.select(project_root))
 """
 
 import ast
@@ -61,6 +61,7 @@ from tests._pyproject import core_requirements, extra_requirements
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
+WEB_SUBPACKAGE = f"{_PACKAGE}.web"
 DEV = "dev"
 WEB = "web"
 E2E = "e2e"
@@ -125,10 +126,10 @@ def _src_dir(project_root: Path) -> Path:
 
 
 def _web_subpackage_dir(project_root: Path) -> Path:
-    """Return the directory of the package's web subpackage under *project_root*, the one the web
-    extra serves.
+    """Return the directory of WEB_SUBPACKAGE, the package's web subpackage, under *project_root*:
+    the one the web extra serves.
     """
-    return _src_dir(project_root) / _PACKAGE / WEB
+    return _src_dir(project_root).joinpath(*WEB_SUBPACKAGE.split("."))
 
 
 def _web_sources(project_root: Path) -> list[Path]:
@@ -223,6 +224,9 @@ SOURCE_SCOPES: tuple[SourceScope, ...] = (
     SourceScope("tests-dev-only-lanes", _dev_only_lane_test_sources, (DEV,)),
     SourceScope("tests-verify", _verify_test_sources, (DEV, WEB)),
     SourceScope("tests-e2e", _e2e_test_sources, (DEV, WEB, E2E)),
+)
+SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA: tuple[SourceScope, ...] = tuple(
+    scope for scope in SOURCE_SCOPES if scope not in PACKAGE_SCOPES and WEB not in scope.extras
 )
 
 
@@ -430,13 +434,19 @@ def _with_the_tests_modules_they_import(project_root: Path, sources: list[Path])
 
 
 def web_subpackage_imports(project_root: Path, sources: Iterable[Path]) -> list[tuple[Path, list[Path]]]:
-    """Return (file, web files run) for every file in *sources* whose imports run a file of the
-    package's web subpackage under *project_root*.
+    """Return (file, web files run) for every file in *sources* whose imports run a file of
+    WEB_SUBPACKAGE under *project_root*.
 
     Imports count as _import_targets counts them: a function-local import, a TYPE_CHECKING
     import, a module named to pytest.importorskip and a pytest_plugins entry count, and an
     ImportError-guarded import does not. Names resolve as Python finds them, so a module named
     web elsewhere is not the subpackage. Only files are read; no installed metadata is needed.
+
+    Each file's own imports are read, not those of the package's modules it imports. That is
+    enough because, outside the subpackage, the package imports it only inside a function, as
+    tests/unit/test_import_structure.py::test_no_module_outside_the_web_subpackage_imports_it_at_module_top
+    pins. So importing a module of the package outside the subpackage runs no file of the
+    subpackage.
     """
     web_dir = _web_subpackage_dir(project_root)
     reaching: list[tuple[Path, list[Path]]] = []

@@ -28,8 +28,9 @@ from pathlib import Path
 
 import pytest
 
+from tests._declared_dependencies import WEB_SUBPACKAGE
+
 _PACKAGE = "solar_challenge"
-_WEB_SUBPACKAGE = f"{_PACKAGE}.web"
 _TEST_SUITE = "tests"
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
@@ -177,8 +178,8 @@ def _module_top_imports_into_the_web_subpackage(sites: Iterable[_ImportSite]) ->
         site
         for site in sites
         if not site.in_function
-        and _in_package(site.imported, _WEB_SUBPACKAGE)
-        and not _in_package(site.importer, _WEB_SUBPACKAGE)
+        and _in_package(site.imported, WEB_SUBPACKAGE)
+        and not _in_package(site.importer, WEB_SUBPACKAGE)
     ]
 
 
@@ -274,7 +275,7 @@ def test_no_import_statement_of_the_package_names_the_test_suite(
 def test_no_module_outside_the_web_subpackage_imports_it_at_module_top(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
-    """Outside its web subpackage, the package imports a module of that subpackage only inside a function, since any of its modules may import the web extra at module top. The CLI, scripts/ and the offline lane's dev-only jobs run without that extra, and tests/unit/test_dependency_declarations.py reads only those files' own imports, relying on this rule."""
+    """Outside its web subpackage, the package imports a module of that subpackage only inside a function, since any of its modules may import the web extra at module top. The CLI, scripts/ and the offline lane's dev-only jobs run without that extra, and web_subpackage_imports in tests/_declared_dependencies.py reads only those files' own imports, relying on this rule."""
     found = _module_top_imports_into_the_web_subpackage(real_tree_imports)
 
     sites = "\n".join(str(site) for site in found)
@@ -283,12 +284,14 @@ def test_no_module_outside_the_web_subpackage_imports_it_at_module_top(
         f"module of that subpackage outside any function:\n{sites}\n"
         "Any module of the web subpackage may import the web extra at module top (the contract "
         "_CLI_WITHOUT_THE_WEB_EXTRA states), so importing the module that holds such an import "
-        "needs that extra. The CLI, scripts/ and the offline lane's dev-only jobs run without "
-        "it, and tests/unit/test_dependency_declarations.py reads only those files' own imports, "
-        "relying on this rule. Import the module inside the function that needs the web extra, "
-        "as cli/web.py's start and _serve do, and list the pair in ALLOWED_FUNCTION_LOCAL_IMPORTS "
-        "with the Permanent reason _CLI_WITHOUT_THE_WEB_EXTRA; or move the code that needs it "
-        "into the web subpackage"
+        "needs that extra. An import in a TYPE_CHECKING block counts too: it never runs, but a "
+        "module outside the subpackage should not need the subpackage even for its annotations. "
+        "The CLI, scripts/ and the offline lane's dev-only jobs run without the web extra, and "
+        "web_subpackage_imports in tests/_declared_dependencies.py reads only those files' own "
+        "imports, relying on this rule. Import the module inside the function that needs the web "
+        "extra, as cli/web.py's start and _serve do, and list the pair in "
+        "ALLOWED_FUNCTION_LOCAL_IMPORTS with the Permanent reason _CLI_WITHOUT_THE_WEB_EXTRA; or "
+        "move the code that needs it into the web subpackage"
     )
 
 
@@ -561,7 +564,7 @@ def test_the_scan_finds_imports_of_the_test_suite_at_any_scope(
 def test_the_scan_finds_module_top_imports_into_the_web_subpackage(
     tmp_path: Path, module: str, source: str, expected: list[tuple[str, str, int]]
 ) -> None:
-    """The scan finds an import of the web subpackage from outside it at module top, in a TYPE_CHECKING block or a class body too, which run when the module is imported; not one inside a function, which INV-5's allow-list governs, nor one within the subpackage, nor of a module merely named web."""
+    """The scan finds an import of the web subpackage from outside it at module top and in a class body, which run when the module is imported, and in a TYPE_CHECKING block, which never runs but which the scan reads like any other statement: a module outside the subpackage should not need the subpackage even for its annotations. It finds none inside a function, which INV-5's allow-list governs, nor one within the subpackage, nor one of a module merely named web."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
     found = _module_top_imports_into_the_web_subpackage(_import_sites(src_dir))

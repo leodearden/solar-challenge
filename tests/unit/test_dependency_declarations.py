@@ -35,6 +35,7 @@ from tests._collect_only import requires_uv
 from tests._declared_dependencies import (
     E2E,
     PACKAGE_SCOPES,
+    SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA,
     SOURCE_SCOPES,
     WEB,
     SourceScope,
@@ -90,11 +91,7 @@ def test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra(
     )
 
 
-@pytest.mark.parametrize(
-    "scope",
-    [scope for scope in SOURCE_SCOPES if WEB not in scope.extras and scope not in PACKAGE_SCOPES],
-    ids=lambda scope: scope.name,
-)
+@pytest.mark.parametrize("scope", SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA, ids=lambda scope: scope.name)
 def test_files_run_without_the_web_extra_import_no_module_of_the_web_subpackage(
     project_root: Path, scope: SourceScope
 ) -> None:
@@ -102,11 +99,10 @@ def test_files_run_without_the_web_extra_import_no_module_of_the_web_subpackage(
     module of that subpackage may import the extra at module top.
 
     The package's own scopes are left to
-    tests/unit/test_import_structure.py::test_no_module_outside_the_web_subpackage_imports_it_at_module_top. That
-    test also makes sure that importing a module of the package outside web runs no web file, so only each file's
-    own imports are read here. Static reading sees neither a run that reaches web through a function-local import
-    the package makes, such as calling `web start` through the CLI app, nor a dynamic import such as
-    importlib.import_module with a computed name.
+    tests/unit/test_import_structure.py::test_no_module_outside_the_web_subpackage_imports_it_at_module_top, the
+    rule web_subpackage_imports relies on to read only each file's own imports, as its docstring says. Static
+    reading sees neither a run that reaches web through a function-local import the package makes, such as calling
+    `web start` through the CLI app, nor a dynamic import such as importlib.import_module with a computed name.
     """
     reached = [
         f"{source.relative_to(project_root)} runs {[path.relative_to(project_root).as_posix() for path in files]}"
