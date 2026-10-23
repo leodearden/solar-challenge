@@ -918,6 +918,8 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
         surface_form(Initialised)
     with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
         named_classes(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(functools.partial(Initialised))
     with pytest.raises(
         TypeError, match=r"\.Priced\b.*\.Priced\.__init__\b.*\bbuiltins\.function\b"
     ):
