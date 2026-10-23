@@ -595,6 +595,19 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
         surface_form(building)
 
 
+def test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum() -> None:
+    class Period(enum.Enum):
+        PEAK = "peak"
+
+    naming_the_partial_and_period = r"\bfunctools\.partial\(.*\.Period\b.*\benum\.Enum\b"
+    with pytest.raises(TypeError, match=naming_the_partial_and_period):
+        surface_form(functools.partial(Period))
+    with pytest.raises(TypeError, match=naming_the_partial_and_period):
+        named_classes(functools.partial(Period))
+    with pytest.raises(TypeError, match=r"\.Period\b.*\.Period\b.*\benum\.Enum\b"):
+        surface_form(functools.wraps(Period)(lambda value: Period(value)))
+
+
 def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature() -> None:
     signature = inspect.Signature(
         [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
