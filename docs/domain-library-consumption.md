@@ -662,6 +662,23 @@ that catch `ValueError`, and pass at least one peak period, change only code
 that builds or reads `config.DispatchStrategyConfig`, which builds or reads its
 strategy's variant instead.
 
+**Unreleased on main** (task 838): `TariffConfig` refuses input the 0.5.0 tag
+accepts: periods that leave a minute of the local day uncovered, or cover one
+twice. It raises `ConfigurationError`, a `ValueError`, naming each gap and each
+overlap as clock ranges, a range across midnight as one (e.g. `23:00-07:00`),
+and each overlap's periods by name and times, e.g. `Tariff periods must cover
+each minute of the day exactly once: 06:00-12:00 is covered by 'Off-peak'
+00:00-12:00, 'Day' 06:00-00:00`. The tag builds such a tariff, then its
+`get_rate` raises `ValueError` ("No tariff period matches timestamp") at the
+first uncovered minute, part-way through a simulation, and bills an overlapped
+minute at the first listed period's rate; `get_rate` now raises for no minute.
+`solar-challenge validate config` reports such a custom tariff as an ERROR row
+where the tag reports it valid, and a stored run or scenario file holding one
+no longer loads. The platform's `integrations/tariff_adapter.to_solar_challenge`
+now refuses a `Tariff` row whose periods do not tile at conversion, not at the
+first uncovered half-hour. Consumers whose tariffs tile need no change when
+they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
