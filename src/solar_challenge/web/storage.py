@@ -271,7 +271,7 @@ class RunTotals:
 
 _RUN_QUERY_CONDITION = (
     "(:run_type IS NULL OR type = :run_type)"
-    " AND (:pattern IS NULL OR name LIKE :pattern OR notes LIKE :pattern)"
+    " AND (:text IS NULL OR instr(lower(name), lower(:text)) > 0 OR instr(lower(notes), lower(:text)) > 0)"
     " AND (:created_from IS NULL OR created_at >= :created_from)"
     " AND (:created_before IS NULL OR created_at < :created_before)"
 )
@@ -280,12 +280,13 @@ _RUN_QUERY_CONDITION = (
 def _run_query_values(query: RunQuery) -> dict[str, str | None]:
     """The values _RUN_QUERY_CONDITION binds to keep the runs *query* keeps; None where it keeps every run.
 
-    A run created on created_to is created before the next day starts, and LIKE matches text
-    anywhere in a name or notes, in any ASCII case.
+    A run created on created_to is created before the next day starts. The text is found
+    anywhere in a name or notes, each character as itself (no % or _ is a wildcard), in any
+    ASCII case: SQLite's lower() folds ASCII letters only, as LIKE does.
     """
     return {
         "run_type": query.run_type,
-        "pattern": None if query.text is None else f"%{query.text}%",
+        "text": query.text,
         "created_from": None if query.created_from is None else query.created_from.isoformat(),
         "created_before": None if query.created_to is None else (query.created_to + timedelta(days=1)).isoformat(),
     }

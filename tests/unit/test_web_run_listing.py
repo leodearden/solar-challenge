@@ -314,6 +314,25 @@ class TestPageRuns:
 
         assert (_ids(page), page.total) == (["noted", "named"], 2)
 
+    @pytest.mark.parametrize(
+        ("text", "holder", "lookalike"),
+        [
+            pytest.param("100%", "Survey of 100% of roofs", "Survey of 1000 roofs", id="percent"),
+            pytest.param("north_roof", "north_roof", "north-roof", id="underscore"),
+            pytest.param("%", "Survey of 100% of roofs", "East Roof", id="percent-alone"),
+        ],
+    )
+    def test_a_query_of_a_text_holding_a_wildcard_of_like_lists_only_the_runs_that_hold_the_text_itself(
+        self, storage: RunStorage, text: str, holder: str, lookalike: str
+    ) -> None:
+        """A % or _ in the text matches only itself, not any run of characters or any one character as in a LIKE pattern."""
+        _store_a_home_run(storage, "holder", name=holder, created_at="2026-10-01T09:00:00+00:00")
+        _store_a_home_run(storage, "lookalike", name=lookalike, created_at="2026-10-02T09:00:00+00:00")
+
+        page = storage.page_runs(RunQuery(text=text))
+
+        assert (_ids(page), page.total) == (["holder"], 1)
+
     def test_a_query_of_dates_lists_the_runs_created_from_the_first_date_to_the_end_of_the_last(
         self, storage: RunStorage
     ) -> None:
