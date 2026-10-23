@@ -104,7 +104,7 @@ escalated instead.
   lane run. The prefix is sized as a generous multiple of the run, not at the run.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
   live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. The
-  job's `outage_probe`, `scripts/pvgis_outage_probe.py`, defines what counts as a PVGIS outage.
+  job's `outage_probe`, `scripts/outage_probe.py pvgis`, defines what counts as a PVGIS outage.
   The `timeout` prefix caps a hung request. `outage_probe_timeout_secs` is pinned here, not
   left to dark-factory's default, because the probe's request timeout is sized to fit it.
 - **`css-build`.** Rebuilds `static/dist/style.css` in a scratch copy from the committed sources

@@ -68,7 +68,7 @@ git:
     - name: pvgis
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider"
       fix_task_priority: "medium"
-      outage_probe: "uv run --locked --extra dev python scripts/pvgis_outage_probe.py"
+      outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pvgis"
       outage_probe_timeout_secs: 180
     - name: css-build
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider"

@@ -180,15 +180,15 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   contract tests, after every merge. They check PVGIS's live response, never a
   cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
   After a red run the lane runs the job's outage probe,
-  `scripts/pvgis_outage_probe.py`, whose docstring says what counts as a PVGIS
-  outage. When it reports one, the lane raises one escalation naming PVGIS
+  `scripts/outage_probe.py pvgis`; the script's docstring says what counts as
+  an outage. When it reports one, the lane raises one escalation naming PVGIS
   instead of filing a fix task, and closes it once the probe passes again. A
   fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
   when the red run printed no failing node-id (it hit the job's `timeout`, or
   pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
   `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`, and
   check PVGIS as the lane does with
-  `uv run --locked --extra dev python scripts/pvgis_outage_probe.py`. The
+  `uv run --locked --extra dev python scripts/outage_probe.py pvgis`. The
   failure line a fix task quotes is the traceback's first: for a request PVGIS
   refused, pvlib's JSONDecodeError on PVGIS's HTML error page. The HTTP status
   is at the end of the traceback, in the pass's `detect.log` under the main
