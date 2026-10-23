@@ -24,7 +24,14 @@ from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
-from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.stored_runs import (
+    RUN_KINDS,
+    RunKind,
+    StoredFleetRun,
+    StoredHomeRun,
+    StoredRun,
+    require_run_name,
+)
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
@@ -479,14 +486,15 @@ class RunStorage:
             The run's record as written.
 
         Raises:
-            ValueError: The store refuses *run_id*, or *run_type* is not one of RUN_TYPES.
+            ValueError: The store refuses *run_id*, *run_type* is not one of RUN_TYPES, or
+                *name* cannot name a run, as require_run_name refuses it.
             sqlite3.Error: The database refuses the row, e.g. for an id a run already has.
             Neither leaves anything written.
         """
         self._validate_run_id(run_id)
         record = RunRecord(
             id=run_id,
-            name=name,
+            name=require_run_name(name),
             type=run_type,
             config_json=None,
             summary_json=None,
@@ -759,15 +767,21 @@ class RunStorage:
     ) -> RunRecord | None:
         """Write each of *labels* to run *run_id*, None as NULL; a label not in *labels* keeps its value.
 
+        A run's name is never NULL or blank, so a name given must be one require_run_name
+        returns; notes may be None.
+
         Returns:
             The run's record as written, or None when no run has that id.
 
         Raises:
-            ValueError: Writing nothing, when a key of *labels* is not one of RUN_LABELS.
+            ValueError: Writing no label, when a key of *labels* is not one of RUN_LABELS, or
+                the name given cannot name a run, as require_run_name refuses it.
         """
         unknown = sorted(set(labels) - set(RUN_LABELS))
         if unknown:
             raise ValueError(f"Not run labels: {unknown}; the run labels are {list(RUN_LABELS)}")
+        if "name" in labels:
+            require_run_name(labels["name"])
         with self.database.transaction() as conn:
             for label, value in labels.items():
                 conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
