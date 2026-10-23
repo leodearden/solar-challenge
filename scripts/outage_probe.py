@@ -208,7 +208,7 @@ def _parser() -> argparse.ArgumentParser:
         "--package-lock",
         type=Path,
         default=_REPOSITORY / "src" / "solar_challenge" / "web" / "package-lock.json",
-        help="the package-lock.json whose first resolved tarball is asked for (default: %(default)s)",
+        help="the package-lock.json whose first tarball resolved at an http(s) URL is asked for (default: %(default)s)",
     )
     npm.set_defaults(service_of=lambda options: _npm(options.package_lock))
     return parser
