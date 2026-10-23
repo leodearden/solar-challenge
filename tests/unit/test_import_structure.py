@@ -11,7 +11,12 @@ its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
 No import statement of solar_challenge, at any scope, names the tests package: the wheel
 ships only src/, so such an import fails in every installed copy.
 
-Both read import statements only: the lazy loader in solar_challenge/__init__.py
+Outside its web subpackage, no import statement of solar_challenge names a module of that
+subpackage outside a function. Any module of the subpackage may import the web extra at
+module top, and the CLI, scripts/ and the dev-only offline-lane jobs run without that extra.
+ALLOWED_FUNCTION_LOCAL_IMPORTS lists the function-local imports that reach the subpackage.
+
+All three read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
 tests/unit/test_init_lazy_surface.py.
 """
@@ -164,6 +169,17 @@ def _function_local_package_imports(sites: Iterable[_ImportSite]) -> list[_Impor
 def _test_suite_imports(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
     """Return the *sites* that import the tests package or a module beneath it, at any scope."""
     return [site for site in sites if _in_package(site.imported, _TEST_SUITE)]
+
+
+def _module_top_imports_into_the_web_subpackage(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* of modules outside the web subpackage that import a module of it outside any function."""
+    return [
+        site
+        for site in sites
+        if not site.in_function
+        and _in_package(site.imported, _WEB_SUBPACKAGE)
+        and not _in_package(site.importer, _WEB_SUBPACKAGE)
+    ]
 
 
 def _unlisted(
