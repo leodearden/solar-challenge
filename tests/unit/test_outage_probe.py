@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for scripts/outage_probe.py, run in-process against stand-ins on this machine for the services it asks."""
 
+import json
 import os
+import re
 import socket
 import socketserver
+import textwrap
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from urllib.parse import parse_qs, urlsplit
 
@@ -151,3 +154,114 @@ def test_a_request_the_probe_cannot_send_raises_instead_of_reporting_an_outage(p
     """So the lane reads a broken probe and keeps filing the red: a defect of the probe's cannot pose as an outage."""
     with pytest.raises(requests.exceptions.MissingSchema):
         probe.main(["pvgis", "--api-url", "re.jrc.ec.europa.eu/api/v5_3/"])
+
+
+_EDITABLE_PROJECT = """
+[[package]]
+name = "demo-project"
+version = "0.1.0"
+source = { editable = "." }
+"""
+"""uv.lock's table for the project's own package, which uv installs from the working tree, not from a registry."""
+
+_NPM_ROOT = ("", {"devDependencies": {"demo": "^1.0.0"}})
+"""package-lock.json's entry for the project itself, which nothing resolves."""
+
+
+def _demo_package_pinned_from(origin: str) -> str:
+    """uv.lock's table for demo-package 1.0, pinned from the registry <origin>/simple, its sdist listed before its wheel as uv lists them."""
+    return textwrap.dedent(
+        f"""
+        [[package]]
+        name = "demo-package"
+        version = "1.0"
+        source = {{ registry = "{origin}/simple" }}
+        sdist = {{ url = "{origin}/packages/demo_package-1.0.tar.gz" }}
+        wheels = [
+            {{ url = "{origin}/packages/demo_package-1.0-py3-none-any.whl" }},
+        ]
+        """
+    )
+
+
+def _uv_lock(*packages: str) -> str:
+    """The text of a uv.lock holding the [[package]] tables *packages*, in order."""
+    return 'version = 1\nrevision = 3\nrequires-python = ">=3.11"\n' + "".join(packages)
+
+
+def _demo_resolved_at(origin: str) -> tuple[str, dict[str, str]]:
+    """package-lock.json's entry for demo 1.0.0, resolved at the registry *origin*."""
+    return "node_modules/demo", {"version": "1.0.0", "resolved": f"{origin}/demo/-/demo-1.0.0.tgz"}
+
+
+def _package_lock(*packages: tuple[str, object]) -> str:
+    """The text of a lockfileVersion 3 package-lock.json whose packages are the (path, entry) pairs *packages*, in order."""
+    return json.dumps({"name": "web", "lockfileVersion": 3, "requires": True, "packages": dict(packages)}, indent=2)
+
+
+def _write(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_pypi_serving_the_index_page_and_a_file_of_the_first_registry_package_is_usable(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """It asks nothing for the project's own package, which no registry serves."""
+    with _stand_in({}) as (origin, received):
+        lock = _write(tmp_path / "uv.lock", _uv_lock(_EDITABLE_PROJECT, _demo_package_pinned_from(origin)))
+        exit_status = probe.main(["pypi", "--uv-lock", str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (0, "")
+    assert [request.name for request in received] == ["demo-package", "demo_package-1.0-py3-none-any.whl"]
+
+
+@pytest.mark.parametrize(
+    ("step", "requested"), [("index", "demo-package"), ("files", "demo_package-1.0-py3-none-any.whl")]
+)
+def test_a_pypi_step_that_fails_is_an_outage_named_on_one_line(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path, step: str, requested: str
+) -> None:
+    with _stand_in({requested: 503}) as (origin, _):
+        lock = _write(tmp_path / "uv.lock", _uv_lock(_EDITABLE_PROJECT, _demo_package_pinned_from(origin)))
+        exit_status = probe.main(["pypi", "--uv-lock", str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PyPI: {step}: HTTP 503\n")
+
+
+def test_the_npm_registry_serving_the_first_resolved_tarball_is_usable(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    with _stand_in({}) as (origin, received):
+        lock = _write(tmp_path / "package-lock.json", _package_lock(_NPM_ROOT, _demo_resolved_at(origin)))
+        exit_status = probe.main(["npm", "--package-lock", str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (0, "")
+    assert [request.name for request in received] == ["demo-1.0.0.tgz"]
+
+
+def test_a_tarball_the_npm_registry_fails_to_serve_is_an_outage_named_on_one_line(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    with _stand_in({"demo-1.0.0.tgz": 503}) as (origin, _):
+        lock = _write(tmp_path / "package-lock.json", _package_lock(_NPM_ROOT, _demo_resolved_at(origin)))
+        exit_status = probe.main(["npm", "--package-lock", str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "npm registry: tarball: HTTP 503\n")
+
+
+@pytest.mark.parametrize(
+    ("service", "option", "lock_name", "lock_text"),
+    [
+        pytest.param("pypi", "--uv-lock", "uv.lock", _uv_lock(_EDITABLE_PROJECT), id="pypi"),
+        pytest.param("npm", "--package-lock", "package-lock.json", _package_lock(_NPM_ROOT), id="npm"),
+    ],
+)
+def test_a_lock_naming_nothing_to_ask_raises_naming_the_lock(
+    probe: ModuleType, tmp_path: Path, service: str, option: str, lock_name: str, lock_text: str
+) -> None:
+    """So the lane reads a broken probe, never a check of nothing passing as usable."""
+    lock = _write(tmp_path / lock_name, lock_text)
+
+    with pytest.raises(ValueError, match=re.escape(str(lock))):
+        probe.main([service, option, str(lock)])
