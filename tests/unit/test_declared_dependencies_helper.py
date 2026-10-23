@@ -301,7 +301,7 @@ def test_web_subpackage_imports_flags_each_file_whose_imports_run_a_module_of_th
         "under TYPE_CHECKING, or by naming a module of it to pytest.importorskip or in pytest_plugins. "
         "imports_the_package_only imports solar_challenge and its weather module only. "
         "guards_the_import imports the subpackage only inside a try that handles ImportError, which "
-        "makes the import optional by construction. imports_another_web imports a module named web "
+        "makes the import optional by construction. imports_another_web imports modules named web "
         "elsewhere, a third-party one and tests/web, neither of which is the package's subpackage. "
         "names_it_in_a_string names it in a string only, which is no import. So none of those four may "
         "be flagged"
