@@ -225,14 +225,14 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
-def _optional_pv_settings(params: Mapping[str, Any]) -> dict[str, Any]:
-    """The PVConfig settings a home body may leave unset, keyed by field: its system_losses unless null, which leaves PVConfig's default.
+def _system_losses_setting(value: Any) -> dict[str, Any]:
+    """The system_losses keyword PVConfig takes for a home body's system_losses *value*; null gives none, leaving PVConfig's default.
 
-    A sent system_losses must be a finite number, refused naming it; PVConfig refuses one outside its range.
+    Any other value must be a finite number, refused naming system_losses; PVConfig refuses one outside its range.
     """
-    if params["system_losses"] is None:
+    if value is None:
         return {}
-    return {"system_losses": as_finite_float(params["system_losses"], "system_losses")}
+    return {"system_losses": as_finite_float(value, "system_losses")}
 
 
 def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
@@ -353,7 +353,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     degradation_rate_per_year = as_finite_float(
         params["degradation_rate_per_year"], "degradation_rate_per_year"
     )
-    optional_pv_settings = _optional_pv_settings(params)
+    system_losses_setting = _system_losses_setting(params["system_losses"])
     battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
     consumption_kwh_raw = params["consumption_kwh"]
     occupants = as_whole_number(params["occupants"], "occupants")
@@ -376,7 +376,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         tilt=tilt,
         system_age_years=system_age_years,
         degradation_rate_per_year=degradation_rate_per_year,
-        **optional_pv_settings,
+        **system_losses_setting,
     )
 
     battery_config = _parse_battery(params, battery_kwh_val)
