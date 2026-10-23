@@ -196,8 +196,9 @@ Every link uses the one route:
 - `dashboard.html` through `url_for('main.run_results', ...)`;
 - `runs.html` through the JSON row's `results_url`;
 - the progress tracker through a server-provided URL (§13 Q4), its `result_type` parameter deleted;
-- the assistant's trigger tools through `url_for`, which works there because `chat` streams under
-  `stream_with_context`.
+- the assistant's trigger tools through `ToolContext.results_url`, the one route's path builder
+  that `assistant._run_results_url_builder` makes in the request from the request's URL adapter,
+  because `chat` streams its frames with no request context, where `url_for` cannot build the URL.
 
 ### 3.6 Default run name (ζ)
 
