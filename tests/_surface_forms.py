@@ -136,12 +136,11 @@ def named_classes(obj: object) -> set[type]:
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
-    whatever __signature__ the wrapper carries but None, which makes inspect read a
-    partial through its func and any other wrapper as itself, spelled where the
-    annotations it holds are, so where the callable it wraps is if functools.wraps
-    copied them from it; an object its class makes callable, where the __call__ that
-    class resolves is, which may be a base's in another module; and a class in the one
-    sys.modules holds under the name its __module__ records. One
+    whatever __signature__ the wrapper carries, but a wrapper that is no partial and
+    carries a __signature__ of None, where _annotations_author says its annotations were
+    spelled; an object its class makes callable,
+    where the __call__ that class resolves is, which may be a base's in another module;
+    and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
     LookupError naming it and the module found there, and one whose module has since
     left sys.modules, LookupError naming it and that module's name. A signature that
