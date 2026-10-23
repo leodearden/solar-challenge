@@ -1,4 +1,3 @@
-
 # solar_challenge — dark-factory orchestrator configuration. Rationale for each setting: docs/orchestrator-config.md.
 # Overrides only what is project-specific; package defaults live in dark-factory/orchestrator/defaults.yaml.
 project_root: &project_root "/home/leo/src/solar-challenge"
