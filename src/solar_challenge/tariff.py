@@ -68,7 +68,7 @@ class TariffPeriod:
             raise ValueError(f"Invalid time format '{time_str}': {e}")
 
     # cached_property, not dataclass fields: the parsed times go in the instance
-    # __dict__ and stay out of fields(). web/storage.py's JSON round-trip walks
+    # __dict__ and stay out of fields(). web/stored_runs.py's JSON round-trip walks
     # fields() and cannot encode a datetime.time.
     @cached_property
     def _parsed_start(self) -> time:

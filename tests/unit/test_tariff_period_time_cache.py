@@ -7,7 +7,7 @@ Two contracts are pinned here:
   but different object, because ``datetime.time`` objects are not interned.
 * The parsed times are a derived cache, not part of a period's identity. They
   must stay out of ``dataclasses.fields()``: field-driven serialisers (the
-  JSON run storage in ``web/storage.py``, ``dataclasses.asdict``) cannot
+  JSON run storage in ``web/stored_runs.py``, ``dataclasses.asdict``) cannot
   encode a ``datetime.time`` and would break their round-trip.
 """
 
