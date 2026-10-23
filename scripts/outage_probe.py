@@ -30,9 +30,9 @@ index. So the probe asks the index page, then one file, of the first package
 uv.lock pins from a registry, its wheels before its sdist, and its outage line
 is "PyPI: index: <cause>" or "PyPI: files: <cause>".
 
-npm: the css-build job's npm ci installs the tarballs package-lock.json
-resolves, so the probe asks for the first one, and its outage line is
-"npm registry: tarball: <cause>".
+npm: the css-build job's npm ci installs, from the registry, the tarballs
+package-lock.json resolves at http(s) URLs. So the probe asks for the first of
+them, and its outage line is "npm registry: tarball: <cause>".
 
 Neither the pypi nor the npm probe reads a body, so neither downloads a file.
 
@@ -54,6 +54,7 @@ from http import HTTPStatus
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 import requests
 
@@ -69,17 +70,6 @@ _REQUEST_TIMEOUT_S = 30.0
 
 _PVGIS_ENDPOINTS = ("tmy", "seriescalc")
 """The PVGIS endpoints PvgisTmy reads, in the order it reads them."""
-
-_BRISTOL = Location.bristol()
-
-_PVGIS_QUERY: Mapping[str, float | str] = MappingProxyType(
-    {
-        "lat": _BRISTOL.latitude,
-        "lon": _BRISTOL.longitude,
-        **{name: str(PVGIS_TMY_REQUEST[name]) for name in ("outputformat", "startyear", "endyear")},
-    }
-)
-"""What each PVGIS endpoint is asked for: the contract tests' point, and the arguments of their TMY request that get_pvgis_tmy sends PVGIS as query parameters of the same name."""
 
 
 @dataclass(frozen=True)
@@ -124,22 +114,30 @@ def _outage_at(request: _Request, timeout: float) -> _Outage | None:
     return _Outage(f"HTTP {status}", reason) if _is_outage_status(status) else None
 
 
-def _pvgis(options: argparse.Namespace) -> _Service:
-    """PVGIS, asked each endpoint PvgisTmy reads of the API release options.api_url names."""
-    return _Service(
-        "PVGIS",
-        tuple(_Request(endpoint, options.api_url + endpoint, _PVGIS_QUERY) for endpoint in _PVGIS_ENDPOINTS),
+def _pvgis(api_url: str) -> _Service:
+    """PVGIS, asked each endpoint PvgisTmy reads of the API release *api_url*.
+
+    Each is asked for the contract tests' point, with the arguments of their TMY
+    request that get_pvgis_tmy sends PVGIS as query parameters of the same name.
+    """
+    bristol = Location.bristol()
+    query: Mapping[str, float | str] = MappingProxyType(
+        {
+            "lat": bristol.latitude,
+            "lon": bristol.longitude,
+            **{name: str(PVGIS_TMY_REQUEST[name]) for name in ("outputformat", "startyear", "endyear")},
+        }
     )
+    return _Service("PVGIS", tuple(_Request(endpoint, api_url + endpoint, query) for endpoint in _PVGIS_ENDPOINTS))
 
 
-def _pypi(options: argparse.Namespace) -> _Service:
-    """PyPI, asked the index page, then the first file, of the first package the uv.lock at options.uv_lock pins from a registry."""
-    lock: Path = options.uv_lock
-    packages = tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+def _pypi(uv_lock: Path) -> _Service:
+    """PyPI, asked the index page, then the first file, of the first package *uv_lock* pins from a registry."""
+    packages = tomllib.loads(uv_lock.read_text(encoding="utf-8")).get("package", [])
     package = _first(
-        (package for package in packages if "registry" in package["source"]), lock, "package pinned from a registry"
+        (package for package in packages if "registry" in package["source"]), uv_lock, "package pinned from a registry"
     )
-    pinned = _first(_files_pinned_for(package), lock, f"file of {package['name']}")
+    pinned = _first(_files_pinned_for(package), uv_lock, f"file of {package['name']}")
     registry = package["source"]["registry"].rstrip("/")
     return _Service("PyPI", (_Request("index", f"{registry}/{package['name']}/"), _Request("files", pinned["url"])))
 
@@ -151,12 +149,14 @@ def _files_pinned_for(package: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]
         yield package["sdist"]
 
 
-def _npm(options: argparse.Namespace) -> _Service:
-    """The npm registry, asked for the first tarball the package-lock.json at options.package_lock resolves."""
-    lock: Path = options.package_lock
-    packages: Mapping[str, Any] = json.loads(lock.read_text(encoding="utf-8")).get("packages", {})
+def _npm(package_lock: Path) -> _Service:
+    """The npm registry, asked for the first tarball *package_lock* resolves at an http(s) URL."""
+    packages: Mapping[str, Any] = json.loads(package_lock.read_text(encoding="utf-8")).get("packages", {})
+    resolved = (entry.get("resolved", "") for entry in packages.values())
     tarball = _first(
-        (entry["resolved"] for entry in packages.values() if "resolved" in entry), lock, "resolved tarball"
+        (url for url in resolved if urlsplit(url).scheme in ("http", "https")),
+        package_lock,
+        "tarball resolved at an http(s) URL",
     )
     return _Service("npm registry", (_Request("tarball", tarball),))
 
@@ -186,7 +186,7 @@ def _parser() -> argparse.ArgumentParser:
         default=PVGIS_API_URL,
         help="the PVGIS API release to ask, ending in a slash (default: %(default)s)",
     )
-    pvgis.set_defaults(service_of=_pvgis)
+    pvgis.set_defaults(service_of=lambda options: _pvgis(options.api_url))
     pypi = services.add_parser(
         "pypi",
         parents=[every_service],
@@ -198,7 +198,7 @@ def _parser() -> argparse.ArgumentParser:
         default=_REPOSITORY / "uv.lock",
         help="the uv.lock whose first package pinned from a registry is asked for (default: %(default)s)",
     )
-    pypi.set_defaults(service_of=_pypi)
+    pypi.set_defaults(service_of=lambda options: _pypi(options.uv_lock))
     npm = services.add_parser(
         "npm",
         parents=[every_service],
@@ -210,7 +210,7 @@ def _parser() -> argparse.ArgumentParser:
         default=_REPOSITORY / "src" / "solar_challenge" / "web" / "package-lock.json",
         help="the package-lock.json whose first resolved tarball is asked for (default: %(default)s)",
     )
-    npm.set_defaults(service_of=_npm)
+    npm.set_defaults(service_of=lambda options: _npm(options.package_lock))
     return parser
 
 

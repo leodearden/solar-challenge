@@ -167,6 +167,9 @@ source = { editable = "." }
 _NPM_ROOT = ("", {"devDependencies": {"demo": "^1.0.0"}})
 """package-lock.json's entry for the project itself, which nothing resolves."""
 
+_NPM_LINK = ("node_modules/local", {"resolved": "packages/local", "link": True})
+"""package-lock.json's entry for a package npm links from the working tree, not from the registry."""
+
 
 def _demo_package_pinned_from(origin: str) -> str:
     """uv.lock's table for demo-package 1.0, pinned from the registry <origin>/simple, its sdist listed before its wheel as uv lists them."""
@@ -251,10 +254,32 @@ def test_a_tarball_the_npm_registry_fails_to_serve_is_an_outage_named_on_one_lin
 
 
 @pytest.mark.parametrize(
+    "resolved",
+    [
+        pytest.param("packages/local", id="link"),
+        pytest.param("file:local-1.0.0.tgz", id="file"),
+        pytest.param("git+ssh://git@github.com/demo/local.git#0123abc", id="git"),
+    ],
+)
+def test_the_npm_registry_is_asked_for_the_first_tarball_resolved_at_an_http_url(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path, resolved: str
+) -> None:
+    """npm ci takes a package resolved anywhere else from the working tree or a git host, not from the registry."""
+    with _stand_in({}) as (origin, received):
+        local = ("node_modules/local", {"version": "1.0.0", "resolved": resolved})
+        lock = _write(tmp_path / "package-lock.json", _package_lock(_NPM_ROOT, local, _demo_resolved_at(origin)))
+        exit_status = probe.main(["npm", "--package-lock", str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (0, "")
+    assert [request.name for request in received] == ["demo-1.0.0.tgz"]
+
+
+@pytest.mark.parametrize(
     ("service", "option", "lock_name", "lock_text"),
     [
         pytest.param("pypi", "--uv-lock", "uv.lock", _uv_lock(_EDITABLE_PROJECT), id="pypi"),
         pytest.param("npm", "--package-lock", "package-lock.json", _package_lock(_NPM_ROOT), id="npm"),
+        pytest.param("npm", "--package-lock", "package-lock.json", _package_lock(_NPM_ROOT, _NPM_LINK), id="npm-link"),
     ],
 )
 def test_a_lock_naming_nothing_to_ask_raises_naming_the_lock(
