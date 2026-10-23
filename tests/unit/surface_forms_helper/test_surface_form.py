@@ -617,6 +617,24 @@ def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that
     assert named_classes(zipped) == {int}
 
 
+def test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps() -> None:
+    def settle(self: object, rate: int) -> None: ...
+
+    def zipping(share: decimal.Decimal) -> None: ...
+
+    zipping.__wrapped__ = zip
+    zipping.__signature__ = None
+
+    @functools.wraps(functools.partialmethod(settle, rate=1))
+    def halved(self: object) -> None: ...
+
+    halved.__signature__ = None
+
+    assert surface_form(zipping) == "(share: Decimal) -> None"
+    assert named_classes(zipping) == {decimal.Decimal}
+    assert surface_form(halved) == "(self: object) -> None"
+
+
 def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:
     signature = inspect.Signature(
         [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
