@@ -1,6 +1,7 @@
 {# PV configuration partial for the home simulation form.
    Uses Alpine.js for reactive slider value display.
-   Expected parent x-data must include formData object.
+   Expected parent x-data must include formData object and sendsSystemLosses(), whether the form
+   sends System Losses.
    The page's context holds default_system_losses (PVWATTS_DEFAULT_SYSTEM_LOSSES in pv.py), which the
    System Losses input shows as its placeholder. #}
 {% from "components/macros.html" import range_input %}
@@ -111,7 +112,7 @@
     <div class="space-y-1.5">
         <div class="flex items-center justify-between">
             <label for="system_losses" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">System Losses</label>
-            <span class="text-sm font-medium text-primary-600 dark:text-primary-400" x-text="formData.system_losses ?? 'PVWatts default'"></span>
+            <span class="text-sm font-medium text-primary-600 dark:text-primary-400" x-text="sendsSystemLosses() ? formData.system_losses : 'PVWatts default'"></span>
         </div>
         <input
             type="number"

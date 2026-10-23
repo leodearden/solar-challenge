@@ -112,6 +112,10 @@ document.addEventListener('alpine:init', () => {
                 this.formData.consumption_kwh = p.consumption_kwh || 3500;
             }
         },
+        // Whether the form sends System Losses: only a typed number; left blank, the server builds PVConfig's default
+        sendsSystemLosses() {
+            return typeof this.formData.system_losses === 'number';
+        },
         buildPayload() {
             const f = this.formData;
             const payload = {
@@ -138,8 +142,8 @@ document.addEventListener('alpine:init', () => {
                 payload.start = f.start_date;
                 payload.end = f.end_date;
             }
-            // Optional: PV system losses; left blank, the server builds PVConfig's default
-            if (typeof f.system_losses === 'number') {
+            // Optional: PV system losses
+            if (this.sendsSystemLosses()) {
                 payload.system_losses = f.system_losses;
             }
             // Optional: heat pump

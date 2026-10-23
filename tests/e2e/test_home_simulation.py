@@ -10,8 +10,9 @@ nothing, and sends either end of that range. It also checks that the form
 leaves a custom range's dates to the server: it sends a single-day range,
 which the server accepts, and shows the server's refusal of a range that
 ends before it starts. And it checks that a blank System Losses input sends
-no system_losses, leaving the server's default, that a typed one is sent as
-typed, and that the page shows the server's refusal of one PVConfig refuses.
+no system_losses, leaving the server's default, and shows "PVWatts default"
+beside its label, that a typed one is sent and shown as typed, and that the
+page shows the server's refusal of one PVConfig refuses.
 """
 
 import re
@@ -362,6 +363,26 @@ def test_typed_system_losses_is_sent_and_accepted(page: Page, live_server: str) 
 
     assert response.request.post_data_json["system_losses"] == 0.05
     assert response.status == 201, response.text()
+
+
+@pytest.mark.parametrize(
+    ("typed", "shown"),
+    [
+        pytest.param((), "PVWatts default", id="untouched"),
+        pytest.param(("0.05", ""), "PVWatts default", id="typed-then-cleared"),
+        pytest.param(("0.05",), "0.05", id="typed"),
+    ],
+)
+def test_system_losses_shows_the_typed_fraction_and_pvwatts_default_while_blank(
+    page: Page, live_server: str, typed: tuple[str, ...], shown: str
+) -> None:
+    """Type each of `typed` in turn into System Losses: beside its label the field shows `shown`, the fraction typed, or "PVWatts default" while it is blank."""
+    page.goto(live_server + "/simulate/home")
+    for text in typed:
+        _type_system_losses(page, text)
+
+    value_beside_label = page.locator("label[for='system_losses'] ~ span")
+    expect(value_beside_label).to_have_text(shown)
 
 
 def test_system_losses_pvconfig_refuses_shows_the_servers_refusal(
