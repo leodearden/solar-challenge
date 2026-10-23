@@ -389,6 +389,51 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
     )
 
 
+_ONE_FILE_IN_EACH_SCOPE = (
+    "src/solar_challenge/simulate.py",
+    "src/solar_challenge/web/views.py",
+    "scripts/measure.py",
+    "tests/_helpers.py",
+    "tests/unit/test_simulate.py",
+    "tests/e2e/test_pages.py",
+)
+
+
+@pytest.mark.parametrize(
+    ("select_sources", "own_files"),
+    [
+        pytest.param(_core_sources, ["src/solar_challenge/simulate.py"], id="outside-web"),
+        pytest.param(_web_sources, ["src/solar_challenge/web/views.py"], id="web"),
+        pytest.param(_script_sources, ["scripts/measure.py"], id="scripts"),
+        pytest.param(
+            _test_sources_outside_e2e,
+            ["tests/_helpers.py", "tests/unit/test_simulate.py"],
+            id="tests-outside-e2e",
+        ),
+        pytest.param(_e2e_test_sources, ["tests/e2e/test_pages.py"], id="tests-e2e"),
+    ],
+)
+def test_each_source_scope_selects_only_its_own_files(
+    tmp_path: Path,
+    select_sources: Callable[[Path], list[Path]],
+    own_files: list[str],
+) -> None:
+    """A source scope selects exactly its own files of the project root it is given.
+
+    The real-tree contract passes for a scope that selects nothing, so this pins which files
+    each scope checks, which is the split between scopes.
+    """
+    for relative_path in _ONE_FILE_IN_EACH_SCOPE:
+        _write_module(tmp_path / relative_path)
+
+    selected = sorted(path.relative_to(tmp_path).as_posix() for path in select_sources(tmp_path))
+
+    assert selected == own_files, (
+        f"in a project holding one file in each scope's directory, {list(_ONE_FILE_IN_EACH_SCOPE)}, "
+        f"this scope selected {selected}, but it owns exactly {own_files}"
+    )
+
+
 def test_core_dependencies_request_only_provided_extras(project_root: Path) -> None:
     """No core dependency may request an extra that its installed distribution does not provide."""
     unknown_extras: dict[str, list[str]] = {}
