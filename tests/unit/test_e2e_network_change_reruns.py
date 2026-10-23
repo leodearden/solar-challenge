@@ -15,8 +15,6 @@ from tests._scenario_session import ScenarioSession
 
 pytest.importorskip("flask")
 
-E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
-
 ALPINE_CORE = "http://127.0.0.1:5000/static/vendor/alpinejs/alpinejs-3.14.8.min.js"
 
 PRESETS_API = "http://127.0.0.1:5000/api/presets"
@@ -75,14 +73,16 @@ def page(context):
 
 
 @pytest.fixture
-def e2e_suite(pytester_importing_test_helpers: pytest.Pytester, project_root: Path) -> pytest.Pytester:
+def e2e_suite(
+    pytester_importing_test_helpers: pytest.Pytester, project_root: Path, e2e_conftest: Path
+) -> pytest.Pytester:
     """pytester, whose sessions read this project's pytest ini and run under the e2e conftest, with a stub browser context and page.
 
     The pytest ini is the one the offline lane's e2e job reads, so a pytest
     deprecation on the rerun path is an error here too.
     """
     pytester_importing_test_helpers.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    pytester_importing_test_helpers.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8") + PLAYWRIGHT_FIXTURE_STUBS)
+    pytester_importing_test_helpers.makeconftest(e2e_conftest.read_text(encoding="utf-8") + PLAYWRIGHT_FIXTURE_STUBS)
     return pytester_importing_test_helpers
 
 

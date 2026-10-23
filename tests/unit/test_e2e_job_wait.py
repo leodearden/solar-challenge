@@ -11,8 +11,6 @@ from pathlib import Path
 import pytest
 pytest.importorskip("flask")
 
-E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
-
 SCENARIOS = """
     import json
     import urllib.request
@@ -66,9 +64,10 @@ SCENARIOS = """
 
 def test_each_e2e_tests_live_server_jobs_finish_before_the_next_test_starts(
     pytester_importing_test_helpers: pytest.Pytester,
+    e2e_conftest: Path,
 ) -> None:
     """The root conftest's offline guard sends the scenario session's HTTP(S) to its refusing proxy, so a job that fetched its TMY would fail, and the guard would fail this test, naming the host."""
-    pytester_importing_test_helpers.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8"))
+    pytester_importing_test_helpers.makeconftest(e2e_conftest.read_text(encoding="utf-8"))
     scenarios = pytester_importing_test_helpers.makepyfile(SCENARIOS)
 
     result = pytester_importing_test_helpers.runpytest_subprocess(scenarios)
