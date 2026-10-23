@@ -1,30 +1,34 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every pointer from a file git lists under src/solar_challenge into tests/ resolves, and names a test only by its node-id.
+"""Every pointer into tests/ from a file git lists outside tests/, docs/, plans/ and review/ resolves, and names a test only by its node-id.
 
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
-so a file git ignores is not there to point at.
+so a file git ignores is not there to point at. A path in another repository is written from that repository's name,
+as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
-prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
-pytest runs as written and this gate resolves. A name the Python module's own code uses, such as a parameter called
-test_config, is no pointer. Nor, outside a node-id, is a name written straight after a dot, so a third-party name that
-reads as a test, such as Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
+prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
+alone, as test_<name>.py. The settled form is the node-id, which pytest runs as written and this gate resolves. A name
+a file uses itself is no pointer: a name the Python module's own code uses, such as a parameter called test_config, or
+a key of the YAML file's own mappings, such as test_command. Nor, outside a node-id, is a name written straight after
+a dot, so a third-party name that reads as a test, such as Werkzeug's TestResponse, is written after its module:
+werkzeug.test.TestResponse.
 """
 
 import ast
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
+import yaml
 
 from tests._working_tree import working_tree_files
 
-_PACKAGE_DIR = PurePosixPath("src/solar_challenge")
+_UNSCANNED = tuple(PurePosixPath(directory) for directory in ("tests", "docs", "plans", "review"))
 
 _POINTER = re.compile(
     r"""
@@ -38,8 +42,8 @@ _POINTER = re.compile(
 )
 
 _NAMED_WITHOUT_ITS_NODE_ID = (
-    "names a test without its file: point at it by its node-id from the project root,"
-    " tests/<file>.py::[<Class>::]<name>"
+    "names a test or test file without its path: point at it from the project root, by its path tests/<file>.py"
+    " or its node-id tests/<file>.py::[<Class>::]<name>"
 )
 
 
@@ -63,6 +67,15 @@ class _Pointer:
         return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
 
 
+def _scanned_files(root: Path) -> list[PurePosixPath]:
+    """Return the files working_tree_files lists in *root*, but those under an _UNSCANNED directory."""
+    return [
+        path
+        for path in working_tree_files(root)
+        if not any(path.is_relative_to(directory) for directory in _UNSCANNED)
+    ]
+
+
 def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
     """Return every pointer in the *sources*, POSIX paths relative to *root*, file by file and in text order."""
     pointers: list[_Pointer] = []
@@ -84,11 +97,11 @@ def _utf8_text(path: Path) -> str | None:
 def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
     """Return the pointers in *text*, the text of the file *source*, in text order.
 
-    In a Python module, a test name given alone that the module's own code uses is not one.
+    A test name given alone that the file uses itself, as a Python module's identifier or a YAML file's key, is not one.
     """
     matches = list(_POINTER.finditer(text))
     has_bare_name = any(match["bare"] is not None for match in matches)
-    own_names = _code_names(text) if source.suffix == ".py" and has_bare_name else frozenset()
+    own_names = _own_names(source, text) if has_bare_name else frozenset()
     return [
         _pointer(source, text, match)
         for match in matches
@@ -110,6 +123,27 @@ def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer
     )
 
 
+def _own_names(source: PurePosixPath, text: str) -> frozenset[str]:
+    """Return the names the file *source*, whose text is *text*, uses itself.
+
+    They are a Python module's identifiers or a YAML file's mapping keys. A file of any other kind uses none. A Python or
+    YAML file that does not parse raises ValueError, naming the file.
+    """
+    match source.suffix:
+        case ".py":
+            read_names = _code_names
+        case ".yaml" | ".yml":
+            read_names = _yaml_keys
+        case _:
+            return frozenset()
+    try:
+        return read_names(text)
+    except (SyntaxError, yaml.YAMLError) as error:
+        raise ValueError(
+            f"{source} does not parse, so the names it uses itself cannot be told from pointers: {error}"
+        ) from error
+
+
 def _code_names(text: str) -> frozenset[str]:
     """Return the names of the variables, arguments, attributes, keywords, defs and classes in the Python module *text*."""
     return frozenset(name for node in ast.walk(ast.parse(text)) if (name := _code_name(node)) is not None)
@@ -129,6 +163,28 @@ def _code_name(node: ast.AST) -> str | None:
         ):
             return name
     return None
+
+
+def _yaml_keys(text: str) -> frozenset[str]:
+    """Return the scalar keys of every mapping in each YAML document in *text*, at any depth.
+
+    They are read from the composed nodes, so no tag needs a constructor.
+    """
+    documents = yaml.compose_all(text, Loader=yaml.SafeLoader)
+    return frozenset(key for document in documents for key in _mapping_keys(document))
+
+
+def _mapping_keys(node: yaml.Node) -> Iterator[str]:
+    """Yield the scalar keys of *node*, a composed YAML node, if it is a mapping, and of each mapping nested in it."""
+    match node:
+        case yaml.MappingNode(value=pairs):
+            for key, item in pairs:
+                if isinstance(key, yaml.ScalarNode):
+                    yield key.value
+                yield from _mapping_keys(item)
+        case yaml.SequenceNode(value=items):
+            for item in items:
+                yield from _mapping_keys(item)
 
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
@@ -212,12 +268,12 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
     }
 
 
-def test_every_pointer_from_the_package_into_tests_resolves(project_root: Path) -> None:
-    sources = [path for path in working_tree_files(project_root) if path.is_relative_to(_PACKAGE_DIR)]
-    pointers = _pointers(project_root, sources)
+def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
+    pointers = _pointers(project_root, _scanned_files(project_root))
+    unscanned = ", ".join(f"{directory}/" for directory in _UNSCANNED)
     assert pointers, (
-        f"found no pointer into tests/ in any file git lists under {_PACKAGE_DIR}, so this gate would pass vacuously;"
-        " fix the listing or the grammar"
+        f"found no pointer into tests/ in any file git lists outside the unscanned directories ({unscanned}), so this"
+        " gate would pass vacuously; fix the listing or the grammar"
     )
 
     dangling = _dangling(project_root, pointers)
@@ -256,6 +312,14 @@ def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return PurePosixPath(source)
+
+
+def test_scans_every_file_git_lists_outside_tests_docs_plans_and_review(project: Path) -> None:
+    scanned = {"CLAUDE.md", "pyproject.toml", "scenarios/fleet.yaml", "scripts/measure.py", "src/pkg/module.py"}
+    for source in [*scanned, "docs/guide.md", "docs/prds/record.md", "plans/plan.md", "review/briefing.yaml"]:
+        _write_source(project, source, "")
+
+    assert set(_scanned_files(project)) == {PurePosixPath(source) for source in scanned}
 
 
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:
@@ -342,7 +406,7 @@ def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     assert _dangling(project, pointers) == []
 
 
-def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -> None:
+def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Path) -> None:
     source = _write_source(
         project,
         "src/pkg/script.js",
@@ -352,7 +416,8 @@ def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -
         "// tests/unit/test_pointed_at.py's test_top shows it.\n"
         "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
         "// Its response is a werkzeug.test.TestResponse.\n"
-        "// Not a test name: src/tests/test_gone.py\n",
+        "// Not a test name: src/tests/test_gone.py\n"
+        "// test_pointed_at.py holds them.\n",
     )
 
     assert _dangling(project, _pointers(project, [source])) == [
@@ -360,6 +425,7 @@ def test_reports_a_test_or_test_class_named_without_its_node_id(project: Path) -
         f"src/pkg/script.js:2: TestGroup: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:3: test_member: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:4: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        f"src/pkg/script.js:8: test_pointed_at: {_NAMED_WITHOUT_ITS_NODE_ID}",
     ]
 
 
@@ -380,3 +446,39 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
     assert _dangling(project, _pointers(project, [naming])) == [
         f"src/pkg/other.py:1: test_config: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
+
+
+@pytest.mark.parametrize("suffix", [".yaml", ".yml"])
+def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix: str) -> None:
+    using = _write_source(
+        project,
+        f"pipeline{suffix}",
+        "test_command: pytest\n"
+        "jobs:\n"
+        "  - name: lint\n"
+        "    test_timeout: 60  # test_timeout bounds the job\n",
+    )
+    naming = _write_source(project, f"other{suffix}", "# Set test_command first.\nname: lint\n")
+
+    assert _pointers(project, [using]) == []
+    assert _dangling(project, _pointers(project, [naming])) == [
+        f"other{suffix}:1: test_command: {_NAMED_WITHOUT_ITS_NODE_ID}"
+    ]
+
+
+def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under_any_tag(project: Path) -> None:
+    using = _write_source(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
+
+    assert _pointers(project, [using]) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "text"),
+    [("src/pkg/app.py", "def build(test_config:\n"), ("pipeline.yaml", "test_command: [pytest\n")],
+    ids=["python", "yaml"],
+)
+def test_reports_a_python_or_yaml_file_that_does_not_parse_by_its_path(project: Path, source: str, text: str) -> None:
+    broken = _write_source(project, source, text)
+
+    with pytest.raises(ValueError, match=f"^{re.escape(source)} does not parse"):
+        _pointers(project, [broken])

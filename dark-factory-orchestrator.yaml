@@ -130,8 +130,9 @@ git:
   #   installs, so an upstream release that breaks this code files a fix task.
   #   It needs PyPI. Like interpreter-matrix it has no `timeout`: its suite
   #   timeout bounds a hang. A run measures 17-19 min, by host load.
-  # The legacy numeric and infra seams are off: this repo has neither
-  # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
+  # The legacy numeric and infra seams are off: this repo has neither script
+  # they run. The test that keeps them off names both:
+  # tests/unit/test_offline_lane_contracts.py::test_offline_lane_starts_and_skips_the_seams_this_repo_lacks
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at
   # orchestrator restart (the fleet redeploy applies them); offline_lane_commands
   # is hot-reloadable.

@@ -88,7 +88,8 @@ fleet_distribution:
 #   Retained as flat-fallback/provenance; inert under capacity_at_events model (I3).
 # grid_services_model: capacity_at_events (ε / task-76): board scenario opts into
 #   the event-window-derived grid-services model.  The flat field above is kept as
-#   documented provenance and for test_flex_grid_services.test_board_scenario_grid_services_filled_from_central_band.
+#   documented provenance and for
+#   tests/integration/test_flex_grid_services.py::test_board_scenario_grid_services_filled_from_central_band.
 finance:
   standing_charge_pence_per_day: 60.0
   own_use_rate_pence_per_kwh: 15.0
