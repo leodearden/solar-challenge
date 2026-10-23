@@ -198,7 +198,7 @@ def test_assert_imports_only_declared_names_each_file_requiring_a_distribution_i
         assert_imports_only_declared(tmp_path, scope)
 
     message = str(failure.value)
-    assert "pkg/uses_yaml.py requires ['pyyaml']" in message, (
+    assert "pkg/uses_yaml.py requires ['pyyaml']" in message and str(tmp_path) not in message, (
         f"the failure does not name pkg/uses_yaml.py, relative to the project root, as requiring exactly the "
         f"undeclared pyyaml: {message}"
     )
