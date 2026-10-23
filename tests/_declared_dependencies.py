@@ -11,9 +11,10 @@ counts as an import it requires, since the test skips wherever that module is
 missing. So does the module pytest imports for each entry of a module-level
 pytest_plugins assignment; a built-in plugin's short name, such as pytester,
 names a module of pytest's own _pytest package. An import inside a try block
-that handles ImportError is optional by construction and exempt;
-dead_import_guards finds each such guard over declared distributions only,
-whose handler can never run. Imports map to distributions only through
+that handles ImportError is optional in the package, where dead_import_guards
+finds each such guard over declared distributions only, whose handler can
+never run, and required like any other in every other file, for the reasons
+_imports_required_by gives. Imports map to distributions only through
 installed metadata, so a scope's check skips where its extras are not
 installed.
 
@@ -193,8 +194,8 @@ def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
 
 def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
     """Return the files of _dev_only_lane_suite_files and every module of the tests package they
-    import, transitively. A pytest_plugins entry and a module named to pytest.importorskip each
-    count as an absolute import.
+    import, transitively, as _imports_required_by reads each file's imports. A pytest_plugins
+    entry and a module named to pytest.importorskip each count as an absolute import.
 
     Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
     helper the verify also imports is judged here, against the dev extra alone, not with the
@@ -253,6 +254,13 @@ def _handles_import_failure(node: ast.Try) -> bool:
         if handler.type is not None
         for name in ast.walk(handler.type)
     )
+
+
+def _imports_in(tree: ast.AST) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield every import in *tree*, wherever it is."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
 
 
 def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.ImportFrom]:
@@ -358,14 +366,25 @@ def _importorskip_imports(tree: ast.AST) -> Iterator[ast.Import]:
 
 
 def _imports_required_by(project_root: Path, source: Path) -> Iterator[ast.Import | ast.ImportFrom]:
-    """Yield the imports the Python *source* file of *project_root* requires: its
-    _unguarded_imports, an import of each module it names to pytest.importorskip, and an import
-    of the module pytest imports for each entry of its pytest_plugins.
+    """Yield the imports the Python *source* file of *project_root* requires: its own imports, an
+    import of each module it names to pytest.importorskip, and an import of the module pytest
+    imports for each entry of its pytest_plugins.
 
-    Every reading of what a file requires starts here.
+    Every reading of what a file requires starts here, so this decides, for all of them, whether
+    an import inside a try that handles ImportError counts. In a package file it does not: the
+    file's own imports are its _unguarded_imports, since a consumer installs the package with or
+    without each extra, so the guard's handler is a real path, and dead_import_guards flags each
+    guard whose handler can never run. Any other file runs only in the project's own runs, which
+    install exactly what its scope declares. There a guarded import of an undeclared module
+    either never imports, so its handler runs every time, skipping the test or falling back, or
+    imports only while another requirement pulls the module in. So outside the package every
+    import counts, guarded or not.
     """
     tree = _parse(source)
-    yield from _unguarded_imports([tree])
+    if source.is_relative_to(_package_dir(project_root)):
+        yield from _unguarded_imports([tree])
+    else:
+        yield from _imports_in(tree)
     yield from _importorskip_imports(tree)
     yield from _pytest_plugin_imports(source, tree)
 
@@ -465,10 +484,11 @@ def web_subpackage_imports(project_root: Path, sources: Iterable[Path]) -> list[
     """Return (file, web files run) for every file in *sources* whose imports run a file of
     WEB_SUBPACKAGE under *project_root*.
 
-    Imports count as _import_targets counts them: a function-local import, a TYPE_CHECKING
-    import, a module named to pytest.importorskip and a pytest_plugins entry count, and an
-    ImportError-guarded import does not. Names resolve as Python finds them, so a module named
-    web elsewhere is not the subpackage. Only files are read; no installed metadata is needed.
+    Imports count as _imports_required_by reads them, which also decides when an import inside a
+    try that handles ImportError counts: a function-local import, a TYPE_CHECKING import, a module
+    named to pytest.importorskip and a pytest_plugins entry count. Names resolve as Python finds
+    them, so a module named web elsewhere is not the subpackage. Only files are read; no
+    installed metadata is needed.
 
     Each file's own imports are read, not those of the package's modules it imports. That is
     enough because, outside the subpackage, the package imports it only inside a function, as
@@ -506,8 +526,7 @@ def _required_top_level_modules(project_root: Path, sources: Iterable[Path]) -> 
     """Return the top-level module of every absolute import *sources*, files of *project_root*,
     require, as _imports_required_by reads them.
 
-    Function-local and TYPE_CHECKING imports count; relative imports and
-    ImportError-guarded imports do not.
+    Function-local and TYPE_CHECKING imports count; relative imports do not.
     """
     return _top_level_modules(
         node for source in sources for node in _imports_required_by(project_root, source)
@@ -566,9 +585,7 @@ def _import_guards(sources: Iterable[Path]) -> Iterator[tuple[Path, ast.Try]]:
 def _guarded_imports(guard: ast.Try) -> Iterator[ast.Import | ast.ImportFrom]:
     """Yield the imports in *guard*'s body, the only part of a try its handlers guard."""
     for statement in guard.body:
-        for node in ast.walk(statement):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                yield node
+        yield from _imports_in(statement)
 
 
 def dead_import_guards(
@@ -612,7 +629,9 @@ def assert_imports_only_declared(project_root: Path, scope: SourceScope) -> None
         f"these files require distributions missing from {groups}: {undeclared}. "
         "A module a file names to pytest.importorskip counts as required, since its test skips "
         "wherever the module is missing; so does a plugin module a pytest_plugins entry names, "
-        "since pytest imports it when it loads the file. Declare them in one of those groups in "
+        "since pytest imports it when it loads the file; and so, outside src/solar_challenge, does "
+        "an import inside a try block that handles ImportError, since the run that loads the file "
+        "installs only what its scope declares. Declare them in one of those groups in "
         "pyproject.toml, or, in src/solar_challenge, make the import optional inside a try block "
         "that handles ImportError"
     )

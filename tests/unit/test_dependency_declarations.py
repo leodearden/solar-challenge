@@ -4,10 +4,11 @@
 Each source scope of tests/_declared_dependencies.py, which states the
 declared-dependency contract, may import only what [project].dependencies and
 the scope's extras declare, and in the package each ImportError guard must
-guard a distribution its scope does not declare.  This module judges the
-scopes whose extras exclude e2e.  The scopes needing e2e are judged in
-tests/e2e/test_declared_dependencies.py by the offline lane's e2e job, the one
-run that installs that extra, and
+guard a distribution its scope does not declare.  Outside the package such a
+guard makes no import optional, so its imports are judged like any other.
+This module judges the scopes whose extras exclude e2e.  The scopes needing
+e2e are judged in tests/e2e/test_declared_dependencies.py by the offline
+lane's e2e job, the one run that installs that extra, and
 test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra pins that the
 job collects a case for each.
 
