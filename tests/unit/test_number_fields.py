@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import sys
+from collections.abc import Callable, Iterable
 
 import numpy as np
 import pytest
@@ -18,7 +19,9 @@ from solar_challenge.number_fields import (
     UNIT_INTERVAL,
     Interval,
     as_finite_float,
+    as_finite_floats,
     as_whole_number,
+    as_whole_numbers,
 )
 
 _IMPORT_PROBE = """\
@@ -402,3 +405,75 @@ class TestAsWholeNumberWithAnInterval:
         with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number(value, "n_homes", within=Interval(1, 10))
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
+
+
+class TestListReaders:
+    """as_finite_floats and as_whole_numbers read a list as a tuple, each element i as as_finite_float or as_whole_number reads it under the name {field}[{i}]."""
+
+    def test_as_finite_floats_reads_each_element_as_a_float(self) -> None:
+        numbers = as_finite_floats([1, "2.5", 3.0], "rates")
+        assert numbers == (1.0, 2.5, 3.0)
+        assert all(type(number) is float for number in numbers)
+
+    def test_as_whole_numbers_reads_each_element_as_the_int_it_equals(self) -> None:
+        numbers = as_whole_numbers([1, 2.0, "3"], "months")
+        assert numbers == (1, 2, 3)
+        assert all(type(number) is int for number in numbers)
+
+    @pytest.mark.parametrize(
+        "make_values",
+        [
+            pytest.param(lambda: (1, 2, 3), id="tuple"),
+            pytest.param(lambda: (number for number in (1, 2, 3)), id="generator"),
+            pytest.param(lambda: range(1, 4), id="range"),
+        ],
+    )
+    def test_any_iterable_of_numbers_is_read(self, make_values: Callable[[], Iterable[int]]) -> None:
+        assert as_whole_numbers(make_values(), "months") == (1, 2, 3)
+
+    @pytest.mark.parametrize(
+        "read", [pytest.param(as_finite_floats, id="floats"), pytest.param(as_whole_numbers, id="whole-numbers")]
+    )
+    def test_an_empty_list_reads_as_an_empty_tuple(self, read: Callable[[object, str], tuple[object, ...]]) -> None:
+        assert read([], "months") == ()
+
+    def test_an_element_with_a_fractional_part_is_refused_naming_its_index_and_the_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_numbers([1, 2.5], "months")
+        assert str(exc_info.value) == "months[1] must be a whole number, got 2.5"
+
+    def test_an_element_that_is_not_a_finite_number_is_refused_naming_its_index_and_the_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_floats([1.0, math.nan], "rates")
+        assert str(exc_info.value) == "rates[1] must be a finite number, got nan"
+
+    def test_the_interval_applies_to_each_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_numbers([1, 13], "months", Interval(1, 12))
+        assert str(exc_info.value) == "months[1] must be between 1 and 12, got 13"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("1,2", id="string"),
+            pytest.param(b"12", id="bytes"),
+            pytest.param({"a": 1}, id="mapping"),
+            pytest.param(5, id="int"),
+            pytest.param(2.5, id="float"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("read", "field", "kind"),
+        [
+            pytest.param(as_finite_floats, "rates", "finite numbers", id="floats"),
+            pytest.param(as_whole_numbers, "months", "whole numbers", id="whole-numbers"),
+        ],
+    )
+    def test_a_value_that_is_not_a_list_is_refused_naming_the_field_and_the_value(
+        self, read: Callable[[object, str], tuple[object, ...]], field: str, kind: str, value: object
+    ) -> None:
+        """Text and a mapping are iterable, but neither is a list of numbers, so each is refused as a number is."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            read(value, field)
+        assert str(exc_info.value) == f"{field} must be a list of {kind}, got {value!r}"
