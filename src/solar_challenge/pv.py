@@ -94,7 +94,8 @@ def _require_settable_temperature_coefficient(
         _require_module_form_taking_temperature_coefficient(custom_module_params, coefficient)
 
 
-_PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
+PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
+"""PVWatts v5's default loss budget, pvlib's pvwatts_losses() as a fraction: PVConfig.system_losses's default (docs/pv-system-losses.md)."""
 
 
 @dataclass(frozen=True)
@@ -161,7 +162,7 @@ class PVConfig:
     degradation_rate_per_year: float = 0.005  # 0.5%/year (typical crystalline silicon)
 
     # System losses
-    system_losses: float = _PVWATTS_DEFAULT_SYSTEM_LOSSES
+    system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
