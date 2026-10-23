@@ -24,6 +24,18 @@ Bristol's TMY through PvgisTmy, which asks PVGIS_API_URL's tmy and seriescalc
 endpoints for Location.bristol() over CLIMATE_YEARS. The probe asks both the
 same, and its outage line is "PVGIS: <endpoint>: <cause>".
 
+pypi: the interpreter-matrix and newest-releases jobs install what uv.lock pins
+from PyPI, and newest-releases also resolves the newest releases from its
+index. So the probe asks the index page, then one file, of the first package
+uv.lock pins from a registry, its wheels before its sdist, and its outage line
+is "PyPI: index: <cause>" or "PyPI: files: <cause>".
+
+npm: the css-build job's npm ci installs the tarballs package-lock.json
+resolves, so the probe asks for the first one, and its outage line is
+"npm registry: tarball: <cause>".
+
+Neither the pypi nor the npm probe reads a body, so neither downloads a file.
+
 Usage, from the repository root:
 
     uv run --locked --extra dev python scripts/outage_probe.py <service> [options]
@@ -32,17 +44,25 @@ Usage, from the repository root:
 """
 
 import argparse
+import json
 import os
 import sys
-from collections.abc import Mapping, Sequence
+import tomllib
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from http import HTTPStatus
+from pathlib import Path
 from types import MappingProxyType
+from typing import Any, TypeVar
 
 import requests
 
 from solar_challenge.location import Location
 from solar_challenge.weather import PVGIS_API_URL, PVGIS_TMY_REQUEST
+
+_REPOSITORY = Path(__file__).resolve().parents[1]
+
+_T = TypeVar("_T")
 
 _REQUEST_TIMEOUT_S = 30.0
 """Seconds a request may take to connect, and again to answer. Twice this per request, for the at most two requests a service is asked, plus uv's start, the imports and the name lookups it does not bound, must fit the outage_probe_timeout_secs of every job in dark-factory-orchestrator.yaml that declares this probe."""
@@ -112,6 +132,42 @@ def _pvgis(options: argparse.Namespace) -> _Service:
     )
 
 
+def _pypi(options: argparse.Namespace) -> _Service:
+    """PyPI, asked the index page, then the first file, of the first package the uv.lock at options.uv_lock pins from a registry."""
+    lock: Path = options.uv_lock
+    packages = tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+    package = _first(
+        (package for package in packages if "registry" in package["source"]), lock, "package pinned from a registry"
+    )
+    pinned = _first(_files_pinned_for(package), lock, f"file of {package['name']}")
+    registry = package["source"]["registry"].rstrip("/")
+    return _Service("PyPI", (_Request("index", f"{registry}/{package['name']}/"), _Request("files", pinned["url"])))
+
+
+def _files_pinned_for(package: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
+    """The files uv.lock pins for *package*, its wheels before its sdist."""
+    yield from package.get("wheels", [])
+    if "sdist" in package:
+        yield package["sdist"]
+
+
+def _npm(options: argparse.Namespace) -> _Service:
+    """The npm registry, asked for the first tarball the package-lock.json at options.package_lock resolves."""
+    lock: Path = options.package_lock
+    packages: Mapping[str, Any] = json.loads(lock.read_text(encoding="utf-8")).get("packages", {})
+    tarball = _first(
+        (entry["resolved"] for entry in packages.values() if "resolved" in entry), lock, "resolved tarball"
+    )
+    return _Service("npm registry", (_Request("tarball", tarball),))
+
+
+def _first(items: Iterable[_T], lock: Path, what: str) -> _T:
+    """The first of *items*, read from *lock*; with none, a ValueError saying *lock* names no *what*, so the lane reads a broken probe."""
+    for item in items:
+        return item
+    raise ValueError(f"{lock} names no {what}, so the probe has nothing to ask")
+
+
 def _parser() -> argparse.ArgumentParser:
     every_service = argparse.ArgumentParser(add_help=False)
     every_service.add_argument(
@@ -131,6 +187,30 @@ def _parser() -> argparse.ArgumentParser:
         help="the PVGIS API release to ask, ending in a slash (default: %(default)s)",
     )
     pvgis.set_defaults(service_of=_pvgis)
+    pypi = services.add_parser(
+        "pypi",
+        parents=[every_service],
+        help="PyPI, from which the interpreter-matrix and newest-releases jobs install what uv.lock pins",
+    )
+    pypi.add_argument(
+        "--uv-lock",
+        type=Path,
+        default=_REPOSITORY / "uv.lock",
+        help="the uv.lock whose first package pinned from a registry is asked for (default: %(default)s)",
+    )
+    pypi.set_defaults(service_of=_pypi)
+    npm = services.add_parser(
+        "npm",
+        parents=[every_service],
+        help="the npm registry, from which the css-build job's npm ci installs what package-lock.json resolves",
+    )
+    npm.add_argument(
+        "--package-lock",
+        type=Path,
+        default=_REPOSITORY / "src" / "solar_challenge" / "web" / "package-lock.json",
+        help="the package-lock.json whose first resolved tarball is asked for (default: %(default)s)",
+    )
+    npm.set_defaults(service_of=_npm)
     return parser
 
 
