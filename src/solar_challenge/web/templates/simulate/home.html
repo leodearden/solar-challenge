@@ -50,6 +50,7 @@ document.addEventListener('alpine:init', () => {
             tariff_off_peak_rate: 0.13,
             system_age_years: 0,
             degradation_rate_per_year: 0.005,
+            system_losses: null,
             seg_enabled: false,
             seg_preset: 'custom',
             seg_rate_pence_per_kwh: 4.0
@@ -136,6 +137,10 @@ document.addEventListener('alpine:init', () => {
             } else {
                 payload.start = f.start_date;
                 payload.end = f.end_date;
+            }
+            // Optional: PV system losses; left blank, the server builds PVConfig's default
+            if (typeof f.system_losses === 'number') {
+                payload.system_losses = f.system_losses;
             }
             // Optional: heat pump
             if (f.heat_pump_enabled) {
