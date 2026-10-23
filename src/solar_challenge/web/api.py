@@ -21,7 +21,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context, ur
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
-from solar_challenge.number_fields import as_finite_float, as_whole_number_within
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
@@ -546,7 +546,7 @@ def simulate_sweep() -> tuple[Response, int]:
     try:
         min_val = as_finite_float(data.get("min", 1.0), "min")
         max_val = as_finite_float(data.get("max", 10.0), "max")
-        steps = as_whole_number_within(data.get("steps", 5), "steps", 2, SWEEP_MAX_STEPS)
+        steps = as_whole_number(data.get("steps", 5), "steps", within=Interval(2, SWEEP_MAX_STEPS))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     if min_val >= max_val:

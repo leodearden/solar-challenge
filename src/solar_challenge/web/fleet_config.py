@@ -18,10 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
-from solar_challenge.number_fields import (
-    as_finite_float,
-    as_whole_number_within,
-)
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.dispatch import DispatchStrategyConfig
@@ -37,10 +34,10 @@ def read_fleet_size(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming *field* and the value sent.
     """
-    return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
+    return as_whole_number(value, field, within=Interval(1, MAX_FLEET_HOMES))
 
 
 #: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
@@ -52,23 +49,23 @@ def read_fleet_seed(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming *field* and the value sent.
     """
-    return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
+    return as_whole_number(value, field, within=Interval(-MAX_FLEET_SEED, MAX_FLEET_SEED))
 
 
 def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list[int]:
     """Read *counts*, each count of the *pool_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming a count's field and the value sent; or, when the counts total more than
             MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
             *pool_field* and the total.
     """
     read_counts = [
-        as_whole_number_within(value, field, 0, MAX_FLEET_HOMES) for field, value in counts
+        as_whole_number(value, field, within=Interval(0, MAX_FLEET_HOMES)) for field, value in counts
     ]
     total = sum(read_counts)
     if total > MAX_FLEET_HOMES:
@@ -143,7 +140,7 @@ def sample_distribution(
 
     Raises:
         ValueError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.number_fields.as_whole_number_within`), params are
+            :func:`~solar_challenge.number_fields.as_whole_number`), params are
             not a dict (see :func:`_require_dict`), :func:`distribution_grammar_spec`
             refuses the distribution, naming type or the field under ``params``, params
             leave out what the type is drawn from (see
@@ -152,7 +149,7 @@ def sample_distribution(
             a finite number, as finite params whose draws overflow a float can; that error
             names params and the sample.
     """
-    n_samples = as_whole_number_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
+    n_samples = as_whole_number(n_samples, "n_samples", within=Interval(1, MAX_FLEET_HOMES))
     params = _require_dict(params, "params")
     fields = {**_fields_under("params"), "type": "type"}
     distribution = {**params, "type": dist_type}
