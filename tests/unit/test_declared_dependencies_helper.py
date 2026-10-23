@@ -96,6 +96,7 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     empty_pytest_plugins = _write_module(tmp_path / "empty_pytest_plugins.py", 'pytest_plugins = ""')
 
     undeclared = undeclared_distributions(
+        tmp_path,
         [
             undeclared_top_level,
             undeclared_function_local,
@@ -167,7 +168,7 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_call_of_pytests_
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
-    assert undeclared_distributions([resembling], declared={"pytest"}) == [], (
+    assert undeclared_distributions(tmp_path, [resembling], declared={"pytest"}) == [], (
         "the undeclared-distributions detector read a requirement of yaml, which no declared "
         f"distribution provides, from a file that only resembles a call of pytest.importorskip: {lines}"
     )
@@ -185,7 +186,7 @@ def test_undeclared_distributions_fails_naming_a_file_that_importorskips_a_modul
     )
 
     with pytest.raises(AssertionError) as failure:
-        undeclared_distributions([skips_always], declared={"pytest"})
+        undeclared_distributions(tmp_path, [skips_always], declared={"pytest"})
 
     message = str(failure.value)
     assert str(skips_always) in message and unprovided in message, (
@@ -504,7 +505,7 @@ def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_pl
     plugin = _write_module(tmp_path / "plugin.py", "import pytest", f"pytest_plugins = {assigned}")
 
     with pytest.raises(AssertionError) as failure:
-        undeclared_distributions([plugin], declared={"pytest"})
+        undeclared_distributions(tmp_path, [plugin], declared={"pytest"})
 
     message = str(failure.value)
     assert f"{plugin}:2 sets pytest_plugins to {assigned}, which {defect}" in message, (

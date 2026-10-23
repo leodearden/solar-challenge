@@ -129,6 +129,13 @@ def _src_dir(project_root: Path) -> Path:
     return project_root / "src"
 
 
+def _package_dir(project_root: Path) -> Path:
+    """Return the directory of the package under *project_root*, from which the editable install
+    imports it.
+    """
+    return _src_dir(project_root) / _PACKAGE
+
+
 def _web_subpackage_dir(project_root: Path) -> Path:
     """Return the directory of WEB_SUBPACKAGE, the package's web subpackage, under *project_root*:
     the one the web extra serves.
@@ -145,8 +152,7 @@ def _core_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files outside its web subpackage, which an install of the package
     without extras runs.
     """
-    web_dir = _web_subpackage_dir(project_root)
-    return _python_files_outside(web_dir.parent, web_dir)
+    return _python_files_outside(_package_dir(project_root), _web_subpackage_dir(project_root))
 
 
 def _script_sources(project_root: Path) -> list[Path]:
@@ -351,10 +357,10 @@ def _importorskip_imports(tree: ast.AST) -> Iterator[ast.Import]:
                     yield ast.copy_location(ast.Import(names=[ast.alias(name=modname.value)]), modname)
 
 
-def _imports_required_by(source: Path) -> Iterator[ast.Import | ast.ImportFrom]:
-    """Yield the imports the Python *source* file requires: its _unguarded_imports, an import of
-    each module it names to pytest.importorskip, and an import of the module pytest imports for
-    each entry of its pytest_plugins.
+def _imports_required_by(project_root: Path, source: Path) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield the imports the Python *source* file of *project_root* requires: its
+    _unguarded_imports, an import of each module it names to pytest.importorskip, and an import
+    of the module pytest imports for each entry of its pytest_plugins.
 
     Every reading of what a file requires starts here.
     """
@@ -401,7 +407,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     A relative import that climbs out of *project_root*, or a pytest_plugins value that
     _pytest_plugin_imports cannot read, fails naming *source* and the line.
     """
-    for node in _imports_required_by(source):
+    for node in _imports_required_by(project_root, source):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield _directory_of_absolute_name(project_root, alias.name), alias.name.split(".")
@@ -496,14 +502,16 @@ def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[st
     return modules
 
 
-def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
-    """Return the top-level module of every absolute import *sources* require, as
-    _imports_required_by reads them.
+def _required_top_level_modules(project_root: Path, sources: Iterable[Path]) -> set[str]:
+    """Return the top-level module of every absolute import *sources*, files of *project_root*,
+    require, as _imports_required_by reads them.
 
     Function-local and TYPE_CHECKING imports count; relative imports and
     ImportError-guarded imports do not.
     """
-    return _top_level_modules(node for source in sources for node in _imports_required_by(source))
+    return _top_level_modules(
+        node for source in sources for node in _imports_required_by(project_root, source)
+    )
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
@@ -513,13 +521,15 @@ def _third_party_modules(modules: set[str]) -> set[str]:
     return modules - sys.stdlib_module_names - _FIRST_PARTY
 
 
-def _third_party_distributions(source: Path, providers: Mapping[str, list[str]]) -> set[str]:
+def _third_party_distributions(
+    project_root: Path, source: Path, providers: Mapping[str, list[str]]
+) -> set[str]:
     """Return the canonical names of the distributions that provide the third-party modules
-    *source* requires, as *providers* maps modules to distributions.
+    *source*, a file of *project_root*, requires, as *providers* maps modules to distributions.
 
     Standard-library modules and the first-party solar_challenge and tests packages are dropped.
     """
-    third_party = _third_party_modules(_required_top_level_modules([source]))
+    third_party = _third_party_modules(_required_top_level_modules(project_root, [source]))
     unprovided = sorted(module for module in third_party if module not in providers)
     assert not unprovided, (
         f"no installed distribution provides the modules {source} requires: {unprovided}; "
@@ -529,16 +539,17 @@ def _third_party_distributions(source: Path, providers: Mapping[str, list[str]])
 
 
 def undeclared_distributions(
+    project_root: Path,
     sources: Iterable[Path],
     declared: set[str],
 ) -> list[tuple[Path, list[str]]]:
-    """Return (file, undeclared distributions) for every file in *sources* that requires a
-    third-party distribution outside *declared*.
+    """Return (file, undeclared distributions) for every file in *sources*, files of
+    *project_root*, that requires a third-party distribution outside *declared*.
     """
     providers = packages_distributions()
     undeclared: list[tuple[Path, list[str]]] = []
     for source in sources:
-        distributions = sorted(_third_party_distributions(source, providers) - declared)
+        distributions = sorted(_third_party_distributions(project_root, source, providers) - declared)
         if distributions:
             undeclared.append((source, distributions))
     return sorted(undeclared)
@@ -592,7 +603,7 @@ def assert_imports_only_declared(project_root: Path, scope: SourceScope) -> None
     sources = scope.select(project_root)
     undeclared = [
         f"{source.relative_to(project_root)} requires {distributions}"
-        for source, distributions in undeclared_distributions(sources, declared)
+        for source, distributions in undeclared_distributions(project_root, sources, declared)
     ]
     groups = ", ".join(
         ["[project].dependencies", *(f"[project.optional-dependencies].{extra}" for extra in scope.extras)]
