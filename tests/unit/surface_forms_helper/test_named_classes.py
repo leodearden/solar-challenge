@@ -2,7 +2,7 @@
 """The rules of tests/_surface_forms.py's named_classes, one per test.
 
 Gauge is defined at module level, where its forward reference to itself resolves in this
-module's namespace.
+module's namespace, and so is _typed, whose lambda carries this module's globals.
 """
 
 import collections
@@ -14,6 +14,7 @@ import fractions
 import functools
 import gc
 import inspect
+import operator
 import pathlib
 import re
 import sys
@@ -75,6 +76,18 @@ class Gauge:
     def inner(self) -> Outer.Inner: ...
 
     def _cache(self) -> bytes: ...
+
+
+def _typed(function: Callable[..., object], *receivers: str) -> Callable[..., object]:
+    """A wrapper of *function*, as functools.wraps records one, given a signature here: *receivers*, then share annotated with the string "Decimal", which this module binds only for type checking."""
+    wrapper = functools.wraps(function)(lambda *args: function(*args))
+    wrapper.__signature__ = inspect.Signature(
+        [
+            *(inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in receivers),
+            inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Decimal"),
+        ]
+    )
+    return wrapper
 
 
 def test_a_generic_names_its_origin_and_its_arguments_classes() -> None:
@@ -976,6 +989,56 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rates.Counted) == {fractions.Fraction}
     assert named_classes(functools.partial(rates.Rated)) == {fractions.Fraction}
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
+
+
+def test_a_signature_a_link_carries_over_a_routine_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relaying = imported_module(
+        tmp_path,
+        monkeypatch,
+        "relaying",
+        "from fractions import Fraction as Decimal\n"
+        "from functools import wraps\n"
+        "\n"
+        "def relay(function):\n"
+        "    return wraps(function)(lambda *args: function(*args))\n",
+    )
+
+    class Counting(type):
+        __call__ = _typed(type.__call__, "receiver")
+
+    class Counted(metaclass=Counting):
+        pass
+
+    class Caller:
+        __call__ = _typed(len, "receiver")
+
+    assert named_classes(_typed(len)) == {decimal.Decimal}
+    assert named_classes(_typed(str.join)) == {decimal.Decimal}
+    assert named_classes(_typed(operator.itemgetter(1))) == {decimal.Decimal}
+    assert named_classes(Counted) == {decimal.Decimal}
+    assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
+    assert named_classes(relaying.relay(_typed(len))) == {decimal.Decimal}
+
+
+def test_a_partial_that_carries_a_signature_over_a_routine_defined_in_c_records_no_module_so_a_string_annotation_there_raises_type_error_naming_it_and_the_string() -> None:
+    rating = functools.partial(len)
+    rating.__signature__ = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+    counting = functools.partial(len)
+    counting.__signature__ = inspect.Signature(
+        [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Decimal")]
+    )
+    relayed = functools.wraps(counting)(lambda *args: counting(*args))
+
+    assert named_classes(rating) == {int}
+    naming_the_partial_and_the_string = r"\bfunctools\.partial\(<built-in function len>\).*'Decimal'"
+    with pytest.raises(TypeError, match=naming_the_partial_and_the_string):
+        named_classes(counting)
+    with pytest.raises(TypeError, match=naming_the_partial_and_the_string):
+        named_classes(relayed)
 
 
 def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_the_class_and_that_metaclass_whatever_its_constructor(
