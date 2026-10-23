@@ -5,6 +5,7 @@ Gauge is defined at module level, where its forward reference to itself resolves
 module's namespace, and so is _typed, whose lambda carries this module's globals.
 """
 
+import _json
 import collections
 import collections.abc
 import datetime
@@ -613,6 +614,22 @@ def test_a_partial_that_carries_a_signature_over_an_immutable_type_its_module_do
     assert named_classes(made) == {int}
 
 
+def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_forms_name_though_its_module_with_no_source_binds_it_under_another_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_json, built in or an extension module, binds _json.Scanner as make_scanner; the class's public members are member descriptors."""
+    monkeypatch.setattr(
+        _json.make_scanner,
+        "__signature__",
+        inspect.Signature(
+            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        ),
+        raising=False,
+    )
+
+    assert named_classes(_json.make_scanner) == {int, types.MemberDescriptorType}
+
+
 def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
     assert named_classes(str.join) == set()
     assert named_classes(", ".join) == set()
@@ -664,6 +681,18 @@ def test_a_string_annotation_read_in_a_module_inspect_reads_no_source_for_raises
 
     with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'unsourced'.*\bno source\b"):
         named_classes(unsourced.settle)
+
+    monkeypatch.setattr(
+        _json.make_scanner,
+        "__signature__",
+        inspect.Signature(
+            [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Share")]
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule '_json'.*\bno source\b"):
+        named_classes(_json.make_scanner)
 
 
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
