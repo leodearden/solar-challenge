@@ -13,11 +13,11 @@ import json
 import re
 import shutil
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal, TypeVar, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
@@ -62,6 +62,30 @@ class RunRecord:
             raise ValueError(f"Run {self.id!r} is recorded with no type, so it is of no run kind")
         return RUN_KINDS[self.type]
 
+    def summary(self) -> SummaryStatistics | FleetSummary | None:
+        """The run's summary, decoded from summary_json as its kind's summary_type; None while the run has none.
+
+        Raises:
+            ValueError: The record has no type, as RunRecord.kind refuses it, or summary_json does
+                not decode as its kind's summary; then the message names the run and
+                runs.summary_json, and the decoder's refusal is the cause.
+        """
+        if self.summary_json is None:
+            return None
+        return _decoded_document(self.id, "summary_json", self.summary_json, self.kind.summary)
+
+    def home_configs(self) -> tuple[HomeConfig, ...] | None:
+        """Each home's HomeConfig, in order, decoded from config_json as the run's kind decodes it; None while the run has none.
+
+        Raises:
+            ValueError: The record has no type, as RunRecord.kind refuses it, or config_json does
+                not decode as its kind's config; then the message names the run and
+                runs.config_json, and the decoder's refusal is the cause.
+        """
+        if self.config_json is None:
+            return None
+        return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
+
     def decoded_config(self) -> Any:
         """The value config_json encodes; {} when the run has no config text or it is not JSON."""
         return _decoded_or_empty(self.config_json)
@@ -75,6 +99,27 @@ def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]
     """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
     if value is not None and value not in allowed:
         raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
+
+
+_DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
+_Decoded = TypeVar("_Decoded")
+
+
+def _decoded_document(
+    run_id: str, column: _DocumentColumn, text: str, decode: Callable[[Mapping[str, Any]], _Decoded]
+) -> _Decoded:
+    """What *decode* reads from the document JSON *text* holds, run *run_id*'s runs.*column*.
+
+    Raises:
+        ValueError: *text* is not JSON, or *decode* refuses the document it holds; the message
+            names the run and the column, and the refusal is the cause.
+    """
+    try:
+        return decode(json.loads(text))
+    except (ValueError, TypeError, KeyError, AttributeError) as refusal:
+        raise ValueError(
+            f"The runs.{column} of run {run_id!r} is not a document its kind decodes: {type(refusal).__name__}: {refusal}"
+        ) from refusal
 
 
 def _decoded_or_empty(text: str | None) -> Any:
