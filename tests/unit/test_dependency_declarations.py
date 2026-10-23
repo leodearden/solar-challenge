@@ -1,18 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Dependency declaration contract tests.
 
-Every third-party import the package requires must be satisfied by a declared
-dependency, not by whatever another package's extra happens to pull in: code
-outside the web subpackage needs DIRECT core dependencies, and the web
-subpackage needs core dependencies or the `web` extra that serves it.  No core
-dependency may request an extra its distribution does not provide.  No declared
-requirement may carry an environment marker that holds only on Python minors
-requires-python does not admit, since it could never install.  An import
-inside a try block that handles ImportError is optional by construction and
-exempt, but the guard must then guard a distribution its scope does not
-declare: a declared distribution always imports in a valid install, so a
-guard over declared distributions only is dead code.  pyproject.toml is parsed
-structurally (TOML plus PEP 508 requirements), not by regex.
+Every third-party import a source file requires must be satisfied by a
+dependency declared for where that file runs, not by whatever another
+requirement happens to pull in.  Every scope may use the core dependencies,
+plus the extras the commands that run it install:
+
+- the package outside its web subpackage: none; the web subpackage: `web`;
+- scripts/: `dev`;
+- tests/ outside tests/e2e: `dev` and `web`, the per-task verify's extras;
+- tests/e2e: `dev`, `web` and `e2e`, the e2e lane job's extras.
+
+solar_challenge and tests are first-party.  No core dependency may request an
+extra its distribution does not provide.  No declared requirement may carry an
+environment marker that holds only on Python minors requires-python does not
+admit, since it could never install.  An import inside a try block that handles
+ImportError is optional by construction and exempt, but in the package the
+guard must then guard a distribution its scope does not declare: a declared
+distribution always imports in a valid install, so a guard over declared
+distributions only is dead code.  pyproject.toml is parsed structurally (TOML
+plus PEP 508 requirements), not by regex.
 
 pyproject.toml is also the only dependency declaration: no requirements*.txt at
 the project root may restate it, since a hand-maintained copy drifts from it.
@@ -37,7 +44,9 @@ from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _FIRST_PARTY = frozenset({"solar_challenge", "tests"})
+_DEV = "dev"
 _WEB = "web"
+_E2E = "e2e"
 
 
 def _core_requirements(project_root: Path) -> list[Requirement]:
@@ -74,11 +83,11 @@ def _declared_distributions_or_skip(project_root: Path, extras: tuple[str, ...])
     extra_requirements = _extra_requirements(project_root, extras)
     uninstalled = _uninstalled(extra_requirements)
     if uninstalled:
-        install_flags = "".join(f" --extra {extra}" for extra in extras)
+        install_flags = "".join(f" --extra {extra}" for extra in dict.fromkeys((_DEV, *extras)))
         pytest.skip(
             "imports can be mapped to distributions only where the extras this source scope may "
             f"use are installed; not installed: {uninstalled}. "
-            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
+            f"Install them, e.g. with `uv run{install_flags} pytest`"
         )
     return {canonicalize_name(r.name) for r in [*_core_requirements(project_root), *extra_requirements]}
 
@@ -119,9 +128,15 @@ def _e2e_test_sources(project_root: Path) -> list[Path]:
     return list((project_root / "tests" / "e2e").rglob("*.py"))
 
 
-_SOURCE_SCOPES = [
+_PACKAGE_SCOPES = [
     pytest.param(_core_sources, (), id="outside-web"),
     pytest.param(_web_sources, (_WEB,), id="web"),
+]
+_SOURCE_SCOPES = [
+    *_PACKAGE_SCOPES,
+    pytest.param(_script_sources, (_DEV,), id="scripts"),
+    pytest.param(_test_sources_outside_e2e, (_DEV, _WEB), id="tests-outside-e2e"),
+    pytest.param(_e2e_test_sources, (_DEV, _WEB, _E2E), id="tests-e2e"),
 ]
 
 
@@ -272,13 +287,14 @@ def test_sources_import_only_declared_dependencies(
     )
 
 
-@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
+@pytest.mark.parametrize(("select_sources", "extras"), _PACKAGE_SCOPES)
 def test_import_guards_guard_an_undeclared_dependency(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
     extras: tuple[str, ...],
 ) -> None:
-    """Every try that handles ImportError must guard a distribution its source scope does not declare.
+    """Every try in the package that handles ImportError must guard a distribution its source
+    scope does not declare.
 
     Its handler runs only if a guarded import fails, and a declared distribution always
     imports in a valid install, so a guard over declared distributions only is dead code.
