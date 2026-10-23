@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Import-structure contract test (INV-5).
+"""Import-structure contract tests: which modules the import statements of solar_challenge may name.
 
-No import statement inside a function of solar_challenge names another of its modules,
+INV-5: no import statement inside a function of solar_challenge names another of its modules,
 except for the (importing module, imported module) pairs ALLOWED_FUNCTION_LOCAL_IMPORTS
 lists. Each pair carries a Permanent reason, the documented contract that requires the
 laziness, or a Transitional one, the task or program stream that removes the import.
 The check runs both ways, so the change that removes a pair's last such import deletes
-its entry. It reads import statements only: the lazy loader in solar_challenge/__init__.py
+its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
+
+No import statement of solar_challenge, at any scope, names the tests package: the wheel
+ships only src/, so such an import fails in every installed copy.
+
+Both read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
-tests/unit/test_init_lazy_surface.py. docs/prds/errors-leaf.md §7 measured and classified
-the list.
+tests/unit/test_init_lazy_surface.py.
 """
 
 import ast
@@ -20,6 +24,7 @@ from pathlib import Path
 import pytest
 
 _PACKAGE = "solar_challenge"
+_TEST_SUITE = "tests"
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 
@@ -78,16 +83,17 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
 
 
 @dataclass(frozen=True)
-class _FunctionLocalImport:
-    """One import of a module of the package inside a function: the importing and imported modules, and the import's file and line."""
+class _ImportSite:
+    """One module an import statement of the package imports: the importing and imported modules, the statement's file and line, and whether it sits inside a function."""
 
     importer: str
     imported: str
     path: Path
     line: int
+    in_function: bool
 
     def __str__(self) -> str:
-        return f"{self.path.as_posix()}:{self.line} imports {self.imported} inside a function"
+        return f"{self.path.as_posix()}:{self.line} imports {self.imported}"
 
 
 def _module_name(source: Path, src_dir: Path) -> str:
@@ -119,44 +125,55 @@ def _imported_modules(
     return [from_module]
 
 
-def _imports_nested_in_functions(
+def _import_statements(
     node: ast.AST, in_function: bool = False
-) -> Iterator[ast.Import | ast.ImportFrom]:
-    """Yield, once each, the imports under *node* that sit inside a function or method."""
+) -> Iterator[tuple[ast.Import | ast.ImportFrom, bool]]:
+    """Yield, once each and in source order, the imports under *node*, each with whether it sits inside a function or method."""
     for child in ast.iter_child_nodes(node):
-        if in_function and isinstance(child, (ast.Import, ast.ImportFrom)):
-            yield child
-        yield from _imports_nested_in_functions(
+        if isinstance(child, (ast.Import, ast.ImportFrom)):
+            yield child, in_function
+        yield from _import_statements(
             child, in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
         )
 
 
-def _function_local_package_imports(src_dir: Path) -> list[_FunctionLocalImport]:
-    """Return every import of the package's modules inside a function of the package under *src_dir*, in path then line order."""
-    found: list[_FunctionLocalImport] = []
+def _import_sites(src_dir: Path) -> list[_ImportSite]:
+    """Return a site for every module an import statement of the package under *src_dir* imports, at any scope, in path then line order."""
+    sites: list[_ImportSite] = []
     for source in sorted((src_dir / _PACKAGE).rglob("*.py")):
         importer = _module_name(source, src_dir)
+        path = source.relative_to(src_dir.parent)
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in _imports_nested_in_functions(tree):
+        for node, in_function in _import_statements(tree):
             for imported in _imported_modules(node, importer, source.name == "__init__.py"):
-                if imported == _PACKAGE or imported.startswith(f"{_PACKAGE}."):
-                    found.append(
-                        _FunctionLocalImport(
-                            importer, imported, source.relative_to(src_dir.parent), node.lineno
-                        )
-                    )
-    return found
+                sites.append(_ImportSite(importer, imported, path, node.lineno, in_function))
+    return sites
+
+
+def _in_package(module: str, package: str) -> bool:
+    """Return whether *module* is *package* or a module beneath it."""
+    return module == package or module.startswith(f"{package}.")
+
+
+def _function_local_package_imports(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* that import a module of the package inside a function."""
+    return [site for site in sites if site.in_function and _in_package(site.imported, _PACKAGE)]
+
+
+def _test_suite_imports(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* that import the tests package or a module beneath it, at any scope."""
+    return [site for site in sites if _in_package(site.imported, _TEST_SUITE)]
 
 
 def _unlisted(
-    found: Iterable[_FunctionLocalImport], allowed: Collection[tuple[str, str]]
-) -> list[_FunctionLocalImport]:
+    found: Iterable[_ImportSite], allowed: Collection[tuple[str, str]]
+) -> list[_ImportSite]:
     """Return the *found* sites whose (importing module, imported module) pair is not in *allowed*."""
     return [site for site in found if (site.importer, site.imported) not in allowed]
 
 
 def _stale(
-    found: Iterable[_FunctionLocalImport], allowed: Collection[tuple[str, str]]
+    found: Iterable[_ImportSite], allowed: Collection[tuple[str, str]]
 ) -> list[tuple[str, str]]:
     """Return the sorted pairs of *allowed* that no *found* site imports."""
     imported = {(site.importer, site.imported) for site in found}
@@ -164,16 +181,18 @@ def _stale(
 
 
 @pytest.fixture(scope="module")
-def real_tree_imports() -> tuple[_FunctionLocalImport, ...]:
-    """The function-local package imports of src/solar_challenge, scanned once for the module's two real-tree tests."""
-    return tuple(_function_local_package_imports(_SRC_DIR))
+def real_tree_imports() -> tuple[_ImportSite, ...]:
+    """The import sites of src/solar_challenge, at any scope, scanned once for the module's three real-tree tests."""
+    return tuple(_import_sites(_SRC_DIR))
 
 
 def test_every_function_local_package_import_is_allowed(
-    real_tree_imports: tuple[_FunctionLocalImport, ...],
+    real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
     """Every import of a module of the package inside a function is of a pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists."""
-    unlisted = _unlisted(real_tree_imports, ALLOWED_FUNCTION_LOCAL_IMPORTS)
+    unlisted = _unlisted(
+        _function_local_package_imports(real_tree_imports), ALLOWED_FUNCTION_LOCAL_IMPORTS
+    )
 
     sites = "\n".join(str(site) for site in unlisted)
     assert not unlisted, (
@@ -187,10 +206,12 @@ def test_every_function_local_package_import_is_allowed(
 
 
 def test_every_allowed_pair_is_still_imported_inside_a_function(
-    real_tree_imports: tuple[_FunctionLocalImport, ...],
+    real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
     """Every pair ALLOWED_FUNCTION_LOCAL_IMPORTS lists is still imported inside a function of the package."""
-    stale = _stale(real_tree_imports, ALLOWED_FUNCTION_LOCAL_IMPORTS)
+    stale = _stale(
+        _function_local_package_imports(real_tree_imports), ALLOWED_FUNCTION_LOCAL_IMPORTS
+    )
 
     entries = "\n".join(f"{pair}: {ALLOWED_FUNCTION_LOCAL_IMPORTS[pair]!r}" for pair in stale)
     assert not stale, (
@@ -218,7 +239,7 @@ def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
 
 
 def test_no_import_statement_of_the_package_names_the_test_suite(
-    real_tree_imports: tuple[_FunctionLocalImport, ...],
+    real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
     """No import statement of the package, at any scope, imports the tests package, which the wheel does not ship."""
     found = _test_suite_imports(real_tree_imports)
@@ -261,7 +282,7 @@ def test_a_function_local_package_import_is_reported_with_its_file_line_and_modu
         },
     )
 
-    unlisted = _unlisted(_function_local_package_imports(src_dir), frozenset())
+    unlisted = _unlisted(_function_local_package_imports(_import_sites(src_dir)), frozenset())
 
     assert [(site.path.as_posix(), site.line, site.imported) for site in unlisted] == [
         ("src/solar_challenge/gridservices.py", 5, "solar_challenge.config")
@@ -286,7 +307,7 @@ def test_an_allowed_pair_no_function_imports_is_reported_stale(tmp_path: Path) -
     )
     pair = ("solar_challenge.finance", "solar_challenge.battery")
 
-    assert _stale(_function_local_package_imports(src_dir), {pair}) == [pair]
+    assert _stale(_function_local_package_imports(_import_sites(src_dir)), {pair}) == [pair]
 
 
 @pytest.mark.parametrize(
@@ -347,7 +368,7 @@ def test_the_scan_finds_only_package_imports_nested_in_a_function(
     """The scan finds an import of the package only inside a function or method, and names its module alike whether the import is absolute or relative."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
-    found = _function_local_package_imports(src_dir)
+    found = _function_local_package_imports(_import_sites(src_dir))
 
     assert [(site.importer, site.imported, site.line) for site in found] == expected
 
