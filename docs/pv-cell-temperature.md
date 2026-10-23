@@ -95,7 +95,7 @@ This is a dated record. Re-measure before relying on it.
   - Bristol's TMY comes through `get_tmy_data` from the weather cache: key
     `tmy_f8a4df0259c4` (key version 2), GHI 1069.46 kWh/m², scaled to PVGIS v5_3's
     2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).
-  - The clear day is `tests/_synthetic_weather.synthetic_june_weather("2024-06-21")`.
+  - The clear day is `tests/_synthetic_weather.py::synthetic_june_weather` called with `"2024-06-21"`.
   - Each SAPM figure is the same chain with every array's temperature-model parameters
     set back to pvlib's SAPM `open_rack_glass_glass` set. It reproduces main's figures
     (3976.80 kWh and 993.14 kWh/kWp: [pv-system-losses.md](pv-system-losses.md) §5).

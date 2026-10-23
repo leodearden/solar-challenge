@@ -16,8 +16,8 @@ releases: ruff 0.16.10 enables hundreds of rules by default that 0.15.9 does not
 
 ## 2. Where It Runs
 
-`tests/unit/test_lint.py` lints `src/solar_challenge`, and the verify's `test_command` runs
-it with the rest of the suite. `dark-factory-orchestrator.yaml` keeps `lint_command: "true"`.
+`tests/unit/test_lint.py` lints `src/solar_challenge`, and the verify's test command runs it
+with the rest of the suite. `dark-factory-orchestrator.yaml` keeps `lint_command: "true"`.
 
 ## 3. Why Not `lint_command`
 
