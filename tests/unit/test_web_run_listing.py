@@ -11,9 +11,15 @@ the generation and self-consumption ratio a run list shows.
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
 query matches; RunQuery refuses a query no page answers.
+
+readable_headline is the headline a run list shows for a run's record: None while the run
+has no summary, and None, with a warning naming the run, when its summary does not decode.
+RunStorage.totals counts the completed runs and their homes and sums the generation of
+those whose headline reads.
 """
 
 import dataclasses
+import logging
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -33,6 +39,8 @@ from solar_challenge.web.storage import (
     RunQuery,
     RunRecord,
     RunStorage,
+    RunTotals,
+    readable_headline,
     run_headline,
 )
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
@@ -330,3 +338,91 @@ class TestPageRuns:
         pages = [storage.page_runs(RunQuery(page=page, per_page=2)) for page in (1, 2)]
 
         assert [_ids(page) for page in pages] == [["tie-c", "tie-b"], ["tie-a"]]
+
+
+def _storage_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The message of each WARNING solar_challenge.web.storage logged in the test."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "solar_challenge.web.storage" and record.levelno == logging.WARNING
+    ]
+
+
+def _garble_summary(storage: RunStorage, run_id: str) -> None:
+    """Overwrite run *run_id*'s summary_json with text that is not JSON."""
+    with storage.database.transaction() as conn:
+        conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", run_id))
+
+
+class TestReadableHeadline:
+    """readable_headline: the headline a run list shows for a run's record, or None when it has none to show."""
+
+    def test_a_saved_run_s_headline_is_the_headline_of_its_summary(self, storage: RunStorage) -> None:
+        fleet = _two_unlike_homes()
+        store_fleet_run(storage, "fleet-1", fleet)
+
+        assert readable_headline(_record(storage, "fleet-1")) == run_headline(calculate_fleet_summary(fleet))
+
+    def test_a_run_whose_job_is_still_running_has_no_headline_yet(self, storage: RunStorage) -> None:
+        storage.create_run("running-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00")
+
+        assert readable_headline(_record(storage, "running-1")) is None
+
+    def test_a_run_whose_summary_does_not_decode_has_no_headline_and_a_warning_names_it(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _store_a_home_run(storage, "garbled-run")
+        _garble_summary(storage, "garbled-run")
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        assert readable_headline(_record(storage, "garbled-run")) is None
+        warnings = _storage_warnings(caplog)
+        assert len(warnings) == 1 and "garbled-run" in warnings[0], warnings
+
+
+class TestRunTotals:
+    """RunStorage.totals: the dashboard's count of the completed runs and of their homes, and the energy they generated."""
+
+    def test_an_empty_store_has_no_runs_no_homes_and_no_generation(self, storage: RunStorage) -> None:
+        assert storage.totals() == RunTotals(run_count=0, home_count=0, generation_kwh=0.0)
+
+    def test_the_completed_runs_of_either_kind_count_with_their_homes_and_their_generation(
+        self, storage: RunStorage
+    ) -> None:
+        results = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        fleet = _two_unlike_homes()
+        store_home_run(storage, "home-1", make_home_config(), results)
+        store_fleet_run(storage, "fleet-1", fleet)
+        store_home_run(storage, "failed-1", make_home_config(), make_sim_results(days=1), status="failed")
+        storage.create_run("running-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00")
+
+        totals = storage.totals()
+
+        assert (totals.run_count, totals.home_count) == (2, 3)
+        assert totals.generation_kwh == pytest.approx(
+            calculate_summary(results).total_generation_kwh + calculate_fleet_summary(fleet).total_generation_kwh
+        )
+
+    def test_a_completed_run_whose_row_records_no_count_of_homes_counts_as_one_home(self, storage: RunStorage) -> None:
+        _store_a_fleet_run(storage, "fleet-1")
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET n_homes = NULL WHERE id = ?", ("fleet-1",))
+
+        assert storage.totals().home_count == 1
+
+    def test_a_completed_run_whose_summary_does_not_decode_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        results = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_home_run(storage, "home-1", make_home_config(), results)
+        _store_a_fleet_run(storage, "garbled-run")
+        _garble_summary(storage, "garbled-run")
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        totals = storage.totals()
+
+        assert (totals.run_count, totals.home_count) == (2, 3)
+        assert totals.generation_kwh == pytest.approx(calculate_summary(results).total_generation_kwh)
+        warnings = _storage_warnings(caplog)
+        assert len(warnings) == 1 and "garbled-run" in warnings[0], warnings
