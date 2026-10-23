@@ -201,6 +201,7 @@ _OWN_FILES_OF_EACH_SCOPE = {
         "tests/_network.py",
         "tests/_newest.py",
         "tests/_paths.py",
+        "tests/_pins.py",
         "tests/_plugin.py",
         "tests/_plugin_fixtures.py",
         "tests/_plugin_hooks.py",
@@ -248,7 +249,8 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
         "from tests._helpers import build",
         "from tests._uv import isolated_env",
     ),
-    # the guarded import is not followed; the function-local from-package submodule is
+    # the guarded import is not followed; the function-local from-package submodule is, and so is
+    # the module the test names to pytest.importorskip
     "tests/newest_releases/test_newest.py": (
         "try:",
         "    from tests._web_double import app",
@@ -256,6 +258,7 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
         "    app = None",
         "def test_newest():",
         "    from tests import _newest",
+        '    pytest.importorskip("tests._pins")',
     ),
     # the package __init__.py on the way is run too
     "tests/css_build/test_build.py": ("from tests.unit._css import classes",),
@@ -298,7 +301,8 @@ def test_each_source_scope_selects_only_its_own_files(
     relatively (from the package directory or from one above it), or through a package's
     __init__.py. Modules that import each other are selected once each. tests-verify owns none
     of them. A module named only inside a try that handles ImportError is not imported for
-    certain, so it stays with tests-verify.
+    certain, so it stays with tests-verify. A module named to pytest.importorskip as a string
+    literal counts as imported: the test imports it or skips.
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
