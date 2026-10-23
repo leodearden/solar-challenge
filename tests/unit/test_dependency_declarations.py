@@ -83,15 +83,40 @@ def _declared_distributions_or_skip(project_root: Path, extras: tuple[str, ...])
     return {canonicalize_name(r.name) for r in [*_core_requirements(project_root), *extra_requirements]}
 
 
-def _web_sources(package_dir: Path) -> list[Path]:
+def _python_files_outside(directory: Path, excluded: Path) -> list[Path]:
+    """Return the .py files under *directory* that are not under its subdirectory *excluded*."""
+    return [source for source in directory.rglob("*.py") if not source.is_relative_to(excluded)]
+
+
+def _web_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files inside its web subpackage, the one the web extra serves."""
-    return list((package_dir / _WEB).rglob("*.py"))
+    return list((project_root / "src" / "solar_challenge" / _WEB).rglob("*.py"))
 
 
-def _core_sources(package_dir: Path) -> list[Path]:
+def _core_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files outside its web subpackage."""
-    web_sources = set(_web_sources(package_dir))
-    return [source for source in package_dir.rglob("*.py") if source not in web_sources]
+    package_dir = project_root / "src" / "solar_challenge"
+    return _python_files_outside(package_dir, package_dir / _WEB)
+
+
+def _script_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of scripts/, which run with the dev extra."""
+    return list((project_root / "scripts").rglob("*.py"))
+
+
+def _test_sources_outside_e2e(project_root: Path) -> list[Path]:
+    """Return the .py files of tests/ outside tests/e2e: what the per-task verify's test_command
+    runs, installing the dev and web extras and ignoring tests/e2e.
+    """
+    tests_dir = project_root / "tests"
+    return _python_files_outside(tests_dir, tests_dir / "e2e")
+
+
+def _e2e_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of tests/e2e: what the offline lane's e2e job runs, installing the
+    dev, web and e2e extras.
+    """
+    return list((project_root / "tests" / "e2e").rglob("*.py"))
 
 
 _SOURCE_SCOPES = [
@@ -232,7 +257,7 @@ def test_sources_import_only_declared_dependencies(
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
     declared = _declared_distributions_or_skip(project_root, extras)
-    sources = select_sources(project_root / "src" / "solar_challenge")
+    sources = select_sources(project_root)
     undeclared = [
         f"{source.relative_to(project_root)} requires {distributions}"
         for source, distributions in _undeclared_distributions(sources, declared)
@@ -259,7 +284,7 @@ def test_import_guards_guard_an_undeclared_dependency(
     imports in a valid install, so a guard over declared distributions only is dead code.
     """
     declared = _declared_distributions_or_skip(project_root, extras)
-    sources = select_sources(project_root / "src" / "solar_challenge")
+    sources = select_sources(project_root)
     dead = [
         f"{source.relative_to(project_root)}:{line} guards {modules}"
         for source, line, modules in _dead_import_guards(sources, declared)
