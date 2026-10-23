@@ -6,7 +6,9 @@ dependency declared for the run that loads that file, not by whatever another
 requirement happens to pull in. A SourceScope pairs a selector of source files
 with the extras, beside [project].dependencies, of the run that loads them;
 each selector's docstring names that run. solar_challenge and tests are
-first-party. An import inside a try block that handles ImportError is optional
+first-party. A module a file names to pytest.importorskip as a string literal
+counts as an import it requires, since the test skips wherever that module is
+missing. An import inside a try block that handles ImportError is optional
 by construction and exempt; dead_import_guards finds each such guard over
 declared distributions only, whose handler can never run. Imports map to
 distributions only through installed metadata, so a scope's check skips where
@@ -155,7 +157,8 @@ def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
 
 def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
     """Return the files of _dev_only_lane_suite_files and every module of the tests package they
-    import, transitively. A pytest_plugins entry counts as an absolute import.
+    import, transitively. A pytest_plugins entry and a module named to pytest.importorskip each
+    count as an absolute import.
 
     Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
     helper the verify also imports is judged here, against the dev extra alone, not with the
@@ -262,6 +265,49 @@ def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
     return names
 
 
+def _calls_importorskip(call: ast.Call) -> bool:
+    """Return whether *call* is spelled as a call of pytest's importorskip: pytest.importorskip, or
+    the bare importorskip that `from pytest import importorskip` binds.
+
+    Only the spelling is read, not what its names are bound to, so a method of that name on any
+    other object, or on pytest imported under another name, is no match.
+    """
+    callee = call.func
+    if isinstance(callee, ast.Attribute):
+        return (
+            callee.attr == "importorskip"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "pytest"
+        )
+    return isinstance(callee, ast.Name) and callee.id == "importorskip"
+
+
+def _importorskip_imports(tree: ast.AST) -> Iterator[ast.Import]:
+    """Yield an import of each module an importorskip call in *tree* passes as a string literal,
+    positionally or as modname=, wherever the call is. Each import sits where its literal does.
+
+    The call imports the module or skips its test, and an ImportError handler around it cannot
+    catch the skip, so the file requires the module wherever the call is. A modname that is not
+    a string literal is not read.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _calls_importorskip(node):
+            keyword_modnames = [keyword.value for keyword in node.keywords if keyword.arg == "modname"]
+            for modname in [*node.args[:1], *keyword_modnames]:
+                if isinstance(modname, ast.Constant) and isinstance(modname.value, str):
+                    yield ast.copy_location(ast.Import(names=[ast.alias(name=modname.value)]), modname)
+
+
+def _required_imports_and_importorskips(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield the imports *tree* requires: its _required_imports, and an import of each module it
+    names to pytest.importorskip.
+
+    Every reading of what a file requires starts here.
+    """
+    yield from _required_imports([tree])
+    yield from _importorskip_imports(tree)
+
+
 def _directory_of_from_import(project_root: Path, source: Path, node: ast.ImportFrom) -> Path:
     """Return the directory the from-import *node* of *source* resolves from: *project_root* for
     an absolute import, else *source*'s package directory, climbed level - 1 times.
@@ -284,15 +330,15 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     """Yield (directory, dotted-name parts) for each module *source* may import.
 
     An absolute name resolves from *project_root* and a relative one from *source*'s package
-    directory. Imports count as _required_imports counts them, and each pytest_plugins entry
-    counts as an absolute import. The last part of a from-import's name may be an attribute of
-    the module before it, not a module.
+    directory. Imports count as _required_imports_and_importorskips counts them, and each
+    pytest_plugins entry counts as an absolute import. The last part of a from-import's name
+    may be an attribute of the module before it, not a module.
 
     A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
     literal, fails naming *source* and the line.
     """
     tree = _parse(source)
-    for node in _required_imports([tree]):
+    for node in _required_imports_and_importorskips(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield project_root, alias.name.split(".")
@@ -357,15 +403,15 @@ def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[st
 
 
 def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
-    """Return the top-level module of every required absolute import in *sources*.
+    """Return the top-level module of every absolute import *sources* require, counting each
+    module they name to pytest.importorskip as one.
 
     Function-local and TYPE_CHECKING imports count; relative imports and
     ImportError-guarded imports do not.
     """
-    modules: set[str] = set()
-    for source in sources:
-        modules |= _top_level_modules(_required_imports([_parse(source)]))
-    return modules
+    return _top_level_modules(
+        node for source in sources for node in _required_imports_and_importorskips(_parse(source))
+    )
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
@@ -384,7 +430,7 @@ def _third_party_distributions(source: Path, providers: Mapping[str, list[str]])
     third_party = _third_party_modules(_required_top_level_modules([source]))
     unprovided = sorted(module for module in third_party if module not in providers)
     assert not unprovided, (
-        f"no installed distribution provides the modules {source} imports: {unprovided}; "
+        f"no installed distribution provides the modules {source} requires: {unprovided}; "
         "declare and install the distribution that provides them"
     )
     return {canonicalize_name(dist) for module in third_party for dist in providers[module]}
@@ -461,6 +507,8 @@ def assert_imports_only_declared(project_root: Path, scope: SourceScope) -> None
     )
     assert not undeclared, (
         f"these files require distributions missing from {groups}: {undeclared}. "
-        "Declare them in one of those groups in pyproject.toml, or make the import optional "
-        "inside a try block that handles ImportError"
+        "A module a file names to pytest.importorskip counts as required, since its test skips "
+        "wherever the module is missing. Declare them in one of those groups in pyproject.toml, "
+        "or, in src/solar_challenge, make the import optional inside a try block that handles "
+        "ImportError"
     )
