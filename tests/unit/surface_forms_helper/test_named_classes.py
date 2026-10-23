@@ -5,6 +5,7 @@ Gauge is defined at module level, where its forward reference to itself resolves
 module's namespace, and so is _typed, whose lambda carries this module's globals.
 """
 
+import _json
 import collections
 import collections.abc
 import datetime
@@ -376,6 +377,7 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
 def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Local's __init__ annotates nothing, so only Local's own module is looked up, for its attribute, and __init__ carries the globals of the module that built Local."""
     earlier = imported_module(
         tmp_path_factory.mktemp("earlier"),
         monkeypatch,
@@ -387,7 +389,9 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
         "\n"
         "def build():\n"
         "    class Local:\n"
-        "        def __init__(self, share: 'Share') -> None: ...\n"
+        "        share: 'Share'\n"
+        "\n"
+        "        def __init__(self): ...\n"
         "\n"
         "    return Local\n",
     )
@@ -403,7 +407,9 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
         "\n"
         "def build():\n"
         "    class Local:\n"
-        "        def __init__(self, share: 'Share') -> None: ...\n"
+        "        share: 'Share'\n"
+        "\n"
+        "        def __init__(self): ...\n"
         "\n"
         "    return Local\n",
     )
@@ -613,6 +619,41 @@ def test_a_partial_that_carries_a_signature_over_an_immutable_type_its_module_do
     assert named_classes(made) == {int}
 
 
+def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_forms_name_though_its_module_with_no_source_binds_it_under_another_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_json, built in or an extension module, binds _json.Scanner as make_scanner; the class's public members are member descriptors."""
+    monkeypatch.setattr(
+        _json.make_scanner,
+        "__signature__",
+        inspect.Signature(
+            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        ),
+        raising=False,
+    )
+
+    assert named_classes(_json.make_scanner) == {int, types.MemberDescriptorType}
+
+
+def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_its_body_compiled_a_function(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__ carries the globals of the module that defined Audit."""
+    auditing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "auditing",
+        "class Audit:\n    share: int\n\n    def __init__(self): ...\n",
+    )
+    monkeypatch.setitem(sys.modules, "auditing", types.ModuleType("auditing"))
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(auditing.Audit)
+
+    assert "auditing.Audit" in str(raised.value)
+    assert auditing.__file__ in str(raised.value)
+
+
 def test_a_routine_cpython_defines_in_c_names_no_class() -> None:
     assert named_classes(str.join) == set()
     assert named_classes(", ".join) == set()
@@ -653,6 +694,29 @@ def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_o
     gc.collect()
 
     assert dropped() is None
+
+
+def test_a_string_annotation_read_in_a_module_inspect_reads_no_source_for_raises_a_type_error_naming_it_and_that_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsourced = types.ModuleType("unsourced")
+    monkeypatch.setitem(sys.modules, "unsourced", unsourced)
+    exec("def settle(share: 'Share') -> None: ...\n", vars(unsourced))
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'unsourced'.*\bno source\b"):
+        named_classes(unsourced.settle)
+
+    monkeypatch.setattr(
+        _json.make_scanner,
+        "__signature__",
+        inspect.Signature(
+            [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Share")]
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule '_json'.*\bno source\b"):
+        named_classes(_json.make_scanner)
 
 
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:

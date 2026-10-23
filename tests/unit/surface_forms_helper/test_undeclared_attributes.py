@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's undeclared_attributes, one per test."""
 
+import _json
 import _random
 import ast
 import collections
@@ -8,6 +9,7 @@ import decimal
 import functools
 import pathlib
 import re
+import sys
 import types
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass
@@ -265,6 +267,25 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
 
 
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_class_whose_module_one_with_no_source_has_replaced_in_sys_modules_raises_a_lookup_error_naming_its_own_module_from_undeclared_attributes_and_unset_attributes_if_its_body_compiled_a_function(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "class Meter:\n    def __init__(self) -> None:\n        self.early = 1\n",
+    )
+    monkeypatch.setitem(sys.modules, "metering", types.ModuleType("metering"))
+
+    with pytest.raises(LookupError) as replaced:
+        scan(metering.Meter)
+
+    assert "metering.Meter" in str(replaced.value)
+    assert metering.__file__ in str(replaced.value)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
 @pytest.mark.parametrize(
     ("cls", "naming_it"),
     [
@@ -298,11 +319,16 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
             r"\b_random\.Random\b.*\bno class statement inspect can read\b",
             id="_random.Random",
         ),
+        pytest.param(
+            _json.make_scanner,
+            r"\b_json\.Scanner\b.*\bno class statement inspect can read\b",
+            id="_json.Scanner",
+        ),
     ],
 )
 def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], cls: type, naming_it: str
 ) -> None:
-    """Neither is an immutable type: ast.AST's module has a source file, and _random.Random's has none."""
+    """None is an immutable type: ast.AST's module has a source, _random.Random's has none, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
     with pytest.raises(TypeError, match=naming_it):
         scan(cls)
