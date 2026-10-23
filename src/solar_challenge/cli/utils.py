@@ -152,6 +152,7 @@ def load_config_with_overrides(
     battery_kwh: Optional[float] = None,
     consumption_kwh: Optional[float] = None,
     location_str: Optional[str] = None,
+    system_losses: Optional[float] = None,
 ) -> dict[str, Any]:
     """Load config file and apply CLI overrides.
 
@@ -161,6 +162,8 @@ def load_config_with_overrides(
         battery_kwh: Override battery capacity
         consumption_kwh: Override annual consumption
         location_str: Override location string
+        system_losses: Override PV system losses, set as the home's pv: block system_losses
+            key, which PVConfig range-checks
 
     Returns:
         Config dict with overrides applied
@@ -185,6 +188,9 @@ def load_config_with_overrides(
     # Apply overrides
     if pv_kw is not None:
         config["home"]["pv"]["capacity_kw"] = pv_kw
+
+    if system_losses is not None:
+        config["home"]["pv"]["system_losses"] = system_losses
 
     if battery_kwh is not None:
         if has_battery(battery_kwh, "--battery-kwh"):
