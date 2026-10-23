@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.weather import TMY_HOURS
-from tests._synthetic_weather import sunless_weather, synthetic_june_weather, synthetic_tmy
+from tests._synthetic_weather import TMY_DAYS, sunless_weather, synthetic_june_weather, synthetic_tmy
 
 
 def test_a_sunless_day_is_dark_every_hour_at_the_given_air_temperature() -> None:
@@ -83,6 +83,35 @@ def test_a_synthetic_tmy_is_a_pvgis_shaped_year_whose_every_utc_day_is_the_clear
     pd.testing.assert_index_equal(tmy.index, pd.date_range("1990-01-01", periods=TMY_HOURS, freq="h", tz="UTC"))
     for _, day in tmy.groupby(tmy.index.date):
         np.testing.assert_array_equal(day.to_numpy(), clear_june_day)
+
+
+def test_a_scaled_synthetic_tmy_is_its_days_built_one_at_a_time_at_their_scales_and_joined_in_order() -> None:
+    """UTC day i of the TMY is the clear June day with its irradiance scaled by entry i of irradiance_scale_per_day."""
+    irradiance_scale_per_day = np.linspace(0.2, 1.0, TMY_DAYS)
+    days_built_one_at_a_time = [
+        synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(scale,)) for scale in irradiance_scale_per_day
+    ]
+
+    pd.testing.assert_frame_equal(
+        synthetic_tmy(irradiance_scale_per_day=irradiance_scale_per_day),
+        pd.concat(days_built_one_at_a_time, ignore_index=True).set_axis(
+            pd.date_range("1990-01-01", periods=TMY_HOURS, freq="h", tz="UTC")
+        ),
+        check_exact=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "days",
+    [
+        pytest.param(TMY_DAYS - 1, id="a-day-short"),
+        pytest.param(TMY_DAYS + 1, id="a-leap-years-days"),
+        pytest.param(TMY_HOURS, id="one-per-hour"),
+    ],
+)
+def test_a_synthetic_tmy_refuses_any_count_of_day_scales_but_one_per_day_of_the_tmy_year(days: int) -> None:
+    with pytest.raises(ValueError, match=rf"\b{TMY_DAYS}\b.*\b{days}\b"):
+        synthetic_tmy(irradiance_scale_per_day=(1.0,) * days)
 
 
 @pytest.mark.parametrize(
