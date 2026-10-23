@@ -276,6 +276,19 @@ def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
             yield value
 
 
+def _pytest_plugins_failure(source: Path, value: ast.expr, defect: str) -> AssertionError:
+    """Return the failure for the pytest_plugins assignment *value* in *source* that the contract
+    cannot follow. It names *source*, the line and the expression; *defect* is the clause that
+    says what is wrong with it, such as "is not a literal". It also says how to write
+    pytest_plugins instead.
+    """
+    return AssertionError(
+        f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which {defect}; "
+        "write pytest_plugins as a literal list or tuple of module names, or as a "
+        "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+    )
+
+
 def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
     """Yield an import of the module pytest imports for each entry of the module-level
     pytest_plugins assignments in *tree*, the syntax tree of *source*. Each import sits where
@@ -285,22 +298,22 @@ def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Impor
     built-in plugin's short name, such as pytester, names that module of pytest's own _pytest
     package, as PytestPluginManager.import_plugin reads builtin_plugins; any other entry names
     the module it spells. The entries are read without running *source*, so the value must be a
-    literal: a str, split at commas as pytest splits it, or a sequence of str. An empty str,
-    like None, names no plugin. A value that is no literal fails, naming *source*, the line and
-    the expression.
+    literal: a str, split at commas as pytest splits it, or a list or tuple of str. An empty
+    str, like None, names no plugin. Any other value fails, naming *source*, the line and the
+    expression.
     """
     for value in _pytest_plugins_values(tree):
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
-            raise AssertionError(
-                f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which is not a "
-                "literal; write pytest_plugins as a literal list or tuple of module names, or as a "
-                "comma-separated string, for the declared-dependency contract to follow the plugins it names"
-            ) from None
-        if not plugins:
+            raise _pytest_plugins_failure(source, value, "is not a literal") from None
+        if plugins is None or plugins == "":
             continue
+        if not isinstance(plugins, (str, list, tuple)):
+            raise _pytest_plugins_failure(source, value, "is neither a str nor a list or tuple")
         for entry in plugins.split(",") if isinstance(plugins, str) else plugins:
+            if not isinstance(entry, str):
+                raise _pytest_plugins_failure(source, value, f"names {entry!r}, not a module name")
             module = f"_pytest.{entry}" if entry in builtin_plugins else entry
             yield ast.copy_location(ast.Import(names=[ast.alias(name=module)]), value)
 
@@ -385,8 +398,8 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     *source*'s package directory. Imports count as _imports_required_by reads them. The last
     part of a from-import's name may be an attribute of the module before it, not a module.
 
-    A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
-    literal, fails naming *source* and the line.
+    A relative import that climbs out of *project_root*, or a pytest_plugins value that
+    _pytest_plugin_imports cannot read, fails naming *source* and the line.
     """
     for node in _imports_required_by(source):
         if isinstance(node, ast.Import):
