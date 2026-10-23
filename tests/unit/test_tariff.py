@@ -4,7 +4,7 @@ import dataclasses
 import pickle
 import re
 from collections.abc import Iterable
-from datetime import time
+from datetime import datetime, time
 
 import pandas as pd
 import pytest
@@ -15,6 +15,10 @@ from solar_challenge.tariff import (
     TariffPeriod,
     calculate_bill,
     describe_minutes_of_day,
+)
+from tests._same_schedule_tariffs import (
+    NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
+    NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
 )
 
 REPEATED_OFF_PEAK_TARIFF = TariffConfig(
@@ -27,8 +31,8 @@ REPEATED_OFF_PEAK_TARIFF = TariffConfig(
 )
 
 
-def _derived_rates(tariff: TariffConfig) -> tuple[float, float]:
-    return tariff.peak_rate, tariff.mean_period_rate
+def _derived_values(tariff: TariffConfig) -> tuple[float, float, frozenset[int]]:
+    return tariff.peak_rate, tariff.mean_period_rate, tariff.cheap_minutes_of_day
 
 
 def _names_as_a_word(message: str, value: object) -> bool:
@@ -613,12 +617,113 @@ class TestTariffConfigPeakAndMeanPeriodRate:
         assert REPEATED_OFF_PEAK_TARIFF.mean_period_rate == pytest.approx(0.20)
 
 
+class TestTariffConfigCheapMinutes:
+    """A minute is cheap when its rate is below the peak and at or below the duration-weighted mean rate."""
+
+    @pytest.mark.parametrize(
+        ("tariff", "expected"),
+        [
+            pytest.param(TariffConfig.economy_7(), frozenset(range(30, 450)), id="economy_7"),
+            pytest.param(
+                TariffConfig.economy_10(),
+                frozenset([*range(0, 300), *range(780, 960), *range(1200, 1320)]),
+                id="economy_10",
+            ),
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                        TariffPeriod("07:00", "00:00", 0.30, "Day"),
+                    )
+                ),
+                frozenset(range(420)),
+                id="custom_two_rate",
+            ),
+            # Its weighted mean is 0.1125, 23 h at 0.10 and 1 h at 0.40.
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("17:00", "18:00", 0.40, "Peak"),
+                        TariffPeriod("18:00", "17:00", 0.10, "Off-peak"),
+                    )
+                ),
+                frozenset(range(1440)) - frozenset(range(1020, 1080)),
+                id="low_rate_most_of_the_day",
+            ),
+            pytest.param(TariffConfig.flat_rate(0.25), frozenset(), id="flat_rate"),
+            pytest.param(
+                TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
+                frozenset(),
+                id="six_periods_one_rate",
+            ),
+        ],
+    )
+    def test_a_two_rate_tariffs_cheap_minutes_are_its_lower_rates(
+        self, tariff: TariffConfig, expected: frozenset[int]
+    ) -> None:
+        assert tariff.cheap_minutes_of_day == expected
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS, id="four_periods"),
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS, id="five_periods"),
+        ],
+    )
+    def test_the_cheap_minutes_follow_the_schedule_not_its_period_list(
+        self, tariff: TariffConfig
+    ) -> None:
+        assert tariff.cheap_minutes_of_day == frozenset(range(420))
+        assert describe_minutes_of_day(tariff.cheap_minutes_of_day) == "00:00-07:00"
+
+    def test_a_rate_at_or_below_the_weighted_mean_is_cheap_though_above_the_period_mean(
+        self,
+    ) -> None:
+        """The weighted mean is 0.28375, the mean of the three period rates 0.17."""
+        tariff = TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "01:00", 0.01, "Night"),
+                TariffPeriod("01:00", "02:00", 0.20, "Shoulder"),
+                TariffPeriod("02:00", "00:00", 0.30, "Peak"),
+            )
+        )
+
+        assert tariff.cheap_minutes_of_day == frozenset(range(120))
+
+    @pytest.mark.parametrize(
+        ("timestamp", "cheap"),
+        [
+            pytest.param(pd.Timestamp("2024-06-21 00:30", tz="Europe/London"), True, id="00:30"),
+            pytest.param(
+                pd.Timestamp("2024-06-21 00:29:59", tz="Europe/London"), False, id="00:29:59"
+            ),
+            pytest.param(
+                pd.Timestamp("2024-06-21 07:29:59", tz="Europe/London"), True, id="07:29:59"
+            ),
+            pytest.param(pd.Timestamp("2024-06-21 07:30", tz="Europe/London"), False, id="07:30"),
+            pytest.param(datetime(2024, 1, 10, 3, 0), True, id="naive-03:00"),
+        ],
+    )
+    def test_is_cheap_at_reads_the_timestamps_wall_clock_minute(
+        self, timestamp: datetime, cheap: bool
+    ) -> None:
+        assert TariffConfig.economy_7().is_cheap_at(timestamp) is cheap
+
+    def test_one_instant_is_cheap_on_the_clock_that_reads_it_in_the_cheap_window(self) -> None:
+        """23:30 UTC on 2024-06-20 is 00:30 BST on 2024-06-21."""
+        instant = pd.Timestamp("2024-06-20 23:30", tz="UTC")
+        tariff = TariffConfig.economy_7()
+
+        assert tariff.is_cheap_at(instant) is False
+        assert tariff.is_cheap_at(instant.tz_convert("Europe/London")) is True
+
+
 class TestTariffConfigDerivedRatesStayOutOfIdentity:
-    """Reading the derived rates must not change a tariff's equality, fields or clones."""
+    """Reading the derived values must not change a tariff's equality, fields or clones."""
 
     def test_reading_the_rates_leaves_equality_hash_and_repr_alone(self) -> None:
         read = TariffConfig.economy_7()
-        _derived_rates(read)
+        _derived_values(read)
         unread = TariffConfig.economy_7()
 
         assert read == unread
@@ -628,7 +733,7 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
     def test_a_tariff_rebuilt_from_its_fields_equals_the_original(self) -> None:
         """web/stored_runs.py's run storage writes fields() and passes them back to the constructor."""
         tariff = TariffConfig.economy_7()
-        _derived_rates(tariff)
+        _derived_values(tariff)
 
         rebuilt = TariffConfig(
             **{f.name: getattr(tariff, f.name) for f in dataclasses.fields(tariff)}
@@ -639,22 +744,23 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
     def test_a_pickled_tariff_carries_the_same_rates(self) -> None:
         """fleet.py's process pool pickles each home's config, its tariff included."""
         tariff = TariffConfig.economy_10()
-        expected = _derived_rates(tariff)
+        expected = _derived_values(tariff)
 
         unpickled: TariffConfig = pickle.loads(pickle.dumps(tariff))
 
         assert unpickled == tariff
         assert hash(unpickled) == hash(tariff)
-        assert _derived_rates(unpickled) == expected
+        assert _derived_values(unpickled) == expected
 
     def test_replace_derives_the_replacement_periods_rates(self) -> None:
         tariff = TariffConfig.economy_7()
-        _derived_rates(tariff)
+        peak, mean, cheap_minutes = _derived_values(tariff)
 
         replaced = dataclasses.replace(tariff, periods=TariffConfig.flat_rate(0.30).periods)
 
-        assert _derived_rates(replaced) == (0.30, 0.30)
-        assert _derived_rates(tariff) == pytest.approx((0.25, 0.17))
+        assert _derived_values(replaced) == (0.30, 0.30, frozenset())
+        assert (peak, mean) == pytest.approx((0.25, 0.17))
+        assert cheap_minutes == frozenset(range(30, 450))
 
 
 class TestCalculateBill:
