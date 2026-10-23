@@ -36,6 +36,7 @@ import ast
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
 from pathlib import Path
 
@@ -130,7 +131,7 @@ _DEV_ONLY_LANE_SUITES = (
 _LOADED_ABOVE_A_SUITE = frozenset({"__init__.py", "conftest.py"})
 
 
-def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
     """Return the .py files of the suites in _DEV_ONLY_LANE_SUITES, which the offline lane's jobs
     that install the dev extra alone run, and the conftest.py and __init__.py files pytest loads
     above them.
@@ -150,6 +151,17 @@ def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
             for suite in suites
         )
     ]
+
+
+def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+    """Return the files of _dev_only_lane_suite_files and every module of the tests package they
+    import, transitively.
+
+    Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
+    helper the verify also imports is judged here, against the dev extra alone, not with the
+    verify's web extra.
+    """
+    return _with_the_tests_modules_they_import(project_root, _dev_only_lane_suite_files(project_root))
 
 
 def _verify_test_sources(project_root: Path) -> list[Path]:
@@ -209,6 +221,64 @@ def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Imp
             yield from _required_imports([*node.handlers, *node.orelse, *node.finalbody])
         else:
             yield from _required_imports(ast.iter_child_nodes(node))
+
+
+def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, list[str]]]:
+    """Yield (directory, dotted-name parts) for each module *source* may import.
+
+    An absolute name resolves from *project_root* and a relative one from *source*'s package
+    directory. Imports count as _required_imports counts them. The last part of a from-import's
+    name may be an attribute of the module before it, not a module.
+    """
+    for node in _required_imports([_parse(source)]):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield project_root, alias.name.split(".")
+        else:
+            directory = source.parents[node.level - 1] if node.level else project_root
+            module_parts = node.module.split(".") if node.module else []
+            for alias in node.names:
+                yield directory, [*module_parts, alias.name]
+
+
+def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
+    """Return the files that importing the dotted name *parts* from *directory* runs: each
+    package's __init__.py down to the module's own file.
+
+    The walk stops at a part that is not found or that follows a plain module, so a trailing
+    attribute adds nothing. Nothing is imported.
+    """
+    files: list[Path] = []
+    search_path = [str(directory)]
+    for depth in range(1, len(parts) + 1):
+        spec = PathFinder.find_spec(".".join(parts[:depth]), search_path)
+        if spec is None:
+            break
+        if spec.origin is not None:
+            files.append(Path(spec.origin))
+        if spec.submodule_search_locations is None:
+            break
+        search_path = list(spec.submodule_search_locations)
+    return files
+
+
+def _with_the_tests_modules_they_import(project_root: Path, sources: list[Path]) -> list[Path]:
+    """Return *sources* and every module of the tests package that they import, transitively."""
+    tests_dir = project_root / "tests"
+    selected = dict.fromkeys(sources)
+    pending = list(sources)
+    while pending:
+        source = pending.pop()
+        reached = (
+            module_file
+            for directory, parts in _import_targets(project_root, source)
+            for module_file in _files_run_by_importing(directory, parts)
+        )
+        for module_file in reached:
+            if module_file.is_relative_to(tests_dir) and module_file not in selected:
+                selected[module_file] = None
+                pending.append(module_file)
+    return list(selected)
 
 
 def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[str]:
