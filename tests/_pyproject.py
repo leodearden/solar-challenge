@@ -3,10 +3,20 @@
 
 Usage::
 
-    from tests._pyproject import declared_floor, load_project_table, load_pyproject, load_uv_lock, locked_versions
+    from tests._pyproject import (
+        core_requirements,
+        declared_floor,
+        extra_requirements,
+        load_project_table,
+        load_pyproject,
+        load_uv_lock,
+        locked_versions,
+    )
 
     requires_python = load_project_table(project_root)["requires-python"]
     mypy_target = load_pyproject(project_root)["tool"]["mypy"]["python_version"]
+    core = core_requirements(project_root)
+    dev_and_web = extra_requirements(project_root, ["dev", "web"])
     pandas_floor = declared_floor(load_project_table(project_root)["dependencies"], "pandas")
     pandas_pins = locked_versions(load_uv_lock(project_root), "pandas")
 """
@@ -30,6 +40,17 @@ def load_project_table(project_root: Path) -> dict[str, Any]:
     """Return the [project] table of *project_root*'s pyproject.toml, parsed as TOML."""
     project: dict[str, Any] = load_pyproject(project_root)["project"]
     return project
+
+
+def core_requirements(project_root: Path) -> list[Requirement]:
+    """Return the parsed [project].dependencies of *project_root*'s pyproject.toml."""
+    return [Requirement(specifier) for specifier in load_project_table(project_root)["dependencies"]]
+
+
+def extra_requirements(project_root: Path, extras: Iterable[str]) -> list[Requirement]:
+    """Return the parsed [project.optional-dependencies] requirements of each extra in *extras*, in the order given."""
+    optional = load_project_table(project_root)["optional-dependencies"]
+    return [Requirement(specifier) for extra in extras for specifier in optional[extra]]
 
 
 def load_uv_lock(project_root: Path) -> dict[str, Any]:
