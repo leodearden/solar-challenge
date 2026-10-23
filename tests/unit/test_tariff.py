@@ -2,14 +2,18 @@
 
 import dataclasses
 import pickle
+import re
+from collections.abc import Iterable
 
 import pandas as pd
 import pytest
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.tariff import (
     TariffConfig,
     TariffPeriod,
     calculate_bill,
+    describe_minutes_of_day,
 )
 
 REPEATED_OFF_PEAK_TARIFF = TariffConfig(
@@ -24,6 +28,11 @@ REPEATED_OFF_PEAK_TARIFF = TariffConfig(
 
 def _derived_rates(tariff: TariffConfig) -> tuple[float, float]:
     return tariff.peak_rate, tariff.mean_period_rate
+
+
+def _names_as_a_word(message: str, value: object) -> bool:
+    """Whether *message* names str(value) as a word of its own: "-inf" does not name "inf", nor does "infinite"."""
+    return re.search(rf"(?<![\w.-]){re.escape(str(value))}(?![\w.])", message) is not None
 
 
 class TestTariffPeriodBasics:
@@ -300,7 +309,7 @@ class TestTariffConfigBasics:
         """TariffConfig can be created with single period."""
         period = TariffPeriod(
             start_time="00:00",
-            end_time="23:59",
+            end_time="00:00",
             rate_per_kwh=0.20
         )
         tariff = TariffConfig(periods=(period,), name="Flat")
@@ -319,7 +328,7 @@ class TestTariffConfigBasics:
 
     def test_frozen_dataclass(self):
         """TariffConfig is immutable (frozen)."""
-        period = TariffPeriod("00:00", "23:59", 0.20)
+        period = TariffPeriod("00:00", "00:00", 0.20)
         tariff = TariffConfig(periods=(period,))
         with pytest.raises(Exception):  # FrozenInstanceError
             tariff.name = "New name"
@@ -350,7 +359,7 @@ class TestTariffConfigGetRate:
 
     def test_get_rate_single_period(self):
         """get_rate returns correct rate for single-period tariff."""
-        period = TariffPeriod("00:00", "23:59", 0.20, "All day")
+        period = TariffPeriod("00:00", "00:00", 0.20, "All day")
         tariff = TariffConfig(periods=(period,))
 
         timestamp = pd.Timestamp("2024-01-15 12:00:00")
@@ -373,15 +382,10 @@ class TestTariffConfigGetRate:
         # Evening rate
         assert tariff.get_rate(pd.Timestamp("2024-01-15 23:30:00")) == 0.15
 
-    def test_get_rate_no_match_raises(self):
-        """get_rate raises ValueError when no period matches."""
-        # Create tariff with a gap (09:00-17:00 only)
-        period = TariffPeriod("09:00", "17:00", 0.25)
-        tariff = TariffConfig(periods=(period,))
-
-        # Time outside period should raise
-        with pytest.raises(ValueError, match="No tariff period matches"):
-            tariff.get_rate(pd.Timestamp("2024-01-15 08:00:00"))
+    def test_a_tariff_with_a_gap_is_refused_at_construction(self):
+        """No constructed tariff has a minute without a rate: a 09:00-17:00 period alone is refused."""
+        with pytest.raises(ConfigurationError, match="17:00-09:00"):
+            TariffConfig(periods=(TariffPeriod("09:00", "17:00", 0.25),))
 
 
 class TestTariffConfigFlatRate:
@@ -762,3 +766,44 @@ class TestCalculateBill:
         assert bill_peak == pytest.approx(3.00)
         assert bill_offpeak == pytest.approx(1.00)
         assert bill_peak > bill_offpeak
+
+
+class TestDescribeMinutesOfDay:
+    """describe_minutes_of_day writes minutes of the day as the clock ranges a tariff refusal names."""
+
+    @pytest.mark.parametrize(
+        ("minutes", "expected"),
+        [
+            pytest.param(range(360, 720), "06:00-12:00", id="one-range"),
+            pytest.param(
+                [*range(1380, 1440), *range(0, 420)], "23:00-07:00", id="across-midnight"
+            ),
+            pytest.param(
+                [*range(0, 420), *range(720, 780), *range(1380, 1440)],
+                "12:00-13:00, 23:00-07:00",
+                id="ranges-in-order-of-their-start",
+            ),
+            pytest.param(range(1380, 1440), "23:00-00:00", id="ending-at-midnight"),
+            pytest.param(range(0, 60), "00:00-01:00", id="starting-at-midnight"),
+            pytest.param([1439], "23:59-00:00", id="the-last-minute"),
+            pytest.param(range(1440), "00:00-00:00", id="the-whole-day"),
+            pytest.param([], "", id="no-minutes"),
+        ],
+    )
+    def test_each_run_of_consecutive_minutes_is_one_clock_range(
+        self, minutes: Iterable[int], expected: str
+    ) -> None:
+        assert describe_minutes_of_day(minutes) == expected
+
+    def test_an_unordered_input_with_duplicates_reads_as_its_sorted_minutes(self) -> None:
+        unordered = [721, 0, 720, 1, 0]
+
+        assert describe_minutes_of_day(unordered) == describe_minutes_of_day(sorted(unordered))
+        assert describe_minutes_of_day(unordered) == "00:00-00:02, 12:00-12:02"
+
+    @pytest.mark.parametrize("minute", [1440, -1])
+    def test_a_minute_outside_the_day_is_refused_naming_it(self, minute: int) -> None:
+        with pytest.raises(ValueError) as refusal:
+            describe_minutes_of_day([0, minute])
+
+        assert _names_as_a_word(str(refusal.value), minute)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests of the `validate` command group: its help, `validate results` on a results CSV, and `validate config` on a config file."""
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -188,6 +189,11 @@ fleet_distribution:
 _TOU_ADVISORY = (
     "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
 )
+
+
+def _names_as_a_word(text: str, value: str) -> bool:
+    """Whether *text* names *value* as a word of its own: "-inf" does not name "inf", nor does "infinite"."""
+    return re.search(rf"(?<![\w.-]){re.escape(value)}(?![\w.])", text) is not None
 
 
 class TestValidateConfig:
@@ -400,6 +406,37 @@ home:
         assert "homes[0].battery.dispatch_strategy.strategy_type 'tou_optimised'" in error_row
         for strategy in ("peak_shaving", "self_consumption", "tou_optimized"):
             assert strategy in error_row
+
+    @pytest.mark.parametrize(
+        ("tariff", "named"),
+        [
+            pytest.param(
+                "{type: custom, periods: ["
+                "{start_time: '07:00', end_time: '23:00', rate_per_kwh: 0.30}]}",
+                "23:00-07:00",
+                id="gap",
+            ),
+            pytest.param(
+                "{type: custom, periods: ["
+                "{start_time: '00:00', end_time: '12:00', rate_per_kwh: 0.10}, "
+                "{start_time: '06:00', end_time: '00:00', rate_per_kwh: 0.30}]}",
+                "06:00-12:00",
+                id="overlap",
+            ),
+        ],
+    )
+    def test_a_tariff_block_its_constructor_refuses_is_an_error_row_naming_the_clock_range_or_rate(
+        self, tmp_path: Path, tariff: str, named: str
+    ) -> None:
+        """Times are quoted: PyYAML reads an unquoted 23:00 as the sexagesimal integer 1380."""
+        result = self._validate_config(
+            tmp_path, f"home:\n  pv: {{capacity_kw: 4.0}}\n  tariff: {tariff}\n"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        assert _names_as_a_word(text[text.index("ERROR"):], named)
 
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
