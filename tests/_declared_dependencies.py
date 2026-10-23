@@ -14,15 +14,22 @@ declared distributions only, whose handler can never run. Imports map to
 distributions only through installed metadata, so a scope's check skips where
 its extras are not installed.
 
+The package's web subpackage, WEB_SUBPACKAGE, is first-party, yet any of its
+modules may import the web extra at module top. So no file of
+SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA may import one;
+web_subpackage_imports finds each file that does.
+
 Usage::
 
     from tests._declared_dependencies import (
         PACKAGE_SCOPES,
+        SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA,
         SOURCE_SCOPES,
         SourceScope,
         assert_imports_only_declared,
         dead_import_guards,
         declared_distributions_or_skip,
+        web_subpackage_imports,
     )
 
     @pytest.mark.parametrize("scope", SOURCE_SCOPES, ids=lambda scope: scope.name)
@@ -32,6 +39,9 @@ Usage::
     for scope in PACKAGE_SCOPES:
         declared = declared_distributions_or_skip(project_root, scope.extras)
         dead = dead_import_guards(scope.select(project_root), declared)
+
+    for scope in SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA:
+        reached = web_subpackage_imports(project_root, scope.select(project_root))
 """
 
 import ast
@@ -49,7 +59,9 @@ from packaging.utils import canonicalize_name
 from tests._pyproject import core_requirements, extra_requirements
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
-_FIRST_PARTY = frozenset({"solar_challenge", "tests"})
+_PACKAGE = "solar_challenge"
+_FIRST_PARTY = frozenset({_PACKAGE, "tests"})
+WEB_SUBPACKAGE = f"{_PACKAGE}.web"
 DEV = "dev"
 WEB = "web"
 E2E = "e2e"
@@ -106,17 +118,31 @@ def _python_files_outside(directory: Path, excluded: Path) -> list[Path]:
     return [source for source in directory.rglob("*.py") if not source.is_relative_to(excluded)]
 
 
+def _src_dir(project_root: Path) -> Path:
+    """Return *project_root*'s src/, which holds the package's source and from which the editable
+    install imports it.
+    """
+    return project_root / "src"
+
+
+def _web_subpackage_dir(project_root: Path) -> Path:
+    """Return the directory of WEB_SUBPACKAGE, the package's web subpackage, under *project_root*:
+    the one the web extra serves.
+    """
+    return _src_dir(project_root).joinpath(*WEB_SUBPACKAGE.split("."))
+
+
 def _web_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files inside its web subpackage, the one the web extra serves."""
-    return list((project_root / "src" / "solar_challenge" / WEB).rglob("*.py"))
+    return list(_web_subpackage_dir(project_root).rglob("*.py"))
 
 
 def _core_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files outside its web subpackage, which an install of the package
     without extras runs.
     """
-    package_dir = project_root / "src" / "solar_challenge"
-    return _python_files_outside(package_dir, package_dir / WEB)
+    web_dir = _web_subpackage_dir(project_root)
+    return _python_files_outside(web_dir.parent, web_dir)
 
 
 def _script_sources(project_root: Path) -> list[Path]:
@@ -162,7 +188,8 @@ def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
 
     Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
     helper the verify also imports is judged here, against the dev extra alone, not with the
-    verify's web extra.
+    verify's web extra. A module of the package that the files import stays with the package's
+    own scope.
     """
     return _with_the_tests_modules_they_import(project_root, _dev_only_lane_suite_files(project_root))
 
@@ -197,6 +224,9 @@ SOURCE_SCOPES: tuple[SourceScope, ...] = (
     SourceScope("tests-dev-only-lanes", _dev_only_lane_test_sources, (DEV,)),
     SourceScope("tests-verify", _verify_test_sources, (DEV, WEB)),
     SourceScope("tests-e2e", _e2e_test_sources, (DEV, WEB, E2E)),
+)
+SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA: tuple[SourceScope, ...] = tuple(
+    scope for scope in SOURCE_SCOPES if scope not in PACKAGE_SCOPES and WEB not in scope.extras
 )
 
 
@@ -308,16 +338,24 @@ def _required_imports_and_importorskips(tree: ast.Module) -> Iterator[ast.Import
     yield from _importorskip_imports(tree)
 
 
+def _directory_of_absolute_name(project_root: Path, name: str) -> Path:
+    """Return the directory the absolute dotted *name* resolves from: *project_root*'s src/ for a
+    name of the package, where the editable install finds it, and *project_root* for any other.
+    """
+    return _src_dir(project_root) if name.partition(".")[0] == _PACKAGE else project_root
+
+
 def _directory_of_from_import(project_root: Path, source: Path, node: ast.ImportFrom) -> Path:
-    """Return the directory the from-import *node* of *source* resolves from: *project_root* for
-    an absolute import, else *source*'s package directory, climbed level - 1 times.
+    """Return the directory the from-import *node* of *source* resolves from: as
+    _directory_of_absolute_name gives for an absolute import, else *source*'s package directory,
+    climbed level - 1 times.
 
     A level that climbs out of *project_root*, even to above the filesystem root, fails naming
     *source*, the line and the import: Python rejects a relative import beyond its top-level
     package.
     """
     if not node.level:
-        return project_root
+        return _directory_of_absolute_name(project_root, node.module or "")
     directory = source.parents[: node.level][-1]
     assert directory.is_relative_to(project_root), (
         f"{source}:{node.lineno} imports `{ast.unparse(node)}`, which climbs out of {project_root}; "
@@ -329,10 +367,11 @@ def _directory_of_from_import(project_root: Path, source: Path, node: ast.Import
 def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, list[str]]]:
     """Yield (directory, dotted-name parts) for each module *source* may import.
 
-    An absolute name resolves from *project_root* and a relative one from *source*'s package
-    directory. Imports count as _required_imports_and_importorskips counts them, and each
-    pytest_plugins entry counts as an absolute import. The last part of a from-import's name
-    may be an attribute of the module before it, not a module.
+    An absolute name of the package resolves from *project_root*'s src/, where the editable
+    install finds it, any other absolute name from *project_root*, and a relative one from
+    *source*'s package directory. Imports count as _required_imports_and_importorskips counts
+    them, and each pytest_plugins entry counts as an absolute import. The last part of a
+    from-import's name may be an attribute of the module before it, not a module.
 
     A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
     literal, fails naming *source* and the line.
@@ -341,14 +380,14 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     for node in _required_imports_and_importorskips(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                yield project_root, alias.name.split(".")
+                yield _directory_of_absolute_name(project_root, alias.name), alias.name.split(".")
         else:
             directory = _directory_of_from_import(project_root, source, node)
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
     for name in _pytest_plugins(source, tree):
-        yield project_root, name.split(".")
+        yield _directory_of_absolute_name(project_root, name), name.split(".")
 
 
 def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
@@ -372,6 +411,14 @@ def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
     return files
 
 
+def _files_its_imports_run(project_root: Path, source: Path) -> Iterator[Path]:
+    """Yield the files that importing each module *source* may import runs, as _import_targets
+    reads its imports and _files_run_by_importing finds their files.
+    """
+    for directory, parts in _import_targets(project_root, source):
+        yield from _files_run_by_importing(directory, parts)
+
+
 def _with_the_tests_modules_they_import(project_root: Path, sources: list[Path]) -> list[Path]:
     """Return *sources* and every module of the tests package that they import, transitively."""
     tests_dir = project_root / "tests"
@@ -379,16 +426,41 @@ def _with_the_tests_modules_they_import(project_root: Path, sources: list[Path])
     pending = list(sources)
     while pending:
         source = pending.pop()
-        reached = (
-            module_file
-            for directory, parts in _import_targets(project_root, source)
-            for module_file in _files_run_by_importing(directory, parts)
-        )
-        for module_file in reached:
+        for module_file in _files_its_imports_run(project_root, source):
             if module_file.is_relative_to(tests_dir) and module_file not in selected:
                 selected[module_file] = None
                 pending.append(module_file)
     return list(selected)
+
+
+def web_subpackage_imports(project_root: Path, sources: Iterable[Path]) -> list[tuple[Path, list[Path]]]:
+    """Return (file, web files run) for every file in *sources* whose imports run a file of
+    WEB_SUBPACKAGE under *project_root*.
+
+    Imports count as _import_targets counts them: a function-local import, a TYPE_CHECKING
+    import, a module named to pytest.importorskip and a pytest_plugins entry count, and an
+    ImportError-guarded import does not. Names resolve as Python finds them, so a module named
+    web elsewhere is not the subpackage. Only files are read; no installed metadata is needed.
+
+    Each file's own imports are read, not those of the package's modules it imports. That is
+    enough because, outside the subpackage, the package imports it only inside a function, as
+    tests/unit/test_import_structure.py::test_no_module_outside_the_web_subpackage_imports_it_at_module_top
+    pins. So importing a module of the package outside the subpackage runs no file of the
+    subpackage.
+    """
+    web_dir = _web_subpackage_dir(project_root)
+    reaching: list[tuple[Path, list[Path]]] = []
+    for source in sources:
+        web_files = sorted(
+            {
+                module_file
+                for module_file in _files_its_imports_run(project_root, source)
+                if module_file.is_relative_to(web_dir)
+            }
+        )
+        if web_files:
+            reaching.append((source, web_files))
+    return sorted(reaching)
 
 
 def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[str]:

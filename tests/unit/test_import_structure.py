@@ -11,7 +11,12 @@ its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
 No import statement of solar_challenge, at any scope, names the tests package: the wheel
 ships only src/, so such an import fails in every installed copy.
 
-Both read import statements only: the lazy loader in solar_challenge/__init__.py
+Outside its web subpackage, no import statement of solar_challenge names a module of that
+subpackage outside a function. Any module of the subpackage may import the web extra at
+module top, and the CLI, scripts/ and the dev-only offline-lane jobs run without that extra.
+ALLOWED_FUNCTION_LOCAL_IMPORTS lists the function-local imports that reach the subpackage.
+
+All three read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
 tests/unit/test_init_lazy_surface.py.
 """
@@ -22,6 +27,8 @@ from dataclasses import astuple, dataclass
 from pathlib import Path
 
 import pytest
+
+from tests._declared_dependencies import WEB_SUBPACKAGE
 
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
@@ -165,6 +172,17 @@ def _test_suite_imports(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
     return [site for site in sites if _in_package(site.imported, _TEST_SUITE)]
 
 
+def _module_top_imports_into_the_web_subpackage(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* of modules outside the web subpackage that import a module of it outside any function."""
+    return [
+        site
+        for site in sites
+        if not site.in_function
+        and _in_package(site.imported, WEB_SUBPACKAGE)
+        and not _in_package(site.importer, WEB_SUBPACKAGE)
+    ]
+
+
 def _unlisted(
     found: Iterable[_ImportSite], allowed: Collection[tuple[str, str]]
 ) -> list[_ImportSite]:
@@ -251,6 +269,29 @@ def test_no_import_statement_of_the_package_names_the_test_suite(
         f"so each fails with ModuleNotFoundError in every installed copy:\n{sites}\n"
         "Move what the package needs from tests/ into src/solar_challenge, or move the code "
         "that needs the tests package into tests/"
+    )
+
+
+def test_no_module_outside_the_web_subpackage_imports_it_at_module_top(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """Outside its web subpackage, the package imports a module of that subpackage only inside a function, since any of its modules may import the web extra at module top. The CLI, scripts/ and the offline lane's dev-only jobs run without that extra, and web_subpackage_imports in tests/_declared_dependencies.py reads only those files' own imports, relying on this rule."""
+    found = _module_top_imports_into_the_web_subpackage(real_tree_imports)
+
+    sites = "\n".join(str(site) for site in found)
+    assert not found, (
+        "these import statements of src/solar_challenge, outside its web subpackage, import a "
+        f"module of that subpackage outside any function:\n{sites}\n"
+        "Any module of the web subpackage may import the web extra at module top (the contract "
+        "_CLI_WITHOUT_THE_WEB_EXTRA states), so importing the module that holds such an import "
+        "needs that extra. An import in a TYPE_CHECKING block counts too: it never runs, but a "
+        "module outside the subpackage should not need the subpackage even for its annotations. "
+        "The CLI, scripts/ and the offline lane's dev-only jobs run without the web extra, and "
+        "web_subpackage_imports in tests/_declared_dependencies.py reads only those files' own "
+        "imports, relying on this rule. Import the module inside the function that needs the web "
+        "extra, as cli/web.py's start and _serve do, and list the pair in "
+        "ALLOWED_FUNCTION_LOCAL_IMPORTS with the Permanent reason _CLI_WITHOUT_THE_WEB_EXTRA; or "
+        "move the code that needs it into the web subpackage"
     )
 
 
@@ -459,3 +500,73 @@ def test_the_scan_finds_imports_of_the_test_suite_at_any_scope(
     found = _test_suite_imports(_import_sites(src_dir))
 
     assert [(site.imported, site.line) for site in found] == expected
+
+
+@pytest.mark.parametrize(
+    ("module", "source", "expected"),
+    [
+        pytest.param(
+            "finance.py",
+            "from solar_challenge.web.jobs import JobManager\n",
+            [("solar_challenge.finance", "solar_challenge.web.jobs", 1)],
+            id="module-top",
+        ),
+        pytest.param(
+            "finance.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from solar_challenge.web.storage import RunStorage\n",
+            [("solar_challenge.finance", "solar_challenge.web.storage", 4)],
+            id="type-checking",
+        ),
+        pytest.param(
+            "home.py",
+            "class Panel:\n    import solar_challenge.web.charts\n",
+            [("solar_challenge.home", "solar_challenge.web.charts", 2)],
+            id="class-body",
+        ),
+        pytest.param(
+            "__init__.py",
+            "from solar_challenge import web\nfrom . import web\n",
+            [
+                ("solar_challenge", "solar_challenge.web", 1),
+                ("solar_challenge", "solar_challenge.web", 2),
+            ],
+            id="package-itself-absolute-and-relative",
+        ),
+        pytest.param(
+            "cli/web.py",
+            "from ..web.jobs import JobManager\n",
+            [("solar_challenge.cli.web", "solar_challenge.web.jobs", 1)],
+            id="relative-from-a-subpackage",
+        ),
+        pytest.param(
+            "cli/web.py",
+            "def start():\n    from solar_challenge.web import create_app\n",
+            [],
+            id="inside-a-function",
+        ),
+        pytest.param(
+            "web/routes.py",
+            "from solar_challenge.web.charts import x\nfrom . import jobs\n",
+            [],
+            id="within-the-web-subpackage",
+        ),
+        pytest.param(
+            "cli/main.py",
+            "from solar_challenge.cli import web as web_app\nimport solar_challenge.web_tools\n",
+            [],
+            id="not-the-web-subpackage",
+        ),
+    ],
+)
+def test_the_scan_finds_module_top_imports_into_the_web_subpackage(
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, str, int]]
+) -> None:
+    """The scan finds an import of the web subpackage from outside it at module top and in a class body, which run when the module is imported, and in a TYPE_CHECKING block, which never runs but which the scan reads like any other statement: a module outside the subpackage should not need the subpackage even for its annotations. It finds none inside a function, which INV-5's allow-list governs, nor one within the subpackage, nor one of a module merely named web."""
+    src_dir = _write_package(tmp_path / "src", {module: source})
+
+    found = _module_top_imports_into_the_web_subpackage(_import_sites(src_dir))
+
+    assert [(site.importer, site.imported, site.line) for site in found] == expected

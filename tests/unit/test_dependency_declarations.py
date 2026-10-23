@@ -11,6 +11,10 @@ run that installs that extra, and
 test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra pins that the
 job collects a case for each.
 
+No file of a scope whose run lacks the web extra, the package's own excepted,
+may import a module of src/solar_challenge/web, since any of those modules may
+import that extra at module top.
+
 No core dependency may request an extra its distribution does not provide.  No
 declared requirement may carry an environment marker that holds only on Python
 minors requires-python does not admit, since it could never install.
@@ -31,11 +35,14 @@ from tests._collect_only import requires_uv
 from tests._declared_dependencies import (
     E2E,
     PACKAGE_SCOPES,
+    SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA,
     SOURCE_SCOPES,
+    WEB,
     SourceScope,
     assert_imports_only_declared,
     dead_import_guards,
     declared_distributions_or_skip,
+    web_subpackage_imports,
 )
 from tests._interpreters import (
     admitted_minor_versions,
@@ -81,6 +88,34 @@ def test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra(
         f"scopes {unjudged}, whose extras include {E2E}. No automated run then judges their imports, so an import "
         "of a distribution that only another requirement installs (e.g. greenlet through playwright) goes unseen. "
         f"Parametrise that module's contract over every scope whose extras include {E2E}"
+    )
+
+
+@pytest.mark.parametrize("scope", SCOPES_OUTSIDE_THE_PACKAGE_WITHOUT_THE_WEB_EXTRA, ids=lambda scope: scope.name)
+def test_files_run_without_the_web_extra_import_no_module_of_the_web_subpackage(
+    project_root: Path, scope: SourceScope
+) -> None:
+    """No file of a scope whose run lacks the web extra imports a module of src/solar_challenge/web, since any
+    module of that subpackage may import the extra at module top.
+
+    The package's own scopes are left to
+    tests/unit/test_import_structure.py::test_no_module_outside_the_web_subpackage_imports_it_at_module_top, the
+    rule web_subpackage_imports relies on to read only each file's own imports, as its docstring says. Static
+    reading sees neither a run that reaches web through a function-local import the package makes, such as calling
+    `web start` through the CLI app, nor a dynamic import such as importlib.import_module with a computed name.
+    """
+    reached = [
+        f"{source.relative_to(project_root)} runs {[path.relative_to(project_root).as_posix() for path in files]}"
+        for source, files in web_subpackage_imports(project_root, scope.select(project_root))
+    ]
+    assert not reached, (
+        f"these files of the {scope.name!r} scope, whose run installs the extras {list(scope.extras)} and not "
+        f"{WEB!r}, import modules of src/solar_challenge/web: {reached}. Any module of that subpackage may import "
+        f"the {WEB} extra at module top, so such an import passes the per-task verify, which installs that extra, "
+        f"and breaks the {scope.name!r} run after the merge. Read what the file needs without importing the "
+        "subpackage, or move the code into a suite the per-task verify runs. If the run must import the "
+        f"subpackage, make it install the {WEB} extra: for an offline-lane job, add --extra {WEB} to its command "
+        "and take its suite out of _DEV_ONLY_LANE_SUITES in tests/_declared_dependencies.py"
     )
 
 
