@@ -139,6 +139,7 @@ _OWN_FILES_OF_EACH_SCOPE = {
         "tests/_lock.py",
         "tests/_network.py",
         "tests/_newest.py",
+        "tests/_paths.py",
         "tests/_plugin.py",
         "tests/_plugin_fixtures.py",
         "tests/_plugin_hooks.py",
@@ -179,6 +180,8 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
     # transitive
     "tests/_uv.py": ("import tests._lock",),
+    # a cycle back to _uv: the walk ends, and each file is selected once
+    "tests/_lock.py": ("import tests._uv",),
     # _uv is shared with the verify and still goes to the dev-only scope; _helpers stays with the verify
     "tests/unit/test_simulate.py": (
         "from tests._helpers import build",
@@ -195,6 +198,9 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     ),
     # the package __init__.py on the way is run too
     "tests/css_build/test_build.py": ("from tests.unit._css import classes",),
+    # relative, two levels up and with a module; no other file imports _paths, so only this
+    # import selects it
+    "tests/unit/_css.py": ("from .._paths import root",),
     # relative, with no module
     "tests/integration/test_pvgis.py": ("from . import _pvgis_probe",),
 }
@@ -228,9 +234,10 @@ def test_each_source_scope_selects_only_its_own_files(
 
     tests-dev-only-lanes also owns every module of the tests package that its files import,
     transitively: at module level, inside a function, as a submodule a from-import names,
-    relatively, or through a package's __init__.py. tests-verify owns none of them. A module
-    named only inside a try that handles ImportError is not imported for certain, so it
-    stays with tests-verify.
+    relatively (from the package directory or from one above it), or through a package's
+    __init__.py. Modules that import each other are selected once each. tests-verify owns none
+    of them. A module named only inside a try that handles ImportError is not imported for
+    certain, so it stays with tests-verify.
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
