@@ -46,6 +46,7 @@ import pytest
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
+    CallableGetter,
     Outer,
     Preset,
     imported_module,
@@ -572,10 +573,6 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
     building = functools.wraps(Built)(lambda rate: Built(rate))
     unsigned = functools.partial(zip, [1])
     unsigned.__signature__ = None
-    texted = functools.partial(zip, [1])
-    texted.__signature__ = "(rate)"
-    texted_zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
-    texted_zipping.__signature__ = "(rate)"
     wrapping = functools.partial(build, 1)
     wrapping.__wrapped__ = zip
 
@@ -590,10 +587,6 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
         surface_form(Zipper().zipped)
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(unsigned)
-    with pytest.raises(TypeError, match=naming_zip):
-        surface_form(texted)
-    with pytest.raises(TypeError, match=naming_zip):
-        surface_form(texted_zipping)
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(wrapping)
     with pytest.raises(
@@ -661,8 +654,27 @@ def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_
     assert surface_form(functools.partial(Rated)) == "(rate: int)"
 
 
-def test_a_class_whose_signature_attribute_is_no_inspect_signature_is_refused_as_its_constructor_is() -> None:
-    class Texted(dict):
+def test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value() -> None:
+    def pay(rate: int) -> None: ...
+
+    def settle(rate: int) -> None: ...
+
+    settle.__signature__ = "(rate)"
+    paying = functools.wraps(pay)(lambda rate: pay(rate))
+    paying.__signature__ = "(rate)"
+    paid = functools.partial(pay)
+    paid.__signature__ = "(rate)"
+    texted = functools.partial(zip, [1])
+    texted.__signature__ = "(rate)"
+    texted_zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    texted_zipping.__signature__ = "(rate)"
+
+    class Texted:
+        __signature__ = "(rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Keyed(dict):
         __signature__ = "(rate)"
 
     class Called(dict):
@@ -672,10 +684,49 @@ def test_a_class_whose_signature_attribute_is_no_inspect_signature_is_refused_as
                 [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
             )
 
-    with pytest.raises(TypeError, match=r"\.Texted\b.*\bbuiltins\.dict\b"):
+    class Meter:
+        def read(self, rate: int) -> None: ...
+
+        read.__signature__ = "(self, rate)"
+
+    getter = CallableGetter()
+    getter.__signature__ = "(rate)"
+
+    carrying_text = r"'\(rate\)'.*\bbuiltins\.str\b.*\binspect\.Signature\b"
+    naming_settle_and_its_text = rf"\.settle\b.*{carrying_text}"
+    with pytest.raises(TypeError, match=naming_settle_and_its_text):
+        surface_form(settle)
+    with pytest.raises(TypeError, match=naming_settle_and_its_text):
+        named_classes(settle)
+    with pytest.raises(TypeError, match=rf"\.pay\b.*{carrying_text}"):
+        surface_form(paying)
+    with pytest.raises(TypeError, match=rf"\bfunctools\.partial\(.*\bpay\b.*{carrying_text}"):
+        surface_form(paid)
+    with pytest.raises(TypeError, match=rf"\bfunctools\.partial\(.*\bzip\b.*{carrying_text}"):
+        surface_form(texted)
+    with pytest.raises(TypeError, match=rf"\bbuiltins\.zip\b.*{carrying_text}"):
+        surface_form(texted_zipping)
+    naming_texted_and_its_text = rf"\.Texted\b.*{carrying_text}"
+    with pytest.raises(TypeError, match=naming_texted_and_its_text):
         surface_form(Texted)
-    with pytest.raises(TypeError, match=r"\.Called\b.*\bbuiltins\.dict\b"):
+    with pytest.raises(TypeError, match=naming_texted_and_its_text):
+        named_classes(Texted)
+    with pytest.raises(
+        TypeError, match=rf"\bfunctools\.partial\(.*\.Texted\b.*{carrying_text}"
+    ):
+        surface_form(functools.partial(Texted))
+    with pytest.raises(TypeError, match=rf"\.Keyed\b.*{carrying_text}"):
+        surface_form(Keyed)
+    with pytest.raises(
+        TypeError, match=r"\.Called\b.*\bbuiltins\.method\b.*\binspect\.Signature\b"
+    ):
         surface_form(Called)
+    with pytest.raises(
+        TypeError, match=r"\.Meter\.read\b.*'\(self, rate\)'.*\bbuiltins\.str\b"
+    ):
+        surface_form(Meter().read)
+    with pytest.raises(TypeError, match=rf"\bCallableGetter\b.*{carrying_text}"):
+        surface_form(getter)
 
 
 def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable() -> None:
