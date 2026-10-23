@@ -30,7 +30,7 @@ from solar_challenge.weather import (
     set_weather_cache,
 )
 from solar_challenge.location import Location
-from tests._synthetic_weather import synthetic_june_weather
+from tests._synthetic_weather import TMY_DAYS, synthetic_june_weather, synthetic_tmy
 
 PRE_SCALING_BRISTOL_TMY_STEM = "tmy_5dc8c8bca218"
 """The file stem of Bristol's cached TMY before task 285, when the cache held PVGIS's TMY unscaled."""
@@ -45,12 +45,7 @@ def sample_index():
 @pytest.fixture
 def pvgis_tmy():
     """A TMY shaped like PVGIS's as pvlib returns it: one non-leap 1990 of hourly UTC rows, its irradiance varying day to day."""
-    utc_1990 = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
-    return (
-        synthetic_june_weather("1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365))
-        .set_axis(utc_1990)
-        .assign(relative_humidity=80.0)
-    )
+    return synthetic_tmy(irradiance_scale_per_day=np.linspace(0.2, 1.0, TMY_DAYS).tolist()).assign(relative_humidity=80.0)
 
 
 @pytest.fixture
