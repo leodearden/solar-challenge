@@ -778,6 +778,22 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
         named_classes(Counted)
 
 
+def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
+    def settle(cls: type, rate: int, scale: float = 1.0) -> None: ...
+
+    class Partial(type):
+        __call__ = functools.partial(settle, scale=2.0)
+
+    class Made(metaclass=Partial):
+        pass
+
+    naming_made_and_its_call = r"\.Made\b.*\.Partial\.__call__\b.*\bfunctools\.partial\b"
+    with pytest.raises(TypeError, match=naming_made_and_its_call):
+        surface_form(Made)
+    with pytest.raises(TypeError, match=naming_made_and_its_call):
+        named_classes(Made)
+
+
 def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by_that_call_whatever_its_constructor() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 

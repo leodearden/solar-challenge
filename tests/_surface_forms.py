@@ -605,9 +605,9 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     The constructors it refuses, in the order it checks them:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
-      __new__ or __init__, if it wraps a callable defined in C. inspect reads any other
-      __call__ _metaclass_call gives in their place, so none of the constructors below
-      is then checked;
+      __new__ or __init__, if it wraps a callable defined in C or is a
+      functools.partial. inspect reads any other __call__ _metaclass_call gives in
+      their place, so none of the constructors below is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -619,16 +619,13 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     call = _metaclass_call(cls)
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
+        _refuse_partial_bound_as_method(cls, type(cls), "__call__", call)
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
-    if name == "__init__" and isinstance(constructor, functools.partial):
-        raise TypeError(
-            f"{_label(cls)} is constructed through {_label(holder)}.__init__, a "
-            "functools.partial, which Python 3.14 binds to the instance as a method and "
-            "earlier minors call without it: define __init__ with def"
-        )
+    if name == "__init__":
+        _refuse_partial_bound_as_method(cls, holder, name, constructor)
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
@@ -686,6 +683,18 @@ def _wrapped_c_callable(
         return None
     wrapped = inspect.unwrap(constructor, stop=_carries_signature)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
+
+
+def _refuse_partial_bound_as_method(
+    cls: type, owner: type, name: str, constructor: object
+) -> None:
+    """Raise TypeError naming *cls* and *owner*'s *name* if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial: Python 3.14 binds one to the instance as a method, and earlier minors call it without one."""
+    if isinstance(constructor, functools.partial):
+        raise TypeError(
+            f"{_label(cls)} is constructed through {_label(owner)}.{name}, a "
+            "functools.partial, which Python 3.14 binds to the instance as a method and "
+            f"earlier minors call without it: define {name} with def"
+        )
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
