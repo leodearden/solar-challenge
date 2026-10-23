@@ -4,6 +4,7 @@ import dataclasses
 import pickle
 import re
 from collections.abc import Iterable
+from datetime import time
 
 import pandas as pd
 import pytest
@@ -74,18 +75,18 @@ class TestTariffPeriodBasics:
 class TestTariffPeriodValidation:
     """Test TariffPeriod parameter validation."""
 
-    def test_negative_rate_raises(self):
-        """Negative rate raises ValueError."""
-        with pytest.raises(ValueError, match="Rate cannot be negative"):
-            TariffPeriod(
-                start_time="09:00",
-                end_time="17:00",
-                rate_per_kwh=-0.10
-            )
+    @pytest.mark.parametrize("rate", [-0.10, float("nan"), float("inf"), float("-inf")])
+    def test_a_rate_that_is_negative_or_not_finite_is_refused_naming_it(self, rate: float) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod(start_time="09:00", end_time="17:00", rate_per_kwh=rate)
+
+        message = str(refusal.value)
+        assert "rate_per_kwh" in message
+        assert _names_as_a_word(message, rate)
 
     def test_invalid_start_time_format(self):
-        """Invalid start time format raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Invalid start time format raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="9",  # Missing minutes
                 end_time="17:00",
@@ -93,8 +94,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_end_time_format(self):
-        """Invalid end time format raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Invalid end time format raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09:00",
                 end_time="25:00",  # Hour out of range
@@ -102,8 +103,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_hour_raises(self):
-        """Hour outside 0-23 range raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Hour outside 0-23 range raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="24:00",
                 end_time="23:59",
@@ -111,8 +112,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_minute_raises(self):
-        """Minute outside 0-59 range raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Minute outside 0-59 range raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09:00",
                 end_time="17:60",
@@ -120,13 +121,18 @@ class TestTariffPeriodValidation:
             )
 
     def test_malformed_time_string(self):
-        """Malformed time string raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Malformed time string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09-00",  # Wrong separator
                 end_time="17:00",
                 rate_per_kwh=0.25
             )
+
+    def test_a_time_object_is_refused_as_a_time_that_is_not_hh_mm_text(self):
+        """start_time and end_time are HH:MM strings only."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
+            TariffPeriod(start_time=time(9, 0), end_time="17:00", rate_per_kwh=0.25)
 
 
 class TestTariffPeriodTimeParsing:
@@ -338,8 +344,8 @@ class TestTariffConfigValidation:
     """Test TariffConfig validation."""
 
     def test_empty_periods_raises(self):
-        """Empty periods tuple raises ValueError."""
-        with pytest.raises(ValueError, match="must have at least one period"):
+        """Empty periods tuple raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="must have at least one period"):
             TariffConfig(periods=())
 
     def test_invalid_period_time_raises(self):
@@ -350,7 +356,7 @@ class TestTariffConfigValidation:
         object.__setattr__(period, "rate_per_kwh", 0.25)
         object.__setattr__(period, "name", "")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffConfig(periods=(period,))
 
 

@@ -423,6 +423,8 @@ home:
                 "06:00-12:00",
                 id="overlap",
             ),
+            pytest.param("{type: flat_rate, rate_per_kwh: .nan}", "nan", id="nan-rate"),
+            pytest.param("{type: flat_rate, rate_per_kwh: .inf}", "inf", id="inf-rate"),
         ],
     )
     def test_a_tariff_block_its_constructor_refuses_is_an_error_row_naming_the_clock_range_or_rate(
