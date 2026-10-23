@@ -136,9 +136,11 @@ def named_classes(obj: object) -> set[type]:
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries but None, which makes inspect read a
-    wrapper as itself and a partial through its func; an object its class makes callable,
-    where the __call__ that class resolves is, which may be a base's in another module;
-    and a class in the one sys.modules holds under the name its __module__ records. One
+    partial through its func and any other wrapper as itself, spelled where the
+    annotations it holds are, so where the callable it wraps is if functools.wraps
+    copied them from it; an object its class makes callable, where the __call__ that
+    class resolves is, which may be a base's in another module; and a class in the one
+    sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
     LookupError naming it and the module found there, and one whose module has since
     left sys.modules, LookupError naming it and that module's name. A signature that
@@ -726,19 +728,35 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
 def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
     """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
 
-    A routine's is that of the end of its chain, which _chain_end follows through to
-    where inspect.get_annotations finds the namespace of a wrapper's annotations. If
-    that end is an object its class makes callable, it is read as the __call__ its
-    class resolves, from which inspect derives its signature. A __signature__ a wrapper
-    carries does not change that: it records no module. A class's is that of
-    _constructor_spelling_modules.
+    A routine's is that of the callable _annotations_author gives for the end of its
+    chain, as _chain_end follows it. If that end is an object its class makes callable,
+    it is read as the __call__ its class resolves, from which inspect derives its
+    signature. A signature a wrapper carries does not change that: it records no module.
+    A class's is that of _constructor_spelling_modules.
     """
     end = _chain_end(obj)
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
     if not _is_routine(end):
         return _spelling_modules(type(end).__call__, names)
-    return dict.fromkeys(names, _defining_module(end))
+    return dict.fromkeys(names, _defining_module(_annotations_author(end)))
+
+
+def _annotations_author(routine: object) -> object:
+    """The callable that spelled the annotations *routine* holds: *routine* itself, unless it holds those of the callable it records as __wrapped__, as functools.wraps copies them, and then that callable's author in turn."""
+    if not callable(routine):
+        return routine
+    return inspect.unwrap(
+        routine, stop=lambda link: not _holds_annotations_of(link, getattr(link, "__wrapped__"))
+    )
+
+
+def _holds_annotations_of(wrapper: object, wrapped: object) -> bool:
+    """Whether *wrapper* holds *wrapped*'s annotations, as functools.wraps copies them, by reference: the same __annotate__ function, which Python 3.14 copies, else the same __annotations__ dict, which earlier minors copy; never by equality, since equal strings in two modules can name two classes."""
+    annotate = getattr(wrapper, "__annotate__", None)
+    if annotate is not None:
+        return annotate is getattr(wrapped, "__annotate__", None)
+    return getattr(wrapper, "__annotations__", None) is getattr(wrapped, "__annotations__", _ABSENT)
 
 
 def _constructor_spelling_modules(
