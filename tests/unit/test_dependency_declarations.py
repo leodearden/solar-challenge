@@ -20,7 +20,7 @@ the project root may restate it, since a hand-maintained copy drifts from it.
 
 import ast
 import sys
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from importlib.metadata import PackageNotFoundError, distribution, metadata, packages_distributions
 from pathlib import Path
 
@@ -36,6 +36,7 @@ from tests._interpreters import (
 from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
+_FIRST_PARTY = frozenset({"solar_challenge", "tests"})
 _WEB = "web"
 
 
@@ -149,23 +150,41 @@ def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
-    """Return *modules* without the standard library and the first-party solar_challenge package."""
-    return modules - sys.stdlib_module_names - {"solar_challenge"}
-
-
-def _third_party_distributions(modules: set[str]) -> set[str]:
-    """Return the canonical names of the installed distributions providing *modules*.
-
-    Standard-library modules and the first-party solar_challenge package are dropped.
+    """Return *modules* without the standard library and the first-party solar_challenge and
+    tests packages.
     """
-    third_party = _third_party_modules(modules)
-    providers = packages_distributions()
+    return modules - sys.stdlib_module_names - _FIRST_PARTY
+
+
+def _third_party_distributions(source: Path, providers: Mapping[str, list[str]]) -> set[str]:
+    """Return the canonical names of the distributions that provide the third-party modules
+    *source* requires, as *providers* maps modules to distributions.
+
+    Standard-library modules and the first-party solar_challenge and tests packages are dropped.
+    """
+    third_party = _third_party_modules(_required_top_level_modules([source]))
     unprovided = sorted(module for module in third_party if module not in providers)
     assert not unprovided, (
-        f"no installed distribution provides the imported modules {unprovided}; "
+        f"no installed distribution provides the modules {source} imports: {unprovided}; "
         "declare and install the distribution that provides them"
     )
     return {canonicalize_name(dist) for module in third_party for dist in providers[module]}
+
+
+def _undeclared_distributions(
+    sources: Iterable[Path],
+    declared: set[str],
+) -> list[tuple[Path, list[str]]]:
+    """Return (file, undeclared distributions) for every file in *sources* that requires a
+    third-party distribution outside *declared*.
+    """
+    providers = packages_distributions()
+    undeclared: list[tuple[Path, list[str]]] = []
+    for source in sources:
+        distributions = sorted(_third_party_distributions(source, providers) - declared)
+        if distributions:
+            undeclared.append((source, distributions))
+    return sorted(undeclared)
 
 
 def _import_guards(sources: Iterable[Path]) -> Iterator[tuple[Path, ast.Try]]:
@@ -213,17 +232,16 @@ def test_sources_import_only_declared_dependencies(
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
     declared = _declared_distributions_or_skip(project_root, extras)
-    required = _third_party_distributions(
-        _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
-    )
-
-    undeclared = sorted(required - declared)
+    sources = select_sources(project_root / "src" / "solar_challenge")
+    undeclared = [
+        f"{source.relative_to(project_root)} requires {distributions}"
+        for source, distributions in _undeclared_distributions(sources, declared)
+    ]
     groups = ", ".join(
         ["[project].dependencies", *(f"[project.optional-dependencies].{extra}" for extra in extras)]
     )
     assert not undeclared, (
-        f"this source scope of src/solar_challenge requires distributions missing from {groups}; "
-        f"undeclared: {undeclared}; required={sorted(required)}. "
+        f"these files require distributions missing from {groups}: {undeclared}. "
         "Declare them in one of those groups in pyproject.toml, or make the import optional "
         "inside a try block that handles ImportError"
     )
