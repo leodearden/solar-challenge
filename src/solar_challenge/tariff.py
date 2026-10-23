@@ -5,6 +5,7 @@ Supports time-of-use (TOU) tariffs with multiple rate periods,
 flat-rate tariffs, and preset UK tariff configurations.
 """
 
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time
@@ -58,9 +59,10 @@ class TariffPeriod:
     """A time period with a specific electricity rate.
 
     Attributes:
-        start_time: Period start time (HH:MM format or time object)
-        end_time: Period end time (HH:MM format or time object)
-        rate_per_kwh: Electricity rate in £/kWh
+        start_time: Period start, an "HH:MM" string only: the local wall-clock minute
+        end_time: Period end, an "HH:MM" string only; an end at or before the start
+            wraps midnight, and an end equal to the start is the whole day
+        rate_per_kwh: Electricity rate in £/kWh, at least 0 and finite
         name: Descriptive name for the period (e.g., "Off-peak", "Peak")
     """
 
@@ -70,16 +72,14 @@ class TariffPeriod:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate tariff period parameters and parse the times once."""
-        if self.rate_per_kwh < 0:
-            raise ValueError(f"Rate cannot be negative, got {self.rate_per_kwh} £/kWh")
-
-        # Validate time format (this also fills the parsed-time caches)
-        try:
-            self.get_start_time()
-            self.get_end_time()
-        except ValueError as e:
-            raise ValueError(f"Invalid time format: {e}")
+        """Refuse a rate that is negative or not finite, and parse the times once, refusing any that is not HH:MM."""
+        if not 0 <= self.rate_per_kwh < math.inf:
+            raise ConfigurationError(
+                "Tariff period rate_per_kwh must be finite and not negative, "
+                f"got {self.rate_per_kwh} £/kWh"
+            )
+        self.get_start_time()
+        self.get_end_time()
 
     @staticmethod
     def _parse_time(time_str: str) -> time:
@@ -92,7 +92,7 @@ class TariffPeriod:
             time object
 
         Raises:
-            ValueError: If time format is invalid
+            ConfigurationError: If time format is invalid, naming the string and why
         """
         try:
             parts = time_str.split(":")
@@ -106,7 +106,7 @@ class TariffPeriod:
                 raise ValueError(f"Minute must be 0-59, got {minute}")
             return time(hour=hour, minute=minute)
         except (ValueError, AttributeError) as e:
-            raise ValueError(f"Invalid time format '{time_str}': {e}")
+            raise ConfigurationError(f"Invalid time format '{time_str}': {e}") from e
 
     # cached_property, not dataclass fields: the parsed times go in the instance
     # __dict__ and stay out of fields(). web/stored_runs.py's JSON round-trip walks
@@ -210,7 +210,7 @@ class TariffConfig:
     def __post_init__(self) -> None:
         """Refuse a tariff without periods; reading the minute table builds it, refusing a gap or an overlap."""
         if not self.periods:
-            raise ValueError("Tariff must have at least one period")
+            raise ConfigurationError("Tariff must have at least one period")
         self._rate_by_minute
 
     # Derived from periods; cached_property keeps them out of fields(), as for

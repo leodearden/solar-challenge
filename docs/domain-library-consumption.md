@@ -676,8 +676,18 @@ minute at the first listed period's rate; `get_rate` now raises for no minute.
 where the tag reports it valid, and a stored run or scenario file holding one
 no longer loads. The platform's `integrations/tariff_adapter.to_solar_challenge`
 now refuses a `Tariff` row whose periods do not tile at conversion, not at the
-first uncovered half-hour. Consumers whose tariffs tile need no change when
-they re-pin.
+first uncovered half-hour. `TariffPeriod` refuses a NaN or infinite
+`rate_per_kwh`, naming it, which the tag accepts: `Tariff period rate_per_kwh
+must be finite and not negative, got nan £/kWh`. Its other refusals, of a
+negative rate and of a time that is not an `HH:MM` string (a `datetime.time`
+included), and `TariffConfig`'s refusal of no periods now raise
+`ConfigurationError` where the tag raises a plain `ValueError`. A negative rate's
+message is the one above, where the tag's is `Rate cannot be negative, got -0.1
+£/kWh`, and a time's gives its prefix once, `Invalid time format '9': Expected
+HH:MM format, got '9'`, where the tag's begins `Invalid time format: Invalid time
+format '9'`. `validate config` reports a `.nan` or `.inf` rate as an ERROR row.
+Consumers that catch `ValueError`, whose tariffs tile and whose rates are finite
+and 0 or more, need no change when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
