@@ -20,7 +20,6 @@ import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, stream_with_context, url_for
 
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
@@ -256,7 +255,9 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         job_id: Unique job identifier.
 
     Returns:
-        JSON with summary data, or 404/409 on error.
+        JSON with the job's run's id, name, type and creation time, and as ``summary`` its
+        summary's field tree, {} while it has none; or 404/409 on error. A run whose summary
+        does not decode fails the request, with RunRecord.summary's refusal.
     """
     job_manager = get_job_manager()
     state = job_manager.job_state(job_id)
@@ -275,14 +276,14 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
-    summary = json.loads(run.summary_json) if run.summary_json else {}
+    summary = run.summary()
 
     return jsonify({
         "run_id": run_id,
         "name": run.name,
         "type": run.type,
         "created_at": run.created_at,
-        "summary": summary,
+        "summary": {} if summary is None else asdict(summary),
     }), 200
 
 # ---------------------------------------------------------------------------
@@ -714,26 +715,34 @@ def _pagination(query: RunQuery, total: int) -> dict[str, int | bool]:
 
 @api_bp.route("/history/runs/<run_id>")
 def history_get_run(run_id: str) -> Response | tuple[Response, int]:
-    """Get full run detail including summary and config.
+    """A run's detail: each column of its row, with its summary and its homes decoded through its kind.
 
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with full run detail, or 404 if not found.
+        JSON of each column of the run's row, plus, once the run has them, ``summary``, its
+        summary's field tree, and ``home_configs``, the HomeConfig field tree of each of its
+        homes, in order. 404 if no run has the id; 409 {error, run_id} if its summary or its
+        config does not decode, the error naming the run and the column.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    run_dict = asdict(run)
-    if run.config_json:
-        run_dict["config"] = run.decoded_config()
-    if run.summary_json:
-        run_dict["summary"] = run.decoded_summary()
+    try:
+        summary = run.summary()
+        homes = run.home_configs()
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal), "run_id": run_id}), 409
 
-    return jsonify(run_dict)
+    detail = asdict(run)
+    if summary is not None:
+        detail["summary"] = asdict(summary)
+    if homes is not None:
+        detail["home_configs"] = [asdict(home) for home in homes]
+    return jsonify(detail)
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["DELETE"])
@@ -836,13 +845,12 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    if not run.config_json:
-        return jsonify({"error": "No config data available"}), 404
-
     try:
-        homes = run.kind.home_configs(run.decoded_config())
-    except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
+        homes = run.home_configs()
+    except ValueError as exc:
         return jsonify({"error": f"Invalid run data: {exc}"}), 500
+    if homes is None:
+        return jsonify({"error": "No config data available"}), 404
 
     run_name = run.name or "run"
     try:
