@@ -1,7 +1,6 @@
 # Orchestrator Configuration: Why Each Setting Is Set
 
 **Config:** [`dark-factory-orchestrator.yaml`](../dark-factory-orchestrator.yaml)
-**Task:** #887 (review-all stream S24, leaf η)
 
 ---
 
@@ -119,8 +118,6 @@ escalated instead.
   files a fix task. It needs PyPI. Like `interpreter-matrix` it has no `timeout` prefix: its
   suite timeout bounds a hang.
 
-How each `timeout` prefix relates to the run it caps is prose here. No test checks the relation.
-
 The legacy numeric and infra seams (`offline_lane_legacy_numeric_enabled`,
 `offline_lane_infra_enabled`) are off because this repo has neither script they run.
 `tests/unit/test_offline_lane_contracts.py::test_offline_lane_starts_and_skips_the_seams_this_repo_lacks`
@@ -144,6 +141,5 @@ needed.
 - **`convert_to_blocked_enforce`.** Enforces strand conversion (task 3539) fleet-wide, by
   Leo's ruling of 2026-10-18 on `esc-3546-1` (task 3546, the mu gate). Restart-only.
 - **`workflow_exit_contract_enforce`.** Enforces the `run()`-exit contract (task 3542)
-  fleet-wide, by Leo's ruling E of 2026-10-20 (dark-factory task 7255), after a clean soak:
-  no `workflow_exit_contract` event of any verdict in any fleet run store since the ruling's
-  deploy. Restart-only, so it goes live at the next fleet restart.
+  fleet-wide, by Leo's ruling E of 2026-10-20 (dark-factory task 7255), after a clean soak
+  following task 3113's deploy. Restart-only, so it goes live at the next fleet restart.
