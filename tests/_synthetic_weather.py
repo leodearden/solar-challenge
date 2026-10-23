@@ -7,7 +7,8 @@ with its irradiance scaled, so a test can put a sunny day next to a sunless one.
 Both index their hours from midnight of the day they are given, in Europe/London, the
 timezone of the simulated demand. ``weather_for`` gives such a frame to simulate_home as
 one home's weather. ``synthetic_tmy`` is a whole TMY year of clear June days, in the
-shape PvgisTmy fetches from PVGIS, for seeding a WeatherCache.
+shape PvgisTmy fetches from PVGIS, for seeding a WeatherCache. Its days' irradiance can
+be scaled too, one scale for each of its ``TMY_DAYS`` days.
 
 Usage::
 
@@ -38,6 +39,9 @@ _HOURS_PER_DAY = 24
 _TMY_YEAR_START = "1990-01-01"
 _TIMEZONE = "Europe/London"
 _IRRADIANCE_COLUMNS = ["ghi", "dni", "dhi"]
+
+TMY_DAYS = TMY_HOURS // _HOURS_PER_DAY
+"""The days of PVGIS's TMY year, and so the irradiance scales synthetic_tmy takes."""
 
 # One clear June day, hour by hour: GHI peaks near 870 W/m² at solar noon.
 _CLEAR_JUNE_DAY = {
@@ -79,10 +83,20 @@ def synthetic_june_weather(
     )
 
 
-def synthetic_tmy() -> pd.DataFrame:
-    """A TMY year of clear June days, shaped as PVGIS's: TMY_HOURS hourly rows from 1990-01-01 00:00 UTC, each UTC day the clear June day."""
+def synthetic_tmy(*, irradiance_scale_per_day: Sequence[float] = (1.0,) * TMY_DAYS) -> pd.DataFrame:
+    """A TMY year of clear June days, shaped as PVGIS's: TMY_HOURS hourly rows from 1990-01-01 00:00 UTC, each UTC day the clear June day.
+
+    UTC day i's ghi, dni and dhi are multiplied by entry i of *irradiance_scale_per_day*, as
+    synthetic_june_weather scales its days. It takes TMY_DAYS scales, all 1.0 by default, and
+    refuses any other count with ValueError.
+    """
+    if len(irradiance_scale_per_day) != TMY_DAYS:
+        raise ValueError(
+            f"synthetic_tmy takes {TMY_DAYS} irradiance scales, one per day of the TMY year, "
+            f"not {len(irradiance_scale_per_day)}"
+        )
     return pd.DataFrame(
-        _clear_june_days((1.0,) * (TMY_HOURS // _HOURS_PER_DAY)),
+        _clear_june_days(irradiance_scale_per_day),
         index=pd.date_range(_TMY_YEAR_START, periods=TMY_HOURS, freq="h", tz="UTC"),
     )
 
