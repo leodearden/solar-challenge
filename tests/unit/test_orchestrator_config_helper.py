@@ -17,6 +17,7 @@ from tests._orchestrator_config import (
     git_config,
     lane_command,
     lane_commands,
+    lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
     verify_command,
@@ -311,3 +312,28 @@ def test_a_lane_job_declaring_no_outage_probe_fails_naming_the_job(
 
     assert "'probe'" in str(failure.value)
     assert repr(declared.get("outage_probe")) in str(failure.value)
+
+
+def test_the_lane_jobs_declaring_an_outage_probe_are_those_whose_probe_is_not_none_in_config_order(
+    tmp_path: Path,
+) -> None:
+    """A malformed probe, such as an empty string, counts as declared, so lane_outage_probe reports it."""
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs(
+            {"name": "a", "command": _COMMAND, "outage_probe": _OUTAGE_PROBE},
+            {"name": "b", "command": _COMMAND},
+            {"name": "c", "command": _COMMAND, "outage_probe": ""},
+        ),
+    )
+
+    assert lane_jobs_declaring_an_outage_probe(tmp_path) == ("a", "c")
+
+
+@pytest.mark.parametrize("git", _GIT_MAPPINGS_WITHOUT_LANE_JOBS)
+def test_a_git_mapping_without_lane_jobs_has_no_job_declaring_an_outage_probe(
+    tmp_path: Path, git: Mapping[str, object]
+) -> None:
+    _write_orchestrator_config(tmp_path, {"git": git})
+
+    assert lane_jobs_declaring_an_outage_probe(tmp_path) == ()
