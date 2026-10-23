@@ -105,7 +105,7 @@ def weather_for(home: HomeConfig, frame: pd.DataFrame) -> PrefetchedWeather:
 
 
 def _clear_june_days(irradiance_scale_per_day: Sequence[float]) -> dict[str, np.ndarray]:
-    """Each column of the clear June day's hours, once per entry of *irradiance_scale_per_day*, its ghi, dni and dhi multiplied by that day's scale."""
+    """The clear June day's hourly values by column, for one day per entry of *irradiance_scale_per_day*, each day's ghi, dni and dhi multiplied by its scale."""
     days = len(irradiance_scale_per_day)
     hour_scales = np.repeat(np.asarray(irradiance_scale_per_day, dtype=float), _HOURS_PER_DAY)
     clear_days = {column: np.tile(np.asarray(hours, dtype=float), days) for column, hours in _CLEAR_JUNE_DAY.items()}
