@@ -275,9 +275,9 @@ def _calls_importorskip(call: ast.Call) -> bool:
     return isinstance(callee, ast.Name) and callee.id == "importorskip"
 
 
-def _importorskip_modnames(tree: ast.AST) -> Iterator[str]:
-    """Yield the module name each importorskip call in *tree* passes as a string literal,
-    positionally or as modname=, wherever the call is.
+def _importorskip_imports(tree: ast.AST) -> Iterator[ast.Import]:
+    """Yield an import of each module an importorskip call in *tree* passes as a string literal,
+    positionally or as modname=, wherever the call is. Each import sits where its literal does.
 
     The call imports the module or skips its test, and an ImportError handler around it cannot
     catch the skip, so the file requires the module wherever the call is. A modname that is not
@@ -288,7 +288,17 @@ def _importorskip_modnames(tree: ast.AST) -> Iterator[str]:
             keyword_modnames = [keyword.value for keyword in node.keywords if keyword.arg == "modname"]
             for modname in [*node.args[:1], *keyword_modnames]:
                 if isinstance(modname, ast.Constant) and isinstance(modname.value, str):
-                    yield modname.value
+                    yield ast.copy_location(ast.Import(names=[ast.alias(name=modname.value)]), modname)
+
+
+def _required_imports_and_importorskips(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield the imports *tree* requires: its _required_imports, and an import of each module it
+    names to pytest.importorskip.
+
+    Every reading of what a file requires starts here.
+    """
+    yield from _required_imports([tree])
+    yield from _importorskip_imports(tree)
 
 
 def _directory_of_from_import(project_root: Path, source: Path, node: ast.ImportFrom) -> Path:
@@ -313,15 +323,15 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     """Yield (directory, dotted-name parts) for each module *source* may import.
 
     An absolute name resolves from *project_root* and a relative one from *source*'s package
-    directory. Imports count as _required_imports counts them, and each pytest_plugins entry
-    and each module named to pytest.importorskip counts as an absolute import. The last part of
-    a from-import's name may be an attribute of the module before it, not a module.
+    directory. Imports count as _required_imports_and_importorskips counts them, and each
+    pytest_plugins entry counts as an absolute import. The last part of a from-import's name
+    may be an attribute of the module before it, not a module.
 
     A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
     literal, fails naming *source* and the line.
     """
     tree = _parse(source)
-    for node in _required_imports([tree]):
+    for node in _required_imports_and_importorskips(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield project_root, alias.name.split(".")
@@ -330,7 +340,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
-    for name in [*_pytest_plugins(source, tree), *_importorskip_modnames(tree)]:
+    for name in _pytest_plugins(source, tree):
         yield project_root, name.split(".")
 
 
@@ -386,18 +396,15 @@ def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[st
 
 
 def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
-    """Return the top-level module of every required absolute import in *sources*, and of every
-    module they name to pytest.importorskip.
+    """Return the top-level module of every absolute import *sources* require, counting each
+    module they name to pytest.importorskip as one.
 
     Function-local and TYPE_CHECKING imports count; relative imports and
     ImportError-guarded imports do not.
     """
-    modules: set[str] = set()
-    for source in sources:
-        tree = _parse(source)
-        modules |= _top_level_modules(_required_imports([tree]))
-        modules |= {name.partition(".")[0] for name in _importorskip_modnames(tree)}
-    return modules
+    return _top_level_modules(
+        node for source in sources for node in _required_imports_and_importorskips(_parse(source))
+    )
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
