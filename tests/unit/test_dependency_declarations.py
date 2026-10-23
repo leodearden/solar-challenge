@@ -110,12 +110,48 @@ def _script_sources(project_root: Path) -> list[Path]:
     return list((project_root / "scripts").rglob("*.py"))
 
 
-def _test_sources_outside_e2e(project_root: Path) -> list[Path]:
-    """Return the .py files of tests/ outside tests/e2e: what the per-task verify's test_command
-    runs, installing the dev and web extras and ignoring tests/e2e.
+_DEV_ONLY_LANE_SUITES = (
+    "tests/interpreter_matrix",
+    "tests/integration/test_pvgis.py",
+    "tests/css_build",
+    "tests/newest_releases",
+)
+_LOADED_ABOVE_A_SUITE = frozenset({"__init__.py", "conftest.py"})
+
+
+def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of the suites in _DEV_ONLY_LANE_SUITES, which the offline lane's jobs
+    that install the dev extra alone run, and the conftest.py and __init__.py files pytest loads
+    above them.
+    """
+    missing = [suite for suite in _DEV_ONLY_LANE_SUITES if not (project_root / suite).exists()]
+    assert not missing, (
+        f"the dev-only lane suites {missing} do not exist; _DEV_ONLY_LANE_SUITES must name the suite "
+        "of each offline-lane job that installs the dev extra alone"
+    )
+    suites = [project_root / suite for suite in _DEV_ONLY_LANE_SUITES]
+    return [
+        source
+        for source in (project_root / "tests").rglob("*.py")
+        if any(
+            source.is_relative_to(suite)
+            or (source.name in _LOADED_ABOVE_A_SUITE and suite.is_relative_to(source.parent))
+            for suite in suites
+        )
+    ]
+
+
+def _verify_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of tests/ outside tests/e2e that _dev_only_lane_test_sources does not
+    select: the per-task verify's test_command runs them, installing the dev and web extras.
     """
     tests_dir = project_root / "tests"
-    return _python_files_outside(tests_dir, tests_dir / "e2e")
+    dev_only_lane_sources = set(_dev_only_lane_test_sources(project_root))
+    return [
+        source
+        for source in _python_files_outside(tests_dir, tests_dir / "e2e")
+        if source not in dev_only_lane_sources
+    ]
 
 
 def _e2e_test_sources(project_root: Path) -> list[Path]:
@@ -132,7 +168,8 @@ _PACKAGE_SCOPES = {
 _SOURCE_SCOPES = {
     **_PACKAGE_SCOPES,
     "scripts": (_script_sources, (_DEV,)),
-    "tests-outside-e2e": (_test_sources_outside_e2e, (_DEV, _WEB)),
+    "tests-dev-only-lanes": (_dev_only_lane_test_sources, (_DEV,)),
+    "tests-verify": (_verify_test_sources, (_DEV, _WEB)),
     "tests-e2e": (_e2e_test_sources, (_DEV, _WEB, _E2E)),
 }
 
@@ -434,7 +471,20 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "outside-web": ("src/solar_challenge/simulate.py",),
     "web": ("src/solar_challenge/web/views.py",),
     "scripts": ("scripts/measure.py",),
-    "tests-outside-e2e": ("tests/_helpers.py", "tests/unit/test_simulate.py"),
+    "tests-dev-only-lanes": (
+        "tests/conftest.py",
+        "tests/css_build/test_build.py",
+        "tests/integration/__init__.py",
+        "tests/integration/test_pvgis.py",
+        "tests/interpreter_matrix/test_matrix.py",
+        "tests/newest_releases/test_newest.py",
+    ),
+    "tests-verify": (
+        "tests/_helpers.py",
+        "tests/integration/test_fleet.py",
+        "tests/unit/conftest.py",
+        "tests/unit/test_simulate.py",
+    ),
     "tests-e2e": ("tests/e2e/test_pages.py",),
 }
 
