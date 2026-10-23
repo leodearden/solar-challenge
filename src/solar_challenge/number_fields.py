@@ -115,6 +115,25 @@ def as_whole_numbers(values: object, field: str, within: Interval = Interval()) 
     return _read_each(as_whole_number, values, field, within, "whole numbers")
 
 
+def read_field(
+    instance: object,
+    field: str,
+    read: Callable[[object, str, Interval], object],
+    within: Interval = Interval(),
+    *,
+    optional: bool = False,
+) -> None:
+    """Read *instance*'s *field* with *read* under *within*, and store what it returns, frozen dataclass or not; an *optional* field left None stays None.
+
+    Raises:
+        ConfigurationError: If *read* refuses the field's value.
+    """
+    value = getattr(instance, field)
+    if optional and value is None:
+        return
+    object.__setattr__(instance, field, read(value, field, within))
+
+
 def _read_each(
     read: Callable[[Any, str, Interval], _Number], values: object, field: str, within: Interval, kind: str
 ) -> tuple[_Number, ...]:
