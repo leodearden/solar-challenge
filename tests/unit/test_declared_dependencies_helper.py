@@ -129,6 +129,35 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     )
 
 
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(("loader = object()", 'loader.importorskip("yaml")'), id="method-of-another-object"),
+        pytest.param(
+            ('"""Skips unless pytest.importorskip("yaml") finds it."""', '# pytest.importorskip("yaml")'),
+            id="named-in-a-docstring-and-a-comment",
+        ),
+        pytest.param(("import pytest", 'pytest.skip("yaml")'), id="another-pytest-function"),
+        pytest.param(("import pytest", 'pytest.importorskip(minversion="2")'), id="no-module-named"),
+    ],
+)
+def test_undeclared_distributions_ignores_what_only_resembles_a_call_of_pytests_importorskip(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """A file requires a module through importorskip only by calling pytest's importorskip with its name.
+
+    A method of that name on another object, a mention in a docstring or a comment, another pytest
+    function given the name of a module, and a call that names no module require nothing.
+    """
+    resembling = _write_module(tmp_path / "resembling.py", *lines)
+
+    assert undeclared_distributions([resembling], declared={"pytest"}) == [], (
+        "the undeclared-distributions detector read a requirement of yaml, which no declared "
+        f"distribution provides, from a file that only resembles a call of pytest.importorskip: {lines}"
+    )
+
+
 def test_undeclared_distributions_fails_naming_a_file_that_importorskips_a_module_no_installed_distribution_provides(
     tmp_path: Path,
 ) -> None:

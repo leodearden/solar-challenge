@@ -266,12 +266,19 @@ def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
 
 
 def _calls_importorskip(call: ast.Call) -> bool:
-    """Return whether *call* calls importorskip: as the attribute of a module, such as
-    pytest.importorskip, or by the bare name imported from pytest.
+    """Return whether *call* is spelled as a call of pytest's importorskip: pytest.importorskip, or
+    the bare importorskip that `from pytest import importorskip` binds.
+
+    Only the spelling is read, not what its names are bound to, so a method of that name on any
+    other object, or on pytest imported under another name, is no match.
     """
     callee = call.func
     if isinstance(callee, ast.Attribute):
-        return callee.attr == "importorskip"
+        return (
+            callee.attr == "importorskip"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "pytest"
+        )
     return isinstance(callee, ast.Name) and callee.id == "importorskip"
 
 
