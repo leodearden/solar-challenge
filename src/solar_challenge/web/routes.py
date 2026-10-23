@@ -30,76 +30,22 @@ from solar_challenge.web.charts import (
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.stored_runs import StoredFleetRun, StoredHomeRun
 
 bp = Blueprint("main", __name__)
 
-
-def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
-    """Compute aggregate statistics across all completed simulation runs.
-
-    Uses SQL aggregate queries instead of loading all rows for O(1) performance.
-
-    Args:
-        storage: RunStorage instance to query.
-
-    Returns:
-        Dict with total_runs, total_homes, and total_energy_mwh.
-    """
-    with storage.database.transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                COUNT(*) as total_runs,
-                COALESCE(SUM(CASE WHEN n_homes IS NOT NULL AND n_homes > 0 THEN n_homes ELSE 1 END), 0) as total_homes
-            FROM runs
-            WHERE status = 'completed'
-        """)
-        row = cursor.fetchone()
-        total_runs = row["total_runs"]
-        total_homes = row["total_homes"]
-
-        # Get total energy from summary_json using json_extract
-        cursor.execute("""
-            SELECT COALESCE(SUM(
-                CAST(json_extract(summary_json, '$.total_generation_kwh') AS REAL)
-            ), 0.0) as total_energy_kwh
-            FROM runs
-            WHERE status = 'completed' AND summary_json IS NOT NULL
-        """)
-        energy_row = cursor.fetchone()
-        total_energy_kwh = energy_row["total_energy_kwh"]
-
-    return {
-        "total_runs": total_runs,
-        "total_homes": total_homes,
-        "total_energy_mwh": round(total_energy_kwh / 1000.0, 2),
-    }
+_RECENT_RUNS = 10  # the runs the dashboard's Recent Runs table lists, the newest first
 
 
 @bp.route("/", methods=["GET"])
 def index() -> str:
-    """Render the dashboard page with recent runs and aggregate stats."""
+    """Render the dashboard page: the records of the newest runs in Recent Runs, and RunStorage.totals in its stat cards."""
     storage = get_storage()
-    runs_raw = storage.list_runs(limit=10)
-    stats = _get_aggregate_stats(storage)
-
-    # Format runs for the template table
-    runs = []
-    for run in runs_raw:
-        runs.append({
-            "id": run.get("id", ""),
-            "name": run.get("name", "Unnamed"),
-            "type": run.get("type", "home"),
-            "date": (run.get("created_at", "")[:10] if run.get("created_at") else ""),
-            "status": run.get("status", "unknown"),
-        })
-
     return str(render_template(
         "dashboard.html",
-        runs=runs,
-        stats=stats,
+        runs=storage.page_runs(RunQuery(per_page=_RECENT_RUNS)).records,
+        totals=storage.totals(),
     ))
 
 
