@@ -595,6 +595,24 @@ class TestPatchAPI:
         assert response.status_code == 404
         assert response.get_json() == {"error": "Run not found"}
 
+    @pytest.mark.parametrize(
+        "body",
+        [{"name": ""}, {"name": None}, {"name": "   "}, {"name": "", "notes": "Checked"}],
+        ids=["empty", "null", "spaces", "empty-beside-notes"],
+    )
+    def test_api_patch_of_a_null_or_blank_name_is_400_naming_name_and_writes_no_label(
+        self, app: Flask, client: FlaskClient, body: dict[str, str | None]
+    ) -> None:
+        """A run's name is never NULL or blank, so the run keeps its name, and the notes given beside it are not written."""
+        _insert_test_run(app, run_id="keep-my-name", name="Old Name")
+
+        response = client.patch("/api/history/runs/keep-my-name", json=body)
+
+        assert response.status_code == 400
+        assert response.get_json()["error"].startswith("name is ")
+        run = client.get("/api/history/runs/keep-my-name").get_json()
+        assert (run["name"], run["notes"]) == ("Old Name", None)
+
 
 class TestExportAPI:
     """Tests for the CSV and YAML export API endpoints."""
