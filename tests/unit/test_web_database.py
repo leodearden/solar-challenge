@@ -585,31 +585,19 @@ class TestSavedRunRow:
             notes=None,
         )
 
-    def test_a_home_save_given_no_name_names_its_run_after_its_home_or_else_unnamed_run(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """A home run saved with no name takes its home's name, or 'Unnamed Run' when its home has none."""
-        for run_id, config in (
-            ("named-home", sample_home_config),
-            ("unnamed-home", dataclasses.replace(sample_home_config, name="")),
-        ):
-            storage.save_home_run(
-                run_id=run_id,
-                config=config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-            )
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_given_no_name_gives_its_run_no_default_name(self, storage, saves, kind):
+        """A run a save records for the first time with no name has none, not its home's or a default.
 
-        assert [storage.run_name("named-home"), storage.run_name("unnamed-home")] == [
-            "Test Home",
-            "Unnamed Run",
-        ]
+        A job's run is named when its submit creates it, at create_run, and the job's save keeps
+        that name as a re-save keeps a run's labels
+        (test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_the_run_labels),
+        so a save has no name of its own to give. The runs table refuses a NULL name only once
+        its name column is NOT NULL (docs/prds/run-store-one-owner.md §3.9).
+        """
+        saves[kind]("new-run")
 
-    def test_a_fleet_save_given_no_name_names_its_run_unnamed_fleet_run(self, storage, saves):
-        """A fleet run saved with no name is named 'Unnamed Fleet Run'."""
-        saves["fleet"]("fleet-run")
-
-        assert storage.run_name("fleet-run") == "Unnamed Fleet Run"
+        assert storage.run_name("new-run") is None
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
@@ -925,7 +913,8 @@ class TestRunName:
     ):
         """A run whose name is NULL answers None, not a default name.
 
-        Every save writes a name, so the test clears the saved one in the database.
+        A database written before every run was named holds such a row, so the test clears
+        the saved name in the database.
         """
         run_id = "null-name-home"
         storage.save_home_run(
