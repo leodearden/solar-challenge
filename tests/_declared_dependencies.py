@@ -8,11 +8,14 @@ with the extras, beside [project].dependencies, of the run that loads them;
 each selector's docstring names that run. solar_challenge and tests are
 first-party. A module a file names to pytest.importorskip as a string literal
 counts as an import it requires, since the test skips wherever that module is
-missing. An import inside a try block that handles ImportError is optional
-by construction and exempt; dead_import_guards finds each such guard over
-declared distributions only, whose handler can never run. Imports map to
-distributions only through installed metadata, so a scope's check skips where
-its extras are not installed.
+missing. So does the module pytest imports for each entry of a module-level
+pytest_plugins assignment; a built-in plugin's short name, such as pytester,
+names a module of pytest's own _pytest package. An import inside a try block
+that handles ImportError is optional by construction and exempt;
+dead_import_guards finds each such guard over declared distributions only,
+whose handler can never run. Imports map to distributions only through
+installed metadata, so a scope's check skips where its extras are not
+installed.
 
 The package's web subpackage, WEB_SUBPACKAGE, is first-party, yet any of its
 modules may import the web extra at module top. So no file of
@@ -53,6 +56,7 @@ from importlib.metadata import PackageNotFoundError, distribution, packages_dist
 from pathlib import Path
 
 import pytest
+from _pytest.config import builtin_plugins
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -245,15 +249,15 @@ def _handles_import_failure(node: ast.Try) -> bool:
     )
 
 
-def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.ImportFrom]:
+def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.ImportFrom]:
     """Yield the imports under *nodes*, skipping the body of every try that handles ImportError."""
     for node in nodes:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             yield node
         elif isinstance(node, ast.Try) and _handles_import_failure(node):
-            yield from _required_imports([*node.handlers, *node.orelse, *node.finalbody])
+            yield from _unguarded_imports([*node.handlers, *node.orelse, *node.finalbody])
         else:
-            yield from _required_imports(ast.iter_child_nodes(node))
+            yield from _unguarded_imports(ast.iter_child_nodes(node))
 
 
 def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
@@ -272,27 +276,46 @@ def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
             yield value
 
 
-def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
-    """Return the plugin names of the module-level pytest_plugins assignments in *tree*, the
-    syntax tree of *source*.
-
-    pytest imports each when it loads a conftest, test module or plugin that sets one. pytest
-    accepts any expression, but the names are read without running *source*, so the value must
-    be a literal: a str, split at commas as pytest splits it, or a sequence of str. Any other
-    value fails, naming *source*, the line and the expression.
+def _pytest_plugins_failure(source: Path, value: ast.expr, defect: str) -> AssertionError:
+    """Return the failure for the pytest_plugins assignment *value* in *source* that the contract
+    cannot follow. It names *source*, the line and the expression; *defect* is the clause that
+    says what is wrong with it, such as "is not a literal". It also says how to write
+    pytest_plugins instead.
     """
-    names: list[str] = []
+    return AssertionError(
+        f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which {defect}; "
+        "write pytest_plugins as a literal list or tuple of module names, or as a "
+        "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+    )
+
+
+def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
+    """Yield an import of the module pytest imports for each entry of the module-level
+    pytest_plugins assignments in *tree*, the syntax tree of *source*. Each import sits where
+    its assignment's value does.
+
+    pytest imports each entry when it loads a conftest, test module or plugin that sets one. A
+    built-in plugin's short name, such as pytester, names that module of pytest's own _pytest
+    package, as PytestPluginManager.import_plugin reads builtin_plugins; any other entry names
+    the module it spells. The entries are read without running *source*, so the value must be a
+    literal: a str, split at commas as pytest splits it, or a list or tuple of str. An empty
+    str, like None, names no plugin. Any other value fails, naming *source*, the line and the
+    expression.
+    """
     for value in _pytest_plugins_values(tree):
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
-            raise AssertionError(
-                f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which is not a "
-                "literal; write pytest_plugins as a literal list or tuple of module names, or as a "
-                "comma-separated string, for the declared-dependency contract to follow the plugins it names"
-            ) from None
-        names.extend(plugins.split(",") if isinstance(plugins, str) else plugins)
-    return names
+            raise _pytest_plugins_failure(source, value, "is not a literal") from None
+        if plugins is None or plugins == "":
+            continue
+        if not isinstance(plugins, (str, list, tuple)):
+            raise _pytest_plugins_failure(source, value, "is neither a str nor a list or tuple")
+        for entry in plugins.split(",") if isinstance(plugins, str) else plugins:
+            if not isinstance(entry, str):
+                raise _pytest_plugins_failure(source, value, f"names {entry!r}, not a module name")
+            module = f"_pytest.{entry}" if entry in builtin_plugins else entry
+            yield ast.copy_location(ast.Import(names=[ast.alias(name=module)]), value)
 
 
 def _calls_importorskip(call: ast.Call) -> bool:
@@ -328,14 +351,17 @@ def _importorskip_imports(tree: ast.AST) -> Iterator[ast.Import]:
                     yield ast.copy_location(ast.Import(names=[ast.alias(name=modname.value)]), modname)
 
 
-def _required_imports_and_importorskips(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
-    """Yield the imports *tree* requires: its _required_imports, and an import of each module it
-    names to pytest.importorskip.
+def _imports_required_by(source: Path) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield the imports the Python *source* file requires: its _unguarded_imports, an import of
+    each module it names to pytest.importorskip, and an import of the module pytest imports for
+    each entry of its pytest_plugins.
 
     Every reading of what a file requires starts here.
     """
-    yield from _required_imports([tree])
+    tree = _parse(source)
+    yield from _unguarded_imports([tree])
     yield from _importorskip_imports(tree)
+    yield from _pytest_plugin_imports(source, tree)
 
 
 def _directory_of_absolute_name(project_root: Path, name: str) -> Path:
@@ -369,15 +395,13 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
 
     An absolute name of the package resolves from *project_root*'s src/, where the editable
     install finds it, any other absolute name from *project_root*, and a relative one from
-    *source*'s package directory. Imports count as _required_imports_and_importorskips counts
-    them, and each pytest_plugins entry counts as an absolute import. The last part of a
-    from-import's name may be an attribute of the module before it, not a module.
+    *source*'s package directory. Imports count as _imports_required_by reads them. The last
+    part of a from-import's name may be an attribute of the module before it, not a module.
 
-    A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
-    literal, fails naming *source* and the line.
+    A relative import that climbs out of *project_root*, or a pytest_plugins value that
+    _pytest_plugin_imports cannot read, fails naming *source* and the line.
     """
-    tree = _parse(source)
-    for node in _required_imports_and_importorskips(tree):
+    for node in _imports_required_by(source):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield _directory_of_absolute_name(project_root, alias.name), alias.name.split(".")
@@ -386,8 +410,6 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
-    for name in _pytest_plugins(source, tree):
-        yield _directory_of_absolute_name(project_root, name), name.split(".")
 
 
 def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
@@ -475,15 +497,13 @@ def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[st
 
 
 def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
-    """Return the top-level module of every absolute import *sources* require, counting each
-    module they name to pytest.importorskip as one.
+    """Return the top-level module of every absolute import *sources* require, as
+    _imports_required_by reads them.
 
     Function-local and TYPE_CHECKING imports count; relative imports and
     ImportError-guarded imports do not.
     """
-    return _top_level_modules(
-        node for source in sources for node in _required_imports_and_importorskips(_parse(source))
-    )
+    return _top_level_modules(node for source in sources for node in _imports_required_by(source))
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
@@ -580,7 +600,8 @@ def assert_imports_only_declared(project_root: Path, scope: SourceScope) -> None
     assert not undeclared, (
         f"these files require distributions missing from {groups}: {undeclared}. "
         "A module a file names to pytest.importorskip counts as required, since its test skips "
-        "wherever the module is missing. Declare them in one of those groups in pyproject.toml, "
-        "or, in src/solar_challenge, make the import optional inside a try block that handles "
-        "ImportError"
+        "wherever the module is missing; so does a plugin module a pytest_plugins entry names, "
+        "since pytest imports it when it loads the file. Declare them in one of those groups in "
+        "pyproject.toml, or, in src/solar_challenge, make the import optional inside a try block "
+        "that handles ImportError"
     )

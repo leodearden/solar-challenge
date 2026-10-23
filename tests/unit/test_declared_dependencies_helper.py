@@ -40,7 +40,8 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     tmp_path: Path,
 ) -> None:
     """A file is flagged with every distribution it requires that is not declared, including each
-    whose module it names to pytest.importorskip.
+    whose module it names to pytest.importorskip, and each whose plugin module a pytest_plugins
+    entry names. A built-in plugin's short name, such as pytester, names a module of pytest itself.
     """
     undeclared_top_level = _write_module(
         tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
@@ -88,6 +89,11 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         'MODULE = "yaml"',
         "pytest.importorskip(MODULE)",
     )
+    undeclared_pytest_plugin = _write_module(
+        tmp_path / "undeclared_pytest_plugin.py", 'pytest_plugins = "pytester,pytest_rerunfailures"'
+    )
+    builtin_pytest_plugin = _write_module(tmp_path / "builtin_pytest_plugin.py", 'pytest_plugins = ["pytester"]')
+    empty_pytest_plugins = _write_module(tmp_path / "empty_pytest_plugins.py", 'pytest_plugins = ""')
 
     undeclared = undeclared_distributions(
         [
@@ -103,6 +109,9 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
             guarded_only,
             declared_importorskip,
             non_literal_importorskip,
+            undeclared_pytest_plugin,
+            builtin_pytest_plugin,
+            empty_pytest_plugins,
         ],
         declared={"pytest"},
     )
@@ -112,6 +121,7 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         (undeclared_importorskip, ["pyyaml"]),
         (undeclared_importorskip_in_guard, ["pyyaml"]),
         (undeclared_importorskip_in_test, ["numpy"]),
+        (undeclared_pytest_plugin, ["pytest-rerunfailures"]),
         (undeclared_top_level, ["numpy", "pyyaml"]),
     ], (
         "the undeclared-distributions detector misjudged a synthetic file: each undeclared_* file "
@@ -126,7 +136,11 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "guarded_only imports yaml only inside a try that handles ImportError, "
         "declared_importorskip names to pytest.importorskip only a module the declared pytest "
         "provides and a standard-library one, and non_literal_importorskip passes it a name, "
-        "not a string literal, so none of those may be flagged"
+        "not a string literal, so none of those may be flagged. undeclared_pytest_plugin names "
+        "the pytest_rerunfailures plugin module in a comma-separated pytest_plugins string, "
+        "beside the built-in pytester. builtin_pytest_plugin names only pytester, which pytest "
+        "imports from its own _pytest package. empty_pytest_plugins sets pytest_plugins to an "
+        "empty string, which names no plugin. So neither of the last two may be flagged"
     )
 
 
@@ -462,6 +476,44 @@ def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_liter
         f"on it that the scope cannot read: {message}"
     )
     assert "literal" in message, f"the failure does not say that pytest_plugins must be a literal: {message}"
+
+
+@pytest.mark.parametrize(
+    ("assigned", "defect"),
+    [
+        pytest.param("[1]", "names 1, not a module name", id="an-int-entry"),
+        pytest.param("['tests._plugin', None]", "names None, not a module name", id="none-beside-a-module-name"),
+        pytest.param("(['tests._plugin'],)", "names ['tests._plugin'], not a module name", id="a-nested-list-entry"),
+        pytest.param("5", "is neither a str nor a list or tuple", id="an-int-for-the-whole-value"),
+        pytest.param("{}", "is neither a str nor a list or tuple", id="an-empty-dict-is-no-empty-value"),
+    ],
+)
+def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_str_nor_list_or_tuple_of_str(
+    tmp_path: Path,
+    assigned: str,
+    defect: str,
+) -> None:
+    """A pytest_plugins value that is no str, list or tuple, or that holds an entry that is no str,
+    fails the detector, naming the file, the line, the expression and what is wrong with it.
+
+    pytest imports each entry as a module name, which it requires to be text, and accepts None,
+    a str or a sequence only. An int read as a module name would otherwise fail on its first
+    string method, naming no file. Only None and the empty str name no plugin, so an empty dict
+    fails like any other value of the wrong type.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import pytest", f"pytest_plugins = {assigned}")
+
+    with pytest.raises(AssertionError) as failure:
+        undeclared_distributions([plugin], declared={"pytest"})
+
+    message = str(failure.value)
+    assert f"{plugin}:2 sets pytest_plugins to {assigned}, which {defect}" in message, (
+        f"the failure does not name line 2 of {plugin}, the pytest_plugins expression `{assigned}` on "
+        f"it and what is wrong with it, `which {defect}`: {message}"
+    )
+    assert "list or tuple of module names" in message, (
+        f"the failure does not say how to write pytest_plugins: {message}"
+    )
 
 
 @pytest.mark.parametrize(
