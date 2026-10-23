@@ -938,6 +938,21 @@ class TestComparisonRoute:
         page = response.get_data(as_text=True)
         assert texts_after(page, "500", 1) == ["Internal Server Error"]
 
+    def test_compare_answers_a_server_error_when_a_run_s_summary_does_not_decode(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A run whose stored summary is not JSON fails the request with the app's 500 page, instead of being compared as a run of zeros."""
+        _insert_test_run(app, run_id="cmp-1", name="Compare A")
+        _insert_test_run(app, run_id="cmp-2", name="Compare B")
+        _garble(app, "cmp-2", "summary_json")
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.get("/history/compare?ids=cmp-1,cmp-2")
+
+        assert response.status_code == 500
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "500", 1) == ["Internal Server Error"]
+
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""
         response = client.get("/history/compare?ids=fake-1,fake-2")
