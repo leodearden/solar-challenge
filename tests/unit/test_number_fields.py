@@ -17,9 +17,7 @@ from solar_challenge.number_fields import (
     UNIT_INTERVAL,
     Interval,
     as_finite_float,
-    as_finite_float_within,
     as_whole_number,
-    as_whole_number_within,
 )
 
 _IMPORT_PROBE = """\
@@ -185,6 +183,9 @@ class TestAsFiniteFloat:
         assert number == expected
         assert isinstance(number, float)
 
+    def test_with_no_interval_any_finite_number_is_read(self) -> None:
+        assert as_finite_float(-1e308, "x") == -1e308
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -209,18 +210,18 @@ class TestAsFiniteFloat:
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
 
 
-class TestAsFiniteFloatWithin:
-    """as_finite_float_within reads a value as as_finite_float does, and refuses one outside its inclusive range."""
+class TestAsFiniteFloatWithAnInterval:
+    """as_finite_float given an interval reads a value as it does without one, and refuses a number outside the interval, phrasing it."""
 
     @pytest.mark.parametrize(
         ("value", "expected"),
         [pytest.param(0.5, 0.5, id="low"), pytest.param(20, 20.0, id="high")],
     )
-    def test_the_range_is_inclusive_and_a_value_is_read_as_a_float(
+    def test_a_closed_interval_admits_its_bounds_and_a_value_is_read_as_a_float(
         self, value: object, expected: float
     ) -> None:
-        """Both ends of the range are accepted, each returned as a float, an integer sent included."""
-        number = as_finite_float_within(value, "pv_kw", 0.5, 20)
+        """Both bounds of a closed interval are admitted, each returned as a float, an integer sent included."""
+        number = as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
         assert number == expected
         assert isinstance(number, float)
 
@@ -232,13 +233,33 @@ class TestAsFiniteFloatWithin:
             pytest.param("25", id="numeric-string-above"),
         ],
     )
-    def test_a_value_outside_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+    def test_a_value_outside_the_interval_is_refused_naming_the_field_the_interval_and_the_value_sent(
         self, value: object
     ) -> None:
         """The refusal shows the value as sent ('25' in quotes), not the float it converts to."""
         with pytest.raises(ConfigurationError) as exc_info:
-            as_finite_float_within(value, "pv_kw", 0.5, 20)
+            as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
         assert str(exc_info.value) == f"pv_kw must be between 0.5 and 20, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "field", "within", "message"),
+        [
+            pytest.param(0, "capacity_kw", POSITIVE, "capacity_kw must be greater than 0, got 0", id="positive"),
+            pytest.param(
+                "1",
+                "share",
+                Interval(0, 1, high_open=True),
+                "share must be at least 0 and less than 1, got '1'",
+                id="open-above",
+            ),
+        ],
+    )
+    def test_a_refusal_phrases_an_open_interval(
+        self, value: object, field: str, within: Interval, message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_float(value, field, within=within)
+        assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
         "value",
@@ -249,12 +270,12 @@ class TestAsFiniteFloatWithin:
             pytest.param(None, id="null"),
         ],
     )
-    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+    def test_a_value_that_is_not_a_finite_number_gets_the_finite_number_refusal(
         self, value: object
     ) -> None:
-        """A value as_finite_float refuses is refused as it refuses it, before any range check."""
+        """A value that is not a finite number is refused as such, before the interval is checked."""
         with pytest.raises(ConfigurationError) as exc_info:
-            as_finite_float_within(value, "pv_kw", 0.5, 20)
+            as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
 
 
@@ -278,6 +299,9 @@ class TestAsWholeNumber:
         number = as_whole_number(value, "n_homes")
         assert number == expected
         assert type(number) is int
+
+    def test_with_no_interval_any_whole_number_is_read(self) -> None:
+        assert as_whole_number(-(10**15), "x") == -(10**15)
 
     @pytest.mark.parametrize(
         "value", [pytest.param(2.5, id="float"), pytest.param("2.5", id="numeric-string")]
@@ -307,8 +331,8 @@ class TestAsWholeNumber:
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
 
 
-class TestAsWholeNumberWithin:
-    """as_whole_number_within reads a value as as_whole_number does, and refuses one outside its inclusive range."""
+class TestAsWholeNumberWithAnInterval:
+    """as_whole_number given an interval reads a value as it does without one, and refuses a number outside the interval, phrasing it."""
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -318,11 +342,11 @@ class TestAsWholeNumberWithin:
             pytest.param(10.0, 10, id="high-as-a-whole-float"),
         ],
     )
-    def test_the_range_is_inclusive_and_a_value_is_read_as_the_int_it_equals(
+    def test_a_closed_interval_admits_its_bounds_and_a_value_is_read_as_the_int_it_equals(
         self, value: object, expected: int
     ) -> None:
-        """Both ends of the range are accepted, each returned as the int it equals, not as a float."""
-        number = as_whole_number_within(value, "n_homes", 1, 10)
+        """Both bounds of a closed interval are admitted, each returned as the int it equals, not as a float."""
+        number = as_whole_number(value, "n_homes", within=Interval(1, 10))
         assert number == expected
         assert type(number) is int
 
@@ -334,23 +358,28 @@ class TestAsWholeNumberWithin:
             pytest.param(1e300, id="huge-float"),
         ],
     )
-    def test_a_value_outside_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+    def test_a_value_outside_the_interval_is_refused_naming_the_field_the_interval_and_the_value_sent(
         self, value: object
     ) -> None:
         """The refusal shows the value as sent (1e300 reads 1e+300), not the int it converts to."""
         with pytest.raises(ConfigurationError) as exc_info:
-            as_whole_number_within(value, "n_homes", 1, 10)
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
         assert str(exc_info.value) == f"n_homes must be between 1 and 10, got {value!r}"
 
+    def test_a_refusal_phrases_an_open_interval(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(0, "n_homes", within=POSITIVE)
+        assert str(exc_info.value) == "n_homes must be greater than 0, got 0"
+
     @pytest.mark.parametrize(
-        "value", [pytest.param(2.5, id="in-range"), pytest.param(0.5, id="out-of-range")]
+        "value", [pytest.param(2.5, id="inside"), pytest.param(0.5, id="outside")]
     )
-    def test_a_number_with_a_fractional_part_gets_the_as_whole_number_refusal(
+    def test_a_number_with_a_fractional_part_gets_the_whole_number_refusal(
         self, value: object
     ) -> None:
-        """A number with a fractional part is refused as as_whole_number refuses it, before any range check."""
+        """A number with a fractional part is refused as such, before the interval is checked."""
         with pytest.raises(ConfigurationError) as exc_info:
-            as_whole_number_within(value, "n_homes", 1, 10)
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
         assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
 
     @pytest.mark.parametrize(
@@ -362,10 +391,10 @@ class TestAsWholeNumberWithin:
             pytest.param(None, id="null"),
         ],
     )
-    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+    def test_a_value_that_is_not_a_finite_number_gets_the_finite_number_refusal(
         self, value: object
     ) -> None:
-        """A value as_finite_float refuses is refused as it refuses it, before any whole-number or range check."""
+        """A value that is not a finite number is refused as such, before the whole-number rule or the interval is checked."""
         with pytest.raises(ConfigurationError) as exc_info:
-            as_whole_number_within(value, "n_homes", 1, 10)
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
