@@ -73,10 +73,11 @@ def surface_form(obj: object) -> str:
     wrapper whose __signature__ is None, whether one of a routine's links or a class's
     constructor, as the callable it is, not as what it wraps, so no refusal here looks
     past it; a functools.partial whose __signature__ is None is still read through its
-    func. A string or a callable as __signature__ counts as none for these refusals,
-    since Python 3.12 and 3.13 convert a string or call a callable given there and 3.11
-    and 3.14 refuse either. _refuse_minor_dependent_constructor lists the constructors it
-    refuses.
+    func. Any other __signature__, such as a string or a callable, which Python 3.12 and
+    3.13 convert or call and 3.11 and 3.14 refuse, raises TypeError naming it and what
+    carries it. That applies on the routine or class itself, and on the link of a
+    routine's chain where inspect stops. _refuse_minor_dependent_constructor lists the
+    constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -150,8 +151,7 @@ def named_classes(obj: object) -> set[type]:
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
-    naming it and its type; a class whose constructor surface_form refuses, a routine
-    surface_form reads as such a class, or a routine whose signature inspect cannot read
+    naming it and its type; a class or routine whose signature surface_form refuses
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
     A class's signature is spelled where its constructor is, the __call__ its metaclass
@@ -530,15 +530,22 @@ def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_minor_dependent_constructor has passed the class at the end of the chain inspect follows from *obj*, if it ends at one that carries no signature.
+    """The signature inspect reads for *obj*, a class or a routine, once the refusals below have passed the end of the chain inspect follows from *obj*.
 
-    A routine whose signature inspect cannot read, as _unreadable_link finds one, raises
-    the TypeError _unreadable_routine_error gives for it, before anything else is read.
+    They run in this order, each raising TypeError:
+
+    - for a routine whose signature inspect cannot read, as _unreadable_link finds one,
+      the TypeError _unreadable_routine_error gives for it, before anything else is read;
+    - for an end that carries a __signature__ inspect reads differently by minor, as
+      _refuse_minor_dependent_signature finds one;
+    - for a class at that end that carries no signature, whatever
+      _refuse_minor_dependent_constructor refuses of its constructor.
     """
     link = _unreadable_link(obj)
     if link is not None:
         raise _unreadable_routine_error(_label(obj), obj, link)
-    end = _chain_end(obj, stop=_carries_signature)
+    end = _chain_end(obj, stop=_gives_signature)
+    _refuse_minor_dependent_signature(obj, end)
     if inspect.isclass(end) and not _carries_signature(end):
         _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
@@ -568,13 +575,62 @@ def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> ob
     )
 
 
+def _gives_signature(obj: object) -> bool:
+    """Whether inspect reads *obj*'s __signature__ in *obj*'s place: *obj* has one, and it is not None.
+
+    It is read as given when it is an inspect.Signature, which _carries_signature counts,
+    and refused by _refuse_minor_dependent_signature otherwise.
+    """
+    return getattr(obj, "__signature__", None) is not None
+
+
 def _carries_signature(obj: object) -> bool:
     """Whether *obj* carries a signature: an inspect.Signature as its __signature__, the one value inspect.signature reads as given on every admitted minor, whatever *obj* is or wraps.
 
-    Any other __signature__ is none: None, or a string or a callable, which Python 3.12
-    and 3.13 convert or call and 3.11 and 3.14 refuse.
+    A __signature__ of None is read as the callable itself, and any other value is
+    refused by _refuse_minor_dependent_signature.
     """
     return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
+
+
+def _minor_dependent_signature(obj: object) -> object | None:
+    """*obj*'s __signature__ if it is neither None nor an inspect.Signature; None otherwise.
+
+    This is the one home of the rule that such a value is refused: inspect converts a
+    string there and calls a callable on Python 3.12 and 3.13, and refuses either on 3.11
+    and 3.14.
+    """
+    signature: object = getattr(obj, "__signature__", None)
+    if signature is None or isinstance(signature, inspect.Signature):
+        return None
+    return signature
+
+
+def _refuse_minor_dependent_signature(obj: object, end: object) -> None:
+    """Raise TypeError naming *obj*, and the __signature__ *end* carries with its type, if _minor_dependent_signature gives one for *end*, the end of the chain inspect follows from *obj*; it names *end* too if its label differs from *obj*'s.
+
+    A bound method and a functools.wraps wrapper take the label of the function they
+    stand for, so one label names both.
+    """
+    signature = _minor_dependent_signature(end)
+    if signature is not None:
+        label = _label(obj)
+        end_label = _label(end)
+        subject = label if end_label == label else f"{label} is read through {end_label}, which"
+        raise TypeError(f"{subject} {_minor_dependent_signature_clause(signature)}")
+
+
+def _minor_dependent_signature_clause(signature: object) -> str:
+    """What a message says of *signature*, a __signature__ _minor_dependent_signature gave: that it is carried, its repr and its type, why inspect's reading of it is refused, and what to do instead.
+
+    It begins with its verb, so that a message begins with its subject.
+    """
+    return (
+        f"carries the __signature__ {signature!r}, a {_label(type(signature))}: Python 3.12 "
+        "and 3.13 convert a string given as __signature__ and call a callable given there, "
+        "and 3.11 and 3.14 refuse either: set __signature__ to an inspect.Signature, or "
+        "make the name private"
+    )
 
 
 def _unreadable_link(obj: object) -> object | None:
@@ -583,16 +639,16 @@ def _unreadable_link(obj: object) -> object | None:
     That link is *obj* itself if it is not callable, as no functools.partialmethod or
     functools.singledispatchmethod is, since inspect checks that before it follows any
     chain. Else it is the end of the chain, as _chain_end follows it, if that is a
-    routine whose class defines __get__ in Python and that carries no signature, which
+    routine whose class defines __get__ in Python and that gives no signature, which
     inspect reads as a builtin, by a text signature only a routine defined in C gives.
     """
     if not _is_routine(obj):
         return None
     if not callable(obj):
         return obj
-    end = _chain_end(obj, stop=_carries_signature)
+    end = _chain_end(obj, stop=_gives_signature)
     getter = inspect.getattr_static(type(end), "__get__", None)
-    if _is_routine(end) and isinstance(getter, types.FunctionType) and not _carries_signature(end):
+    if _is_routine(end) and isinstance(getter, types.FunctionType) and not _gives_signature(end):
         return end
     return None
 
