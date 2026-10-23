@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every pointer into tests/ from a scanned file resolves, and names a test only by its node-id.
 
-The scanned files are those git lists outside tests/, docs/prds/, docs/research/, plans/ and review/. The PRDs and
-research notes under docs/, like plans/ and review/, are records that name tests as they were when written.
+The scanned files are those git lists outside the _UNSCANNED directories, which hold the tests themselves and records
+that name tests as they were when written, such as the PRDs and research notes under docs/.
 
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
@@ -319,7 +319,7 @@ def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
     return PurePosixPath(source)
 
 
-def test_scans_every_file_git_lists_outside_tests_docs_prds_docs_research_plans_and_review(project: Path) -> None:
+def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: Path) -> None:
     scanned = {
         "CLAUDE.md",
         "docs/guide.md",
