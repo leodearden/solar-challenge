@@ -89,14 +89,6 @@ class RunRecord:
             return None
         return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
 
-    def decoded_config(self) -> Any:
-        """The value config_json encodes; {} when the run has no config text or it is not JSON."""
-        return _decoded_or_empty(self.config_json)
-
-    def decoded_summary(self) -> Any:
-        """The value summary_json encodes; {} when the run has no summary text or it is not JSON."""
-        return _decoded_or_empty(self.summary_json)
-
 
 def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]) -> None:
     """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
@@ -123,16 +115,6 @@ def _decoded_document(
         raise ValueError(
             f"The runs.{column} of run {run_id!r} is not a document its kind decodes: {type(refusal).__name__}: {refusal}"
         ) from refusal
-
-
-def _decoded_or_empty(text: str | None) -> Any:
-    """The value JSON *text* encodes; {} when *text* is None, empty or not JSON."""
-    if not text:
-        return {}
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return {}
 
 
 def _record_of(row: sqlite3.Row) -> RunRecord:
@@ -781,61 +763,6 @@ class RunStorage:
         headlines = (readable_headline(_record_of(row)) for row in rows)
         generation_kwh = sum((headline.generation_kwh for headline in headlines if headline is not None), 0.0)
         return RunTotals(run_count=run_count, home_count=home_count, generation_kwh=generation_kwh)
-
-    def list_runs(
-        self,
-        run_type: RunType | None = None,
-        status: RunStatus | None = None,
-        limit: int | None = None,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """List simulation runs with optional filtering.
-
-        Queries SQLite database for run metadata with optional filters.
-
-        Args:
-            run_type: Filter by run type, None for all
-            status: Filter by status, None for all
-            limit: Maximum number of results to return, None for all
-            offset: Number of results to skip (for pagination)
-
-        Returns:
-            List of run metadata dictionaries with keys matching the database schema
-        """
-        with self.database.transaction() as conn:
-            cursor = conn.cursor()
-
-            # Build query with optional filters
-            query = "SELECT * FROM runs WHERE 1=1"
-            params: list[Any] = []
-
-            if run_type is not None:
-                query += " AND type = ?"
-                params.append(run_type)
-
-            if status is not None:
-                query += " AND status = ?"
-                params.append(status)
-
-            # Order by created_at descending (most recent first)
-            query += " ORDER BY created_at DESC"
-
-            # Add limit and offset
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
-
-            if offset > 0:
-                if limit is None:
-                    query += " LIMIT -1"
-                query += " OFFSET ?"
-                params.append(offset)
-
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-
-            # Convert Row objects to dictionaries
-            return [dict(row) for row in rows]
 
     def delete_run(self, run_id: str) -> None:
         """Delete a simulation run from storage.
