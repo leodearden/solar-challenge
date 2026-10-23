@@ -7,8 +7,14 @@ suite the per-task verify never runs. These tests pin the git settings that
 start the lane, and the contracts every job keeps, with one row per job in
 LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
 that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
+
+A row's service column names the live service its job's suite needs. Such a
+job declares an outage probe, which must report that service out of reach as an
+outage, and every job declaring a probe must have a row naming its service, so
+no declared probe goes unchecked.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path, PurePosixPath
@@ -16,8 +22,16 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._collect_only import requires_uv
+from tests._command_runner import describe_outcome, run_command
 from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
-from tests._orchestrator_config import git_config, lane_command, offline_lane_jobs
+from tests._network_guard import send_child_processes_to_a_dead_proxy
+from tests._orchestrator_config import (
+    git_config,
+    lane_command,
+    lane_jobs_declaring_an_outage_probe,
+    lane_outage_probe,
+    offline_lane_jobs,
+)
 from tests._uv_env import SharedUvEnvironments
 
 
@@ -43,12 +57,19 @@ class LaneJob:
     name is the job's git.offline_lane_commands name, and the id of each test
     run for it. suite is relative to the root, as node ids are. if_unrun is a
     clause stating what goes unseen while the lane does not run the suite.
+    service is the live service the suite needs, as the job's outage probe names
+    it at the start of an outage line, or None for a suite that needs none:
+    test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage
+    runs the probe of each row naming one, and
+    test_every_lane_job_declaring_an_outage_probe_has_a_row_naming_its_service
+    checks that no job declares a probe its row does not name a service for.
     """
 
     name: str
     suite: str
     if_unrun: str
     checked: frozenset[LaneContract]
+    service: str | None
 
 
 LANE_JOBS: tuple[LaneJob, ...] = (
@@ -58,30 +79,35 @@ LANE_JOBS: tuple[LaneJob, ...] = (
         "tests/interpreter_matrix",
         if_unrun="the interpreters other than the .python-version pin are never re-verified",
         checked=frozenset({LaneContract.EVERY_TEST_SLOW}),
+        service="PyPI",
     ),
     LaneJob(
         "e2e",
         "tests/e2e",
         if_unrun="e2e regressions go unseen",
         checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+        service=None,
     ),
     LaneJob(
         "pvgis",
         "tests/integration/test_pvgis.py",
         if_unrun="a change in PVGIS's or pvlib's response goes unseen",
         checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+        service="PVGIS",
     ),
     LaneJob(
         "css-build",
         "tests/css_build",
         if_unrun="a stylesheet its sources no longer build to, or a stale Tailwind license text, goes unseen",
         checked=frozenset(LaneContract),
+        service="npm registry",
     ),
     LaneJob(
         "newest-releases",
         "tests/newest_releases",
         if_unrun="an upstream release that breaks this code goes unseen until a consumer re-locks",
         checked=frozenset(LaneContract),
+        service="PyPI",
     ),
 )
 
@@ -89,6 +115,11 @@ LANE_JOBS: tuple[LaneJob, ...] = (
 def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
     """Return the LANE_JOBS rows that list *contract*, in table order."""
     return tuple(job for job in LANE_JOBS if contract in job.checked)
+
+
+def _needing_a_live_service() -> tuple[LaneJob, ...]:
+    """Return the LANE_JOBS rows that name a service, in table order."""
+    return tuple(job for job in LANE_JOBS if job.service is not None)
 
 
 def _whose_suite_lies_directly_under_tests() -> tuple[LaneJob, ...]:
@@ -199,4 +230,43 @@ def test_every_test_in_the_suite_is_slow(job: LaneJob, project_root: Path) -> No
         f"`-m 'not slow'` collected the {job.suite} tests {fast_tests}; a test there not marked slow runs under "
         "tests/conftest.py's offline guard, which refuses the live service the suite needs, so the "
         f"{job.name!r} lane job goes red whenever such a test needs that service; mark it slow"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+@pytest.mark.parametrize("job", _needing_a_live_service(), ids=lambda job: job.name)
+def test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage(
+    job: LaneJob,
+    monkeypatch: pytest.MonkeyPatch,
+    project_root: Path,
+    shared_uv_probe_environments: SharedUvEnvironments,
+) -> None:
+    """Run as the lane runs it after a red run, with everything off this machine out of reach, the job's outage probe reports an outage of the row's service.
+
+    It runs in the uv environment of the job's command, which the job's red run has synced when the lane runs the probe.
+    Here that environment may not be synced yet, so the run is given longer than the job's outage_probe_timeout_secs.
+    """
+    send_child_processes_to_a_dead_proxy(monkeypatch)
+    probe = lane_outage_probe(project_root, job.name)
+    environment = shared_uv_probe_environments.for_command(lane_command(project_root, job.name).command)
+
+    result = run_command(probe, environment, timeout_secs=300)
+
+    assert result.returncode == os.EX_TEMPFAIL and result.stdout.startswith(f"{job.service}: "), (
+        f"with everything off this machine behind a dead proxy, the {probe.label}, {probe.command!r}, reported no "
+        f"{job.service} outage, so every {job.service} outage that outlasts a run and its confirm re-run files a fix "
+        f"task instead of one escalation the lane closes itself\n{describe_outcome(result)}"
+    )
+
+
+def test_every_lane_job_declaring_an_outage_probe_has_a_row_naming_its_service(project_root: Path) -> None:
+    """Every job that declares an outage probe has a LANE_JOBS row naming its service, so no declared probe goes unrun here."""
+    services = {job.name: job.service for job in LANE_JOBS}
+    unchecked = [name for name in lane_jobs_declaring_an_outage_probe(project_root) if services.get(name) is None]
+
+    assert not unchecked, (
+        f"git.offline_lane_commands declares an outage_probe for {unchecked}, whose LANE_JOBS rows are missing or "
+        "name no service, so nothing checks that each probe reports its service out of reach as an outage; name in "
+        "each job's row the service its probe names at the start of an outage line"
     )
