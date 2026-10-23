@@ -49,6 +49,10 @@ def compare_page() -> str | Response:
     given or fewer than two of them are found in the database; a missing or
     empty ``ids`` renders the no-runs-selected empty state instead.
 
+    Each run found is compared by its columns and, as ``summary``, its summary's field
+    tree, {} while it has none. A run whose summary does not decode fails the request
+    with RunRecord.summary's ValueError, rather than being compared as a run of zeros.
+
     Returns:
         Rendered HTML for the comparison page, or redirect.
     """
@@ -68,9 +72,8 @@ def compare_page() -> str | Response:
     for rid in run_ids:
         record = storage.run_record(rid)
         if record is not None:
-            runs.append(
-                {**asdict(record), "summary": record.decoded_summary(), "config": record.decoded_config()}
-            )
+            summary = record.summary()
+            runs.append({**asdict(record), "summary": {} if summary is None else asdict(summary)})
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")
