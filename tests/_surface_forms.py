@@ -69,9 +69,12 @@ def surface_form(obj: object) -> str:
     inspect reads in that constructor's place; so does a routine that wraps such a
     class, through a functools.partial, a bound method or a functools.wraps wrapper,
     unless the class or one of the routine's links carries one. A signature is an
-    inspect.Signature as __signature__, which inspect reads as given. Any other
-    __signature__ counts as none for these refusals, since Python 3.12 and 3.13 convert a
-    string or call a callable given there and 3.11 and 3.14 refuse either.
+    inspect.Signature as __signature__, which inspect reads as given. A wrapper whose
+    __signature__ is None is the routine's last link, since inspect reads it as the
+    callable it is, not as what it wraps; a functools.partial whose __signature__ is None
+    is still read through its func. A string or a callable as __signature__ counts as
+    none for these refusals, since Python 3.12 and 3.13 convert a string or call a
+    callable given there and 3.11 and 3.14 refuse either.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
@@ -132,7 +135,8 @@ def named_classes(obj: object) -> set[type]:
     NameError. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
-    whatever __signature__ the wrapper carries; an object its class makes callable,
+    whatever __signature__ the wrapper carries but None, which makes inspect read a
+    wrapper as itself and a partial through its func; an object its class makes callable,
     where the __call__ that class resolves is, which may be a base's in another module;
     and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
@@ -538,18 +542,28 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(obj)
 
 
-def _chain_end(obj: object, stop: Callable[[object], bool] | None = None) -> object:
-    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, else a functools.partial's func, ending early at the first object *stop* holds of."""
+def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, as _unwrapped follows them, else a functools.partial's func, ending early at the first object *stop* holds of."""
     if not callable(obj):
         return obj
     if isinstance(obj, types.MethodType):
         return _chain_end(obj.__func__, stop)
-    unwrapped = inspect.unwrap(obj, stop=stop)
+    unwrapped = _unwrapped(obj, stop)
     if unwrapped is not obj:
         return _chain_end(unwrapped, stop)
-    if isinstance(obj, functools.partial) and (stop is None or not stop(obj)):
+    if isinstance(obj, functools.partial) and not stop(obj):
         return _chain_end(obj.func, stop)
     return obj
+
+
+_ABSENT = object()
+
+
+def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> object:
+    """The callable reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
+    return inspect.unwrap(
+        obj, stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link)
+    )
 
 
 def _carries_signature(obj: object) -> bool:
