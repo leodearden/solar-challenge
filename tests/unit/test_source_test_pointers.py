@@ -8,19 +8,21 @@ so a file git ignores is not there to point at.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
-pytest runs as written and this gate resolves. A name the Python module's own code uses, such as a parameter called
-test_config, is no pointer. Nor, outside a node-id, is a name written straight after a dot, so a third-party name that
-reads as a test, such as Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
+pytest runs as written and this gate resolves. A name a file uses itself is no pointer: a name the Python module's own
+code uses, such as a parameter called test_config, or a key of the YAML file's own mappings, such as test_command. Nor,
+outside a node-id, is a name written straight after a dot, so a third-party name that reads as a test, such as
+Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
 """
 
 import ast
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
+import yaml
 
 from tests._working_tree import working_tree_files
 
@@ -84,11 +86,11 @@ def _utf8_text(path: Path) -> str | None:
 def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
     """Return the pointers in *text*, the text of the file *source*, in text order.
 
-    In a Python module, a test name given alone that the module's own code uses is not one.
+    A test name given alone that the file uses itself, as a Python module's identifier or a YAML file's key, is not one.
     """
     matches = list(_POINTER.finditer(text))
     has_bare_name = any(match["bare"] is not None for match in matches)
-    own_names = _code_names(text) if source.suffix == ".py" and has_bare_name else frozenset()
+    own_names = _own_names(source, text) if has_bare_name else frozenset()
     return [
         _pointer(source, text, match)
         for match in matches
@@ -110,6 +112,20 @@ def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer
     )
 
 
+def _own_names(source: PurePosixPath, text: str) -> frozenset[str]:
+    """Return the names the file *source*, whose text is *text*, uses itself.
+
+    They are a Python module's identifiers or a YAML file's mapping keys. A file of any other kind uses none.
+    """
+    match source.suffix:
+        case ".py":
+            return _code_names(text)
+        case ".yaml":
+            return _yaml_keys(text)
+        case _:
+            return frozenset()
+
+
 def _code_names(text: str) -> frozenset[str]:
     """Return the names of the variables, arguments, attributes, keywords, defs and classes in the Python module *text*."""
     return frozenset(name for node in ast.walk(ast.parse(text)) if (name := _code_name(node)) is not None)
@@ -129,6 +145,24 @@ def _code_name(node: ast.AST) -> str | None:
         ):
             return name
     return None
+
+
+def _yaml_keys(text: str) -> frozenset[str]:
+    """Return the string keys of every mapping in the YAML document *text*, at any depth."""
+    return frozenset(_mapping_keys(yaml.safe_load(text)))
+
+
+def _mapping_keys(value: object) -> Iterator[str]:
+    """Yield the string keys of *value*, a loaded YAML value, if it is a mapping, and of each mapping nested in it."""
+    match value:
+        case dict():
+            for key, item in value.items():
+                if isinstance(key, str):
+                    yield key
+                yield from _mapping_keys(item)
+        case list():
+            for item in value:
+                yield from _mapping_keys(item)
 
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
