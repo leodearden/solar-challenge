@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Dependency declaration contract tests.
 
-Every third-party import the package requires must be satisfied by a declared
-dependency, not by whatever another package's extra happens to pull in: code
-outside the web subpackage needs DIRECT core dependencies, and the web
-subpackage needs core dependencies or the `web` extra that serves it.  No core
-dependency may request an extra its distribution does not provide.  No declared
-requirement may carry an environment marker that holds only on Python minors
-requires-python does not admit, since it could never install.  An import
-inside a try block that handles ImportError is optional by construction and
-exempt, but the guard must then guard a distribution its scope does not
-declare: a declared distribution always imports in a valid install, so a
-guard over declared distributions only is dead code.  pyproject.toml is parsed
-structurally (TOML plus PEP 508 requirements), not by regex.
+Every third-party import a source file requires must be satisfied by a
+dependency declared for where that file runs, not by whatever another
+requirement happens to pull in.  _SOURCE_SCOPES pairs each selector of source
+files with the extras, beside the core dependencies, that the selected files
+may use; each selector's docstring names what runs its files with those extras.
+solar_challenge and tests are first-party.  No core dependency may request an
+extra its distribution does not provide.  No declared requirement may carry an
+environment marker that holds only on Python minors requires-python does not
+admit, since it could never install.  An import inside a try block that handles
+ImportError is optional by construction and exempt, but in the package the
+guard must then guard a distribution its scope does not declare: a declared
+distribution always imports in a valid install, so a guard over declared
+distributions only is dead code.  pyproject.toml is parsed structurally (TOML
+plus PEP 508 requirements), not by regex.
 
 pyproject.toml is also the only dependency declaration: no requirements*.txt at
 the project root may restate it, since a hand-maintained copy drifts from it.
@@ -20,7 +22,7 @@ the project root may restate it, since a hand-maintained copy drifts from it.
 
 import ast
 import sys
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from importlib.metadata import PackageNotFoundError, distribution, metadata, packages_distributions
 from pathlib import Path
 
@@ -36,7 +38,10 @@ from tests._interpreters import (
 from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
+_FIRST_PARTY = frozenset({"solar_challenge", "tests"})
+_DEV = "dev"
 _WEB = "web"
+_E2E = "e2e"
 
 
 def _core_requirements(project_root: Path) -> list[Requirement]:
@@ -73,30 +78,107 @@ def _declared_distributions_or_skip(project_root: Path, extras: tuple[str, ...])
     extra_requirements = _extra_requirements(project_root, extras)
     uninstalled = _uninstalled(extra_requirements)
     if uninstalled:
-        install_flags = "".join(f" --extra {extra}" for extra in extras)
+        install_flags = "".join(f" --extra {extra}" for extra in dict.fromkeys((_DEV, *extras)))
         pytest.skip(
             "imports can be mapped to distributions only where the extras this source scope may "
             f"use are installed; not installed: {uninstalled}. "
-            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
+            f"Install them, e.g. with `uv run{install_flags} pytest`"
         )
     return {canonicalize_name(r.name) for r in [*_core_requirements(project_root), *extra_requirements]}
 
 
-def _web_sources(package_dir: Path) -> list[Path]:
+def _python_files_outside(directory: Path, excluded: Path) -> list[Path]:
+    """Return the .py files under *directory* that are not under its subdirectory *excluded*."""
+    return [source for source in directory.rglob("*.py") if not source.is_relative_to(excluded)]
+
+
+def _web_sources(project_root: Path) -> list[Path]:
     """Return the package's .py files inside its web subpackage, the one the web extra serves."""
-    return list((package_dir / _WEB).rglob("*.py"))
+    return list((project_root / "src" / "solar_challenge" / _WEB).rglob("*.py"))
 
 
-def _core_sources(package_dir: Path) -> list[Path]:
-    """Return the package's .py files outside its web subpackage."""
-    web_sources = set(_web_sources(package_dir))
-    return [source for source in package_dir.rglob("*.py") if source not in web_sources]
+def _core_sources(project_root: Path) -> list[Path]:
+    """Return the package's .py files outside its web subpackage, which an install of the package
+    without extras runs.
+    """
+    package_dir = project_root / "src" / "solar_challenge"
+    return _python_files_outside(package_dir, package_dir / _WEB)
 
 
-_SOURCE_SCOPES = [
-    pytest.param(_core_sources, (), id="outside-web"),
-    pytest.param(_web_sources, (_WEB,), id="web"),
-]
+def _script_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of scripts/, which run with the dev extra."""
+    return list((project_root / "scripts").rglob("*.py"))
+
+
+_DEV_ONLY_LANE_SUITES = (
+    "tests/interpreter_matrix",
+    "tests/integration/test_pvgis.py",
+    "tests/css_build",
+    "tests/newest_releases",
+)
+_LOADED_ABOVE_A_SUITE = frozenset({"__init__.py", "conftest.py"})
+
+
+def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of the suites in _DEV_ONLY_LANE_SUITES, which the offline lane's jobs
+    that install the dev extra alone run, and the conftest.py and __init__.py files pytest loads
+    above them.
+    """
+    missing = [suite for suite in _DEV_ONLY_LANE_SUITES if not (project_root / suite).exists()]
+    assert not missing, (
+        f"the dev-only lane suites {missing} do not exist; _DEV_ONLY_LANE_SUITES must name the suite "
+        "of each offline-lane job that installs the dev extra alone"
+    )
+    suites = [project_root / suite for suite in _DEV_ONLY_LANE_SUITES]
+    return [
+        source
+        for source in (project_root / "tests").rglob("*.py")
+        if any(
+            source.is_relative_to(suite)
+            or (source.name in _LOADED_ABOVE_A_SUITE and suite.is_relative_to(source.parent))
+            for suite in suites
+        )
+    ]
+
+
+def _verify_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of tests/ outside tests/e2e that _dev_only_lane_test_sources does not
+    select: the per-task verify's test_command runs them, installing the dev and web extras.
+    """
+    tests_dir = project_root / "tests"
+    dev_only_lane_sources = set(_dev_only_lane_test_sources(project_root))
+    return [
+        source
+        for source in _python_files_outside(tests_dir, tests_dir / "e2e")
+        if source not in dev_only_lane_sources
+    ]
+
+
+def _e2e_test_sources(project_root: Path) -> list[Path]:
+    """Return the .py files of tests/e2e: what the offline lane's e2e job runs, installing the
+    dev, web and e2e extras.
+    """
+    return list((project_root / "tests" / "e2e").rglob("*.py"))
+
+
+_PACKAGE_SCOPES = {
+    "outside-web": (_core_sources, ()),
+    "web": (_web_sources, (_WEB,)),
+}
+_SOURCE_SCOPES = {
+    **_PACKAGE_SCOPES,
+    "scripts": (_script_sources, (_DEV,)),
+    "tests-dev-only-lanes": (_dev_only_lane_test_sources, (_DEV,)),
+    "tests-verify": (_verify_test_sources, (_DEV, _WEB)),
+    "tests-e2e": (_e2e_test_sources, (_DEV, _WEB, _E2E)),
+}
+
+
+def _scope_params(
+    scopes: Mapping[str, tuple[Callable[[Path], list[Path]], tuple[str, ...]]],
+) -> list[object]:
+    """Return a pytest.param of each scope's selector and extras, identified by the scope's name."""
+    return [pytest.param(select_sources, extras, id=name) for name, (select_sources, extras) in scopes.items()]
 
 
 def _parse(source: Path) -> ast.Module:
@@ -149,23 +231,41 @@ def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
 
 
 def _third_party_modules(modules: set[str]) -> set[str]:
-    """Return *modules* without the standard library and the first-party solar_challenge package."""
-    return modules - sys.stdlib_module_names - {"solar_challenge"}
-
-
-def _third_party_distributions(modules: set[str]) -> set[str]:
-    """Return the canonical names of the installed distributions providing *modules*.
-
-    Standard-library modules and the first-party solar_challenge package are dropped.
+    """Return *modules* without the standard library and the first-party solar_challenge and
+    tests packages.
     """
-    third_party = _third_party_modules(modules)
-    providers = packages_distributions()
+    return modules - sys.stdlib_module_names - _FIRST_PARTY
+
+
+def _third_party_distributions(source: Path, providers: Mapping[str, list[str]]) -> set[str]:
+    """Return the canonical names of the distributions that provide the third-party modules
+    *source* requires, as *providers* maps modules to distributions.
+
+    Standard-library modules and the first-party solar_challenge and tests packages are dropped.
+    """
+    third_party = _third_party_modules(_required_top_level_modules([source]))
     unprovided = sorted(module for module in third_party if module not in providers)
     assert not unprovided, (
-        f"no installed distribution provides the imported modules {unprovided}; "
+        f"no installed distribution provides the modules {source} imports: {unprovided}; "
         "declare and install the distribution that provides them"
     )
     return {canonicalize_name(dist) for module in third_party for dist in providers[module]}
+
+
+def _undeclared_distributions(
+    sources: Iterable[Path],
+    declared: set[str],
+) -> list[tuple[Path, list[str]]]:
+    """Return (file, undeclared distributions) for every file in *sources* that requires a
+    third-party distribution outside *declared*.
+    """
+    providers = packages_distributions()
+    undeclared: list[tuple[Path, list[str]]] = []
+    for source in sources:
+        distributions = sorted(_third_party_distributions(source, providers) - declared)
+        if distributions:
+            undeclared.append((source, distributions))
+    return sorted(undeclared)
 
 
 def _import_guards(sources: Iterable[Path]) -> Iterator[tuple[Path, ast.Try]]:
@@ -205,7 +305,7 @@ def _dead_import_guards(
     return sorted(dead)
 
 
-@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
+@pytest.mark.parametrize(("select_sources", "extras"), _scope_params(_SOURCE_SCOPES))
 def test_sources_import_only_declared_dependencies(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
@@ -213,35 +313,35 @@ def test_sources_import_only_declared_dependencies(
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
     declared = _declared_distributions_or_skip(project_root, extras)
-    required = _third_party_distributions(
-        _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
-    )
-
-    undeclared = sorted(required - declared)
+    sources = select_sources(project_root)
+    undeclared = [
+        f"{source.relative_to(project_root)} requires {distributions}"
+        for source, distributions in _undeclared_distributions(sources, declared)
+    ]
     groups = ", ".join(
         ["[project].dependencies", *(f"[project.optional-dependencies].{extra}" for extra in extras)]
     )
     assert not undeclared, (
-        f"this source scope of src/solar_challenge requires distributions missing from {groups}; "
-        f"undeclared: {undeclared}; required={sorted(required)}. "
+        f"these files require distributions missing from {groups}: {undeclared}. "
         "Declare them in one of those groups in pyproject.toml, or make the import optional "
         "inside a try block that handles ImportError"
     )
 
 
-@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
+@pytest.mark.parametrize(("select_sources", "extras"), _scope_params(_PACKAGE_SCOPES))
 def test_import_guards_guard_an_undeclared_dependency(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
     extras: tuple[str, ...],
 ) -> None:
-    """Every try that handles ImportError must guard a distribution its source scope does not declare.
+    """Every try in the package that handles ImportError must guard a distribution its source
+    scope does not declare.
 
     Its handler runs only if a guarded import fails, and a declared distribution always
     imports in a valid install, so a guard over declared distributions only is dead code.
     """
     declared = _declared_distributions_or_skip(project_root, extras)
-    sources = select_sources(project_root / "src" / "solar_challenge")
+    sources = select_sources(project_root)
     dead = [
         f"{source.relative_to(project_root)}:{line} guards {modules}"
         for source, line, modules in _dead_import_guards(sources, declared)
@@ -254,6 +354,13 @@ def test_import_guards_guard_an_undeclared_dependency(
     )
 
 
+def _write_module(path: Path, *lines: str) -> Path:
+    """Write *path* as a module of *lines*, creating its parent directories, and return *path*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
 def _write_import_guard(path: Path, *body_lines: str) -> Path:
     """Write *path* as a module whose one function runs *body_lines* in a try that handles
     ImportError, and return *path*. The try is on line 2.
@@ -264,6 +371,60 @@ def _write_import_guard(path: Path, *body_lines: str) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distribution(
+    tmp_path: Path,
+) -> None:
+    """A file is flagged with every distribution it requires that is not declared."""
+    undeclared_top_level = _write_module(
+        tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
+    )
+    undeclared_function_local = _write_module(
+        tmp_path / "undeclared_function_local.py",
+        "def load():",
+        "    from yaml import safe_load",
+        "    return safe_load",
+    )
+    declared_only = _write_module(
+        tmp_path / "declared_only.py", "import pytest", "from _pytest.monkeypatch import MonkeyPatch"
+    )
+    first_party_only = _write_module(
+        tmp_path / "first_party_only.py",
+        "import solar_challenge",
+        "from tests._pyproject import load_project_table",
+    )
+    standard_library_only = _write_module(
+        tmp_path / "standard_library_only.py", "import json", "from collections.abc import Iterator"
+    )
+    relative_only = _write_module(tmp_path / "relative_only.py", "from . import sibling")
+    guarded_only = _write_import_guard(tmp_path / "guarded_only.py", "import yaml")
+
+    undeclared = _undeclared_distributions(
+        [
+            undeclared_top_level,
+            undeclared_function_local,
+            declared_only,
+            first_party_only,
+            standard_library_only,
+            relative_only,
+            guarded_only,
+        ],
+        declared={"pytest"},
+    )
+
+    assert undeclared == [
+        (undeclared_function_local, ["pyyaml"]),
+        (undeclared_top_level, ["numpy", "pyyaml"]),
+    ], (
+        "the undeclared-distributions detector misjudged a synthetic file: each undeclared_* file "
+        "requires distributions beside the declared pytest, named canonically (pyyaml provides "
+        "yaml), at top level or inside a function. declared_only imports only modules the "
+        "declared pytest provides, first_party_only only solar_challenge and tests, "
+        "standard_library_only only the standard library and relative_only only a sibling, and "
+        "guarded_only imports yaml only inside a try that handles ImportError, so none of those "
+        "may be flagged"
+    )
 
 
 def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions(
@@ -303,6 +464,53 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
         "declared pyyaml, each live_* guard imports a module no declared distribution provides, "
         "and not_judged_stdlib_only imports only the standard library, so it guards no "
         "third-party import and must not be judged dead"
+    )
+
+
+_OWN_FILES_OF_EACH_SCOPE = {
+    "outside-web": ("src/solar_challenge/simulate.py",),
+    "web": ("src/solar_challenge/web/views.py",),
+    "scripts": ("scripts/measure.py",),
+    "tests-dev-only-lanes": (
+        "tests/conftest.py",
+        "tests/css_build/test_build.py",
+        "tests/integration/__init__.py",
+        "tests/integration/test_pvgis.py",
+        "tests/interpreter_matrix/test_matrix.py",
+        "tests/newest_releases/test_newest.py",
+    ),
+    "tests-verify": (
+        "tests/_helpers.py",
+        "tests/integration/test_fleet.py",
+        "tests/unit/conftest.py",
+        "tests/unit/test_simulate.py",
+    ),
+    "tests-e2e": ("tests/e2e/test_pages.py",),
+}
+
+
+@pytest.mark.parametrize(
+    ("select_sources", "own_files"),
+    [
+        pytest.param(select_sources, _OWN_FILES_OF_EACH_SCOPE[name], id=name)
+        for name, (select_sources, _extras) in _SOURCE_SCOPES.items()
+    ],
+)
+def test_each_source_scope_selects_only_its_own_files(
+    tmp_path: Path,
+    select_sources: Callable[[Path], list[Path]],
+    own_files: tuple[str, ...],
+) -> None:
+    """A source scope selects exactly its own files of the project root it is given."""
+    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
+    for relative_path in project_files:
+        _write_module(tmp_path / relative_path)
+
+    selected = sorted(path.relative_to(tmp_path).as_posix() for path in select_sources(tmp_path))
+
+    assert selected == sorted(own_files), (
+        f"in a project holding each scope's own files, {project_files}, this scope selected "
+        f"{selected}, but it owns exactly {sorted(own_files)}"
     )
 
 
