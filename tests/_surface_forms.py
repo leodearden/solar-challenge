@@ -549,10 +549,10 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
     link = _unreadable_link(obj)
     if link is not None:
         raise _unreadable_routine_error(_label(obj), obj, link)
-    end = _chain_end(obj, stop=_gives_signature)
+    end = _chain_end(obj, stop=_has_non_none_signature)
     _refuse_wrapped_enum(obj, end)
     _refuse_minor_dependent_signature(obj, end)
-    if inspect.isclass(end) and not _carries_signature(end):
+    if inspect.isclass(end) and not _carries_inspect_signature(end):
         _refuse_minor_dependent_constructor(end)
     return inspect.signature(obj)
 
@@ -581,21 +581,13 @@ def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> ob
     )
 
 
-def _gives_signature(obj: object) -> bool:
-    """Whether inspect reads *obj*'s __signature__ in *obj*'s place: *obj* has one, and it is not None.
-
-    It is read as given when it is an inspect.Signature, which _carries_signature counts,
-    and refused by _refuse_minor_dependent_signature otherwise.
-    """
-    return getattr(obj, "__signature__", None) is not None
+def _has_non_none_signature(obj: object) -> bool:
+    """Whether *obj*'s __signature__ is anything but None, as _carries_inspect_signature or _minor_dependent_signature finds one: inspect reads it in *obj*'s place."""
+    return _carries_inspect_signature(obj) or _minor_dependent_signature(obj) is not None
 
 
-def _carries_signature(obj: object) -> bool:
-    """Whether *obj* carries a signature: an inspect.Signature as its __signature__, the one value inspect.signature reads as given on every admitted minor, whatever *obj* is or wraps.
-
-    A __signature__ of None is read as the callable itself, and any other value is
-    refused by _refuse_minor_dependent_signature.
-    """
+def _carries_inspect_signature(obj: object) -> bool:
+    """Whether *obj*'s __signature__ is an inspect.Signature, the one value inspect.signature reads as given on every admitted minor, whatever *obj* is or wraps."""
     return isinstance(getattr(obj, "__signature__", None), inspect.Signature)
 
 
@@ -645,16 +637,21 @@ def _unreadable_link(obj: object) -> object | None:
     That link is *obj* itself if it is not callable, as no functools.partialmethod or
     functools.singledispatchmethod is, since inspect checks that before it follows any
     chain. Else it is the end of the chain, as _chain_end follows it, if that is a
-    routine whose class defines __get__ in Python and that gives no signature, which
-    inspect reads as a builtin, by a text signature only a routine defined in C gives.
+    routine whose class defines __get__ in Python and whose __signature__ is None or
+    absent, which inspect reads as a builtin, by a text signature only a routine defined
+    in C gives.
     """
     if not _is_routine(obj):
         return None
     if not callable(obj):
         return obj
-    end = _chain_end(obj, stop=_gives_signature)
+    end = _chain_end(obj, stop=_has_non_none_signature)
     getter = inspect.getattr_static(type(end), "__get__", None)
-    if _is_routine(end) and isinstance(getter, types.FunctionType) and not _gives_signature(end):
+    if (
+        _is_routine(end)
+        and isinstance(getter, types.FunctionType)
+        and not _has_non_none_signature(end)
+    ):
         return end
     return None
 
@@ -779,7 +776,7 @@ def _refuse_wrapper_of_c_callable(
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link that gives a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link whose __signature__ is not None, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
 
     It stops at any __signature__, as inspect's own lookup of a constructor does from
     Python 3.13, so it and _refuse_constructor_signature never both apply to one
@@ -787,7 +784,7 @@ def _wrapped_c_callable(
     """
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
-    wrapped = _unwrapped(constructor, _gives_signature)
+    wrapped = _unwrapped(constructor, _has_non_none_signature)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
@@ -811,7 +808,7 @@ def _refuse_constructor_signature(
     The constructor is named as *owner*.*name*, not by its own label: a functools.wraps
     wrapper's label is that of the callable it wraps.
     """
-    signature = _minor_dependent_signature(_chain_end(constructor, stop=_gives_signature))
+    signature = _minor_dependent_signature(_chain_end(constructor, stop=_has_non_none_signature))
     if signature is not None:
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(owner)}.{name}, which "
@@ -887,7 +884,7 @@ def _constructor_spelling_modules(
     signature, else the holder's; _signature_holder checks every class that carries a
     signature before the constructor is read.
     """
-    signature_holder = _signature_holder(cls) if _carries_signature(cls) else None
+    signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
     if call is not None:
         return _spelling_modules(call, names)
