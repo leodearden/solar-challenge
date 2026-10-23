@@ -141,6 +141,7 @@ _OWN_FILES_OF_EACH_SCOPE = {
         "tests/_newest.py",
         "tests/_plugin.py",
         "tests/_plugin_fixtures.py",
+        "tests/_plugin_hooks.py",
         "tests/_uv.py",
         "tests/conftest.py",
         "tests/css_build/test_build.py",
@@ -170,6 +171,10 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     ),
     # a plugin's own entries, in the comma-separated string form pytest also accepts
     "tests/_plugin.py": ('pytest_plugins = "pytester,tests._plugin_fixtures"',),
+    # an annotated assignment, which pytest honours too
+    "tests/_plugin_fixtures.py": ('pytest_plugins: list[str] = ["tests._plugin_hooks"]',),
+    # an annotation with no value assigns nothing
+    "tests/_plugin_hooks.py": ("pytest_plugins: list[str]",),
     # module level; the trailing name is an attribute of the module
     "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
     # transitive
@@ -195,6 +200,21 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
 }
 
 
+def _write_project_of_every_scope(project_root: Path) -> list[str]:
+    """Write every scope's own files under *project_root*, each importing as
+    _LINES_OF_EACH_IMPORTING_FILE gives, and return their paths relative to it.
+    """
+    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
+    for relative_path in project_files:
+        _write_module(project_root / relative_path, *_LINES_OF_EACH_IMPORTING_FILE.get(relative_path, ()))
+    return project_files
+
+
+def _scope_named(name: str) -> SourceScope:
+    """Return the source scope called *name*."""
+    return next(scope for scope in SOURCE_SCOPES if scope.name == name)
+
+
 @pytest.mark.parametrize(
     ("scope", "own_files"),
     [pytest.param(scope, _OWN_FILES_OF_EACH_SCOPE[scope.name], id=scope.name) for scope in SOURCE_SCOPES],
@@ -213,12 +233,11 @@ def test_each_source_scope_selects_only_its_own_files(
     stays with tests-verify.
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
-    conftest or in a plugin it loads, counts as imported: pytest imports each entry. A built-in
+    conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
+    one that an annotated assignment names; an annotation with no value names none. A built-in
     such as pytester names no file of the project.
     """
-    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
-    for relative_path in project_files:
-        _write_module(tmp_path / relative_path, *_LINES_OF_EACH_IMPORTING_FILE.get(relative_path, ()))
+    project_files = _write_project_of_every_scope(tmp_path)
 
     selected = sorted(path.relative_to(tmp_path).as_posix() for path in scope.select(tmp_path))
 
@@ -227,6 +246,31 @@ def test_each_source_scope_selects_only_its_own_files(
         f"{_LINES_OF_EACH_IMPORTING_FILE} gives, this scope selected {selected}, "
         f"but it owns exactly {sorted(own_files)}"
     )
+
+
+def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_literal(tmp_path: Path) -> None:
+    """A scope that follows pytest_plugins entries fails, naming the file, the line and the
+    expression, on a value it cannot read without running the file.
+
+    pytest accepts any expression, such as a starred list or a name imported from another
+    module. A bare ValueError from reading it would name no file.
+    """
+    _write_project_of_every_scope(tmp_path)
+    conftest = _write_module(
+        tmp_path / "tests" / "conftest.py",
+        "from tests._network import BASE_PLUGINS",
+        'pytest_plugins = [*BASE_PLUGINS, "tests._plugin"]',
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        _scope_named("tests-dev-only-lanes").select(tmp_path)
+
+    message = str(failure.value)
+    assert f"{conftest}:2" in message and "[*BASE_PLUGINS, 'tests._plugin']" in message, (
+        f"the failure does not name line 2 of {conftest}, nor the pytest_plugins expression "
+        f"on it that the scope cannot read: {message}"
+    )
+    assert "literal" in message, f"the failure does not say that pytest_plugins must be a literal: {message}"
 
 
 def test_assert_imports_only_declared_names_each_file_requiring_a_distribution_its_scope_does_not_declare(

@@ -223,18 +223,42 @@ def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Imp
             yield from _required_imports(ast.iter_child_nodes(node))
 
 
-def _pytest_plugins(tree: ast.Module) -> list[str]:
-    """Return the plugin names of *tree*'s module-level pytest_plugins assignments.
+def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
+    """Yield the value of each module-level assignment of pytest_plugins in *tree*, annotated or not.
 
-    pytest imports each when it loads a conftest, test module or plugin that sets one.
+    An annotation with no value assigns nothing.
+    """
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            targets, value = statement.targets, statement.value
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets, value = [statement.target], statement.value
+        else:
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
+            yield value
+
+
+def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
+    """Return the plugin names of the module-level pytest_plugins assignments in *tree*, the
+    syntax tree of *source*.
+
+    pytest imports each when it loads a conftest, test module or plugin that sets one. pytest
+    accepts any expression, but the names are read without running *source*, so the value must
+    be a literal: a str, split at commas as pytest splits it, or a sequence of str. Any other
+    value fails, naming *source*, the line and the expression.
     """
     names: list[str] = []
-    for statement in tree.body:
-        if isinstance(statement, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in statement.targets
-        ):
-            value = ast.literal_eval(statement.value)
-            names.extend(value.split(",") if isinstance(value, str) else value)
+    for value in _pytest_plugins_values(tree):
+        try:
+            plugins = ast.literal_eval(value)
+        except ValueError:
+            raise AssertionError(
+                f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which is not a "
+                "literal; write pytest_plugins as a literal list or tuple of module names, or as a "
+                "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+            ) from None
+        names.extend(plugins.split(",") if isinstance(plugins, str) else plugins)
     return names
 
 
@@ -256,7 +280,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
-    for name in _pytest_plugins(tree):
+    for name in _pytest_plugins(source, tree):
         yield project_root, name.split(".")
 
 
