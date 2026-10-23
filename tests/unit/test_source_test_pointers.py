@@ -126,15 +126,22 @@ def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer
 def _own_names(source: PurePosixPath, text: str) -> frozenset[str]:
     """Return the names the file *source*, whose text is *text*, uses itself.
 
-    They are a Python module's identifiers or a YAML file's mapping keys. A file of any other kind uses none.
+    They are a Python module's identifiers or a YAML file's mapping keys. A file of any other kind uses none. A Python or
+    YAML file that does not parse raises ValueError, naming the file.
     """
     match source.suffix:
         case ".py":
-            return _code_names(text)
+            read_names = _code_names
         case ".yaml" | ".yml":
-            return _yaml_keys(text)
+            read_names = _yaml_keys
         case _:
             return frozenset()
+    try:
+        return read_names(text)
+    except (SyntaxError, yaml.YAMLError) as error:
+        raise ValueError(
+            f"{source} does not parse, so the names it uses itself cannot be told from pointers: {error}"
+        ) from error
 
 
 def _code_names(text: str) -> frozenset[str]:
@@ -159,20 +166,24 @@ def _code_name(node: ast.AST) -> str | None:
 
 
 def _yaml_keys(text: str) -> frozenset[str]:
-    """Return the string keys of every mapping in the YAML document *text*, at any depth."""
-    return frozenset(_mapping_keys(yaml.safe_load(text)))
+    """Return the scalar keys of every mapping in each YAML document in *text*, at any depth.
+
+    They are read from the composed nodes, so no tag needs a constructor.
+    """
+    documents = yaml.compose_all(text, Loader=yaml.SafeLoader)
+    return frozenset(key for document in documents for key in _mapping_keys(document))
 
 
-def _mapping_keys(value: object) -> Iterator[str]:
-    """Yield the string keys of *value*, a loaded YAML value, if it is a mapping, and of each mapping nested in it."""
-    match value:
-        case dict():
-            for key, item in value.items():
-                if isinstance(key, str):
-                    yield key
+def _mapping_keys(node: yaml.Node) -> Iterator[str]:
+    """Yield the scalar keys of *node*, a composed YAML node, if it is a mapping, and of each mapping nested in it."""
+    match node:
+        case yaml.MappingNode(value=pairs):
+            for key, item in pairs:
+                if isinstance(key, yaml.ScalarNode):
+                    yield key.value
                 yield from _mapping_keys(item)
-        case list():
-            for item in value:
+        case yaml.SequenceNode(value=items):
+            for item in items:
                 yield from _mapping_keys(item)
 
 
@@ -453,3 +464,21 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix
     assert _dangling(project, _pointers(project, [naming])) == [
         f"other{suffix}:1: test_command: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
+
+
+def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under_any_tag(project: Path) -> None:
+    using = _write_source(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
+
+    assert _pointers(project, [using]) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "text"),
+    [("src/pkg/app.py", "def build(test_config:\n"), ("pipeline.yaml", "test_command: [pytest\n")],
+    ids=["python", "yaml"],
+)
+def test_reports_a_python_or_yaml_file_that_does_not_parse_by_its_path(project: Path, source: str, text: str) -> None:
+    broken = _write_source(project, source, text)
+
+    with pytest.raises(ValueError, match=f"^{re.escape(source)} does not parse"):
+        _pointers(project, [broken])
