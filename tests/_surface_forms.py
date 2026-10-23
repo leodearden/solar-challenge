@@ -604,10 +604,10 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
 
     The constructors it refuses, in the order it checks them:
 
-    - the __call__ *cls*'s metaclass resolves, which inspect looks up before any __new__
-      or __init__, if it wraps a callable defined in C. inspect reads any other __call__
-      _metaclass_call_as_read gives in their place, so none of the constructors below is
-      then checked;
+    - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
+      __new__ or __init__, if it wraps a callable defined in C. inspect reads any other
+      __call__ _metaclass_call gives in their place, so none of the constructors below
+      is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -616,11 +616,9 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
-    metaclass = type(cls)
-    _refuse_wrapper_of_c_callable(
-        cls, metaclass, "__call__", inspect.getattr_static(metaclass, "__call__")
-    )
-    if _metaclass_call_as_read(cls) is not None:
+    call = _metaclass_call(cls)
+    if call is not None:
+        _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
@@ -664,15 +662,13 @@ def _first_read_constructor(holder: type) -> tuple[str, object]:
 def _refuse_wrapper_of_c_callable(
     cls: type, owner: type, name: str, constructor: object
 ) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps one.
+    """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C that *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps, if _wrapped_c_callable gives one.
 
     inspect reads such a wrapper through that callable on some Python releases, and skips
     it as defined in C on others, reading the next constructor instead.
     """
-    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
-        return
-    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
-    if isinstance(wrapped, _C_CONSTRUCTOR_KINDS):
+    wrapped = _wrapped_c_callable(constructor)
+    if wrapped is not None:
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(owner)}.{name}, which wraps "
             f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
@@ -680,6 +676,16 @@ def _refuse_wrapper_of_c_callable(
             f"others: make the name private, or define {name} with def, wrapping no "
             "callable defined in C"
         )
+
+
+def _wrapped_c_callable(
+    constructor: object,
+) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
+    """The callable defined in C that *constructor* wraps, if inspect.unwrap, stopped at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+        return None
+    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
 def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
@@ -779,13 +785,18 @@ def _constructor_as_read(cls: type, holder: type) -> object:
     return _bound_to(constructor, cls)
 
 
+def _metaclass_call(cls: type) -> object | None:
+    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if it is defined in C, as type.__call__ is, which inspect skips on every minor."""
+    call = inspect.getattr_static(type(cls), "__call__")
+    return None if isinstance(call, _C_CONSTRUCTOR_KINDS) else call
+
+
 def _metaclass_call_as_read(cls: type) -> object | None:
-    """The __call__ *cls*'s metaclass resolves, as inspect reads it in place of any __new__ or __init__: bound to the metaclass, as _bound_to binds it; None if it is defined in C, as type.__call__ is, which inspect skips, or wraps a callable defined in C, which only some minors read."""
-    metaclass = type(cls)
-    call = inspect.getattr_static(metaclass, "__call__")
-    if isinstance(inspect.unwrap(call, stop=_carries_signature), _C_CONSTRUCTOR_KINDS):
+    """The __call__ _metaclass_call gives for *cls*, as inspect reads it in place of any __new__ or __init__: bound to the metaclass, as _bound_to binds it; None if it gives none, or one that wraps a callable defined in C, as _wrapped_c_callable finds one, which only some minors read."""
+    call = _metaclass_call(cls)
+    if call is None or _wrapped_c_callable(call) is not None:
         return None
-    return _bound_to(call, metaclass)
+    return _bound_to(call, type(cls))
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
