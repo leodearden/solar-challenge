@@ -60,4 +60,3 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
         "another way to keep PVGIS out of reach\n"
         f"stdout tail:\n{result.stdout.str()[-5000:]}"
     )
-

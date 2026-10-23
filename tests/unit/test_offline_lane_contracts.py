@@ -7,11 +7,6 @@ suite the per-task verify never runs. These tests pin the git settings that
 start the lane, and the contracts every job keeps, with one row per job in
 LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
 that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
-
-A row's service column names the live service its job's suite needs. Such a
-job declares an outage probe, which must report that service out of reach as an
-outage, and every job declaring a probe must have a row naming its service, so
-no declared probe goes unchecked.
 """
 
 import os
@@ -58,11 +53,7 @@ class LaneJob:
     run for it. suite is relative to the root, as node ids are. if_unrun is a
     clause stating what goes unseen while the lane does not run the suite.
     service is the live service the suite needs, as the job's outage probe names
-    it at the start of an outage line, or None for a suite that needs none:
-    test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage
-    runs the probe of each row naming one, and
-    test_every_lane_job_declaring_an_outage_probe_has_a_row_naming_its_service
-    checks that no job declares a probe its row does not name a service for.
+    it at the start of an outage line, or None for a suite that needs none.
     """
 
     name: str
@@ -244,8 +235,8 @@ def test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage(
 ) -> None:
     """Run as the lane runs it after a red run, with everything off this machine out of reach, the job's outage probe reports an outage of the row's service.
 
-    It runs in the uv environment of the job's command, which the job's red run has synced when the lane runs the probe.
-    Here that environment may not be synced yet, so the run is given longer than the job's outage_probe_timeout_secs.
+    It runs in the uv environment of the job's command, as the lane runs it. Here that environment may not be synced
+    yet, so the run is given longer than the job's outage_probe_timeout_secs.
     """
     send_child_processes_to_a_dead_proxy(monkeypatch)
     probe = lane_outage_probe(project_root, job.name)
