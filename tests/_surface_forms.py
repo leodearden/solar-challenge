@@ -772,15 +772,16 @@ def _constructor_spelling_modules(
     MRO that holds one, which may be a base defined in another module. It is spelled
     where _spelling_modules spells the end of its chain, so a function the class body
     assigns from another module, or that wraps one there as functools.wraps records
-    one, is spelled in that other module. One compiled outside the class body and
+    one, is spelled in that other module. If the function whose annotations that end
+    holds, as _annotations_author gives it, was compiled outside the class body and
     renamed into it, as the dataclass decorator generates an __init__ and
-    collections.namedtuple a __new__, is spelled as _generated_constructor_modules
-    spells it; one renamed into another class and assigned here raises TypeError naming
-    *cls* and the function. A constructor defined in C, or one that wraps a callable
-    defined in C, spells no annotation, so the class's is that of the class
-    _signature_holder gives if *cls* carries a signature, else the holder's;
-    _signature_holder checks every class that carries a signature before the
-    constructor is read.
+    collections.namedtuple a __new__, the constructor is spelled as
+    _generated_constructor_modules spells it; if that function was renamed into another
+    class and assigned here, TypeError names *cls* and the function. A constructor
+    defined in C, or one that wraps a callable defined in C, spells no annotation, so
+    the class's is that of the class _signature_holder gives if *cls* carries a
+    signature, else the holder's; _signature_holder checks every class that carries a
+    signature before the constructor is read.
     """
     signature_holder = _signature_holder(cls) if _carries_signature(cls) else None
     call = _metaclass_call_as_read(cls)
@@ -791,8 +792,9 @@ def _constructor_spelling_modules(
     if isinstance(end, _C_CONSTRUCTOR_KINDS):
         spelling_class = holder if signature_holder is None else signature_holder
         return dict.fromkeys(names, _defining_module(spelling_class))
-    if _is_generated(end):
-        _refuse_constructor_generated_for_another_class(cls, holder, end)
+    author = _annotations_author(end)
+    if _is_generated(author):
+        _refuse_constructor_generated_for_another_class(cls, holder, author)
         return _generated_constructor_modules(holder, names)
     return _spelling_modules(end, names)
 
@@ -800,7 +802,7 @@ def _constructor_spelling_modules(
 def _refuse_constructor_generated_for_another_class(
     cls: type, holder: type, generated: types.FunctionType
 ) -> None:
-    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds at the end of the constructor *holder* holds, unless it was renamed into *holder*.
+    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds as the _annotations_author of the end of the constructor *holder* holds, unless it was renamed into *holder*.
 
     The dataclass decorator renames a function into a class by the class's qualified
     name, collections.namedtuple by its name. A function renamed into another class and
@@ -922,10 +924,13 @@ def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
     """Whether *routine* is a function compiled outside a class body and renamed into a class, as the dataclass decorator generates __init__ and collections.namedtuple __new__.
 
     The code of such a function keeps another qualified name than the function; one the
-    body defines, or one assigned from elsewhere, keeps its own.
+    body defines, or one assigned from elsewhere, keeps its own. A function that records
+    __wrapped__ is none, though its code keeps another name: functools.wraps renamed it
+    after what it wraps, not into a class.
     """
     return (
         isinstance(routine, types.FunctionType)
+        and not hasattr(routine, "__wrapped__")
         and routine.__code__.co_qualname != routine.__qualname__
     )
 
