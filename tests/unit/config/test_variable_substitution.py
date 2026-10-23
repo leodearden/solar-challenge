@@ -108,3 +108,85 @@ class TestAPlaceholderWithNoValueIsRefused:
             substitute_config_variables({"homes": [{"pv": {"capacity_kw": "${X}"}}]})
 
         assert str(refusal.value) == "homes[0].pv.capacity_kw: variable 'X' is not supplied and has no default"
+
+
+class TestAMalformedPlaceholderIsRefused:
+    """A malformed placeholder is refused as soon as its string is read, naming the variable and its key path."""
+
+    @pytest.mark.parametrize(
+        ("document", "variables", "message"),
+        [
+            pytest.param(
+                {"name": "fleet-${BATTERY_RATIO}"},
+                {"BATTERY_RATIO": 2.0},
+                "name: variable 'BATTERY_RATIO' is inside the longer string 'fleet-${BATTERY_RATIO}'; "
+                "a placeholder must be the whole value",
+                id="finding-probe",
+            ),
+            pytest.param(
+                {"homes": [{"name": "home-${N:1}"}]},
+                {},
+                "homes[0].name: variable 'N' is inside the longer string 'home-${N:1}'; "
+                "a placeholder must be the whole value",
+                id="in-a-list-with-nothing-supplied",
+            ),
+            pytest.param(
+                {"a": "${A}${B}"},
+                {"A": 1.0, "B": 2.0},
+                "a: variable 'A' is inside the longer string '${A}${B}'; a placeholder must be the whole value",
+                id="two-placeholders",
+            ),
+        ],
+    )
+    def test_a_placeholder_inside_a_longer_string_is_refused_naming_the_variable_and_its_key_path(
+        self, document: dict[str, Any], variables: dict[str, float], message: str
+    ) -> None:
+        """The refusal names the embedded placeholder, not the supplied variable it leaves with no placeholder."""
+        with pytest.raises(ConfigurationError) as refusal:
+            substitute_config_variables(document, variables)
+
+        assert str(refusal.value) == message
+
+    @pytest.mark.parametrize(
+        ("document", "variables", "message"),
+        [
+            pytest.param(
+                {"homes": [{"pv": {"capacity_kw": "${X:abc}"}}]},
+                {},
+                "homes[0].pv.capacity_kw: the default of variable 'X' must be a finite number, got 'abc'",
+                id="word",
+            ),
+            pytest.param(
+                {"homes": [{}, {"pv": {"capacity_kw": "${X:}"}}]},
+                {},
+                "homes[1].pv.capacity_kw: the default of variable 'X' must be a finite number, got ''",
+                id="empty",
+            ),
+            pytest.param(
+                {"pv": {"tilt": "${X:nan}"}},
+                {},
+                "pv.tilt: the default of variable 'X' must be a finite number, got 'nan'",
+                id="nan",
+            ),
+            pytest.param(
+                {"pv": {"tilt": "${X:inf}"}},
+                {},
+                "pv.tilt: the default of variable 'X' must be a finite number, got 'inf'",
+                id="infinite",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": "${X:abc}"}},
+                {"X": 1.0},
+                "pv.capacity_kw: the default of variable 'X' must be a finite number, got 'abc'",
+                id="supplied-variable",
+            ),
+        ],
+    )
+    def test_a_default_that_is_not_a_finite_number_is_refused_naming_the_variable_and_its_key_path(
+        self, document: dict[str, Any], variables: dict[str, float], message: str
+    ) -> None:
+        """The default is read with the document, so it is refused even where a supplied value would replace it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            substitute_config_variables(document, variables)
+
+        assert str(refusal.value) == message
