@@ -25,7 +25,6 @@ from typing import (
     Protocol,
     TypeVar,
     Union,
-    cast,
 )
 
 import pandas as pd
@@ -2368,24 +2367,27 @@ def _read_placeholder(path: str, text: str) -> Optional[_Placeholder]:
     return None
 
 
+_Document = TypeVar("_Document")
+
+
 @dataclass(frozen=True)
-class _Substitution:
+class _Substitution(Generic[_Document]):
     """A document with each placeholder that has a value replaced by it, and every placeholder the document held, in document order."""
 
-    document: Any
+    document: _Document
     placeholders: tuple[_Placeholder, ...] = ()
 
 
-def _placeholders_of(parts: Iterable[_Substitution]) -> tuple[_Placeholder, ...]:
+def _placeholders_of(parts: Iterable[_Substitution[Any]]) -> tuple[_Placeholder, ...]:
     """The placeholders of each of *parts*, in order."""
     return tuple(placeholder for part in parts for placeholder in part.placeholders)
 
 
-def _substitute_variables(data: Any, variables: Mapping[str, float], path: str) -> _Substitution:
+def _substitute_variables(data: Any, variables: Mapping[str, float], path: str) -> _Substitution[Any]:
     """*data*, the document at *path*, with each placeholder that has a value replaced by it, and every placeholder *data* holds; *data* is left unchanged.
 
     A placeholder's value is the one *variables* gives its variable, else its default; a
-    placeholder with neither stays as its text. Mapping keys are not read.
+    placeholder with neither stays as its text.
     """
     if isinstance(data, str):
         placeholder = _read_placeholder(path, data)
@@ -2394,17 +2396,27 @@ def _substitute_variables(data: Any, variables: Mapping[str, float], path: str) 
         value = placeholder.value(variables)
         return _Substitution(data if value is None else value, (placeholder,))
     if isinstance(data, dict):
-        entries = {
-            key: _substitute_variables(child, variables, _child_path(path, str(key)))
-            for key, child in data.items()
-        }
-        return _Substitution(
-            {key: entry.document for key, entry in entries.items()}, _placeholders_of(entries.values())
-        )
+        return _substitute_mapping(data, variables, path)
     if isinstance(data, list):
         items = [_substitute_variables(item, variables, f"{path}[{index}]") for index, item in enumerate(data)]
         return _Substitution([each.document for each in items], _placeholders_of(items))
     return _Substitution(data)
+
+
+_Key = TypeVar("_Key")
+
+
+def _substitute_mapping(
+    data: Mapping[_Key, Any], variables: Mapping[str, float], path: str
+) -> _Substitution[dict[_Key, Any]]:
+    """*data*, the mapping at *path*, as a new dict of its keys and their values substituted, and the placeholders those hold; its keys are not read."""
+    entries = {
+        key: _substitute_variables(child, variables, _child_path(path, str(key)))
+        for key, child in data.items()
+    }
+    return _Substitution(
+        {key: entry.document for key, entry in entries.items()}, _placeholders_of(entries.values())
+    )
 
 
 def _refuse_unmatched_variables(
@@ -2454,10 +2466,10 @@ def substitute_config_variables(
             neither supplied nor defaulted.
     """
     supplied = variables or {}
-    substitution = _substitute_variables(config, supplied, "")
+    substitution = _substitute_mapping(config, supplied, "")
     _refuse_unmatched_variables(supplied, substitution.placeholders)
     _refuse_placeholders_without_a_value(supplied, substitution.placeholders)
-    return cast(dict[str, Any], substitution.document)
+    return substitution.document
 
 
 def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
