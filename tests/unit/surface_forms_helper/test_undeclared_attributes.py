@@ -9,6 +9,7 @@ import decimal
 import functools
 import pathlib
 import re
+import sys
 import types
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass
@@ -263,6 +264,25 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
 
     assert later.__file__ in str(undeclared.value)
     assert later.__file__ in str(unset.value)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_class_whose_module_one_with_no_source_has_replaced_in_sys_modules_raises_a_lookup_error_naming_its_own_module_from_undeclared_attributes_and_unset_attributes_if_its_body_compiled_a_function(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "class Meter:\n    def __init__(self) -> None:\n        self.early = 1\n",
+    )
+    monkeypatch.setitem(sys.modules, "metering", types.ModuleType("metering"))
+
+    with pytest.raises(LookupError) as replaced:
+        scan(metering.Meter)
+
+    assert "metering.Meter" in str(replaced.value)
+    assert metering.__file__ in str(replaced.value)
 
 
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
