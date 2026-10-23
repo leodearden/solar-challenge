@@ -18,12 +18,14 @@ from typing import (
     Callable,
     Collection,
     Generic,
+    Iterable,
     Iterator,
     Mapping,
     Optional,
     Protocol,
     TypeVar,
     Union,
+    cast,
 )
 
 import pandas as pd
@@ -2328,48 +2330,101 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
     )
 
 
-# Pattern for variable substitution: ${VAR} or ${VAR:default}
-_VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+_PLACEHOLDER_PATTERN = re.compile(r"\$\{(?P<name>[^}:]+)(?::(?P<default>[^}]*))?\}")
 
 
-def _substitute_variables(data: Any, variables: dict[str, float]) -> Any:
-    """Recursively substitute ${VAR} or ${VAR:default} patterns in data.
+@dataclass(frozen=True)
+class _Placeholder:
+    """A ${NAME} or ${NAME:default} placeholder: the whole string value at *path* in a document."""
 
-    Args:
-        data: Data structure to process (dict, list, or scalar)
-        variables: Dict mapping variable names to values
+    path: str
+    name: str
+    default: Optional[float]
 
-    Returns:
-        Data with variables substituted
+    def value(self, variables: Mapping[str, float]) -> Optional[float]:
+        """The value *variables* gives NAME, else the default, else None."""
+        return variables.get(self.name, self.default)
+
+
+def _read_placeholder(path: str, text: str) -> Optional[_Placeholder]:
+    """The placeholder that *text*, the string value at *path*, is; None if *text* is not one."""
+    whole = _PLACEHOLDER_PATTERN.fullmatch(text)
+    if whole is None:
+        return None
+    default = whole["default"]
+    return _Placeholder(path, whole["name"], None if default is None else float(default))
+
+
+@dataclass(frozen=True)
+class _Substitution:
+    """A document with each placeholder that has a value replaced by it, and every placeholder the document held, in document order."""
+
+    document: Any
+    placeholders: tuple[_Placeholder, ...] = ()
+
+
+def _placeholders_of(parts: Iterable[_Substitution]) -> tuple[_Placeholder, ...]:
+    """The placeholders of each of *parts*, in order."""
+    return tuple(placeholder for part in parts for placeholder in part.placeholders)
+
+
+def _substitute_variables(data: Any, variables: Mapping[str, float], path: str) -> _Substitution:
+    """*data*, the document at *path*, with each placeholder that has a value replaced by it, and every placeholder *data* holds; *data* is left unchanged.
+
+    A placeholder's value is the one *variables* gives its variable, else its default; a
+    placeholder with neither stays as its text. Mapping keys are not read.
     """
     if isinstance(data, str):
-        match = _VAR_PATTERN.fullmatch(data)
-        if match:
-            var_name = match.group(1)
-            default_str = match.group(2)
-            if var_name in variables:
-                return variables[var_name]
-            elif default_str is not None:
-                return float(default_str)
-            else:
-                raise ConfigurationError(
-                    f"Variable '{var_name}' not provided and has no default"
-                )
-        return data
-    elif isinstance(data, dict):
-        return {k: _substitute_variables(v, variables) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [_substitute_variables(item, variables) for item in data]
-    else:
-        return data
+        placeholder = _read_placeholder(path, data)
+        if placeholder is None:
+            return _Substitution(data)
+        value = placeholder.value(variables)
+        return _Substitution(data if value is None else value, (placeholder,))
+    if isinstance(data, dict):
+        entries = {
+            key: _substitute_variables(child, variables, _child_path(path, str(key)))
+            for key, child in data.items()
+        }
+        return _Substitution(
+            {key: entry.document for key, entry in entries.items()}, _placeholders_of(entries.values())
+        )
+    if isinstance(data, list):
+        items = [_substitute_variables(item, variables, f"{path}[{index}]") for index, item in enumerate(data)]
+        return _Substitution([each.document for each in items], _placeholders_of(items))
+    return _Substitution(data)
+
+
+def _refuse_unmatched_variables(
+    variables: Mapping[str, float], placeholders: tuple[_Placeholder, ...]
+) -> None:
+    """Refuse *variables* if one of them is named by none of *placeholders*, the document's, listing those."""
+    unmatched = sorted(repr(name) for name in variables.keys() - {each.name for each in placeholders})
+    if unmatched:
+        listed = ", ".join(f"{each.name!r} at {_block_label(each.path)}" for each in placeholders)
+        held = f"its placeholders: {listed}" if placeholders else "it holds no placeholders"
+        raise ConfigurationError(
+            f"Variables with no placeholder in the document: {', '.join(unmatched)}; {held}"
+        )
+
+
+def _refuse_placeholders_without_a_value(
+    variables: Mapping[str, float], placeholders: tuple[_Placeholder, ...]
+) -> None:
+    """Refuse the first of *placeholders* that neither *variables* nor its default gives a value, naming its key path and its variable."""
+    for each in placeholders:
+        if each.value(variables) is None:
+            raise ConfigurationError(
+                f"{_block_label(each.path)}: variable {each.name!r} is not supplied and has no default"
+            )
 
 
 def substitute_config_variables(
     config: dict[str, Any], variables: Optional[dict[str, float]] = None
 ) -> dict[str, Any]:
-    """Substitute variables in a configuration dictionary.
+    """Return *config* with each placeholder in it replaced by its variable's value; *config* is left unchanged.
 
-    Variables are specified as ${VAR} or ${VAR:default} in YAML values.
+    A placeholder, ${NAME} or ${NAME:default}, is the whole of a string value in the document.
+    It is replaced by the value *variables* gives NAME, else by its default.
 
     Args:
         config: Configuration dictionary
@@ -2377,8 +2432,17 @@ def substitute_config_variables(
 
     Returns:
         Configuration with variables substituted
+
+    Raises:
+        ConfigurationError: listing the document's placeholders, for a supplied variable none of
+            them names; then, naming its key path and its variable, for a placeholder neither
+            supplied nor defaulted.
     """
-    return _substitute_variables(config, variables or {})  # type: ignore[no-any-return]
+    supplied = variables or {}
+    substitution = _substitute_variables(config, supplied, "")
+    _refuse_unmatched_variables(supplied, substitution.placeholders)
+    _refuse_placeholders_without_a_value(supplied, substitution.placeholders)
+    return cast(dict[str, Any], substitution.document)
 
 
 def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
