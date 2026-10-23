@@ -4,7 +4,8 @@
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
-so a file git ignores is not there to point at.
+so a file git ignores is not there to point at. A path in another repository is written from that repository's name,
+as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. The settled form is the node-id, which
