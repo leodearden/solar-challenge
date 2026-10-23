@@ -292,6 +292,14 @@ def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
     return PurePosixPath(source)
 
 
+def test_scans_every_file_git_lists_outside_tests_docs_plans_and_review(project: Path) -> None:
+    scanned = {"CLAUDE.md", "pyproject.toml", "scenarios/fleet.yaml", "scripts/measure.py", "src/pkg/module.py"}
+    for source in [*scanned, "docs/guide.md", "docs/prds/record.md", "plans/plan.md", "review/briefing.yaml"]:
+        _write_source(project, source, "")
+
+    assert set(_scanned_files(project)) == {PurePosixPath(source) for source in scanned}
+
+
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:
     source = _write_source(
         project,
