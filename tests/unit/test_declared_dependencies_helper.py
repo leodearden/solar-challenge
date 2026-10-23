@@ -13,6 +13,7 @@ from tests._declared_dependencies import (
     assert_imports_only_declared,
     dead_import_guards,
     undeclared_distributions,
+    web_subpackage_imports,
 )
 
 
@@ -220,6 +221,93 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
     )
 
 
+def test_web_subpackage_imports_flags_each_file_whose_imports_run_a_module_of_the_web_subpackage(
+    tmp_path: Path,
+) -> None:
+    """A file is flagged with each file of the package's web subpackage that its imports run, however
+    it names the subpackage: a module of it, the subpackage from its parent package, a name of it
+    inside a function or for type checking, a module named to pytest.importorskip, or a
+    pytest_plugins entry.
+    """
+    package_dir = tmp_path / "src" / "solar_challenge"
+    _write_module(package_dir / "__init__.py")
+    _write_module(package_dir / "weather.py")
+    web_init = _write_module(package_dir / "web" / "__init__.py")
+    web_jobs = _write_module(package_dir / "web" / "jobs.py")
+    web_app = _write_module(package_dir / "web" / "app.py", "import flask")
+    _write_module(tmp_path / "tests" / "web" / "__init__.py")
+    scripts_dir = tmp_path / "scripts"
+    imports_a_module = _write_module(scripts_dir / "imports_a_module.py", "import solar_challenge.web.jobs")
+    imports_the_subpackage_from_its_parent = _write_module(
+        scripts_dir / "imports_the_subpackage_from_its_parent.py", "from solar_challenge import web"
+    )
+    imports_a_name_in_a_function = _write_module(
+        scripts_dir / "imports_a_name_in_a_function.py",
+        "def build():",
+        "    from solar_challenge.web.app import create_app",
+        "    return create_app()",
+    )
+    imports_for_type_checking = _write_module(
+        scripts_dir / "imports_for_type_checking.py",
+        "from typing import TYPE_CHECKING",
+        "if TYPE_CHECKING:",
+        "    from solar_challenge.web.jobs import JobManager",
+    )
+    importorskips = _write_module(
+        scripts_dir / "importorskips.py", "import pytest", 'pytest.importorskip("solar_challenge.web.app")'
+    )
+    names_a_plugin = _write_module(scripts_dir / "names_a_plugin.py", 'pytest_plugins = ["solar_challenge.web.jobs"]')
+    imports_the_package_only = _write_module(
+        scripts_dir / "imports_the_package_only.py",
+        "import solar_challenge",
+        "from solar_challenge import weather",
+        "from solar_challenge.weather import fetch",
+    )
+    guards_the_import = _write_import_guard(
+        scripts_dir / "guards_the_import.py", "from solar_challenge.web.app import create_app"
+    )
+    imports_another_web = _write_module(scripts_dir / "imports_another_web.py", "import web", "from tests import web")
+    names_it_in_a_string = _write_module(
+        scripts_dir / "names_it_in_a_string.py", "import sys", 'sys.modules.get("solar_challenge.web.jobs")'
+    )
+
+    flagged = web_subpackage_imports(
+        tmp_path,
+        [
+            imports_a_module,
+            imports_the_subpackage_from_its_parent,
+            imports_a_name_in_a_function,
+            imports_for_type_checking,
+            importorskips,
+            names_a_plugin,
+            imports_the_package_only,
+            guards_the_import,
+            imports_another_web,
+            names_it_in_a_string,
+        ],
+    )
+
+    assert flagged == [
+        (importorskips, [web_init, web_app]),
+        (imports_a_module, [web_init, web_jobs]),
+        (imports_a_name_in_a_function, [web_init, web_app]),
+        (imports_for_type_checking, [web_init, web_jobs]),
+        (imports_the_subpackage_from_its_parent, [web_init]),
+        (names_a_plugin, [web_init, web_jobs]),
+    ], (
+        "the web-subpackage detector misjudged a synthetic file. Each flagged file runs "
+        "web/__init__.py, and the module of src/solar_challenge/web it names, by importing a module of "
+        "the subpackage, the subpackage from its parent package, or a name of it inside a function or "
+        "under TYPE_CHECKING, or by naming a module of it to pytest.importorskip or in pytest_plugins. "
+        "imports_the_package_only imports solar_challenge and its weather module only. "
+        "guards_the_import imports the subpackage only inside a try that handles ImportError, which "
+        "makes the import optional by construction. imports_another_web imports a module named web "
+        "elsewhere, a third-party one and tests/web, neither of which is the package's subpackage. "
+        "names_it_in_a_string names it in a string only, which is no import. So none of those four may "
+        "be flagged"
+    )
+
+
 _OWN_FILES_OF_EACH_SCOPE = {
     "outside-web": ("src/solar_challenge/simulate.py",),
     "web": ("src/solar_challenge/web/views.py",),
@@ -294,8 +382,8 @@ _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     # relative, two levels up and with a module; no other file imports _paths, so only this
     # import selects it
     "tests/unit/_css.py": ("from .._paths import root",),
-    # relative, with no module
-    "tests/integration/test_pvgis.py": ("from . import _pvgis_probe",),
+    # relative, with no module; and a module of the package, which stays with the package's own scope
+    "tests/integration/test_pvgis.py": ("from . import _pvgis_probe", "from solar_challenge.simulate import run"),
 }
 
 
@@ -331,7 +419,9 @@ def test_each_source_scope_selects_only_its_own_files(
     __init__.py. Modules that import each other are selected once each. tests-verify owns none
     of them. A module named only inside a try that handles ImportError is not imported for
     certain, so it stays with tests-verify. A module named to pytest.importorskip as a string
-    literal counts as imported: the test imports it or skips.
+    literal counts as imported: the test imports it or skips. The dev-only lanes' closure selects
+    tests modules only, so a module of the package that a lane file imports stays with the
+    package's own scope.
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
