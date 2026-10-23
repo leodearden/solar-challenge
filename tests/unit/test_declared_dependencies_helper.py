@@ -139,6 +139,8 @@ _OWN_FILES_OF_EACH_SCOPE = {
         "tests/_lock.py",
         "tests/_network.py",
         "tests/_newest.py",
+        "tests/_plugin.py",
+        "tests/_plugin_fixtures.py",
         "tests/_uv.py",
         "tests/conftest.py",
         "tests/css_build/test_build.py",
@@ -160,8 +162,14 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "tests-e2e": ("tests/e2e/test_pages.py",),
 }
 _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
-    # a conftest every run loads
-    "tests/conftest.py": ("from tests._network import refusing_network",),
+    # a conftest every run loads; its pytest_plugins list names a pytest built-in, which is no file
+    # of the project, beside a plugin of the project
+    "tests/conftest.py": (
+        "from tests._network import refusing_network",
+        'pytest_plugins = ["pytester", "tests._plugin"]',
+    ),
+    # a plugin's own entries, in the comma-separated string form pytest also accepts
+    "tests/_plugin.py": ('pytest_plugins = "pytester,tests._plugin_fixtures"',),
     # module level; the trailing name is an attribute of the module
     "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
     # transitive
@@ -203,6 +211,10 @@ def test_each_source_scope_selects_only_its_own_files(
     relatively, or through a package's __init__.py. tests-verify owns none of them. A module
     named only inside a try that handles ImportError is not imported for certain, so it
     stays with tests-verify.
+
+    A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
+    conftest or in a plugin it loads, counts as imported: pytest imports each entry. A built-in
+    such as pytester names no file of the project.
     """
     project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
     for relative_path in project_files:
