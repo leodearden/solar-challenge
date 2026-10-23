@@ -98,7 +98,12 @@ naming the failing node-ids, unless the job's `outage_probe` reports an outage, 
 escalated instead. Each job whose suite needs a live service declares `scripts/outage_probe.py`,
 naming that service, as its `outage_probe`; the script defines what counts as an outage.
 `outage_probe_timeout_secs` is pinned beside each probe, not left to dark-factory's default,
-because the probe's request timeout is sized to fit it.
+because the probe's request timeout is sized to fit it. Each probe runs as
+`uv run --locked --extra dev`, since the script needs requests from the dev extra and
+`solar_challenge` for the PVGIS request, so it starts only once uv has synced the job's
+environment. If PyPI is out of reach while `uv.lock` pins a file this host's uv cache lacks,
+the job's own sync fails, and so does the probe's: the lane reads a broken probe, so the red
+goes to its confirm and is filed, with a broken-probe escalation beside it.
 
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
   except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
