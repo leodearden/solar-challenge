@@ -998,11 +998,17 @@ def test_a_signature_a_link_carries_over_a_routine_defined_in_c_names_the_classe
         tmp_path,
         monkeypatch,
         "relaying",
+        "import inspect\n"
         "from fractions import Fraction as Decimal\n"
         "from functools import wraps\n"
         "\n"
         "def relay(function):\n"
-        "    return wraps(function)(lambda *args: function(*args))\n",
+        "    return wraps(function)(lambda *args: function(*args))\n"
+        "\n"
+        "def resign(function):\n"
+        "    resigned = relay(function)\n"
+        "    resigned.__signature__ = inspect.Signature(list(inspect.signature(function).parameters.values()))\n"
+        "    return resigned\n",
     )
 
     class Counting(type):
@@ -1016,10 +1022,13 @@ def test_a_signature_a_link_carries_over_a_routine_defined_in_c_names_the_classe
 
     assert named_classes(_typed(len)) == {decimal.Decimal}
     assert named_classes(_typed(str.join)) == {decimal.Decimal}
+    assert named_classes(_typed(vars(dict)["fromkeys"])) == {decimal.Decimal}
+    assert named_classes(_typed((1).__add__)) == {decimal.Decimal}
     assert named_classes(_typed(operator.itemgetter(1))) == {decimal.Decimal}
     assert named_classes(Counted) == {decimal.Decimal}
     assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
     assert named_classes(relaying.relay(_typed(len))) == {decimal.Decimal}
+    assert named_classes(relaying.resign(_typed(len))) == {fractions.Fraction}
 
 
 def test_a_partial_that_carries_a_signature_over_a_routine_defined_in_c_records_no_module_so_a_string_annotation_there_raises_type_error_naming_it_and_the_string() -> None:
