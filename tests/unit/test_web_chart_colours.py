@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards two invariants of the chart colours, whose one home is the chart section of the
+"""Guards three invariants of the chart colours, whose one home is the chart section of the
 theme token file, static/src/theme-tokens.json, which charts.py loads into COLOUR_PALETTE:
-a token edit reaches every chart colour a chart draws, and the palette holds only colours a
-chart draws, so it reads as the list of them. That no other web source writes out a chart
+a token edit reaches every chart colour a chart draws; the palette holds only colours a
+chart draws, so it reads as the list of them; and no chart draws Plotly's default template's
+bar outline, a colour outside the palette. That no other web source writes out a chart
 colour is test_web_theme_tokens.py's to guard.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Three
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
 checks enforce the invariants:
 
 * Every chart colour a chart builder draws follows a palette edit: with each palette role
@@ -18,10 +19,13 @@ checks enforce the invariants:
   other role has, the figures of all the _FIGURES cases together must draw every role's
   colour, so a role no chart reads fails. Only those figures are read, so a role a builder
   draws only for inputs no case gives is reported too.
-* Both of those checks read a figure from every chart builder: each of its cases names the
-  builder it draws with, and a public function of charts.py that no case names fails, so a
-  new builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
-  builder.
+* No chart outlines its bars: Plotly's default template, which every figure carries,
+  outlines each bar in its own plot background colour, #E5ECF6, which no figure draws, so
+  every bar trace of every _FIGURES case must set its own outline width to 0.
+* All three of those checks read a figure from every chart builder: each of its cases
+  names the builder it draws with, and a public function of charts.py that no case names
+  fails, so a new builder cannot go unread. A name charts.py imports, such as
+  make_subplots, is not a builder.
 """
 
 import dataclasses
@@ -42,7 +46,7 @@ from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
 from tests._finance_builders import make_fleet_results, make_sim_results
-from tests._plotly_figure import Rgb, colour_literals, drawn_colours
+from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
 
 
 @dataclasses.dataclass(frozen=True)
@@ -191,6 +195,31 @@ def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) ->
         f"no chart draws. Delete the role from {THEME_TOKENS_KEY}'s chart section, or draw it in "
         "a chart builder. If a builder draws it only for some inputs, give _FIGURES a case with "
         "those inputs."
+    )
+
+
+def test_no_chart_outlines_its_bars() -> None:
+    """Plotly's default template, which every figure carries, outlines each bar 0.5 px in its plot background colour, #E5ECF6.
+
+    No figure draws that background, so the outline showed as a light rim round every bar on the dark card
+    (task 1046). A bar trace's own outline width of 0 overrides the template's.
+    """
+    bars = [
+        (case_name, trace["name"], trace.get("marker", {}).get("line", {}).get("width"))
+        for case_name, case in _FIGURES.items()
+        for trace in traces(case.figure())
+        if trace["type"] == "bar"
+    ]
+    assert bars, "no _FIGURES case draws a bar, so this check would pass vacuously"
+
+    outlined = sorted(
+        f"{case_name}: {name!r} (outline width {width})" for case_name, name, width in bars if width != 0
+    )
+
+    assert outlined == [], (
+        "These bar traces keep the outline of Plotly's default template, #E5ECF6 at 0.5 px, a light rim "
+        f"on the dark card: {', '.join(outlined)}. Build each bar with charts.py's bar helper, _bar, which "
+        "sets its outline width, marker.line.width, to 0."
     )
 
 
