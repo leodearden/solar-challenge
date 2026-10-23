@@ -16,6 +16,10 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
+from tests._same_schedule_tariffs import (
+    NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
+    NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
+)
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
@@ -547,3 +551,31 @@ class TestSimulateHomeGridCharge:
 
         assert results.grid_charge_cost is None
         assert results.grid_charge is None
+
+
+class TestSimulateHomeDispatchesOnTheTariffSchedule:
+    """The arbitrage home on one schedule imports the same energy at the same cost, however the schedule's periods are listed.
+
+    The offline stand-in for `home run` on scenarios/bristol-arbitrage.yaml with that tariff
+    (docs/prds/tariff-coverage-classifier-presets.md §9 row 3).
+    """
+
+    @staticmethod
+    def _winter_day_summary(tariff: TariffConfig) -> SummaryStatistics:
+        home = dataclasses.replace(bristol_arbitrage_home(), tariff_config=tariff)
+        results = simulate_home(
+            home,
+            start_date=pd.Timestamp("2024-01-10"),
+            end_date=pd.Timestamp("2024-01-10"),
+            weather=weather_for(home, sunless_weather("2024-01-10", temp_air=5.0)),
+        )
+        return calculate_summary(results)
+
+    def test_a_schedule_as_four_or_five_periods_imports_the_same_at_the_same_cost(self) -> None:
+        four = self._winter_day_summary(NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS)
+        five = self._winter_day_summary(NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS)
+
+        assert (four.total_grid_import_kwh, four.total_import_cost_gbp) == (
+            five.total_grid_import_kwh,
+            five.total_import_cost_gbp,
+        )
