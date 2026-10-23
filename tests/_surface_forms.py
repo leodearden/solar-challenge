@@ -149,9 +149,11 @@ def named_classes(obj: object) -> set[type]:
     and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
     LookupError naming it and the module found there, and one whose module has since
-    left sys.modules, LookupError naming it and that module's name. A signature carried
-    over a callable that spells no annotation, such as one defined in C or a class
-    constructed by object or in C, is read where the def or lambda given it is defined.
+    left sys.modules, LookupError naming it and that module's name. A class defined
+    outside any function is checked against the module found only where inspect reads a
+    source for that module. A signature carried over a callable that spells no
+    annotation, such as one defined in C or a class constructed by object or in C, is
+    read where the def or lambda given it is defined.
     A string in one given to a link that records no module, as a functools.partial
     records none, or to a function that wraps a link carrying a signature of its own,
     which the new one may copy, raises TypeError naming the link and the string. A
@@ -210,8 +212,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
     An immutable type raises TypeError naming it before anything else is read, and a
-    class with no class statement inspect can read, such as ast.AST, raises TypeError
-    naming it when its source is read.
+    class with no class statement inspect can read, such as ast.AST or _json.Scanner,
+    raises TypeError naming it when its source is read.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
@@ -222,7 +224,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     A string annotation in any of those class bodies is read as named_classes reads one,
     so a name its module does not bind raises NameError. Like those annotations, *cls*'s
     source is read from its own module only, so a module another of the same name has
-    replaced in sys.modules raises LookupError.
+    replaced in sys.modules raises LookupError, unless inspect reads no source for the
+    module found there.
     """
     _refuse_immutable_type(cls)
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
@@ -243,7 +246,8 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
     read from its own module only, so a module another of the same name has replaced in
-    sys.modules raises LookupError.
+    sys.modules raises LookupError, unless inspect reads no source for the module found
+    there.
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
@@ -1214,10 +1218,12 @@ def _class_module(cls: type) -> types.ModuleType:
     A class defined outside any function must be bound there under its qualified name; for
     one defined inside a function, the module's globals must be those the first function
     its body compiled carries. Otherwise, as once another module of the same name has
-    replaced its own in sys.modules, LookupError names *cls* and the module found. An
-    immutable type carries no source or annotation to misread, and a class inside a
-    function whose body compiled no function carries nothing to check it by, so their
-    module is looked up unchecked.
+    replaced its own in sys.modules, LookupError names *cls* and the module found. A
+    module inspect reads no source for holds no class statement to misread, and
+    _evaluated refuses a string read there, so there a class defined outside any function
+    need not be bound under its qualified name. An immutable type carries no source or
+    annotation to misread, and a class inside a function whose body compiled no function
+    carries nothing to check it by, so their module is looked up unchecked.
     """
     module = _module_named(cls.__module__, cls)
     if _is_immutable_type(cls):
@@ -1228,16 +1234,16 @@ def _class_module(cls: type) -> types.ModuleType:
             raise _defined_elsewhere(_label(cls), function.__globals__, module, cls.__module__)
         return module
     bound = _bound_under(cls.__qualname__, module)
-    if bound is not cls:
-        raise LookupError(
-            f"{_label(cls)} is not bound under {cls.__qualname__!r} in "
-            f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
-            f"the name {cls.__module__!r}: that module binds "
-            f"{'nothing' if bound is None else 'another object'} there. Read each module's "
-            "objects before importing another module of that name, or bind the class under "
-            "its qualified name"
-        )
-    return module
+    if bound is cls or not _has_source(module):
+        return module
+    raise LookupError(
+        f"{_label(cls)} is not bound under {cls.__qualname__!r} in "
+        f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+        f"the name {cls.__module__!r}: that module binds "
+        f"{'nothing' if bound is None else 'another object'} there. Read each module's "
+        "objects before importing another module of that name, or bind the class under "
+        "its qualified name"
+    )
 
 
 def _defined_elsewhere(
