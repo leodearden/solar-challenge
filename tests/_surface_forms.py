@@ -146,16 +146,14 @@ def named_classes(obj: object) -> set[type]:
     and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
     LookupError naming it and the module found there, and one whose module has since
-    left sys.modules, LookupError naming it and that module's name. Where the callable
-    a routine stands for spells no annotation, as a callable defined in C spells none,
-    or a class constructed by object or in C that carries no signature, a signature
-    one of the routine's links carries is spelled where the link given it is, as
-    _signature_author finds that link: in the module whose globals it carries, if a
-    def or lambda compiled it. A link that records no module of its own, as a
-    functools.partial records none, leaves a string in that signature no module, and
-    that string raises TypeError naming the link and the string. A signature that
-    annotates nothing, as that of each routine CPython defines in C such as str.join,
-    names no class, and no module is looked up for it. Met again
+    left sys.modules, LookupError naming it and that module's name. A signature carried
+    over a callable that spells no annotation, such as one defined in C or a class
+    constructed by object or in C, is read where the def or lambda given it is defined.
+    A string in one given to a link that records no module, as a functools.partial
+    records none, or to a function that wraps a link carrying a signature of its own,
+    which the new one may copy, raises TypeError naming the link and the string. A
+    signature that annotates nothing, as that of each routine CPython defines in C such
+    as str.join, names no class, and no module is looked up for it. Met again
     inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
@@ -279,19 +277,42 @@ class _Evaluation:
 _Enclosing: typing.TypeAlias = frozenset[_TypeVariable | typing.NewType | _Evaluation]
 
 
+class _Unspelled(abc.ABC):
+    """No module is known to spell the string annotations of a signature, so reading one is refused."""
+
+    @abc.abstractmethod
+    def refusal(self, source: str) -> TypeError:
+        """The error for reading *source*, a string annotation in that signature."""
+
+
 @dataclasses.dataclass(frozen=True)
-class _Unspelled:
-    """No module is known to spell the string annotations of a signature: *author*, the link given it (else the object whose signature is read), records no module of its own, as a functools.partial records none, and what it stands for spells no annotation."""
+class _RecordsNoModule(_Unspelled):
+    """*author*, the link given the signature (else the object whose signature is read), records no module of its own, as a functools.partial records none, and what it stands for spells no annotation."""
 
     author: object
 
     def refusal(self, source: str) -> TypeError:
-        """The error for reading *source*, a string annotation in that signature."""
         return TypeError(
             f"{_label(self.author)} carries a signature whose string annotation {source!r} "
             "no module is known to spell: it records no module of its own, and what it "
             "stands for spells no annotation: make the name private, annotate with the "
             "class, not a string, or carry the signature on a function defined with def"
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class _MayBeCopied(_Unspelled):
+    """*author*, the function given the signature, wraps a link that carries a signature of its own, which *author*'s may be a copy of: its strings may be spelled where that one was given."""
+
+    author: object
+
+    def refusal(self, source: str) -> TypeError:
+        return TypeError(
+            f"{_label(self.author)} carries a signature whose string annotation {source!r} "
+            "no module is known to spell: it wraps a callable that carries a signature of "
+            "its own, so this one may be a copy of it, spelled where that one was given: "
+            "make the name private, annotate with the class, not a string, or leave the "
+            "signature to functools.wraps, which copies it"
         )
 
 
@@ -843,10 +864,10 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
 
 
 def _spelling_modules(obj: object, names: Collection[str]) -> Mapping[str, _ModuleOrUnspelled]:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return", as _chain_spelling_modules finds it; _Unspelled, naming *obj*, for each if it finds none."""
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return", as _chain_spelling_modules finds it; _RecordsNoModule, naming *obj*, for each if it finds none."""
     spelled = _chain_spelling_modules(obj, names)
     if spelled is None:
-        return dict.fromkeys(names, _Unspelled(obj))
+        return dict.fromkeys(names, _RecordsNoModule(obj))
     return spelled
 
 
@@ -856,17 +877,25 @@ def _chain_spelling_modules(
     """The module that spells each of *names* in the signature inspect reads for *obj*, a class or a routine; None if nothing on its chain spells an annotation or carries a signature.
 
     That is where the end of the chain _chain_end follows from *obj* spells them, as
-    _end_spelling_modules finds it, whatever signature a link carries. If that end
-    spells no annotation, it is where _carried_signature_module finds the link given the
-    signature of the first link that carries one.
+    _end_spelling_modules finds it, whatever signature a link carries, since a signature
+    given to a wrapper of a callable that spells annotations is presumed derived from
+    them. If that end spells no annotation, the strings were given to a link, and it is
+    where _carried_signature_module finds the link given the signature of the first link
+    that carries one.
     """
     spelled = _end_spelling_modules(_chain_end(obj), names)
     if spelled is not None:
         return spelled
-    carrier = _chain_end(obj, stop=_carries_inspect_signature)
-    if not _carries_inspect_signature(carrier):
+    carrier = _signed_link(obj)
+    if carrier is None:
         return None
     return dict.fromkeys(names, _carried_signature_module(carrier))
+
+
+def _signed_link(obj: object) -> object | None:
+    """The first link of the chain inspect follows from *obj*, as _chain_end follows it, whose __signature__ is an inspect.Signature; None if no link of it is."""
+    link = _chain_end(obj, stop=_carries_inspect_signature)
+    return link if _carries_inspect_signature(link) else None
 
 
 def _end_spelling_modules(
@@ -890,20 +919,25 @@ def _end_spelling_modules(
 
 
 def _carried_signature_module(carrier: object) -> _ModuleOrUnspelled:
-    """Where the link _signature_author gives for *carrier* is spelled, the module whose globals it carries if a def or lambda compiled it; _Unspelled, naming that link, otherwise."""
+    """Where the link _signature_author gives for *carrier* is spelled, the module whose globals it carries if a def or lambda compiled it; _RecordsNoModule, naming that link, if it is neither; _MayBeCopied if that function wraps a link that carries a signature too, which its own may be a copy of."""
     author = _signature_author(carrier)
-    if isinstance(author, types.FunctionType):
-        return _defining_module(author)
-    return _Unspelled(author)
+    if not isinstance(author, types.FunctionType):
+        return _RecordsNoModule(author)
+    if _signed_link(getattr(author, "__wrapped__", None)) is not None:
+        return _MayBeCopied(author)
+    return _defining_module(author)
 
 
 def _signature_author(carrier: object) -> object:
-    """The link that was given the signature *carrier* carries: *carrier* itself, unless the callable it records as __wrapped__ holds that very signature, as functools.wraps copies it, and then that callable's author in turn."""
+    """The link that was given the signature *carrier* carries: *carrier* itself, unless the callable it records as __wrapped__ holds that very signature, as functools.wraps copies it, and then that callable's author in turn; the author of a bound method's function if the walk ends at a bound method, which forwards the signature of the function it binds."""
     if not callable(carrier):
         return carrier
-    return inspect.unwrap(
+    author = inspect.unwrap(
         carrier, stop=lambda link: not _holds_signature_of(link, getattr(link, "__wrapped__"))
     )
+    if isinstance(author, types.MethodType):
+        return _signature_author(author.__func__)
+    return author
 
 
 def _holds_signature_of(wrapper: object, wrapped: object) -> bool:

@@ -1065,7 +1065,7 @@ def test_a_signature_functools_wraps_copies_from_a_link_that_carries_one_over_a_
         pytest.param(functools.partial(_typed(len, "receiver"), 1), 0, id="copy-of-a-partials"),
     ],
 )
-def test_a_signature_given_to_a_function_that_wraps_a_link_carrying_a_signature_of_its_own_over_a_routine_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_function_and_the_string(
+def test_a_signature_given_to_a_function_that_wraps_a_link_carrying_a_signature_of_its_own_over_a_routine_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_string_and_that_it_may_be_a_copy(
     wrapped: Callable[..., object],
     dropping: int,
     tmp_path: pathlib.Path,
@@ -1073,7 +1073,7 @@ def test_a_signature_given_to_a_function_that_wraps_a_link_carrying_a_signature_
 ) -> None:
     relaying = imported_module(tmp_path, monkeypatch, "relaying", _RELAYING_SOURCE)
 
-    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b.*'Decimal'.*\bmay be a copy\b"):
+    with pytest.raises(TypeError, match=r"annotation 'Decimal' no module is known to spell:.*\bmay be a copy\b"):
         named_classes(relaying.resign(wrapped, dropping))
 
 
@@ -1089,7 +1089,9 @@ def test_a_partial_that_carries_a_signature_over_a_routine_defined_in_c_records_
     relayed = functools.wraps(counting)(lambda *args: counting(*args))
 
     assert named_classes(rating) == {int}
-    naming_the_partial_and_the_string = r"\bfunctools\.partial\(<built-in function len>\).*'Decimal'"
+    naming_the_partial_and_the_string = (
+        r"\bfunctools\.partial\(<built-in function len>\).*'Decimal'.*\brecords no module of its own\b"
+    )
     with pytest.raises(TypeError, match=naming_the_partial_and_the_string):
         named_classes(counting)
     with pytest.raises(TypeError, match=naming_the_partial_and_the_string):
