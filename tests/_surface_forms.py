@@ -148,9 +148,10 @@ def named_classes(obj: object) -> set[type]:
     LookupError naming it and the module found there, and one whose module has since
     left sys.modules, LookupError naming it and that module's name. Where the callable
     a routine stands for spells no annotation, as a callable defined in C spells none,
-    a signature one of the routine's links carries is spelled where the link given it
-    is, as _signature_author finds that link: in the module whose globals it carries,
-    if a def or lambda compiled it. A link that records no module of its own, as a
+    or a class constructed by object or in C that carries no signature, a signature
+    one of the routine's links carries is spelled where the link given it is, as
+    _signature_author finds that link: in the module whose globals it carries, if a
+    def or lambda compiled it. A link that records no module of its own, as a
     functools.partial records none, leaves a string in that signature no module, and
     that string raises TypeError naming the link and the string. A signature that
     annotates nothing, as that of each routine CPython defines in C such as str.join,
@@ -946,23 +947,24 @@ def _constructor_spelling_modules(
     class and assigned here, TypeError names *cls* and the function. A constructor
     defined in C, or one that wraps a callable defined in C, spells no annotation, so
     the class's is that of the class _signature_holder gives if *cls* carries a
-    signature, else the holder's; _signature_holder checks every class that carries a
-    signature before the constructor is read.
+    signature, else where _chain_spelling_modules finds the link given the signature
+    a link of that constructor's chain carries, if any does; _signature_holder checks
+    every class that carries a signature before the constructor is read.
     """
     signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
     if call is not None:
         return _chain_spelling_modules(call, names)
     holder = _constructor_holder(cls)
-    end = _chain_end(_constructor_as_read(cls, holder))
-    if isinstance(end, _C_CONSTRUCTOR_KINDS):
-        spelling_class = holder if signature_holder is None else signature_holder
-        return dict.fromkeys(names, _defining_module(spelling_class))
+    constructor = _constructor_as_read(cls, holder)
+    end = _chain_end(constructor)
+    if signature_holder is not None and isinstance(end, _C_CONSTRUCTOR_KINDS):
+        return dict.fromkeys(names, _defining_module(signature_holder))
     author = _annotations_author(end)
     if _is_generated(author):
         _refuse_constructor_generated_for_another_class(cls, holder, author)
         return _generated_constructor_modules(holder, names)
-    return _chain_spelling_modules(end, names)
+    return _chain_spelling_modules(constructor, names)
 
 
 def _refuse_constructor_generated_for_another_class(
