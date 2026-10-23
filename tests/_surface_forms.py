@@ -46,7 +46,7 @@ import textwrap
 import types
 import typing
 import weakref
-from collections.abc import Callable, Collection, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 
 def surface_form(obj: object) -> str:
@@ -146,9 +146,14 @@ def named_classes(obj: object) -> set[type]:
     and a class in the one sys.modules holds under the name its __module__ records. One
     whose module another of the same name has since replaced in sys.modules raises
     LookupError naming it and the module found there, and one whose module has since
-    left sys.modules, LookupError naming it and that module's name. A signature that
-    annotates nothing, as that of each routine CPython defines in C such as str.join,
-    names no class, and no module is looked up for it. Met again
+    left sys.modules, LookupError naming it and that module's name. A signature carried
+    over a callable that spells no annotation, such as one defined in C or a class
+    constructed by object or in C, is read where the def or lambda given it is defined.
+    A string in one given to a link that records no module, as a functools.partial
+    records none, or to a function that wraps a link carrying a signature of its own,
+    which the new one may copy, raises TypeError naming the link and the string. A
+    signature that annotates nothing, as that of each routine CPython defines in C such
+    as str.join, names no class, and no module is looked up for it. Met again
     inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
@@ -272,6 +277,48 @@ class _Evaluation:
 _Enclosing: typing.TypeAlias = frozenset[_TypeVariable | typing.NewType | _Evaluation]
 
 
+class _Unspelled(abc.ABC):
+    """No module is known to spell the string annotations of a signature, so reading one is refused."""
+
+    @abc.abstractmethod
+    def refusal(self, source: str) -> TypeError:
+        """The error for reading *source*, a string annotation in that signature."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _RecordsNoModule(_Unspelled):
+    """*author*, the link given the signature (else the object whose signature is read), records no module of its own, as a functools.partial records none, and what it stands for spells no annotation."""
+
+    author: object
+
+    def refusal(self, source: str) -> TypeError:
+        return TypeError(
+            f"{_label(self.author)} carries a signature whose string annotation {source!r} "
+            "no module is known to spell: it records no module of its own, and what it "
+            "stands for spells no annotation: make the name private, annotate with the "
+            "class, not a string, or carry the signature on a function defined with def"
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class _MayBeCopied(_Unspelled):
+    """*author*, the function given the signature, wraps a link that carries a signature of its own, which *author*'s may be a copy of: its strings may be spelled where that one was given."""
+
+    author: object
+
+    def refusal(self, source: str) -> TypeError:
+        return TypeError(
+            f"{_label(self.author)} carries a signature whose string annotation {source!r} "
+            "no module is known to spell: it wraps a callable that carries a signature of "
+            "its own, so this one may be a copy of it, spelled where that one was given: "
+            "make the name private, annotate with the class, not a string, or leave the "
+            "signature to functools.wraps, which copies it"
+        )
+
+
+_ModuleOrUnspelled: typing.TypeAlias = types.ModuleType | _Unspelled
+
+
 class _Construct(abc.ABC):
     """An annotation parsed as the construct it is, the annotations inside it parsed in turn: the one grammar both its spelling and the classes it names are read by."""
 
@@ -280,8 +327,8 @@ class _Construct(abc.ABC):
         """The spelling, alike on every admitted minor."""
 
     @abc.abstractmethod
-    def classes(self, module: types.ModuleType) -> set[type]:
-        """The classes it names, a name in it resolved in *module*."""
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
+        """The classes it names, a name in it resolved in *module*; a string raises TypeError where *module* is _Unspelled, as no module is known to spell it."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -294,7 +341,9 @@ class _Unevaluated(_Construct):
     def text(self) -> str:
         return self.source
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
+        if isinstance(module, _Unspelled):
+            raise module.refusal(self.source)
         evaluation = _Evaluation(self.source, module)
         if evaluation in self.enclosing:
             return set()
@@ -312,7 +361,7 @@ class _Leaf(_Construct):
     def text(self) -> str:
         return self.spelling
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return set(self.named)
 
 
@@ -325,7 +374,7 @@ class _Union(_Construct):
     def text(self) -> str:
         return " | ".join(member.text() for member in self.members)
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return _classes_of(self.members, module)
 
 
@@ -340,7 +389,7 @@ class _Subscripted(_Construct):
         inside = _texts_of(self.arguments) if self.arguments else "()"
         return f"{self.origin.text()}[{inside}]"
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return self.origin.classes(module) | _classes_of(self.arguments, module)
 
 
@@ -353,7 +402,7 @@ class _ParameterTypes(_Construct):
     def text(self) -> str:
         return f"[{_texts_of(self.members)}]"
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return _classes_of(self.members, module)
 
 
@@ -370,7 +419,7 @@ class _Declared(_Construct):
             return self.name
         return f"{self.name}({_texts_of(self.arguments)})"
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return _classes_of(self.arguments, module if self.module is None else self.module)
 
 
@@ -384,7 +433,7 @@ class _Keyword(_Construct):
     def text(self) -> str:
         return f"{self.keyword}={self.annotation.text()}"
 
-    def classes(self, module: types.ModuleType) -> set[type]:
+    def classes(self, module: _ModuleOrUnspelled) -> set[type]:
         return self.annotation.classes(module)
 
 
@@ -392,7 +441,7 @@ def _texts_of(constructs: Iterable[_Construct]) -> str:
     return ", ".join(construct.text() for construct in constructs)
 
 
-def _classes_of(constructs: Iterable[_Construct], module: types.ModuleType) -> set[type]:
+def _classes_of(constructs: Iterable[_Construct], module: _ModuleOrUnspelled) -> set[type]:
     return set().union(*(construct.classes(module) for construct in constructs))
 
 
@@ -669,6 +718,12 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
+_C_ROUTINE_KINDS = (
+    *_C_CONSTRUCTOR_KINDS,
+    types.MethodDescriptorType,
+    types.ClassMethodDescriptorType,
+    types.MethodWrapperType,
+)
 
 
 def _refuse_minor_dependent_constructor(cls: type) -> None:
@@ -808,21 +863,86 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
     return annotations
 
 
-def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, types.ModuleType]:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return".
+def _spelling_modules(obj: object, names: Collection[str]) -> Mapping[str, _ModuleOrUnspelled]:
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return", as _chain_spelling_modules finds it; _RecordsNoModule, naming *obj*, for each if it finds none."""
+    spelled = _chain_spelling_modules(obj, names)
+    if spelled is None:
+        return dict.fromkeys(names, _RecordsNoModule(obj))
+    return spelled
 
-    A routine's is that of the callable _annotations_author gives for the end of its
-    chain, as _chain_end follows it. If that end is an object its class makes callable,
-    it is read as the __call__ its class resolves, from which inspect derives its
-    signature. A signature a wrapper carries does not change that: it records no module.
-    A class's is that of _constructor_spelling_modules.
+
+def _chain_spelling_modules(
+    obj: object, names: Collection[str]
+) -> Mapping[str, _ModuleOrUnspelled] | None:
+    """The module that spells each of *names* in the signature inspect reads for *obj*, a class or a routine; None if nothing on its chain spells an annotation or carries a signature.
+
+    That is where the end of the chain _chain_end follows from *obj* spells them, as
+    _end_spelling_modules finds it, whatever signature a link carries, since a signature
+    given to a wrapper of a callable that spells annotations is presumed derived from
+    them. If that end spells no annotation, the strings were given to a link, and it is
+    where _carried_signature_module finds the link given the signature of the first link
+    that carries one.
     """
-    end = _chain_end(obj)
+    spelled = _end_spelling_modules(_chain_end(obj), names)
+    if spelled is not None:
+        return spelled
+    carrier = _signed_link(obj)
+    if carrier is None:
+        return None
+    return dict.fromkeys(names, _carried_signature_module(carrier))
+
+
+def _signed_link(obj: object) -> object | None:
+    """The first link of the chain inspect follows from *obj*, as _chain_end follows it, whose __signature__ is an inspect.Signature; None if no link of it is."""
+    link = _chain_end(obj, stop=_carries_inspect_signature)
+    return link if _carries_inspect_signature(link) else None
+
+
+def _end_spelling_modules(
+    end: object, names: Collection[str]
+) -> Mapping[str, _ModuleOrUnspelled] | None:
+    """The module that spells each of *names* where *end*, the end of a chain, spells it; None if *end* spells no annotation.
+
+    A class spells them where _constructor_spelling_modules says. An object its class
+    makes callable spells them as the __call__ its class resolves does, from which
+    inspect derives its signature. A routine of a kind in _C_ROUTINE_KINDS spells none;
+    any other, in the module whose globals the callable _annotations_author gives for
+    it carries.
+    """
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
     if not _is_routine(end):
-        return _spelling_modules(type(end).__call__, names)
+        return _chain_spelling_modules(type(end).__call__, names)
+    if isinstance(end, _C_ROUTINE_KINDS):
+        return None
     return dict.fromkeys(names, _defining_module(_annotations_author(end)))
+
+
+def _carried_signature_module(carrier: object) -> _ModuleOrUnspelled:
+    """Where the link _signature_author gives for *carrier* is spelled, the module whose globals it carries if a def or lambda compiled it; _RecordsNoModule, naming that link, if it is neither; _MayBeCopied if that function wraps a link that carries a signature too, which its own may be a copy of."""
+    author = _signature_author(carrier)
+    if not isinstance(author, types.FunctionType):
+        return _RecordsNoModule(author)
+    if _signed_link(getattr(author, "__wrapped__", None)) is not None:
+        return _MayBeCopied(author)
+    return _defining_module(author)
+
+
+def _signature_author(carrier: object) -> object:
+    """The link that was given the signature *carrier* carries: *carrier* itself, unless the callable it records as __wrapped__ holds that very signature, as functools.wraps copies it, and then that callable's author in turn; the author of a bound method's function if the walk ends at a bound method, which forwards the signature of the function it binds."""
+    if not callable(carrier):
+        return carrier
+    author = inspect.unwrap(
+        carrier, stop=lambda link: not _holds_signature_of(link, getattr(link, "__wrapped__"))
+    )
+    if isinstance(author, types.MethodType):
+        return _signature_author(author.__func__)
+    return author
+
+
+def _holds_signature_of(wrapper: object, wrapped: object) -> bool:
+    """Whether *wrapper* holds *wrapped*'s signature, as functools.wraps copies it along with __dict__, by reference: the same __signature__ object; never by equality, since two links given equal signatures each can be spelled in two modules."""
+    return getattr(wrapper, "__signature__", None) is getattr(wrapped, "__signature__", _ABSENT)
 
 
 def _annotations_author(routine: object) -> object:
@@ -843,16 +963,16 @@ def _holds_annotations_of(wrapper: object, wrapped: object) -> bool:
 
 
 def _constructor_spelling_modules(
-    cls: type, names: Iterable[str]
-) -> dict[str, types.ModuleType]:
-    """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled.
+    cls: type, names: Collection[str]
+) -> Mapping[str, _ModuleOrUnspelled] | None:
+    """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled; None if _chain_spelling_modules finds none on that constructor's chain.
 
     That constructor is the __call__ *cls*'s metaclass resolves, if
     _metaclass_call_as_read gives one, which inspect reads before any __new__ or
     __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
     MRO that holds one, which may be a base defined in another module. It is spelled
-    where _spelling_modules spells the end of its chain, so a function the class body
-    assigns from another module, or that wraps one there as functools.wraps records
+    where _chain_spelling_modules spells the end of its chain, so a function the class
+    body assigns from another module, or that wraps one there as functools.wraps records
     one, is spelled in that other module. If the function whose annotations that end
     holds, as _annotations_author gives it, was compiled outside the class body and
     renamed into it, as the dataclass decorator generates an __init__ and
@@ -861,23 +981,24 @@ def _constructor_spelling_modules(
     class and assigned here, TypeError names *cls* and the function. A constructor
     defined in C, or one that wraps a callable defined in C, spells no annotation, so
     the class's is that of the class _signature_holder gives if *cls* carries a
-    signature, else the holder's; _signature_holder checks every class that carries a
-    signature before the constructor is read.
+    signature, else where _chain_spelling_modules finds the link given the signature
+    a link of that constructor's chain carries, if any does; _signature_holder checks
+    every class that carries a signature before the constructor is read.
     """
     signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
     if call is not None:
-        return _spelling_modules(call, names)
+        return _chain_spelling_modules(call, names)
     holder = _constructor_holder(cls)
-    end = _chain_end(_constructor_as_read(cls, holder))
-    if isinstance(end, _C_CONSTRUCTOR_KINDS):
-        spelling_class = holder if signature_holder is None else signature_holder
-        return dict.fromkeys(names, _defining_module(spelling_class))
+    constructor = _constructor_as_read(cls, holder)
+    end = _chain_end(constructor)
+    if signature_holder is not None and isinstance(end, _C_CONSTRUCTOR_KINDS):
+        return dict.fromkeys(names, _defining_module(signature_holder))
     author = _annotations_author(end)
     if _is_generated(author):
         _refuse_constructor_generated_for_another_class(cls, holder, author)
         return _generated_constructor_modules(holder, names)
-    return _spelling_modules(end, names)
+    return _chain_spelling_modules(constructor, names)
 
 
 def _refuse_constructor_generated_for_another_class(
@@ -1057,9 +1178,9 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
 
     If sys.modules holds another module under that name, as once another module of the
     same name has replaced it there, LookupError names *routine* and both modules. A
-    routine that carries no globals, as a routine CPython defines in C carries none,
-    records nothing to check its module by, so the one its __module__ names is looked up
-    unchecked.
+    routine that carries no globals, as a descriptor object that carries a signature
+    carries none, records nothing to check its module by, so the one its __module__
+    names is looked up unchecked.
     """
     namespace = getattr(routine, "__globals__", None)
     if namespace is None:
