@@ -48,6 +48,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
@@ -601,7 +602,7 @@ class TestRunLookupToolSurface:
             name="dispatch-run",
             status="completed",
             created_at="2026-04-01T10:00:00+00:00",
-            summary={"total_generation_kwh": 500.0},
+            summary=home_summary(total_generation_kwh=500.0),
         )
         storage = RunStorage(Database(db_path), tmp_path)
 
@@ -623,15 +624,12 @@ class TestRunLookupToolSurface:
             name="lrr-dispatch-run",
             status="completed",
             created_at="2026-04-01T11:00:00+00:00",
-            summary={"self_consumption_ratio": 0.55},
+            summary=home_summary(self_consumption_ratio=0.55),
         )
+        storage = RunStorage(Database(db_path), tmp_path)
 
-        result = dispatch_tool(
-            "list_recent_runs",
-            {"limit": 5},
-            tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)),
-        )
-        expected = list_recent_runs(5, Database(db_path))
+        result = dispatch_tool("list_recent_runs", {"limit": 5}, tool_context(tmp_path, storage=storage))
+        expected = list_recent_runs(5, storage)
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
@@ -647,13 +645,14 @@ class TestRunLookupToolSurface:
             name="lrr-zero-run",
             status="completed",
             created_at="2026-04-01T12:00:00+00:00",
-            summary={"self_consumption_ratio": 0.5},
+            summary=home_summary(self_consumption_ratio=0.5),
         )
+        storage = RunStorage(Database(db_path), tmp_path)
 
-        result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=RunStorage(Database(db_path), tmp_path)))
+        result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=storage))
 
         assert "error" not in result, f"Expected runs, not an error; got {result!r}"
-        assert result == list_recent_runs(0, Database(db_path))
+        assert result == list_recent_runs(0, storage)
 
     def test_end_to_end_get_run_results_tool_use_signal(
         self,
@@ -671,7 +670,7 @@ class TestRunLookupToolSurface:
             name="e2e-signal-run",
             status="completed",
             created_at="2026-05-01T08:00:00+00:00",
-            summary={"total_generation_kwh": summary_val},
+            summary=home_summary(total_generation_kwh=summary_val),
         )
 
         TOOL_ID = "toolu_grr_e2e_001"

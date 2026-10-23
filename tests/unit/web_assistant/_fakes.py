@@ -10,6 +10,7 @@ into the runs table.
 
 Usage::
 
+    from tests._run_summaries import home_summary
     from tests.unit.web_assistant._fakes import (
         install_fake_anthropic,
         make_end_turn_stream,
@@ -18,7 +19,7 @@ Usage::
     )
 
     seed_run(db_path, run_id="run-1", name="my-run",
-             created_at="2026-01-01T00:00:00+00:00", summary={})
+             created_at="2026-01-01T00:00:00+00:00", summary=home_summary(total_generation_kwh=987.65))
     anthropic_api = install_fake_anthropic(monkeypatch)
     anthropic_api.set_streams([
         make_tool_use_stream("toolu_1", "get_run_results", {"run_id_or_name": "run-1"}),
@@ -29,7 +30,6 @@ Usage::
     messages_with_tool_result = anthropic_api.calls[1]["messages"]
 """
 
-import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,7 +38,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from solar_challenge.fleet import FleetSummary
+from solar_challenge.home import SummaryStatistics
 from solar_challenge.web.database import Database, init_db
+from tests._run_summaries import summary_json
 
 
 class FakeAnthropic:
@@ -270,12 +273,12 @@ def seed_run(
     type: str = "home",
     status: str = "completed",
     created_at: str,
-    summary: dict[str, Any],
+    summary: SummaryStatistics | FleetSummary,
 ) -> None:
     """Insert a row into the runs table for testing read-only handlers.
 
-    Calls init_db (idempotent) to ensure the schema exists, then inserts
-    a minimal runs row with summary_json=json.dumps(summary).
+    Calls init_db (idempotent) to ensure the schema exists, then inserts a minimal
+    runs row whose summary_json is the text a save writes for *summary*.
     """
     init_db(db_path)
     with Database(Path(db_path)).transaction() as conn:
@@ -284,5 +287,5 @@ def seed_run(
             INSERT INTO runs (id, name, type, status, created_at, summary_json)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, name, type, status, created_at, json.dumps(summary)),
+            (run_id, name, type, status, created_at, summary_json(summary)),
         )

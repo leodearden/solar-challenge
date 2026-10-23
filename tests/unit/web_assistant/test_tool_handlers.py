@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
+import dataclasses
+import logging
 import time
 from datetime import date
 from pathlib import Path
@@ -11,7 +13,9 @@ import pytest
 
 pytest.importorskip("flask")
 from flask import Flask
+from flask.testing import FlaskClient
 
+from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
@@ -26,8 +30,11 @@ from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.storage import RunStorage
 
+from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
+from tests._web_runs import store_fleet_run
 from tests.unit.web_assistant._fakes import seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
 
@@ -225,7 +232,7 @@ class TestGetRunResults:
         seed_run leaves n_homes at the schema's default, 1.
         """
         db_path = tmp_path / "grr_test.db"
-        summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
+        summary = home_summary(total_generation_kwh=1234.5, self_consumption_ratio=0.62)
         seed_run(
             db_path,
             run_id="run-abc-123",
@@ -245,13 +252,22 @@ class TestGetRunResults:
             "status": "completed",
             "created_at": "2026-01-01T12:00:00+00:00",
             "n_homes": 1,
-            "summary": summary,
+            "summary": dataclasses.asdict(summary),
         }
+
+    def test_a_fleet_run_answers_the_field_tree_of_its_fleet_summary(self, storage: RunStorage) -> None:
+        """get_run_results of a saved fleet run answers its FleetSummary's fields, fleet_self_consumption_ratio among them."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+
+        result = get_run_results("fleet-run", storage)
+
+        assert result["summary"] == dataclasses.asdict(calculate_fleet_summary(fleet))
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
         db_path = tmp_path / "grr_name_test.db"
-        summary = {"self_sufficiency": 0.45}
+        summary = fleet_summary()
         seed_run(
             db_path,
             run_id="run-xyz-456",
@@ -283,7 +299,7 @@ class TestGetRunResults:
             name="known-run",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={},
+            summary=home_summary(),
         )
 
         try:
@@ -310,7 +326,7 @@ class TestGetRunResults:
             name="shared-run-name",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={"total_generation_kwh": 100.0},
+            summary=home_summary(total_generation_kwh=100.0),
         )
         # Newer run with same name seeded second
         seed_run(
@@ -319,7 +335,7 @@ class TestGetRunResults:
             name="shared-run-name",
             status="completed",
             created_at="2026-03-01T00:00:00+00:00",
-            summary={"total_generation_kwh": 200.0},
+            summary=home_summary(total_generation_kwh=200.0),
         )
 
         result = get_run_results("shared-run-name", _storage(db_path))
@@ -370,7 +386,7 @@ class TestGetRunResults:
 
 
 class TestListRecentRuns:
-    """Tests for list_recent_runs(limit, database) -> dict."""
+    """Tests for list_recent_runs(limit, storage) -> dict."""
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
@@ -383,10 +399,10 @@ class TestListRecentRuns:
                 name=f"run-name-{i}",
                 status="completed",
                 created_at=f"2026-01-{i + 1:02d}T12:00:00+00:00",
-                summary={"total_generation_kwh": float(i * 100)},
+                summary=home_summary(total_generation_kwh=float(i * 100)),
             )
 
-        result = list_recent_runs(3, Database(db_path))
+        result = list_recent_runs(3, _storage(db_path))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -412,10 +428,10 @@ class TestListRecentRuns:
             type="fleet",
             status="completed",
             created_at="2026-03-15T09:00:00+00:00",
-            summary={"self_consumption_ratio": 0.70},
+            summary=fleet_summary(fleet_self_consumption_ratio=0.70),
         )
 
-        result = list_recent_runs(10, Database(db_path))
+        result = list_recent_runs(10, _storage(db_path))
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -434,7 +450,7 @@ class TestListRecentRuns:
         init_db(db_path)
 
         try:
-            result = list_recent_runs(10, Database(db_path))
+            result = list_recent_runs(10, _storage(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -457,10 +473,10 @@ class TestListRecentRuns:
                 name=f"clamp-{i}",
                 status="completed",
                 created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00",
-                summary={},
+                summary=home_summary(),
             )
 
-        result = list_recent_runs(9999, Database(db_path))
+        result = list_recent_runs(9999, _storage(db_path))
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -476,11 +492,11 @@ class TestListRecentRuns:
             name="np-run",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={},
+            summary=home_summary(),
         )
 
         try:
-            result = list_recent_runs(0, Database(db_path))
+            result = list_recent_runs(0, _storage(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -506,7 +522,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, Database(db_path))
+            result = list_recent_runs(5, _storage(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -525,7 +541,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, Database(bad_path))
+            result = list_recent_runs(5, _storage(bad_path))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
@@ -537,6 +553,56 @@ class TestListRecentRuns:
         assert "error" in result, (
             f"Expected 'error' key for unreadable db_path; got {result}"
         )
+
+    def test_a_fleet_run_is_listed_with_the_figures_the_history_list_shows_for_it(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """B7: a fleet run is listed with its FleetSummary's generation and fleet_self_consumption_ratio, not None, as GET /api/history/runs lists it."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+        summary = calculate_fleet_summary(fleet)
+        assert summary.fleet_self_consumption_ratio == pytest.approx(0.25)
+
+        [entry] = list_recent_runs(10, storage)["runs"]
+        [row] = client.get("/api/history/runs").get_json()["runs"]
+
+        figures = (entry["total_generation_kwh"], entry["self_consumption_ratio"])
+        assert figures == (summary.total_generation_kwh, summary.fleet_self_consumption_ratio)
+        assert figures == (row["total_generation_kwh"], row["self_consumption_ratio"])
+
+    def test_a_run_whose_summary_does_not_decode_is_listed_without_figures_beside_the_others(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One damaged run neither fails the list nor hides the other runs' figures, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
+        db_path = tmp_path / "lrr_garbled.db"
+        seed_run(
+            db_path,
+            run_id="readable-run",
+            name="readable",
+            created_at="2026-01-02T00:00:00+00:00",
+            summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37),
+        )
+        seed_run(
+            db_path,
+            run_id="garbled-run",
+            name="garbled",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary=home_summary(),
+        )
+        with Database(db_path).transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        result = list_recent_runs(10, _storage(db_path))
+
+        assert "error" not in result, result
+        assert [
+            (entry["run_id"], entry["total_generation_kwh"], entry["self_consumption_ratio"])
+            for entry in result["runs"]
+        ] == [("readable-run", 987.65, 0.37), ("garbled-run", None, None)]
+        assert [record.levelno for record in caplog.records if "garbled-run" in record.getMessage()] == [
+            logging.WARNING
+        ]
 
 
 def _results_url_for_test(run_id: str) -> str:
