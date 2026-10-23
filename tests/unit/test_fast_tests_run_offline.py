@@ -6,7 +6,10 @@ reads in the test and in a child process that inherits its environment.
 
 The guard decides outcomes at teardown, so the scenarios run in a session of
 their own under a copy of tests/conftest.py. They need no session apiece, so
-they share one (tests/_scenario_session.py).
+they share one (tests/_scenario_session.py). The e2e suite's scenario runs in a
+session of its own that names e2e/, as the offline lane's e2e job names
+tests/e2e, because the root conftest's collect_ignore keeps e2e/ out of the
+shared session.
 """
 
 import subprocess
@@ -70,34 +73,54 @@ RUNS_A_ROOT_UNSEEDED = """
         CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
     """
 
-E2E_TEST_RUNS_A_ROOT_UNSEEDED = """
-    import pytest
-    from typer.testing import CliRunner
 
-    from solar_challenge.cli import app
-
-    pytestmark = pytest.mark.e2e
-
-
-    def test_runs_home_quick():
-        CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
-    """
-
-
-@pytest.mark.parametrize(
-    "module", ["test_runs_a_root_unseeded", "test_e2e_test_runs_a_root_unseeded"], ids=["unmarked", "e2e"]
-)
 def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_and_leaves_no_weather_cache_behind(
-    suite: pytest.Pytester, offline_scenarios: ScenarioSession, module: str
+    suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
     """CliRunner keeps the refused fetch's error in its result, so the test itself passes and only the guard can catch it."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes(module) == {"passed": 1, "errors": 1}
+    assert run.outcomes("test_runs_a_root_unseeded") == {"passed": 1, "errors": 1}
     run.result.stdout.fnmatch_lines(
-        [f"{module}.py::test_runs_home_quick reached the network ({urlsplit(PVGIS_API_URL).hostname}:443)*"]
+        [
+            "test_runs_a_root_unseeded.py::test_runs_home_quick reached the network "
+            f"({urlsplit(PVGIS_API_URL).hostname}:443)*"
+        ]
     )
     assert not (run.session_dir / DEFAULT_CACHE_DIR).exists()
+
+
+E2E_SUITE_TEST_LOOKS_UP_A_HOST = """
+    import socket
+
+
+    def test_looks_up_a_host_and_carries_on():
+        try:
+            socket.getaddrinfo("example.invalid", 443)
+        except OSError:
+            pass
+    """
+
+
+def test_a_fast_test_under_the_e2e_conftest_that_reaches_the_network_fails_naming_the_host(
+    suite: pytest.Pytester, project_root: Path, e2e_conftest: Path
+) -> None:
+    """Laid out as the lane's e2e job runs tests/e2e, the test swallows its lookup's error, so only the guard can catch it: nothing in the e2e conftest takes it out of the window."""
+    pytest.importorskip("flask")
+    suite.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+    suite.makepyfile(
+        **{
+            "e2e/conftest": e2e_conftest.read_text(encoding="utf-8"),
+            "e2e/test_looks_up_a_host": E2E_SUITE_TEST_LOOKS_UP_A_HOST,
+        }
+    )
+
+    result = suite.runpytest_subprocess("-p", "no:cacheprovider", "e2e")
+
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        ["*e2e/test_looks_up_a_host.py::test_looks_up_a_host_and_carries_on reached the network (example.invalid:443)*"]
+    )
 
 
 SUBMITS_A_HOME_JOB = """
@@ -341,7 +364,6 @@ def test_a_slow_test_reads_the_weather_cache_in_its_working_directory(
 
 SCENARIOS = {
     "test_runs_a_root_unseeded": RUNS_A_ROOT_UNSEEDED,
-    "test_e2e_test_runs_a_root_unseeded": E2E_TEST_RUNS_A_ROOT_UNSEEDED,
     "test_submits_a_home_job": SUBMITS_A_HOME_JOB,
     "fetches_and_carries_on": FETCHES_AND_CARRIES_ON,
     "test_runs_a_child_that_fetches": RUNS_A_CHILD_THAT_FETCHES,
