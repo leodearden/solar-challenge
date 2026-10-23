@@ -155,7 +155,7 @@ def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
 
 def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
     """Return the files of _dev_only_lane_suite_files and every module of the tests package they
-    import, transitively.
+    import, transitively. A pytest_plugins entry counts as an absolute import.
 
     Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
     helper the verify also imports is judged here, against the dev extra alone, not with the
@@ -223,14 +223,31 @@ def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Imp
             yield from _required_imports(ast.iter_child_nodes(node))
 
 
+def _pytest_plugins(tree: ast.Module) -> list[str]:
+    """Return the plugin names of *tree*'s module-level pytest_plugins assignments.
+
+    pytest imports each when it loads a conftest, test module or plugin that sets one.
+    """
+    names: list[str] = []
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in statement.targets
+        ):
+            value = ast.literal_eval(statement.value)
+            names.extend(value.split(",") if isinstance(value, str) else value)
+    return names
+
+
 def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, list[str]]]:
     """Yield (directory, dotted-name parts) for each module *source* may import.
 
     An absolute name resolves from *project_root* and a relative one from *source*'s package
-    directory. Imports count as _required_imports counts them. The last part of a from-import's
-    name may be an attribute of the module before it, not a module.
+    directory. Imports count as _required_imports counts them, and each pytest_plugins entry
+    counts as an absolute import. The last part of a from-import's name may be an attribute of
+    the module before it, not a module.
     """
-    for node in _required_imports([_parse(source)]):
+    tree = _parse(source)
+    for node in _required_imports([tree]):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield project_root, alias.name.split(".")
@@ -239,6 +256,8 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
+    for name in _pytest_plugins(tree):
+        yield project_root, name.split(".")
 
 
 def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
