@@ -2,12 +2,8 @@
 
 Verifies API submission, progress tracker appearance, completion, navigation
 to results, and stat cards.
-
-Note: test_simulation_completes_and_shows_view_results makes a real
-PVGIS API call and is marked slow.
 """
 
-import pytest
 from playwright.sync_api import Page, expect
 
 from tests.e2e._home_form import submit_two_day_run
@@ -63,20 +59,19 @@ def test_progress_tracker_appears_after_submit(
     ).to_be_visible()
 
 
-# -- Simulation completes and shows View Results (slow, real PVGIS) --------
+# -- Simulation completes and shows View Results ---------------------------
 
 
-@pytest.mark.slow
 def test_simulation_completes_and_shows_view_results(
     page: Page,
     live_server: str,
 ) -> None:
-    """'View Results' link appears within 120s (real PVGIS call)."""
+    """'View Results' link appears once the run's job completes."""
     page.goto(live_server + "/simulate/home")
     response = submit_two_day_run(page)
     assert response.status == 201, response.text()
 
-    # Wait for "View Results" link to appear (up to 120s for PVGIS)
+    # Wait for "View Results" link to appear
     view_results = page.locator("a", has_text="View Results")
     expect(view_results).to_be_visible(timeout=120_000)
 
@@ -84,7 +79,6 @@ def test_simulation_completes_and_shows_view_results(
 # -- View Results link navigates to results page ---------------------------
 
 
-@pytest.mark.slow
 def test_view_results_link_navigates_to_results_page(
     page: Page,
     live_server: str,

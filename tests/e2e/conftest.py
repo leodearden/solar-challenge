@@ -3,8 +3,9 @@
 Provides a live Flask server running in a background thread,
 configures Playwright's base_url so tests can use relative paths, and
 gives tests the server's dashboard macros, to compare a page with
-what a macro draws. A test module chooses the weather the live
-server's jobs simulate on by overriding live_server_weather_in_place,
+what a macro draws. The live server's jobs simulate on a synthetic
+TMY at each location preset the dashboard offers; a test module
+chooses other weather by overriding live_server_weather_in_place,
 which the app is built after.
 
 Includes data-seeding fixtures, which save completed runs through the
@@ -59,13 +60,16 @@ from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.shared import get_job_manager
 from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
+from tests._synthetic_weather import synthetic_tmy
 from tests._web_app import build_test_app, run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -87,12 +91,20 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def live_server_weather_in_place() -> None:
-    """Put in place the weather the live server's jobs simulate on; this one leaves default_weather() as it is.
+def live_server_weather_in_place(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Put in place the weather the live server's jobs simulate on: synthetic_tmy() at each location preset, in a weather cache that CACHE_DIR_VARIABLE names while _e2e_app builds the app.
 
-    A test module overrides it to install its own. _e2e_app requests it, because create_app binds
-    default_weather() when it builds the app.
+    create_app binds that cache when it builds the app, so the jobs read it all session, whatever each test's
+    offline window later sets the variable to. The TMY is a whole year, which a heat pump's job needs. A test
+    module overrides this fixture to install its own weather.
     """
+    cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("e2e-weather"))
+    tmy = synthetic_tmy()
+    for location in LOCATION_PRESETS.values():
+        cache.put(tmy, "tmy", location)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(CACHE_DIR_VARIABLE, str(cache.cache_dir))
+        yield
 
 
 @pytest.fixture(scope="session")

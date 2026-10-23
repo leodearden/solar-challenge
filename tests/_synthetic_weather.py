@@ -6,16 +6,19 @@ with its irradiance scaled, so a test can put a sunny day next to a sunless one.
 ``sunless_weather`` is one day with no sun at a constant air temperature, on any date.
 Both index their hours from midnight of the day they are given, in Europe/London, the
 timezone of the simulated demand. ``weather_for`` gives such a frame to simulate_home as
-one home's weather.
+one home's weather. ``synthetic_tmy`` is a whole TMY year of clear June days, in the
+shape PvgisTmy fetches from PVGIS, for seeding a WeatherCache.
 
 Usage::
 
-    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
+    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, synthetic_tmy, weather_for
 
     sunny_then_sunless = synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(1.0, 0.0))
     results = simulate_home(config, start, end, weather=weather_for(config, sunny_then_sunless))
 
     no_pv_in_january = sunless_weather("2024-01-15", temp_air=8.0)
+
+    WeatherCache(cache_dir=cache_dir).put(synthetic_tmy(), "tmy", location)
 """
 
 from __future__ import annotations
@@ -26,12 +29,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from solar_challenge.weather import PrefetchedWeather
+from solar_challenge.weather import TMY_HOURS, PrefetchedWeather
 
 if TYPE_CHECKING:
     from solar_challenge.home import HomeConfig
 
 _HOURS_PER_DAY = 24
+_TMY_YEAR_START = "1990-01-01"
 _TIMEZONE = "Europe/London"
 _IRRADIANCE_COLUMNS = ["ghi", "dni", "dhi"]
 
@@ -69,11 +73,18 @@ def synthetic_june_weather(
     Each day is the clear June day with ghi, dni and dhi multiplied by that day's scale:
     1.0 keeps the sun as is, 0.0 removes it. Air temperature and wind speed are never scaled.
     """
-    days = len(irradiance_scale_per_day)
-    hour_scales = np.repeat(np.asarray(irradiance_scale_per_day, dtype=float), _HOURS_PER_DAY)
-    clear_days = {column: np.tile(np.asarray(hours, dtype=float), days) for column, hours in _CLEAR_JUNE_DAY.items()}
-    scaled_irradiance = {column: clear_days[column] * hour_scales for column in _IRRADIANCE_COLUMNS}
-    return pd.DataFrame(clear_days | scaled_irradiance, index=_hourly_index(first_day, days))
+    return pd.DataFrame(
+        _clear_june_days(irradiance_scale_per_day),
+        index=_hourly_index(first_day, days=len(irradiance_scale_per_day)),
+    )
+
+
+def synthetic_tmy() -> pd.DataFrame:
+    """A TMY year of clear June days, shaped as PVGIS's: TMY_HOURS hourly rows from 1990-01-01 00:00 UTC, each UTC day the clear June day."""
+    return pd.DataFrame(
+        _clear_june_days((1.0,) * (TMY_HOURS // _HOURS_PER_DAY)),
+        index=pd.date_range(_TMY_YEAR_START, periods=TMY_HOURS, freq="h", tz="UTC"),
+    )
 
 
 def sunless_weather(day: str | pd.Timestamp, *, temp_air: float) -> pd.DataFrame:
@@ -91,6 +102,15 @@ def weather_for(home: HomeConfig, frame: pd.DataFrame) -> PrefetchedWeather:
     It is held at the home's location alone, so a run of a home elsewhere is refused, naming both locations.
     """
     return PrefetchedWeather({home.location: frame})
+
+
+def _clear_june_days(irradiance_scale_per_day: Sequence[float]) -> dict[str, np.ndarray]:
+    """The clear June day's hourly values by column, for one day per entry of *irradiance_scale_per_day*, each day's ghi, dni and dhi multiplied by its scale."""
+    days = len(irradiance_scale_per_day)
+    hour_scales = np.repeat(np.asarray(irradiance_scale_per_day, dtype=float), _HOURS_PER_DAY)
+    clear_days = {column: np.tile(np.asarray(hours, dtype=float), days) for column, hours in _CLEAR_JUNE_DAY.items()}
+    scaled_irradiance = {column: clear_days[column] * hour_scales for column in _IRRADIANCE_COLUMNS}
+    return clear_days | scaled_irradiance
 
 
 def _hourly_index(first_day: str | pd.Timestamp, days: int) -> pd.DatetimeIndex:

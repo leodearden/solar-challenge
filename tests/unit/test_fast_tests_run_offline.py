@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Pins that tests/conftest.py runs every test not marked slow or e2e offline, with every fixture it sets up or tears down.
+"""Pins that tests/conftest.py runs every test not marked slow offline, the e2e suite's included, with every fixture it sets up or tears down.
 
 Each such test also runs on a weather cache of its own, which default_weather()
 reads in the test and in a child process that inherits its environment.
@@ -70,16 +70,32 @@ RUNS_A_ROOT_UNSEEDED = """
         CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
     """
 
+E2E_TEST_RUNS_A_ROOT_UNSEEDED = """
+    import pytest
+    from typer.testing import CliRunner
 
+    from solar_challenge.cli import app
+
+    pytestmark = pytest.mark.e2e
+
+
+    def test_runs_home_quick():
+        CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
+    """
+
+
+@pytest.mark.parametrize(
+    "module", ["test_runs_a_root_unseeded", "test_e2e_test_runs_a_root_unseeded"], ids=["unmarked", "e2e"]
+)
 def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_and_leaves_no_weather_cache_behind(
-    suite: pytest.Pytester, offline_scenarios: ScenarioSession
+    suite: pytest.Pytester, offline_scenarios: ScenarioSession, module: str
 ) -> None:
     """CliRunner keeps the refused fetch's error in its result, so the test itself passes and only the guard can catch it."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes("test_runs_a_root_unseeded") == {"passed": 1, "errors": 1}
+    assert run.outcomes(module) == {"passed": 1, "errors": 1}
     run.result.stdout.fnmatch_lines(
-        [f"*test_runs_home_quick reached the network ({urlsplit(PVGIS_API_URL).hostname}:443)*"]
+        [f"{module}.py::test_runs_home_quick reached the network ({urlsplit(PVGIS_API_URL).hostname}:443)*"]
     )
     assert not (run.session_dir / DEFAULT_CACHE_DIR).exists()
 
@@ -285,7 +301,7 @@ def test_a_slow_test_that_requests_weather_cache_errors_at_setup(
     run.result.stdout.fnmatch_lines(["*test_requests_weather_cache_while_marked_slow is marked slow*"])
 
 
-SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE = """
+SLOW_READS_ITS_WORKING_DIRECTORY_CACHE = """
     import pandas as pd
     import pytest
 
@@ -311,27 +327,21 @@ SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE = """
         pd.testing.assert_frame_equal(
             default_weather().get(Location.bristol()), synthetic_june_weather("2024-06-21"), check_exact=True
         )
-
-
-    @pytest.mark.e2e
-    def test_an_e2e_test_reads_bristols_tmy():
-        pd.testing.assert_frame_equal(
-            default_weather().get(Location.bristol()), synthetic_june_weather("2024-06-21"), check_exact=True
-        )
     """
 
 
-def test_slow_and_e2e_tests_read_the_weather_cache_in_their_working_directory(
+def test_a_slow_test_reads_the_weather_cache_in_its_working_directory(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
-    """Neither is guarded, so each reads the cache its working directory holds, not an empty one of its own, even after a fast test's window has closed."""
+    """It is not guarded, so it reads the cache its working directory holds, not an empty one of its own, even after a fast test's window has closed."""
     run = offline_scenarios.run_in(suite)
 
-    assert run.outcomes("test_slow_and_e2e_read_their_working_directory_cache") == {"passed": 3}
+    assert run.outcomes("test_slow_reads_its_working_directory_cache") == {"passed": 2}
 
 
 SCENARIOS = {
     "test_runs_a_root_unseeded": RUNS_A_ROOT_UNSEEDED,
+    "test_e2e_test_runs_a_root_unseeded": E2E_TEST_RUNS_A_ROOT_UNSEEDED,
     "test_submits_a_home_job": SUBMITS_A_HOME_JOB,
     "fetches_and_carries_on": FETCHES_AND_CARRIES_ON,
     "test_runs_a_child_that_fetches": RUNS_A_CHILD_THAT_FETCHES,
@@ -340,7 +350,7 @@ SCENARIOS = {
     "test_module_fixture_passes_its_provider": MODULE_FIXTURE_PASSES_ITS_PROVIDER,
     "test_cache_directory_cannot_be_removed": CACHE_DIRECTORY_CANNOT_BE_REMOVED,
     "test_slow_requests_weather_cache": SLOW_REQUESTS_WEATHER_CACHE,
-    "test_slow_and_e2e_read_their_working_directory_cache": SLOW_AND_E2E_READ_THEIR_WORKING_DIRECTORY_CACHE,
+    "test_slow_reads_its_working_directory_cache": SLOW_READS_ITS_WORKING_DIRECTORY_CACHE,
 }
 
 

@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests._synthetic_weather import sunless_weather, synthetic_june_weather
+from solar_challenge.weather import TMY_HOURS
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, synthetic_tmy
 
 
 def test_a_sunless_day_is_dark_every_hour_at_the_given_air_temperature() -> None:
@@ -74,10 +75,20 @@ def test_a_days_scale_multiplies_its_irradiance_and_leaves_air_temperature_and_w
     )
 
 
+def test_a_synthetic_tmy_is_a_pvgis_shaped_year_whose_every_utc_day_is_the_clear_june_day() -> None:
+    clear_june_day = synthetic_june_weather("2024-06-21").to_numpy()
+
+    tmy = synthetic_tmy()
+
+    pd.testing.assert_index_equal(tmy.index, pd.date_range("1990-01-01", periods=TMY_HOURS, freq="h", tz="UTC"))
+    for _, day in tmy.groupby(tmy.index.date):
+        np.testing.assert_array_equal(day.to_numpy(), clear_june_day)
+
+
 @pytest.mark.parametrize(
     "weather",
-    [synthetic_june_weather("2024-06-21"), sunless_weather("2024-06-21", temp_air=12.0)],
-    ids=["clear-june", "sunless"],
+    [synthetic_june_weather("2024-06-21"), sunless_weather("2024-06-21", temp_air=12.0), synthetic_tmy()],
+    ids=["clear-june", "sunless", "tmy"],
 )
 def test_every_profile_carries_the_columns_the_pv_model_reads(weather: pd.DataFrame) -> None:
     """pvlib's ModelChain silently runs a missing temp_air at 20 °C and a missing wind_speed at 0 m/s, so a profile that loses a column fails nowhere else."""
