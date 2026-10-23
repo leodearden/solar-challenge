@@ -224,7 +224,7 @@ override), and `householder_bill` emits a `UserWarning`.  The CBS revenue follow
 the same split (§4), so the cost-recovery solve's rate base is the own-use these
 bills charge (§5).
 
-**[FIN] override example** (`TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
+**[FIN] override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
 3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail and effective import
 rate 23 p/kWh):
 
@@ -249,7 +249,7 @@ self_consumption_fraction = 3,400 / 5,775 = 0.589  (rendered 58.9%)
 Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
 15 × 4,042.5 / 100 = £606.375, outlay £866.64, saving £184.41.
 
-**Untariffed override example** (`TestOverrideExactValues`; 4,000 kWh generation,
+**Untariffed override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 4,000 kWh generation,
 3,400 kWh demand, 1,200 kWh physics import at £0 with no tariff configured,
 override 0.70, own-use 15 p/kWh, retail 23 p/kWh):
 
@@ -373,7 +373,7 @@ When `grid_services_income_per_kw_per_year_gbp=0.0` and `export_revenue=0`
 fleet_revenue_gbp = own_use_rate × fleet_billed_own_use / 100
 ```
 
-This identity is hard-asserted in `TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
+This identity is hard-asserted in `tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
 
 ### Grid-charge energy is householder import, not a CBS outgoing
 
@@ -455,7 +455,7 @@ The solver uses this affine structure to avoid re-simulating for each trial rate
 After the solve, a separate age-0 fleet simulation provides per-home granularity
 for the `BillDistribution` (representative median-outlay home, min/mean/median/max).
 
-**[FIN] override solve** (`TestOverrideOwnUseCappedAtDemand`; the §7.2 anchor fleet
+**[FIN] override solve** (`tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand`; the §7.2 anchor fleet
 and finance with `self_consumption_override` 0.70: 3,400 kWh demand, 5,775 kWh
 generation, no SEG, no grid services).  The anchor's 5,000 kWh fleet caps at the same
 3,400 kWh, `min(0.70 × 5,000, 3,400)`, so both fleets solve to one rate.  Carry `r*`
@@ -472,7 +472,7 @@ bills collect        = 100 × 3,400 × 7.190096 / 100         = £24,446.33/yr  
 
 On basis C the same anchor solves at 12.2232 p (§7.4).  The bills collect exactly the
 required revenue, so they fund the £27 floor the solve reports
-(`test_surplus_is_what_the_bills_fund`).  The representative home's bill (§3):
+(`tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand::test_surplus_is_what_the_bills_fund`).  The representative home's bill (§3):
 
 ```
 own_use_payment_gbp = 7.190096 × 3,400 / 100         = £244.4633/yr
@@ -515,7 +515,7 @@ raises `s0` (the surplus deficit at r = 0), which raises `r*` (to compensate),
 which raises `own_use_payment_gbp` per home, which raises `total_outlay_gbp`.
 
 This **H2 monotonicity** is exact by the affine solve algebra.  It is
-hard-asserted in `TestStructuralInvariants::test_h2_capex_monotone_on_fin_fleet`.
+hard-asserted in `tests/integration/test_cost_recovery_calibration.py::TestStructuralInvariants::test_h2_capex_monotone_on_fin_fleet`.
 
 **[FIN] example** (100 homes × 5.5 kWp + 5 kWh, grant = £250,000):
 
@@ -537,8 +537,8 @@ floor_total  = 100 × £27        = £2,700/yr
 
 ## 7. Worked No-Flex [FEAS] Reconciliation (Corrected Premise)
 
-Source: calibration anchor from `TestNoFlexAnchorReconciliation::test_no_flex_solve_report`
-(live run: `tests/integration/test_cost_recovery_calibration.py`).
+Source: calibration anchor from the live run of
+`tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_solve_report`.
 
 ### 7.1 Corrected False Premise
 
@@ -679,9 +679,9 @@ raise `r*`, not lower it.
 **The key structural result is exact.**  At binding = 'floor' the closed-form affine solve
 returns `net_surplus_per_home_per_year_gbp == floor` to float ε, regardless of the rate
 value (£27.00 at the [FIN] anchor).  It is hard-asserted (to within 1e-6) as H1 in
-`TestStructuralInvariants::test_h1_surplus_equals_floor` (£50 floor) and in
-`TestArbitrageBasisCReconciliation::test_b_solve_binds_floor_grid_charge` (£27 floor);
-the [FIN] anchor test, `test_no_flex_solve_report`, prints its surplus and does not
+`tests/integration/test_cost_recovery_calibration.py::TestStructuralInvariants::test_h1_surplus_equals_floor` (£50 floor) and in
+`tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation::test_b_solve_binds_floor_grid_charge` (£27 floor);
+the [FIN] anchor test, `tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_solve_report`, prints its surplus and does not
 assert it.  The printed rate (12.22 p) and saving (£226) are live, code-authoritative
 figures reported for transparency; no test pins them to specific digits.
 
@@ -693,7 +693,7 @@ figures reported for transparency; no test pins them to specific digits.
 | No-flex CBS-revenue identity | **HARD asserted** | By construction (grid_services=0, SEG=0) |
 | `0 ≤ r* ≤ retail` | **HARD asserted** | Valid clamped range |
 | H1: `surplus == floor` (interior regime) | **HARD asserted** | Exact by the affine solve algebra |
-| The bills fund the solve's surplus: n × own-use payment, less opex and the mean debt service (§7.4), per home | **HARD asserted** | On the anchor and under the 0.70 override (`test_surplus_is_what_the_bills_fund`): the rate base is the own-use the bills charge (§5) |
+| The bills fund the solve's surplus: n × own-use payment, less opex and the mean debt service (§7.4), per home | **HARD asserted** | On the anchor and under the 0.70 override (`tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_surplus_is_what_the_bills_fund` and `tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand::test_surplus_is_what_the_bills_fund`): the rate base is the own-use the bills charge (§5) |
 | H2: capex → rate + outlay monotone | **HARD asserted** | Exact by affine algebra |
 | flex → strictly lower rate | **HARD asserted** | Monotone by affine algebra |
 | θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact; covenant floor achievable |
@@ -702,7 +702,7 @@ figures reported for transparency; no test pins them to specific digits.
 
 ### 7.6 Why the Real-Physics Column Is Not Comparable with the Anchor
 
-Source: `TestPhysicsReconciliationColumn::test_physics_path_reported`
+Source: `tests/integration/test_cost_recovery_calibration.py::TestPhysicsReconciliationColumn::test_physics_path_reported`
 (`@pytest.mark.slow`; real PVGIS weather), on the fleet
 `tests/_fin_calibration.py::make_physics_column_scenario` builds.
 
@@ -721,7 +721,7 @@ anchor's (§7.3), for three reasons:
   `2 × (5.5 × 1,000 + 1,000 + 5 × 250) = £15,500`, is below the £250,000 [FIN] grant, so
   financed capex, debt and equity are all zero (§6).  No debt service enters its solve,
   DSCR is `inf` and the equity IRR is `nan`, where the anchor's 100 homes finance
-  £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
+  £525,000 and carry £131,250 of debt (§6, §7.4).  `tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises` asserts
   this premise in the fast suite.
 - **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
   degradation and battery fade (§4, *Battery ageing*) lower its later-year own-use.
@@ -760,7 +760,7 @@ r*(flex) = r*(no-flex) − grid_services_income / (fleet_billed_own_use / 100)  
 ```
 
 This directional property is hard-asserted in
-`TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
+`tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
 
 ### 8.2 TOU Arbitrage / Time-Shift (Endogenous Physics) — Basis C
 
@@ -781,10 +781,10 @@ So the CBS neither bills nor pays for grid-charged energy (§4) and bears only t
 battery round-trip loss, absorbed into the solved rate.  The solved rate therefore
 moves with arbitrage only through basis-C own-use (`fleet_billed_own_use` in `project_multi_year`).
 
-Gates: `TestArbitrageBasisCReconciliation` pins the basis (`fleet_billed_own_use` is basis C on a
-grid-charging fleet, task-84 §6), and `TestGridChargeEnergyPaidOnce` pins that each
+Gates: `tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation` pins the basis (`fleet_billed_own_use` is basis C on a
+grid-charging fleet, task-84 §6), and `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` pins that each
 grid-charged kWh is paid once, on householder import.
-`TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
+`tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
 direction on a synthetic arbitrage fleet whose basis-C own-use is higher than the
 flat-rate fleet's (2,400 vs 2,000 kWh/home), so it earns more own-use revenue and
 solves at a lower rate.
