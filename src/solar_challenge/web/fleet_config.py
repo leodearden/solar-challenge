@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.number_fields import (
+from solar_challenge.number_fields import (
     as_finite_float,
     as_whole_number_within,
 )
@@ -37,7 +37,7 @@ def read_fleet_size(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
             naming *field* and the value sent.
     """
     return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
@@ -52,7 +52,7 @@ def read_fleet_seed(value: Any, field: str) -> int:
     """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
             naming *field* and the value sent.
     """
     return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
@@ -62,7 +62,7 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list
     """Read *counts*, each count of the *pool_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+        ValueError: From :func:`~solar_challenge.number_fields.as_whole_number_within`,
             naming a count's field and the value sent; or, when the counts total more than
             MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
             *pool_field* and the total.
@@ -143,7 +143,7 @@ def sample_distribution(
 
     Raises:
         ValueError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_whole_number_within`), params are
+            :func:`~solar_challenge.number_fields.as_whole_number_within`), params are
             not a dict (see :func:`_require_dict`), :func:`distribution_grammar_spec`
             refuses the distribution, naming type or the field under ``params``, params
             leave out what the type is drawn from (see
@@ -349,7 +349,7 @@ def _parse_component_distribution(
     Its distribution is what *data* holds at *primary_field*: a distribution (see
     :func:`_is_distribution`), read by :func:`distribution_grammar_spec`, or a fixed value
     (see :func:`_is_fixed_value`), read by
-    :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
+    :func:`~solar_challenge.number_fields.as_finite_float`.  A mapping without a type
     passes as given, and an absent or null field as an empty mapping, for config.py's
     grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
 
@@ -414,7 +414,7 @@ def _other_setting(value: object, field: str) -> object:
 
     Raises:
         ValueError: If :func:`distribution_grammar_spec` or
-            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses *value*; the
+            :func:`~solar_challenge.number_fields.as_finite_float` refuses *value*; the
             error names its field under *field* and what was sent.
     """
     if _is_distribution(value):
@@ -508,7 +508,7 @@ def distribution_grammar_spec(
 
     Raises:
         ValueError: For a type the editor does not offer, a parameter
-            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses, or rows
+            :func:`~solar_challenge.number_fields.as_finite_float` refuses, or rows
             :func:`_rows_spec` refuses; each error names its field.
     """
     dist_type = distribution.get("type")
@@ -566,7 +566,7 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     value, which the grammar spells as a number or as a fixed distribution, and which the
     form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
     or shuffled_pool rows.  A shuffled_pool's counts are read by :func:`read_pool_counts`,
-    and any other number by :func:`~solar_challenge.web.number_fields.as_finite_float`, as
+    and any other number by :func:`~solar_challenge.number_fields.as_finite_float`, as
     the form's conversion reads them.
 
     Raises:
@@ -607,11 +607,11 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
 
 
 def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
-    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.web.number_fields.as_finite_float`, a missing one as None."""
+    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.number_fields.as_finite_float`, a missing one as None."""
     return {key: as_finite_float(spec.get(key), f"{path}.{key}") for key in keys}
 
 
 def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
-    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.web.number_fields.as_finite_float`."""
+    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.number_fields.as_finite_float`."""
     return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
 

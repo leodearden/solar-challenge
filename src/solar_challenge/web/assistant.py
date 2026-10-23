@@ -29,6 +29,7 @@ from flask import Blueprint, Response, current_app, jsonify, render_template, re
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -38,7 +39,6 @@ from solar_challenge.validation import (
 from solar_challenge.web.database import Database, get_chat_history, save_chat_message
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.number_fields import as_finite_float_within, as_whole_number
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (

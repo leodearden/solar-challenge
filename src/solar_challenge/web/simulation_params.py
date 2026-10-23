@@ -18,15 +18,15 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.number_fields import (
+from solar_challenge.number_fields import (
     as_finite_float,
     as_finite_float_within,
     as_whole_number,
     as_whole_number_within,
 )
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
     require_json_object,

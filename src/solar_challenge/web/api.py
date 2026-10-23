@@ -21,6 +21,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context, ur
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.number_fields import as_finite_float, as_whole_number_within
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
@@ -35,7 +36,6 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.jobs import JobEvent, JobEventType, JobStatus
-from solar_challenge.web.number_fields import as_finite_float, as_whole_number_within
 from solar_challenge.web.presets import (
     PresetNameTaken,
     SavedPresetUnreadable,
