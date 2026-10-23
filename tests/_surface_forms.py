@@ -116,10 +116,11 @@ def member_forms(cls: type) -> dict[str, str]:
     declares come first, in annotation order, then the other names it defines, in
     class-body order. A ClassVar annotation declares a class variable, not an instance
     attribute; a string annotation is read as named_classes reads one, so a name its
-    module does not bind raises NameError, and a module another of the same name has
-    replaced in sys.modules raises LookupError. A public member that no member rule
-    spells and that is a routine whose signature inspect cannot read, as surface_form
-    describes one, raises TypeError naming *cls*, the member and its kind.
+    module does not bind raises NameError, a module inspect reads no source for raises
+    TypeError, and a module another of the same name has replaced in sys.modules raises
+    LookupError. A public member that no member rule spells and that is a routine whose
+    signature inspect cannot read, as surface_form describes one, raises TypeError naming
+    *cls*, the member and its kind.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -136,7 +137,9 @@ def named_classes(obj: object) -> set[type]:
     annotation or a forward reference names the class its name is bound to in the module
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
-    NameError. A routine is spelled in the module whose globals it carries, whatever
+    NameError. A string read in a module inspect reads no source for, such as a built-in
+    or extension module, which has no such block to read, raises TypeError naming it and
+    that module. A routine is spelled in the module whose globals it carries, whatever
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries, but a wrapper that is no partial and
@@ -1274,7 +1277,14 @@ def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
 
 
 def _evaluated(annotation: str, module: types.ModuleType) -> object:
-    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them."""
+    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; TypeError naming both if inspect reads no source for *module*, which then has no such block to read."""
+    if not _has_source(module):
+        raise TypeError(
+            f"The string annotation {annotation!r} is read in the module {module.__name__!r}, "
+            "for which inspect reads no source, as for a built-in or extension module, so no "
+            "`if TYPE_CHECKING:` import there can be read: make the name private, or annotate "
+            "with the class, not a string"
+        )
     namespace = dict(vars(module))
     exec(_type_checking_imports(module), namespace)
     return eval(annotation, namespace)
@@ -1313,6 +1323,16 @@ def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
                     if isinstance(statement, (ast.Import, ast.ImportFrom))
                 ]
     return compile(ast.Module(body=imports, type_ignores=[]), module.__name__, "exec")
+
+
+@_cached_while_alive
+def _has_source(module: types.ModuleType) -> bool:
+    """Whether inspect reads a source for *module*: not for a built-in or extension module, nor for one with no file, as a module types.ModuleType makes has none."""
+    try:
+        inspect.getsource(module)
+    except (OSError, TypeError):
+        return False
+    return True
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
