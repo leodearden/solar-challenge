@@ -380,3 +380,20 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
     assert _dangling(project, _pointers(project, [naming])) == [
         f"src/pkg/other.py:1: test_config: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
+
+
+def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path) -> None:
+    using = _write_source(
+        project,
+        "pipeline.yaml",
+        "test_command: pytest\n"
+        "jobs:\n"
+        "  - name: lint\n"
+        "    test_timeout: 60  # test_timeout bounds the job\n",
+    )
+    naming = _write_source(project, "other.yaml", "# Set test_command first.\nname: lint\n")
+
+    assert _pointers(project, [using]) == []
+    assert _dangling(project, _pointers(project, [naming])) == [
+        f"other.yaml:1: test_command: {_NAMED_WITHOUT_ITS_NODE_ID}"
+    ]
