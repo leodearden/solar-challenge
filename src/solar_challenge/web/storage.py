@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeVar, get_args
+from typing import Any, Literal, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
@@ -135,6 +135,33 @@ def _decoded_or_empty(text: str | None) -> Any:
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
     return None if row is None else RunRecord(**dict(row))
+
+
+@dataclass(frozen=True)
+class RunHeadline:
+    """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed."""
+
+    generation_kwh: float
+    self_consumption_ratio: float
+
+
+def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
+    """The headline of the run whose summary is *summary*, a home run's or a fleet run's.
+
+    It is the one place the web maps a fleet summary's names, such as fleet_self_consumption_ratio,
+    to a run list's (D-S19-8 in docs/prds/run-store-one-owner.md).
+    """
+    match summary:
+        case SummaryStatistics():
+            return RunHeadline(
+                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.self_consumption_ratio
+            )
+        case FleetSummary():
+            return RunHeadline(
+                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
+            )
+        case _:
+            assert_never(summary)
 
 
 RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
