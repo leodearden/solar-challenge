@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.number_fields, the package's number readers."""
 
+import dataclasses
 import json
+import math
 import subprocess
 import sys
 
@@ -9,6 +11,11 @@ import pytest
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
+    FRACTION,
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    Interval,
     as_finite_float,
     as_finite_float_within,
     as_whole_number,
@@ -44,6 +51,117 @@ def test_importing_the_module_loads_only_errors_and_whole_numbers_from_the_packa
         "solar_challenge.number_fields",
         "solar_challenge.whole_numbers",
     ]
+
+
+class TestInterval:
+    """An Interval is a frozen value: it admits the finite numbers inside its bounds, and its str() phrases them for a refusal."""
+
+    @pytest.mark.parametrize(
+        ("interval", "text"),
+        [
+            pytest.param(Interval(), "", id="unbounded"),
+            pytest.param(POSITIVE, "greater than 0", id="positive"),
+            pytest.param(NON_NEGATIVE, "at least 0", id="non-negative"),
+            pytest.param(FRACTION, "greater than 0 and at most 1", id="fraction"),
+            pytest.param(UNIT_INTERVAL, "between 0 and 1", id="unit-interval"),
+            pytest.param(Interval(0, 360), "between 0 and 360", id="closed"),
+            pytest.param(Interval(0, 1, high_open=True), "at least 0 and less than 1", id="open-above"),
+            pytest.param(
+                Interval(-1, 0, low_open=True, high_open=True),
+                "greater than -1 and less than 0",
+                id="open-at-both-ends",
+            ),
+            pytest.param(Interval(-500), "at least -500", id="low-bound-only"),
+            pytest.param(Interval(high=23), "at most 23", id="high-bound-only"),
+            pytest.param(Interval(high=0, high_open=True), "less than 0", id="open-high-bound-only"),
+        ],
+    )
+    def test_an_interval_phrases_its_bounds(self, interval: Interval, text: str) -> None:
+        """A closed interval with two finite bounds reads "between", any other names each finite bound it has, and one with neither reads empty."""
+        assert str(interval) == text
+
+    @pytest.mark.parametrize(
+        ("interval", "text"),
+        [
+            pytest.param(Interval(0.5, 20), "between 0.5 and 20", id="fraction-and-int"),
+            pytest.param(Interval(0.0, 1.0), "between 0.0 and 1.0", id="integral-floats"),
+            pytest.param(
+                Interval(-(2**53 - 1), 2**53 - 1),
+                "between -9007199254740991 and 9007199254740991",
+                id="ints-beyond-six-digits",
+            ),
+        ],
+    )
+    def test_a_bound_prints_as_the_number_given(self, interval: Interval, text: str) -> None:
+        """Each bound prints as str() prints it, so an integral float keeps its .0 and a large int prints in full."""
+        assert str(interval) == text
+
+    @pytest.mark.parametrize(
+        ("interval", "number"),
+        [
+            pytest.param(POSITIVE, 5e-324, id="positive-smallest-float"),
+            pytest.param(Interval(), -1e308, id="unbounded-large-negative"),
+            pytest.param(Interval(), 10**400, id="unbounded-int-too-large-for-a-float"),
+            pytest.param(Interval(0, 360), 0, id="closed-low-bound"),
+            pytest.param(Interval(0, 360), 360, id="closed-high-bound"),
+            pytest.param(Interval(0, 1, high_open=True), 0, id="open-above-low-bound"),
+            pytest.param(FRACTION, 1, id="fraction-high-bound"),
+        ],
+    )
+    def test_an_interval_admits_a_finite_number_inside_its_bounds(
+        self, interval: Interval, number: float
+    ) -> None:
+        """A closed bound admits itself, and an int too large for a float is compared, not converted."""
+        assert interval.admits(number) is True
+
+    @pytest.mark.parametrize(
+        ("interval", "number"),
+        [
+            pytest.param(POSITIVE, math.nan, id="positive-nan"),
+            pytest.param(POSITIVE, math.inf, id="positive-infinity"),
+            pytest.param(POSITIVE, -math.inf, id="positive-negative-infinity"),
+            pytest.param(POSITIVE, 0, id="positive-zero"),
+            pytest.param(Interval(), math.nan, id="unbounded-nan"),
+            pytest.param(Interval(), math.inf, id="unbounded-infinity"),
+            pytest.param(Interval(), -math.inf, id="unbounded-negative-infinity"),
+            pytest.param(Interval(0, 360), -0.5, id="closed-below"),
+            pytest.param(Interval(0, 360), 360.5, id="closed-above"),
+            pytest.param(Interval(0, 1, high_open=True), 1, id="open-above-high-bound"),
+            pytest.param(FRACTION, 0, id="fraction-low-bound"),
+        ],
+    )
+    def test_an_interval_refuses_a_number_outside_its_bounds_or_not_finite(
+        self, interval: Interval, number: float
+    ) -> None:
+        """An open bound refuses itself, and NaN and ±inf are refused by every interval, an unbounded one included."""
+        assert interval.admits(number) is False
+
+    def test_intervals_with_the_same_bounds_are_equal_and_hash_alike(self) -> None:
+        assert Interval(0, 1) == UNIT_INTERVAL
+        assert hash(Interval(0, 1)) == hash(UNIT_INTERVAL)
+
+    def test_an_interval_is_frozen(self) -> None:
+        interval = Interval(0, 1)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            interval.low = 0.5
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            pytest.param(1, 0, id="low-above-high"),
+            pytest.param(math.nan, 1, id="nan-low"),
+            pytest.param(0, math.nan, id="nan-high"),
+        ],
+    )
+    def test_an_interval_whose_low_bound_is_not_at_most_its_high_bound_is_refused_naming_both(
+        self, low: float, high: float
+    ) -> None:
+        """Bounds are written by code, so broken ones are a defect, refused with a plain ValueError rather than a ConfigurationError."""
+        with pytest.raises(ValueError) as exc_info:
+            Interval(low, high)
+        assert exc_info.type is ValueError
+        assert repr(low) in str(exc_info.value)
+        assert repr(high) in str(exc_info.value)
 
 
 class TestAsFiniteFloat:
