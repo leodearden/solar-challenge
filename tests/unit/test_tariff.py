@@ -616,7 +616,7 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
         assert repr(read) == repr(unread)
 
     def test_a_tariff_rebuilt_from_its_fields_equals_the_original(self) -> None:
-        """web/storage.py's run storage writes fields() and passes them back to the constructor."""
+        """web/stored_runs.py's run storage writes fields() and passes them back to the constructor."""
         tariff = TariffConfig.economy_7()
         _derived_rates(tariff)
 
