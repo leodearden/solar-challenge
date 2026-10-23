@@ -655,6 +655,17 @@ def test_a_module_whose_string_annotation_named_classes_read_is_not_kept_alive_o
     assert dropped() is None
 
 
+def test_a_string_annotation_read_in_a_module_inspect_reads_no_source_for_raises_a_type_error_naming_it_and_that_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsourced = types.ModuleType("unsourced")
+    monkeypatch.setitem(sys.modules, "unsourced", unsourced)
+    exec("def settle(share: 'Share') -> None: ...\n", vars(unsourced))
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'unsourced'.*\bno source\b"):
+        named_classes(unsourced.settle)
+
+
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
     def f(a: "Nowhere") -> None: ...  # noqa: F821
 
