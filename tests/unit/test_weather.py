@@ -45,7 +45,7 @@ def sample_index():
 @pytest.fixture
 def pvgis_tmy():
     """A TMY shaped like PVGIS's as pvlib returns it: one non-leap 1990 of hourly UTC rows, its irradiance varying day to day."""
-    return synthetic_tmy(irradiance_scale_per_day=np.linspace(0.2, 1.0, TMY_DAYS)).assign(relative_humidity=80.0)
+    return synthetic_tmy(irradiance_scale_per_day=np.linspace(0.2, 1.0, TMY_DAYS).tolist()).assign(relative_humidity=80.0)
 
 
 @pytest.fixture

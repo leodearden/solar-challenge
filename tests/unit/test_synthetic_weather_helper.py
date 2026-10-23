@@ -41,7 +41,7 @@ def test_the_clear_june_day_is_dark_at_midnight_and_peaks_at_noon() -> None:
 @pytest.mark.parametrize(
     ("first_day", "irradiance_scale_per_day"),
     [
-        pytest.param("1990-01-01", np.linspace(0.2, 1.0, 365), id="365-days-across-both-clock-changes"),
+        pytest.param("1990-01-01", np.linspace(0.2, 1.0, 365).tolist(), id="365-days-across-both-clock-changes"),
         pytest.param("2024-03-30", (1.0, 0.0, 0.5), id="3-days-across-the-spring-clock-change"),
     ],
 )
@@ -87,7 +87,7 @@ def test_a_synthetic_tmy_is_a_pvgis_shaped_year_whose_every_utc_day_is_the_clear
 
 def test_a_scaled_synthetic_tmy_is_its_days_built_one_at_a_time_at_their_scales_and_joined_in_order() -> None:
     """UTC day i of the TMY is the clear June day with its irradiance scaled by entry i of irradiance_scale_per_day."""
-    irradiance_scale_per_day = np.linspace(0.2, 1.0, TMY_DAYS)
+    irradiance_scale_per_day = np.linspace(0.2, 1.0, TMY_DAYS).tolist()
     days_built_one_at_a_time = [
         synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(scale,)) for scale in irradiance_scale_per_day
     ]
