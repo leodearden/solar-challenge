@@ -157,7 +157,8 @@ def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
 
 def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
     """Return the files of _dev_only_lane_suite_files and every module of the tests package they
-    import, transitively. A pytest_plugins entry counts as an absolute import.
+    import, transitively. A pytest_plugins entry and a module named to pytest.importorskip each
+    count as an absolute import.
 
     Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
     helper the verify also imports is judged here, against the dev extra alone, not with the
@@ -313,8 +314,8 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
 
     An absolute name resolves from *project_root* and a relative one from *source*'s package
     directory. Imports count as _required_imports counts them, and each pytest_plugins entry
-    counts as an absolute import. The last part of a from-import's name may be an attribute of
-    the module before it, not a module.
+    and each module named to pytest.importorskip counts as an absolute import. The last part of
+    a from-import's name may be an attribute of the module before it, not a module.
 
     A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
     literal, fails naming *source* and the line.
@@ -329,7 +330,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
             module_parts = node.module.split(".") if node.module else []
             for alias in node.names:
                 yield directory, [*module_parts, alias.name]
-    for name in _pytest_plugins(source, tree):
+    for name in [*_pytest_plugins(source, tree), *_importorskip_modnames(tree)]:
         yield project_root, name.split(".")
 
 
