@@ -1,20 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the job endpoints: GET /api/jobs/<id>, GET /api/jobs/<id>/progress (an SSE stream) and GET /api/jobs/<id>/results."""
 
-import json
 from dataclasses import asdict, replace
-from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import Database
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
 from solar_challenge.web.jobs import JobEvent, JobState
+from solar_challenge.web.storage import RunStorage
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._sse import SseFrame, parse_sse_events
+from tests._web_runs import store_fleet_run, store_home_run
 
 _A_RUNNING_JOB = JobState(
     job_id="job-running",
@@ -162,23 +163,15 @@ class TestGetJobResults:
         assert resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 50.0}
 
     def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
-        self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A completed job whose run has a row answers the run's id, name, type, creation time and decoded summary."""
+        """A completed job whose run has a row answers the run's id, name, type, creation time and its summary's field tree."""
         run_id = "run-complete-001"
         mock_job_manager.job_state.return_value = replace(
             _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
         )
-        # Insert a run row into the test database so the results endpoint
-        # can retrieve it.
-        db_path = app.config["DATABASE"]
-        summary = {"total_generation_kwh": 1234.5, "self_consumption_pct": 45.0}
-        with Database(Path(db_path)).transaction() as conn:
-            conn.execute(
-                "INSERT INTO runs (id, name, type, summary_json, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, "Test Run", "home", json.dumps(summary), "completed", "2024-01-01T00:00:00"),
-            )
+        results = make_sim_results(days=1)
+        store_home_run(storage, run_id, make_home_config(), results, name="Test Run", created_at="2024-01-01T00:00:00")
 
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 200
@@ -187,7 +180,28 @@ class TestGetJobResults:
             "name": "Test Run",
             "type": "home",
             "created_at": "2024-01-01T00:00:00",
-            "summary": summary,
+            "summary": asdict(calculate_summary(results)),
+        }
+
+    def test_completed_fleet_job_answers_its_run_s_fleet_summary(
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A completed fleet job's run answers its FleetSummary's field tree as its summary."""
+        run_id = "fleet-complete-001"
+        mock_job_manager.job_state.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
+        )
+        fleet = make_fleet_results(n_homes=2, days=1)
+        store_fleet_run(storage, run_id, fleet, name="Fleet Run", created_at="2024-01-02T00:00:00")
+
+        resp = client.get("/api/jobs/job-complete/results")
+        assert resp.status_code == 200
+        assert resp.get_json() == {
+            "run_id": run_id,
+            "name": "Fleet Run",
+            "type": "fleet",
+            "created_at": "2024-01-02T00:00:00",
+            "summary": asdict(calculate_fleet_summary(fleet)),
         }
 
     def test_completed_job_missing_run_returns_404(

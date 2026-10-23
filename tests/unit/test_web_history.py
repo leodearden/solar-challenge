@@ -23,7 +23,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.fleet import FleetResults, FleetSummary
+from solar_challenge.fleet import FleetResults, FleetSummary, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -37,7 +37,7 @@ from solar_challenge.web.database import RUN_TYPES, Database
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
-from tests._finance_builders import make_fleet_results
+from tests._finance_builders import make_fleet_results, make_home_config
 from tests._html_page import element_attributes, element_count, texts_after
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import fleet_summary, home_summary, summary_json
@@ -46,10 +46,14 @@ from tests._web_app import point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
+def _field_tree(home: HomeConfig) -> dict:
+    """*home*'s field tree in JSON's values, as a run's config_json holds each of its homes."""
+    return json.loads(json.dumps(dataclasses.asdict(home)))
+
+
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
 
-_A_HOME_FIELD_TREE = json.loads(json.dumps(dataclasses.asdict(_A_HOME)))
-"""_A_HOME's field tree, as the config_json of a home run's row holds its config."""
+_A_HOME_FIELD_TREE = _field_tree(_A_HOME)
 
 _PRE_DISPATCH_UNION_HOME_CONFIGS = (
     Path(__file__).resolve().parents[1] / "fixtures" / "stored_runs" / "pre_dispatch_union_home_configs.json"
@@ -111,10 +115,10 @@ def _insert_test_run(
         )
 
 
-def _garble_summary(app: Flask, run_id: str) -> None:
-    """Overwrite run *run_id*'s summary_json with text that is not JSON."""
+def _garble(app: Flask, run_id: str, column: str) -> None:
+    """Overwrite run *run_id*'s *column*, summary_json or config_json, with text that is not JSON."""
     with Database(Path(app.config["DATABASE"])).transaction() as conn:
-        conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", run_id))
+        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", ("{not json", run_id))
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +330,7 @@ class TestRunsAPI:
             app, run_id="readable-run", summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
         )
         _insert_test_run(app, run_id="garbled-run")
-        _garble_summary(app, "garbled-run")
+        _garble(app, "garbled-run", "summary_json")
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         response = client.get("/api/history/runs")
@@ -395,13 +399,12 @@ class TestRunDetailAPI:
         response = client.get("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
 
-    def test_api_get_run_answers_every_column_with_config_and_summary_decoded(
+    def test_api_get_run_answers_every_column_with_its_summary_and_homes_decoded(
         self, app: Flask, client: FlaskClient
     ) -> None:
-        """A run's detail is each column of its row, plus its config and summary decoded."""
-        config = {"pv_config": {"capacity_kw": 4.0}}
+        """A run's detail is each column of its row, plus its summary's field tree and each of its homes' HomeConfig field tree."""
         summary = home_summary()
-        _insert_test_run(app, run_id="detail-run", name="Detail Run", summary=summary, config=config)
+        _insert_test_run(app, run_id="detail-run", name="Detail Run", summary=summary)
 
         response = client.get("/api/history/runs/detail-run")
 
@@ -409,7 +412,7 @@ class TestRunDetailAPI:
             "id": "detail-run",
             "name": "Detail Run",
             "type": "home",
-            "config_json": json.dumps(config),
+            "config_json": json.dumps(_A_HOME_FIELD_TREE),
             "summary_json": summary_json(summary),
             "status": "completed",
             "error_message": None,
@@ -418,11 +421,25 @@ class TestRunDetailAPI:
             "duration_seconds": 60.0,
             "n_homes": 1,
             "notes": None,
-            "config": config,
             "summary": dataclasses.asdict(summary),
+            "home_configs": [_A_HOME_FIELD_TREE],
         }
 
-    def test_api_get_run_of_a_running_run_answers_its_row_without_decoded_config_or_summary(
+    def test_api_get_run_of_a_fleet_run_answers_its_fleet_summary_and_each_home_in_the_fleet_s_order(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """A fleet run's summary is its FleetSummary's field tree, fleet_self_consumption_ratio among them."""
+        homes = [make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))]
+        fleet = make_fleet_results(homes=homes, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+
+        data = client.get("/api/history/runs/fleet-run").get_json()
+
+        assert "fleet_self_consumption_ratio" in data["summary"]
+        assert data["summary"] == dataclasses.asdict(calculate_fleet_summary(fleet))
+        assert data["home_configs"] == [_field_tree(home) for home in homes]
+
+    def test_api_get_run_of_a_running_run_answers_its_row_without_a_summary_or_homes(
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A running run's detail is its row alone: with no config or summary stored yet, neither is decoded.
@@ -452,25 +469,20 @@ class TestRunDetailAPI:
             "notes": None,
         }
 
-    def test_api_get_run_decodes_a_config_or_summary_that_is_not_json_as_empty(
-        self, app: Flask, client: FlaskClient
+    @pytest.mark.parametrize("column", ["summary_json", "config_json"])
+    def test_api_get_run_of_a_run_whose_document_does_not_decode_answers_409_naming_the_run_and_its_column(
+        self, app: Flask, client: FlaskClient, column: str
     ) -> None:
-        """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
-        with Database(Path(app.config["DATABASE"])).transaction() as conn:
-            conn.execute(
-                "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
-                " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"
-                " '2025-06-03T10:00:00')"
-            )
+        """A stored summary or config that is not JSON is refused, not decoded as {}."""
+        _insert_test_run(app, run_id="garbled-run")
+        _garble(app, "garbled-run", column)
 
-        data = client.get("/api/history/runs/garbled-run").get_json()
+        response = client.get("/api/history/runs/garbled-run")
 
-        assert {key: data[key] for key in ("config_json", "summary_json", "config", "summary")} == {
-            "config_json": "{not json",
-            "summary_json": "not json either",
-            "config": {},
-            "summary": {},
-        }
+        assert response.status_code == 409
+        body = response.get_json()
+        assert body == {"error": body["error"], "run_id": "garbled-run"}
+        assert "'garbled-run'" in body["error"] and f"runs.{column}" in body["error"], body["error"]
 
 
 class TestDeleteAPI:
