@@ -135,21 +135,90 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "web": ("src/solar_challenge/web/views.py",),
     "scripts": ("scripts/measure.py",),
     "tests-dev-only-lanes": (
+        "tests/__init__.py",
+        "tests/_lock.py",
+        "tests/_network.py",
+        "tests/_newest.py",
+        "tests/_paths.py",
+        "tests/_plugin.py",
+        "tests/_plugin_fixtures.py",
+        "tests/_plugin_hooks.py",
+        "tests/_uv.py",
         "tests/conftest.py",
         "tests/css_build/test_build.py",
         "tests/integration/__init__.py",
+        "tests/integration/_pvgis_probe.py",
         "tests/integration/test_pvgis.py",
         "tests/interpreter_matrix/test_matrix.py",
         "tests/newest_releases/test_newest.py",
+        "tests/unit/__init__.py",
+        "tests/unit/_css.py",
     ),
     "tests-verify": (
         "tests/_helpers.py",
+        "tests/_web_double.py",
         "tests/integration/test_fleet.py",
         "tests/unit/conftest.py",
         "tests/unit/test_simulate.py",
     ),
     "tests-e2e": ("tests/e2e/test_pages.py",),
 }
+_LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
+    # a conftest every run loads; its pytest_plugins list names a pytest built-in, which is no file
+    # of the project, beside a plugin of the project
+    "tests/conftest.py": (
+        "from tests._network import refusing_network",
+        'pytest_plugins = ["pytester", "tests._plugin"]',
+    ),
+    # a plugin's own entries, in the comma-separated string form pytest also accepts
+    "tests/_plugin.py": ('pytest_plugins = "pytester,tests._plugin_fixtures"',),
+    # an annotated assignment, which pytest honours too
+    "tests/_plugin_fixtures.py": ('pytest_plugins: list[str] = ["tests._plugin_hooks"]',),
+    # an annotation with no value assigns nothing
+    "tests/_plugin_hooks.py": ("pytest_plugins: list[str]",),
+    # module level; the trailing name is an attribute of the module
+    "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
+    # transitive
+    "tests/_uv.py": ("import tests._lock",),
+    # a cycle back to _uv: the walk ends, and each file is selected once
+    "tests/_lock.py": ("import tests._uv",),
+    # _uv is shared with the verify and still goes to the dev-only scope; _helpers stays with the verify
+    "tests/unit/test_simulate.py": (
+        "from tests._helpers import build",
+        "from tests._uv import isolated_env",
+    ),
+    # the guarded import is not followed; the function-local from-package submodule is
+    "tests/newest_releases/test_newest.py": (
+        "try:",
+        "    from tests._web_double import app",
+        "except ImportError:",
+        "    app = None",
+        "def test_newest():",
+        "    from tests import _newest",
+    ),
+    # the package __init__.py on the way is run too
+    "tests/css_build/test_build.py": ("from tests.unit._css import classes",),
+    # relative, two levels up and with a module; no other file imports _paths, so only this
+    # import selects it
+    "tests/unit/_css.py": ("from .._paths import root",),
+    # relative, with no module
+    "tests/integration/test_pvgis.py": ("from . import _pvgis_probe",),
+}
+
+
+def _write_project_of_every_scope(project_root: Path) -> list[str]:
+    """Write every scope's own files under *project_root*, each importing as
+    _LINES_OF_EACH_IMPORTING_FILE gives, and return their paths relative to it.
+    """
+    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
+    for relative_path in project_files:
+        _write_module(project_root / relative_path, *_LINES_OF_EACH_IMPORTING_FILE.get(relative_path, ()))
+    return project_files
+
+
+def _scope_named(name: str) -> SourceScope:
+    """Return the source scope called *name*."""
+    return next(scope for scope in SOURCE_SCOPES if scope.name == name)
 
 
 @pytest.mark.parametrize(
@@ -161,16 +230,82 @@ def test_each_source_scope_selects_only_its_own_files(
     scope: SourceScope,
     own_files: tuple[str, ...],
 ) -> None:
-    """A source scope selects exactly its own files of the project root it is given."""
-    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
-    for relative_path in project_files:
-        _write_module(tmp_path / relative_path)
+    """A source scope selects exactly its own files of the project root it is given.
+
+    tests-dev-only-lanes also owns every module of the tests package that its files import,
+    transitively: at module level, inside a function, as a submodule a from-import names,
+    relatively (from the package directory or from one above it), or through a package's
+    __init__.py. Modules that import each other are selected once each. tests-verify owns none
+    of them. A module named only inside a try that handles ImportError is not imported for
+    certain, so it stays with tests-verify.
+
+    A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
+    conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
+    one that an annotated assignment names; an annotation with no value names none. A built-in
+    such as pytester names no file of the project.
+    """
+    project_files = _write_project_of_every_scope(tmp_path)
 
     selected = sorted(path.relative_to(tmp_path).as_posix() for path in scope.select(tmp_path))
 
     assert selected == sorted(own_files), (
-        f"in a project holding each scope's own files, {project_files}, this scope selected "
-        f"{selected}, but it owns exactly {sorted(own_files)}"
+        f"in a project holding each scope's own files, {project_files}, which import as "
+        f"{_LINES_OF_EACH_IMPORTING_FILE} gives, this scope selected {selected}, "
+        f"but it owns exactly {sorted(own_files)}"
+    )
+
+
+def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_literal(tmp_path: Path) -> None:
+    """A scope that follows pytest_plugins entries fails, naming the file, the line and the
+    expression, on a value it cannot read without running the file.
+
+    pytest accepts any expression, such as a starred list or a name imported from another
+    module. A bare ValueError from reading it would name no file.
+    """
+    _write_project_of_every_scope(tmp_path)
+    conftest = _write_module(
+        tmp_path / "tests" / "conftest.py",
+        "from tests._network import BASE_PLUGINS",
+        'pytest_plugins = [*BASE_PLUGINS, "tests._plugin"]',
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        _scope_named("tests-dev-only-lanes").select(tmp_path)
+
+    message = str(failure.value)
+    assert f"{conftest}:2" in message and "[*BASE_PLUGINS, 'tests._plugin']" in message, (
+        f"the failure does not name line 2 of {conftest}, nor the pytest_plugins expression "
+        f"on it that the scope cannot read: {message}"
+    )
+    assert "literal" in message, f"the failure does not say that pytest_plugins must be a literal: {message}"
+
+
+@pytest.mark.parametrize(
+    "level",
+    [pytest.param(3, id="out-of-the-project"), pytest.param(100, id="above-the-filesystem-root")],
+)
+def test_a_scope_fails_naming_the_file_and_line_of_a_relative_import_that_leaves_the_project(
+    tmp_path: Path,
+    level: int,
+) -> None:
+    """A scope that follows relative imports fails, naming the file, the line and the import, on one
+    that climbs out of the project root.
+
+    Python rejects a relative import beyond its top-level package, so no working suite holds one.
+    The contract names it, instead of raising an IndexError or resolving against a directory
+    outside the project.
+    """
+    _write_project_of_every_scope(tmp_path)
+    relative_import = f"from {'.' * level} import elsewhere"
+    conftest = _write_module(tmp_path / "tests" / "conftest.py", relative_import)
+
+    with pytest.raises(AssertionError) as failure:
+        _scope_named("tests-dev-only-lanes").select(tmp_path)
+
+    message = str(failure.value)
+    assert f"{conftest}:1" in message and relative_import in message, (
+        f"the failure does not name line 1 of {conftest}, nor the import `{relative_import}` "
+        f"on it that climbs out of the project root: {message}"
     )
 
 

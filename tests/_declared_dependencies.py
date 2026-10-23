@@ -36,6 +36,7 @@ import ast
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
 from pathlib import Path
 
@@ -130,7 +131,7 @@ _DEV_ONLY_LANE_SUITES = (
 _LOADED_ABOVE_A_SUITE = frozenset({"__init__.py", "conftest.py"})
 
 
-def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+def _dev_only_lane_suite_files(project_root: Path) -> list[Path]:
     """Return the .py files of the suites in _DEV_ONLY_LANE_SUITES, which the offline lane's jobs
     that install the dev extra alone run, and the conftest.py and __init__.py files pytest loads
     above them.
@@ -150,6 +151,17 @@ def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
             for suite in suites
         )
     ]
+
+
+def _dev_only_lane_test_sources(project_root: Path) -> list[Path]:
+    """Return the files of _dev_only_lane_suite_files and every module of the tests package they
+    import, transitively. A pytest_plugins entry counts as an absolute import.
+
+    Each of those modules runs in an offline-lane job that installs the dev extra alone, so a
+    helper the verify also imports is judged here, against the dev extra alone, not with the
+    verify's web extra.
+    """
+    return _with_the_tests_modules_they_import(project_root, _dev_only_lane_suite_files(project_root))
 
 
 def _verify_test_sources(project_root: Path) -> list[Path]:
@@ -209,6 +221,128 @@ def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Imp
             yield from _required_imports([*node.handlers, *node.orelse, *node.finalbody])
         else:
             yield from _required_imports(ast.iter_child_nodes(node))
+
+
+def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
+    """Yield the value of each module-level assignment of pytest_plugins in *tree*, annotated or not.
+
+    An annotation with no value assigns nothing.
+    """
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            targets, value = statement.targets, statement.value
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets, value = [statement.target], statement.value
+        else:
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
+            yield value
+
+
+def _pytest_plugins(source: Path, tree: ast.Module) -> list[str]:
+    """Return the plugin names of the module-level pytest_plugins assignments in *tree*, the
+    syntax tree of *source*.
+
+    pytest imports each when it loads a conftest, test module or plugin that sets one. pytest
+    accepts any expression, but the names are read without running *source*, so the value must
+    be a literal: a str, split at commas as pytest splits it, or a sequence of str. Any other
+    value fails, naming *source*, the line and the expression.
+    """
+    names: list[str] = []
+    for value in _pytest_plugins_values(tree):
+        try:
+            plugins = ast.literal_eval(value)
+        except ValueError:
+            raise AssertionError(
+                f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which is not a "
+                "literal; write pytest_plugins as a literal list or tuple of module names, or as a "
+                "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+            ) from None
+        names.extend(plugins.split(",") if isinstance(plugins, str) else plugins)
+    return names
+
+
+def _directory_of_from_import(project_root: Path, source: Path, node: ast.ImportFrom) -> Path:
+    """Return the directory the from-import *node* of *source* resolves from: *project_root* for
+    an absolute import, else *source*'s package directory, climbed level - 1 times.
+
+    A level that climbs out of *project_root*, even to above the filesystem root, fails naming
+    *source*, the line and the import: Python rejects a relative import beyond its top-level
+    package.
+    """
+    if not node.level:
+        return project_root
+    directory = source.parents[: node.level][-1]
+    assert directory.is_relative_to(project_root), (
+        f"{source}:{node.lineno} imports `{ast.unparse(node)}`, which climbs out of {project_root}; "
+        "a relative import cannot leave its top-level package"
+    )
+    return directory
+
+
+def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, list[str]]]:
+    """Yield (directory, dotted-name parts) for each module *source* may import.
+
+    An absolute name resolves from *project_root* and a relative one from *source*'s package
+    directory. Imports count as _required_imports counts them, and each pytest_plugins entry
+    counts as an absolute import. The last part of a from-import's name may be an attribute of
+    the module before it, not a module.
+
+    A relative import that climbs out of *project_root*, or a pytest_plugins value that is no
+    literal, fails naming *source* and the line.
+    """
+    tree = _parse(source)
+    for node in _required_imports([tree]):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield project_root, alias.name.split(".")
+        else:
+            directory = _directory_of_from_import(project_root, source, node)
+            module_parts = node.module.split(".") if node.module else []
+            for alias in node.names:
+                yield directory, [*module_parts, alias.name]
+    for name in _pytest_plugins(source, tree):
+        yield project_root, name.split(".")
+
+
+def _files_run_by_importing(directory: Path, parts: list[str]) -> list[Path]:
+    """Return the files that importing the dotted name *parts* from *directory* runs: each
+    package's __init__.py down to the module's own file.
+
+    The walk stops at a part that is not found or that follows a plain module, so a trailing
+    attribute adds nothing. Nothing is imported.
+    """
+    files: list[Path] = []
+    search_path = [str(directory)]
+    for depth in range(1, len(parts) + 1):
+        spec = PathFinder.find_spec(".".join(parts[:depth]), search_path)
+        if spec is None:
+            break
+        if spec.origin is not None:
+            files.append(Path(spec.origin))
+        if spec.submodule_search_locations is None:
+            break
+        search_path = list(spec.submodule_search_locations)
+    return files
+
+
+def _with_the_tests_modules_they_import(project_root: Path, sources: list[Path]) -> list[Path]:
+    """Return *sources* and every module of the tests package that they import, transitively."""
+    tests_dir = project_root / "tests"
+    selected = dict.fromkeys(sources)
+    pending = list(sources)
+    while pending:
+        source = pending.pop()
+        reached = (
+            module_file
+            for directory, parts in _import_targets(project_root, source)
+            for module_file in _files_run_by_importing(directory, parts)
+        )
+        for module_file in reached:
+            if module_file.is_relative_to(tests_dir) and module_file not in selected:
+                selected[module_file] = None
+                pending.append(module_file)
+    return list(selected)
 
 
 def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[str]:
