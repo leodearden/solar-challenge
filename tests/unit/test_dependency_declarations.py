@@ -3,14 +3,9 @@
 
 Every third-party import a source file requires must be satisfied by a
 dependency declared for where that file runs, not by whatever another
-requirement happens to pull in.  Every scope may use the core dependencies,
-plus the extras the commands that run it install:
-
-- the package outside its web subpackage: none; the web subpackage: `web`;
-- scripts/: `dev`;
-- tests/ outside tests/e2e: `dev` and `web`, the per-task verify's extras;
-- tests/e2e: `dev`, `web` and `e2e`, the e2e lane job's extras.
-
+requirement happens to pull in.  _SOURCE_SCOPES pairs each selector of source
+files with the extras, beside the core dependencies, that the selected files
+may use; each selector's docstring names what runs its files with those extras.
 solar_challenge and tests are first-party.  No core dependency may request an
 extra its distribution does not provide.  No declared requirement may carry an
 environment marker that holds only on Python minors requires-python does not
@@ -103,7 +98,9 @@ def _web_sources(project_root: Path) -> list[Path]:
 
 
 def _core_sources(project_root: Path) -> list[Path]:
-    """Return the package's .py files outside its web subpackage."""
+    """Return the package's .py files outside its web subpackage, which an install of the package
+    without extras runs.
+    """
     package_dir = project_root / "src" / "solar_challenge"
     return _python_files_outside(package_dir, package_dir / _WEB)
 
@@ -128,16 +125,23 @@ def _e2e_test_sources(project_root: Path) -> list[Path]:
     return list((project_root / "tests" / "e2e").rglob("*.py"))
 
 
-_PACKAGE_SCOPES = [
-    pytest.param(_core_sources, (), id="outside-web"),
-    pytest.param(_web_sources, (_WEB,), id="web"),
-]
-_SOURCE_SCOPES = [
-    *_PACKAGE_SCOPES,
-    pytest.param(_script_sources, (_DEV,), id="scripts"),
-    pytest.param(_test_sources_outside_e2e, (_DEV, _WEB), id="tests-outside-e2e"),
-    pytest.param(_e2e_test_sources, (_DEV, _WEB, _E2E), id="tests-e2e"),
-]
+_PACKAGE_SCOPES = {
+    "outside-web": (_core_sources, ()),
+    "web": (_web_sources, (_WEB,)),
+}
+_SOURCE_SCOPES = {
+    **_PACKAGE_SCOPES,
+    "scripts": (_script_sources, (_DEV,)),
+    "tests-outside-e2e": (_test_sources_outside_e2e, (_DEV, _WEB)),
+    "tests-e2e": (_e2e_test_sources, (_DEV, _WEB, _E2E)),
+}
+
+
+def _scope_params(
+    scopes: Mapping[str, tuple[Callable[[Path], list[Path]], tuple[str, ...]]],
+) -> list[object]:
+    """Return a pytest.param of each scope's selector and extras, identified by the scope's name."""
+    return [pytest.param(select_sources, extras, id=name) for name, (select_sources, extras) in scopes.items()]
 
 
 def _parse(source: Path) -> ast.Module:
@@ -264,7 +268,7 @@ def _dead_import_guards(
     return sorted(dead)
 
 
-@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
+@pytest.mark.parametrize(("select_sources", "extras"), _scope_params(_SOURCE_SCOPES))
 def test_sources_import_only_declared_dependencies(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
@@ -287,7 +291,7 @@ def test_sources_import_only_declared_dependencies(
     )
 
 
-@pytest.mark.parametrize(("select_sources", "extras"), _PACKAGE_SCOPES)
+@pytest.mark.parametrize(("select_sources", "extras"), _scope_params(_PACKAGE_SCOPES))
 def test_import_guards_guard_an_undeclared_dependency(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
@@ -335,11 +339,7 @@ def _write_import_guard(path: Path, *body_lines: str) -> Path:
 def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distribution(
     tmp_path: Path,
 ) -> None:
-    """A file is flagged with every distribution it requires that is not declared.
-
-    Once scripts/ and tests/ hold no undeclared import, test_sources_import_only_declared_dependencies
-    passes for a detector that flags nothing, so this checks the detector on files of known verdict.
-    """
+    """A file is flagged with every distribution it requires that is not declared."""
     undeclared_top_level = _write_module(
         tmp_path / "undeclared_top_level.py", "import pytest", "import yaml", "import numpy"
     )
@@ -430,48 +430,37 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
     )
 
 
-_ONE_FILE_IN_EACH_SCOPE = (
-    "src/solar_challenge/simulate.py",
-    "src/solar_challenge/web/views.py",
-    "scripts/measure.py",
-    "tests/_helpers.py",
-    "tests/unit/test_simulate.py",
-    "tests/e2e/test_pages.py",
-)
+_OWN_FILES_OF_EACH_SCOPE = {
+    "outside-web": ("src/solar_challenge/simulate.py",),
+    "web": ("src/solar_challenge/web/views.py",),
+    "scripts": ("scripts/measure.py",),
+    "tests-outside-e2e": ("tests/_helpers.py", "tests/unit/test_simulate.py"),
+    "tests-e2e": ("tests/e2e/test_pages.py",),
+}
 
 
 @pytest.mark.parametrize(
     ("select_sources", "own_files"),
     [
-        pytest.param(_core_sources, ["src/solar_challenge/simulate.py"], id="outside-web"),
-        pytest.param(_web_sources, ["src/solar_challenge/web/views.py"], id="web"),
-        pytest.param(_script_sources, ["scripts/measure.py"], id="scripts"),
-        pytest.param(
-            _test_sources_outside_e2e,
-            ["tests/_helpers.py", "tests/unit/test_simulate.py"],
-            id="tests-outside-e2e",
-        ),
-        pytest.param(_e2e_test_sources, ["tests/e2e/test_pages.py"], id="tests-e2e"),
+        pytest.param(select_sources, _OWN_FILES_OF_EACH_SCOPE[name], id=name)
+        for name, (select_sources, _extras) in _SOURCE_SCOPES.items()
     ],
 )
 def test_each_source_scope_selects_only_its_own_files(
     tmp_path: Path,
     select_sources: Callable[[Path], list[Path]],
-    own_files: list[str],
+    own_files: tuple[str, ...],
 ) -> None:
-    """A source scope selects exactly its own files of the project root it is given.
-
-    The real-tree contract passes for a scope that selects nothing, so this pins which files
-    each scope checks, which is the split between scopes.
-    """
-    for relative_path in _ONE_FILE_IN_EACH_SCOPE:
+    """A source scope selects exactly its own files of the project root it is given."""
+    project_files = sorted({path for files in _OWN_FILES_OF_EACH_SCOPE.values() for path in files})
+    for relative_path in project_files:
         _write_module(tmp_path / relative_path)
 
     selected = sorted(path.relative_to(tmp_path).as_posix() for path in select_sources(tmp_path))
 
-    assert selected == own_files, (
-        f"in a project holding one file in each scope's directory, {list(_ONE_FILE_IN_EACH_SCOPE)}, "
-        f"this scope selected {selected}, but it owns exactly {own_files}"
+    assert selected == sorted(own_files), (
+        f"in a project holding each scope's own files, {project_files}, this scope selected "
+        f"{selected}, but it owns exactly {sorted(own_files)}"
     )
 
 
