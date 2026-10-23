@@ -41,7 +41,7 @@ def test_the_clear_june_day_is_dark_at_midnight_and_peaks_at_noon() -> None:
 @pytest.mark.parametrize(
     ("first_day", "irradiance_scale_per_day"),
     [
-        pytest.param("1990-01-01", np.linspace(0.2, 1.0, 365), id="365-days-as-test_weather-pvgis_tmy-builds-them"),
+        pytest.param("1990-01-01", np.linspace(0.2, 1.0, 365), id="365-days-across-both-clock-changes"),
         pytest.param("2024-03-30", (1.0, 0.0, 0.5), id="3-days-across-the-spring-clock-change"),
     ],
 )
