@@ -11,6 +11,7 @@ Usage::
         git_config,
         lane_command,
         lane_commands,
+        lane_jobs_declaring_an_outage_probe,
         lane_outage_probe,
         offline_lane_jobs,
         verify_command,
@@ -20,11 +21,13 @@ Usage::
     verify_commands = [verify_command(project_root, slot) for slot in VERIFY_SLOTS]
     e2e_job = lane_command(project_root, "e2e")
     pvgis_outage_probe = lane_outage_probe(project_root, "pvgis")
+    probed_lane_jobs = lane_jobs_declaring_an_outage_probe(project_root)
     every_lane_job = lane_commands(project_root)
     offline_lane_enabled = git_config(project_root).get("offline_lane_enabled")
     lane_job_names = [job["name"] for job in offline_lane_jobs(project_root)]
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -102,12 +105,22 @@ def lane_outage_probe(project_root: Path, name: str) -> OrchestratorCommand:
     job whose outages the lane would file as fix tasks fails here, naming the job.
     """
     job = lane_command(project_root, name)
-    probe = _sole_offline_lane_job(project_root, name).get("outage_probe")
+    probe = _declared_outage_probe(_sole_offline_lane_job(project_root, name))
     assert isinstance(probe, str) and probe.strip(), (
         f"the {job.label} declares outage_probe {probe!r} (None if it declares none), not a command string, so the "
         "lane files a fix task for every outage of the service its tests use"
     )
     return replace(job, label=f"outage probe of the {job.label}", command=probe)
+
+
+def lane_jobs_declaring_an_outage_probe(project_root: Path) -> tuple[str, ...]:
+    """Return, in config order, the names of *project_root*'s offline-lane jobs that declare an outage probe of any value but None."""
+    return tuple(job["name"] for job in offline_lane_jobs(project_root) if _declared_outage_probe(job) is not None)
+
+
+def _declared_outage_probe(job: Mapping[str, Any]) -> object:
+    """Return the outage_probe the offline-lane job *job* (a git.offline_lane_commands entry) declares, None if it declares none."""
+    return job.get("outage_probe")
 
 
 def lane_commands(project_root: Path) -> tuple[OrchestratorCommand, ...]:
