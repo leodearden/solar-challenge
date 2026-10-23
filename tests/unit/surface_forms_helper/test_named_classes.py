@@ -1050,6 +1050,28 @@ def test_a_partial_that_carries_a_signature_over_a_routine_defined_in_c_records_
         named_classes(relayed)
 
 
+def test_a_signature_a_link_carries_over_a_constructor_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initialising = imported_module(
+        tmp_path,
+        monkeypatch,
+        "initialising",
+        "from fractions import Fraction as Decimal\n"
+        "\n"
+        "class Initialised:\n"
+        "    pass\n",
+    )
+    initialising.Initialised.__init__ = _typed(object.__init__, "receiver")
+
+    class Plain:
+        pass
+
+    assert named_classes(_typed(zip)) == {decimal.Decimal}
+    assert named_classes(_typed(Plain)) == {decimal.Decimal}
+    assert named_classes(initialising.Initialised) == {decimal.Decimal}
+
+
 def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_the_class_and_that_metaclass_whatever_its_constructor(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
