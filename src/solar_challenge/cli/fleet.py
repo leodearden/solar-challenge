@@ -264,7 +264,7 @@ def sweep(
         Optional[str],
         typer.Option(
             "--param",
-            help="Variable name for CLI sweep (e.g., BATTERY_RATIO)",
+            help="Name of the ${NAME} placeholder the CLI sweep sets (e.g., BATTERY_RATIO)",
         ),
     ] = None,
     min_val: Annotated[
@@ -324,8 +324,13 @@ def sweep(
     1. YAML-defined sweep: When the config contains a sweep spec in the
        battery.capacity_kwh.multiplier field, runs all sweep points.
 
-    2. CLI-driven sweep: When --param is provided, substitutes the variable
-       in the config and sweeps from --min to --max.
+    2. CLI-driven sweep: When --param is provided, it is the NAME of the
+       ${NAME} or ${NAME:default} placeholders to sweep, each the whole
+       value of a key in the config. Each sweep point replaces every such
+       placeholder with the point's value, from --min to --max; a
+       placeholder --param does not name takes its default. The sweep
+       refuses a --param that no placeholder names, a placeholder inside a
+       longer string, and a default that is not a finite number.
 
     Example YAML-defined sweep:
 
@@ -341,7 +346,13 @@ def sweep(
 
     Example CLI-driven sweep:
 
-        solar_challenge fleet sweep config.yaml \\
+        battery:
+          capacity_kwh:
+            type: proportional_to
+            source: pv.capacity_kw
+            multiplier: '${BATTERY_RATIO:1.0}'
+
+        solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
     """
     raw_config = load_config(config)
