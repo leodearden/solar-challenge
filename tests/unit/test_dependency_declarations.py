@@ -4,11 +4,18 @@
 Each source scope of tests/_declared_dependencies.py, which states the
 declared-dependency contract, may import only what [project].dependencies and
 the scope's extras declare, and in the package each ImportError guard must
-guard a distribution its scope does not declare.  No core dependency may
-request an extra its distribution does not provide.  No declared requirement
-may carry an environment marker that holds only on Python minors
-requires-python does not admit, since it could never install.  pyproject.toml
-is parsed structurally (TOML plus PEP 508 requirements), not by regex.
+guard a distribution its scope does not declare.  This module judges the
+scopes whose extras exclude e2e.  The scopes needing e2e are judged in
+tests/e2e/test_declared_dependencies.py by the offline lane's e2e job, the one
+run that installs that extra, and
+test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra pins that the
+job collects a case for each.
+
+No core dependency may request an extra its distribution does not provide.  No
+declared requirement may carry an environment marker that holds only on Python
+minors requires-python does not admit, since it could never install.
+pyproject.toml is parsed structurally (TOML plus PEP 508 requirements), not by
+regex.
 
 pyproject.toml is also the only dependency declaration: no requirements*.txt at
 the project root may restate it, since a hand-maintained copy drifts from it.
@@ -43,9 +50,15 @@ _E2E_LANE_JOB = "e2e"
 _E2E_CONTRACT_MODULE = PurePosixPath("tests/e2e/test_declared_dependencies.py")
 
 
-@pytest.mark.parametrize("scope", SOURCE_SCOPES, ids=lambda scope: scope.name)
+@pytest.mark.parametrize(
+    "scope", [scope for scope in SOURCE_SCOPES if E2E not in scope.extras], ids=lambda scope: scope.name
+)
 def test_sources_import_only_declared_dependencies(project_root: Path, scope: SourceScope) -> None:
-    """Every third-party distribution a source scope requires must be declared for that scope."""
+    """Every third-party distribution a source scope requires must be declared for that scope.
+
+    The scopes whose extras include e2e are judged in tests/e2e/test_declared_dependencies.py by the e2e lane
+    job, as test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra pins.
+    """
     assert_imports_only_declared(project_root, scope)
 
 
