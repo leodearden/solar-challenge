@@ -69,13 +69,14 @@ def surface_form(obj: object) -> str:
     inspect reads in that constructor's place; so does a routine that wraps such a
     class, through a functools.partial, a bound method or a functools.wraps wrapper,
     unless the class or one of the routine's links carries one. A signature is an
-    inspect.Signature as __signature__, which inspect reads as given. A wrapper whose
-    __signature__ is None is the routine's last link, since inspect reads it as the
-    callable it is, not as what it wraps; a functools.partial whose __signature__ is None
-    is still read through its func. A string or a callable as __signature__ counts as
-    none for these refusals, since Python 3.12 and 3.13 convert a string or call a
-    callable given there and 3.11 and 3.14 refuse either.
-    _refuse_minor_dependent_constructor lists the constructors it refuses.
+    inspect.Signature as __signature__, which inspect reads as given. inspect reads a
+    wrapper whose __signature__ is None, whether one of a routine's links or a class's
+    constructor, as the callable it is, not as what it wraps, so no refusal here looks
+    past it; a functools.partial whose __signature__ is None is still read through its
+    func. A string or a callable as __signature__ counts as none for these refusals,
+    since Python 3.12 and 3.13 convert a string or call a callable given there and 3.11
+    and 3.14 refuse either. _refuse_minor_dependent_constructor lists the constructors it
+    refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -618,7 +619,8 @@ _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 def _refuse_minor_dependent_constructor(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
 
-    The constructors it refuses, in the order it checks them:
+    The constructors it refuses, in the order it checks them; a constructor wraps a
+    callable defined in C here if _wrapped_c_callable gives one for it:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it wraps a callable defined in C or is a
@@ -694,10 +696,10 @@ def _refuse_wrapper_of_c_callable(
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if inspect.unwrap, stopped at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link that carries a signature, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable."""
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
-    wrapped = inspect.unwrap(constructor, stop=_carries_signature)
+    wrapped = _unwrapped(constructor, _carries_signature)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
