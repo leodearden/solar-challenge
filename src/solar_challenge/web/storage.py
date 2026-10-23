@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, TypeVar, assert_never, get_args
 
@@ -132,9 +132,14 @@ def _decoded_or_empty(text: str | None) -> Any:
         return {}
 
 
+def _record_of(row: sqlite3.Row) -> RunRecord:
+    """The RunRecord of a runs row read with SELECT *."""
+    return RunRecord(**dict(row))
+
+
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
-    return None if row is None else RunRecord(**dict(row))
+    return None if row is None else _record_of(row)
 
 
 @dataclass(frozen=True)
@@ -162,6 +167,90 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
             )
         case _:
             assert_never(summary)
+
+
+RunSort = Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
+RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
+
+_Option = TypeVar("_Option", bound=str)
+
+
+def one_of(value: object, options: tuple[_Option, ...], field: str) -> _Option:
+    """The one of *options* that *value* equals, typed as the options are: a text read from a request narrows to its Literal.
+
+    Raises:
+        ValueError: *value* equals none of *options*; the message names *field*, *value* and each option.
+    """
+    for option in options:
+        if value == option:
+            return option
+    raise ValueError(f"{field} is {value!r}, not one of {list(options)}")
+
+
+_MAX_RUNS_PER_PAGE = 100
+
+
+@dataclass(frozen=True)
+class RunQuery:
+    """A page of the run list: the runs it keeps, the order it sorts them in, and which page of them it is.
+
+    run_type keeps the runs of that type; text the runs whose name or notes hold it, in any ASCII
+    case; created_from and created_to the runs created on or after the one date and on or before
+    the other. A filter that is None keeps every run. The runs are sorted by the sort column, then
+    by id, descending or not, and page numbers from 1 the pages of per_page runs.
+
+    Raises:
+        ValueError: sort is not one of RUN_SORTS, run_type is not one of RUN_TYPES, page is below
+            1, or per_page is not from 1 to 100; the message names the field and its value.
+    """
+
+    run_type: RunType | None = None
+    text: str | None = None
+    created_from: date | None = None
+    created_to: date | None = None
+    sort: RunSort = "created_at"
+    descending: bool = True
+    page: int = 1
+    per_page: int = 20
+
+    def __post_init__(self) -> None:
+        one_of(self.sort, RUN_SORTS, "sort")
+        if self.run_type is not None:
+            one_of(self.run_type, RUN_TYPES, "run_type")
+        if self.page < 1:
+            raise ValueError(f"page is {self.page!r}, not a page number: pages are numbered from 1")
+        if not 1 <= self.per_page <= _MAX_RUNS_PER_PAGE:
+            raise ValueError(f"per_page is {self.per_page!r}, not from 1 to {_MAX_RUNS_PER_PAGE} runs a page")
+
+
+@dataclass(frozen=True)
+class RunPage:
+    """A page of the run list: the records of its runs, in order, and the count of every run the list's query keeps."""
+
+    records: tuple[RunRecord, ...]
+    total: int
+
+
+_RUN_QUERY_CONDITION = (
+    "(:run_type IS NULL OR type = :run_type)"
+    " AND (:pattern IS NULL OR name LIKE :pattern OR notes LIKE :pattern)"
+    " AND (:created_from IS NULL OR created_at >= :created_from)"
+    " AND (:created_before IS NULL OR created_at < :created_before)"
+)
+
+
+def _run_query_values(query: RunQuery) -> dict[str, str | None]:
+    """The values _RUN_QUERY_CONDITION binds to keep the runs *query* keeps; None where it keeps every run.
+
+    A run created on created_to is created before the next day starts, and LIKE matches text
+    anywhere in a name or notes, in any ASCII case.
+    """
+    return {
+        "run_type": query.run_type,
+        "pattern": None if query.text is None else f"%{query.text}%",
+        "created_from": None if query.created_from is None else query.created_from.isoformat(),
+        "created_before": None if query.created_to is None else (query.created_to + timedelta(days=1)).isoformat(),
+    }
 
 
 RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
@@ -628,6 +717,22 @@ class RunStorage:
             for label, value in labels.items():
                 conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
         return self.run_record(run_id)
+
+    def page_runs(self, query: RunQuery) -> RunPage:
+        """The records of the runs on *query*'s page of the run list, in its order, and the count of every run *query* keeps.
+
+        A page past the last lists no runs.
+        """
+        values = _run_query_values(query)
+        direction = "DESC" if query.descending else "ASC"
+        order = f"{one_of(query.sort, RUN_SORTS, 'sort')} {direction}, id {direction}"
+        with self.database.transaction() as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM runs WHERE {_RUN_QUERY_CONDITION}", values).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT * FROM runs WHERE {_RUN_QUERY_CONDITION} ORDER BY {order} LIMIT :limit OFFSET :offset",
+                {**values, "limit": query.per_page, "offset": (query.page - 1) * query.per_page},
+            ).fetchall()
+        return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
 
     def list_runs(
         self,
