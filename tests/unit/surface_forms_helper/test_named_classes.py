@@ -90,6 +90,23 @@ def _typed(function: Callable[..., object], *receivers: str) -> Callable[..., ob
     return wrapper
 
 
+_RELAYING_SOURCE = (
+    "import inspect\n"
+    "from fractions import Fraction as Decimal\n"
+    "from functools import wraps\n"
+    "\n"
+    "def relay(function):\n"
+    "    return wraps(function)(lambda *args: function(*args))\n"
+    "\n"
+    "def resign(function, dropping=0):\n"
+    "    signature = inspect.signature(function)\n"
+    "    resigned = relay(function)\n"
+    "    parameters = list(signature.parameters.values())[dropping:]\n"
+    "    resigned.__signature__ = signature.replace(parameters=parameters)\n"
+    "    return resigned\n"
+)
+
+
 def test_a_generic_names_its_origin_and_its_arguments_classes() -> None:
     def f(
         a: list[Preset],
@@ -991,44 +1008,73 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
 
 
+@pytest.mark.parametrize(
+    "routine",
+    [
+        pytest.param(_typed(len), id="builtin-function"),
+        pytest.param(_typed(str.join), id="method-descriptor"),
+        pytest.param(_typed(vars(dict)["fromkeys"]), id="classmethod-descriptor"),
+        pytest.param(_typed((1).__add__), id="method-wrapper"),
+        pytest.param(_typed(operator.itemgetter(1)), id="object-of-a-class-defined-in-c"),
+        pytest.param(types.MethodType(_typed(len, "receiver"), object()), id="bound-method"),
+    ],
+)
 def test_a_signature_a_link_carries_over_a_routine_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    routine: Callable[..., object],
 ) -> None:
-    relaying = imported_module(
-        tmp_path,
-        monkeypatch,
-        "relaying",
-        "import inspect\n"
-        "from fractions import Fraction as Decimal\n"
-        "from functools import wraps\n"
-        "\n"
-        "def relay(function):\n"
-        "    return wraps(function)(lambda *args: function(*args))\n"
-        "\n"
-        "def resign(function):\n"
-        "    resigned = relay(function)\n"
-        "    resigned.__signature__ = inspect.Signature(list(inspect.signature(function).parameters.values()))\n"
-        "    return resigned\n",
-    )
+    assert named_classes(routine) == {decimal.Decimal}
 
+
+def test_a_signature_a_link_carries_over_the_call_a_metaclass_resolves_that_wraps_a_routine_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled() -> None:
     class Counting(type):
         __call__ = _typed(type.__call__, "receiver")
 
     class Counted(metaclass=Counting):
         pass
 
+    assert named_classes(Counted) == {decimal.Decimal}
+
+
+def test_a_signature_a_link_carries_over_the_call_of_a_callable_object_that_wraps_a_routine_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled() -> None:
     class Caller:
         __call__ = _typed(len, "receiver")
 
-    assert named_classes(_typed(len)) == {decimal.Decimal}
-    assert named_classes(_typed(str.join)) == {decimal.Decimal}
-    assert named_classes(_typed(vars(dict)["fromkeys"])) == {decimal.Decimal}
-    assert named_classes(_typed((1).__add__)) == {decimal.Decimal}
-    assert named_classes(_typed(operator.itemgetter(1))) == {decimal.Decimal}
-    assert named_classes(Counted) == {decimal.Decimal}
     assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
-    assert named_classes(relaying.relay(_typed(len))) == {decimal.Decimal}
-    assert named_classes(relaying.resign(_typed(len))) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        pytest.param(_typed(len), id="function"),
+        pytest.param(types.MethodType(_typed(len, "receiver"), object()), id="bound-method"),
+    ],
+)
+def test_a_signature_functools_wraps_copies_from_a_link_that_carries_one_over_a_routine_defined_in_c_names_the_classes_it_names_read_where_the_link_given_it_is_spelled(
+    wrapped: Callable[..., object], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relaying = imported_module(tmp_path, monkeypatch, "relaying", _RELAYING_SOURCE)
+
+    assert named_classes(relaying.relay(wrapped)) == {decimal.Decimal}
+
+
+@pytest.mark.parametrize(
+    ("wrapped", "dropping"),
+    [
+        pytest.param(_typed(len, "receiver"), 0, id="equal-copy"),
+        pytest.param(_typed(len, "receiver"), 1, id="parameters-dropped"),
+        pytest.param(functools.partial(_typed(len, "receiver"), 1), 0, id="copy-of-a-partials"),
+    ],
+)
+def test_a_signature_given_to_a_function_that_wraps_a_link_carrying_a_signature_of_its_own_over_a_routine_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_function_and_the_string(
+    wrapped: Callable[..., object],
+    dropping: int,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relaying = imported_module(tmp_path, monkeypatch, "relaying", _RELAYING_SOURCE)
+
+    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b.*'Decimal'.*\bmay be a copy\b"):
+        named_classes(relaying.resign(wrapped, dropping))
 
 
 def test_a_partial_that_carries_a_signature_over_a_routine_defined_in_c_records_no_module_so_a_string_annotation_there_raises_type_error_naming_it_and_the_string() -> None:
