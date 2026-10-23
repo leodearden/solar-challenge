@@ -5,8 +5,11 @@ RUN_KINDS holds one RunKind for each RunType. A run's record names its kind, and
 reads the run's files back as a StoredHomeRun or a StoredFleetRun, the variant whose
 export_frame the run's CSV export answers with. The kind also reads the HomeConfigs the
 run's record holds, and builds from them the scenario the run's YAML export answers with.
+A kind also names a run created without a name, and is_run_name and require_run_name say
+which texts can name a run.
 """
 
+import dataclasses
 import json
 import re
 from typing import Any, get_args
@@ -22,12 +25,28 @@ from solar_challenge.home import HomeConfig, SimulationResults, calculate_summar
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.database import RunType
 from solar_challenge.web.storage import RunRecord, RunStorage
-from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import (
+    RUN_KINDS,
+    StoredFleetRun,
+    StoredHomeRun,
+    is_run_name,
+    require_run_name,
+)
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._web_runs import store_fleet_run, store_home_run
 
 _HOME_RUN_ID = "home-1"
 _FLEET_RUN_ID = "fleet-1"
+
+_RUN_NAMES = ("North Roof", " North Roof ")
+_RUN_NAME_IDS = ("a-name", "a-name-between-spaces")
+_NOT_RUN_NAMES = (None, "", "   ", "\t\n", 5)
+_NOT_RUN_NAME_IDS = ("none", "empty", "spaces", "tab-and-newline", "a-number")
+
+
+def _a_home_named(name: str) -> HomeConfig:
+    """make_home_config's home under *name*."""
+    return dataclasses.replace(make_home_config(), name=name)
 
 
 def _a_home() -> tuple[HomeConfig, SimulationResults]:
@@ -159,6 +178,51 @@ def test_the_fleet_kinds_scenario_of_the_configs_a_fleet_run_records_is_its_flee
     scenario = kind.scenario_document(kind.home_configs(_recorded_config(storage, _FLEET_RUN_ID)), "Community Fleet")
 
     assert scenario == fleet_scenario(fleet.home_configs, name="Community Fleet")
+
+
+def test_the_home_kinds_default_name_of_a_named_home_is_its_name() -> None:
+    assert RUN_KINDS["home"].default_name((_a_home_named("North Roof"),)) == "North Roof"
+
+
+@pytest.mark.parametrize("home_name", ["", "   ", "\t\n"], ids=["empty", "spaces", "tab-and-newline"])
+def test_the_home_kinds_default_name_of_a_home_whose_name_cannot_name_a_run_is_web_simulation(home_name: str) -> None:
+    assert RUN_KINDS["home"].default_name((_a_home_named(home_name),)) == "Web Simulation"
+
+
+def test_the_home_kinds_default_name_of_no_home_is_web_simulation() -> None:
+    """A run's record may hold no config, as one whose job failed before its save does, and its kind still names it."""
+    assert RUN_KINDS["home"].default_name(()) == "Web Simulation"
+
+
+@pytest.mark.parametrize(
+    "homes",
+    [(_a_home_named("Home 1"), _a_home_named("Home 2")), ()],
+    ids=["two-named-homes", "no-home"],
+)
+def test_the_fleet_kinds_default_name_is_fleet_simulation_whatever_its_homes(homes: tuple[HomeConfig, ...]) -> None:
+    assert RUN_KINDS["fleet"].default_name(homes) == "Fleet Simulation"
+
+
+@pytest.mark.parametrize("name", _RUN_NAMES, ids=_RUN_NAME_IDS)
+def test_a_name_holding_a_character_other_than_whitespace_is_required_unchanged(name: str) -> None:
+    assert require_run_name(name) == name
+
+
+@pytest.mark.parametrize("name", _NOT_RUN_NAMES, ids=_NOT_RUN_NAME_IDS)
+def test_a_name_that_is_no_string_or_holds_only_whitespace_is_refused_naming_the_field_and_the_value(
+    name: object,
+) -> None:
+    with pytest.raises(ValueError, match="^" + re.escape(f"name is {name!r}")):
+        require_run_name(name)
+
+
+@pytest.mark.parametrize(
+    ("name", "names_a_run"),
+    [(name, True) for name in _RUN_NAMES] + [(name, False) for name in _NOT_RUN_NAMES],
+    ids=_RUN_NAME_IDS + _NOT_RUN_NAME_IDS,
+)
+def test_is_run_name_holds_for_exactly_the_names_require_run_name_returns(name: object, names_a_run: bool) -> None:
+    assert is_run_name(name) is names_a_run
 
 
 @pytest.mark.parametrize("run_id", ["no-such-run", "../escape"], ids=["no-run-has-it", "the-store-refuses-it"])
