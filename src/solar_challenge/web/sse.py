@@ -11,19 +11,14 @@ contract.
 
 import json
 from collections.abc import Iterable
-from dataclasses import Field, asdict, dataclass
-from typing import Any, ClassVar, Final, Generic, Protocol, TypeVar
+from dataclasses import asdict, dataclass
+from typing import Final, Generic, TypeVar
 
 from flask import Response
 
+from solar_challenge.dataclass_instance import DataclassInstance
 
-class _DataclassInstance(Protocol):
-    """An instance of any dataclass: what ``dataclasses.asdict`` accepts."""
-
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
-
-
-P = TypeVar("P", bound=_DataclassInstance)
+P = TypeVar("P", bound=DataclassInstance)
 
 
 @dataclass(frozen=True)
