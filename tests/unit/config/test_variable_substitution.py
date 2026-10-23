@@ -121,7 +121,7 @@ class TestAMalformedPlaceholderIsRefused:
                 {"BATTERY_RATIO": 2.0},
                 "name: variable 'BATTERY_RATIO' is inside the longer string 'fleet-${BATTERY_RATIO}'; "
                 "a placeholder must be the whole value",
-                id="finding-probe",
+                id="suffix-with-the-variable-supplied",
             ),
             pytest.param(
                 {"homes": [{"name": "home-${N:1}"}]},
