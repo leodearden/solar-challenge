@@ -92,10 +92,11 @@ def _find_free_port() -> int:
 
 @pytest.fixture(scope="session")
 def live_server_weather_in_place(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Put in place the weather the live server's jobs simulate on: synthetic_tmy() at each location preset, in a weather cache CACHE_DIR_VARIABLE names for the session.
+    """Put in place the weather the live server's jobs simulate on: synthetic_tmy() at each location preset, in a weather cache that CACHE_DIR_VARIABLE names while _e2e_app builds the app.
 
-    The TMY is a whole year, which a heat pump's job needs. A test module overrides this fixture to install
-    its own weather. _e2e_app requests it, because create_app binds default_weather() when it builds the app.
+    create_app binds that cache when it builds the app, so the jobs read it all session, whatever each test's
+    offline window later sets the variable to. The TMY is a whole year, which a heat pump's job needs. A test
+    module overrides this fixture to install its own weather.
     """
     cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("e2e-weather"))
     tmy = synthetic_tmy()
