@@ -66,6 +66,7 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "tilt": 35,
     "system_age_years": 0.0,
     "degradation_rate_per_year": 0.005,
+    "system_losses": None,
     "battery_kwh": 0.0,
     "max_charge_kw": None,
     "max_discharge_kw": None,
@@ -224,6 +225,16 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
+def _optional_pv_settings(params: Mapping[str, Any]) -> dict[str, Any]:
+    """The PVConfig settings a home body may leave unset, keyed by field: its system_losses unless null, which leaves PVConfig's default.
+
+    A sent system_losses must be a finite number, refused naming it; PVConfig refuses one outside its range.
+    """
+    if params["system_losses"] is None:
+        return {}
+    return {"system_losses": as_finite_float(params["system_losses"], "system_losses")}
+
+
 def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
     """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: null is unset.
 
@@ -324,7 +335,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             sent), or if required fields are missing or invalid. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
-            is; a null setting reads as unset.
+            is; a null setting reads as unset. A null system_losses also
+            reads as unset, leaving PVConfig's default, and a sent one
+            outside PVConfig's range raises PVConfig's own refusal.
     """
     data = require_json_object(data, _HOME_CONFIG)
     refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
@@ -332,14 +345,15 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     pv_kw = as_finite_float(params["pv_kw"], "pv_kw")
     azimuth = as_finite_float(params["azimuth"], "azimuth")
     tilt = as_finite_float(params["tilt"], "tilt")
-    # Range validation for system_age_years (>= 0) and degradation_rate_per_year
-    # ([0, 1]) is delegated to PVConfig.__post_init__, which raises ValueError.
+    # Range validation for system_age_years, degradation_rate_per_year and
+    # system_losses is delegated to PVConfig.__post_init__, which raises ValueError.
     # That ValueError propagates out of this function unchanged.
     # PVConfig is the single source of truth for these bounds.
     system_age_years = as_finite_float(params["system_age_years"], "system_age_years")
     degradation_rate_per_year = as_finite_float(
         params["degradation_rate_per_year"], "degradation_rate_per_year"
     )
+    optional_pv_settings = _optional_pv_settings(params)
     battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
     consumption_kwh_raw = params["consumption_kwh"]
     occupants = as_whole_number(params["occupants"], "occupants")
@@ -362,6 +376,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         tilt=tilt,
         system_age_years=system_age_years,
         degradation_rate_per_year=degradation_rate_per_year,
+        **optional_pv_settings,
     )
 
     battery_config = _parse_battery(params, battery_kwh_val)
