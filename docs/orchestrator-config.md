@@ -95,28 +95,36 @@ which keys take effect when, and how to roll back.
 After every merge to main the offline lane runs each `offline_lane_commands` job in order, off
 the merge path at idle priority. It never gates a merge. A confirmed red files a fix task
 naming the failing node-ids, unless the job's `outage_probe` reports an outage, which is
-escalated instead.
+escalated instead. Each job whose suite needs a live service declares `scripts/outage_probe.py`,
+naming that service, as its `outage_probe`; the script defines what counts as an outage.
+`outage_probe_timeout_secs` is pinned beside each probe, not left to dark-factory's default,
+because the probe's request timeout is sized to fit it. Each probe runs as
+`uv run --locked --extra dev`, since the script needs requests from the dev extra and
+`solar_challenge` for the PVGIS request, so it starts only once uv has synced the job's
+environment. If PyPI is out of reach while `uv.lock` pins a file this host's uv cache lacks,
+the job's own sync fails, and so does the probe's: the lane reads a broken probe, so the red
+goes to its confirm and is filed, with a broken-probe escalation beside it.
 
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
-  except the `.python-version` pin.
+  except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
+  downloads whenever `uv.lock` changes.
 - **`e2e`.** The non-slow Playwright suite. `LaneCommand` has no timeout field and the lane is
   single-flight, so without the `timeout` prefix a hung browser run would stall every later
-  lane run. The prefix is sized as a generous multiple of the run, not at the run.
+  lane run. The prefix is sized as a generous multiple of the run, not at the run. Its suite
+  needs no live service, so it declares no probe.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
-  live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. The
-  job's `outage_probe`, `scripts/pvgis_outage_probe.py`, defines what counts as a PVGIS outage.
-  The `timeout` prefix caps a hung request. `outage_probe_timeout_secs` is pinned here, not
-  left to dark-factory's default, because the probe's request timeout is sized to fit it.
+  live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. Its
+  probe asks PVGIS. The `timeout` prefix caps a hung request.
 - **`css-build`.** Rebuilds `static/dist/style.css` in a scratch copy from the committed sources
   and `package-lock.json` (`tests/css_build`), and goes red when the committed file differs,
   for example after an unrebuilt `tailwind.config.js` edit, or when the Tailwind license texts
   beside it are not the locked tailwindcss package's. It needs npm and
-  `registry.npmjs.org`. The `timeout` prefix caps a hung run.
+  `registry.npmjs.org`, which its probe asks. The `timeout` prefix caps a hung run.
 - **`newest-releases`.** Re-runs the verify suite in a scratch copy whose `uv.lock` is upgraded
   to the newest releases `pyproject.toml`'s ranges admit (`tests/newest_releases`), the
   releases a consumer that re-locks installs, so an upstream release that breaks this code
-  files a fix task. It needs PyPI. Like `interpreter-matrix` it has no `timeout` prefix: its
-  suite timeout bounds a hang.
+  files a fix task. It needs PyPI, which its probe asks. Like `interpreter-matrix` it has no
+  `timeout` prefix: its suite timeout bounds a hang.
 
 The legacy numeric and infra seams (`offline_lane_legacy_numeric_enabled`,
 `offline_lane_infra_enabled`) are off because this repo has neither script they run.

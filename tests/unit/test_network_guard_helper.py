@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from tests._network_guard import refusing_network
+from tests._network_guard import refusing_network, send_child_processes_to_a_dead_proxy
 
 # TEST-NET-1 (RFC 5737) is never routed, and the guard refuses before any syscall, so no packet is sent.
 _OFF_THIS_MACHINE = ("192.0.2.1", 9)
@@ -230,3 +230,18 @@ class TestRefusingNetwork:
             pass
 
         assert dict(os.environ) == before
+
+
+class TestSendChildProcessesToADeadProxy:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_a_child_processs_request_off_this_machine_fails_to_connect_without_being_refused(
+        self, scheme: str
+    ) -> None:
+        """So a test whose child processes ask a live service meets it out of reach, and their requests do not count against the test."""
+        host, port = _OFF_THIS_MACHINE
+        with refusing_network() as refused, pytest.MonkeyPatch.context() as patch:
+            send_child_processes_to_a_dead_proxy(patch)
+            child = _fetch_with_requests_in_a_child_process(f"{scheme}://{host}:{port}/")
+
+        assert child.returncode != 0 and "ProxyError" in child.stderr, (child.returncode, child.stderr[-2000:])
+        assert refused == []

@@ -62,20 +62,26 @@ git:
     - name: interpreter-matrix
       command: "uv run --locked --extra dev pytest tests/interpreter_matrix"
       fix_task_priority: "medium"
+      outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pypi"
+      outage_probe_timeout_secs: 180
     - name: e2e
       command: "timeout -k 60 1800 uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider"
       fix_task_priority: "medium"
     - name: pvgis
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider"
       fix_task_priority: "medium"
-      outage_probe: "uv run --locked --extra dev python scripts/pvgis_outage_probe.py"
+      outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pvgis"
       outage_probe_timeout_secs: 180
     - name: css-build
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider"
       fix_task_priority: "medium"
+      outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py npm"
+      outage_probe_timeout_secs: 180
     - name: newest-releases
       command: "uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider"
       fix_task_priority: "medium"
+      outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pypi"
+      outage_probe_timeout_secs: 180
 
 # Landlock filesystem sandbox; restart tier.
 sandbox:

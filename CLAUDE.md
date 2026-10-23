@@ -156,11 +156,23 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   reproduce here, may come from the laptop's environment.
   `docs/laptop-merge-verify.md` says how to reproduce it there and how to send
   merge verifies back to this host.
+- An offline-lane job whose suite needs a live service declares, as its
+  `outage_probe` in `dark-factory-orchestrator.yaml`, `scripts/outage_probe.py`
+  naming that service; the script's docstring says what counts as an outage and
+  what each service is asked. After a red run the lane runs the probe. When it
+  reports an outage, the lane raises one escalation naming the service instead
+  of filing a fix task, and closes it once the probe passes again. Check a
+  service as the lane does with
+  `uv run --locked --extra dev python scripts/outage_probe.py <service>`, whose
+  `--help` lists the services.
 - After every merge, the offline lane re-runs the verify suite on each admitted
   Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
   files names the interpreter in its failing node-id, e.g.
   `tests/interpreter_matrix/test_verify_suite.py::test_verify_suite_passes_on_python[3.14]`;
-  reproduce it by running that node-id.
+  reproduce it by running that node-id. Its outage probe asks PyPI
+  (`scripts/outage_probe.py pypi`), whose files a case's locked sync downloads
+  whenever `uv.lock` changes. If uv could not download from PyPI, retry later
+  before changing code.
 - The lane's `e2e` job runs the non-slow Playwright suite after every merge. A
   fix task it files names the failing e2e node-ids, e.g.
   `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
@@ -179,16 +191,11 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
 - The lane's `pvgis` job runs `tests/integration/test_pvgis.py`, the PVGIS
   contract tests, after every merge. They check PVGIS's live response, never a
   cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
-  After a red run the lane runs the job's outage probe,
-  `scripts/pvgis_outage_probe.py`, whose docstring says what counts as a PVGIS
-  outage. When it reports one, the lane raises one escalation naming PVGIS
-  instead of filing a fix task, and closes it once the probe passes again. A
+  Its outage probe asks PVGIS (`scripts/outage_probe.py pvgis`). A
   fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
   when the red run printed no failing node-id (it hit the job's `timeout`, or
   pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`, and
-  check PVGIS as the lane does with
-  `uv run --locked --extra dev python scripts/pvgis_outage_probe.py`. The
+  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. The
   failure line a fix task quotes is the traceback's first: for a request PVGIS
   refused, pvlib's JSONDecodeError on PVGIS's HTML error page. The HTTP status
   is at the end of the traceback, in the pass's `detect.log` under the main
@@ -201,7 +208,10 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
 - The lane's `css-build` job rebuilds the web package's `static/dist/style.css`
   from the committed sources and `package-lock.json` in a scratch copy, and
   fails when the committed file differs. Tailwind scans the raw text of
-  templates and `static/js`, so an edit there can change the build too. A fix
+  templates and `static/js`, so an edit there can change the build too. Its
+  outage probe asks the npm registry (`scripts/outage_probe.py npm`), from
+  which `npm ci` installs every tarball `package-lock.json` resolves. If npm
+  could not reach the registry, retry later before changing code. A fix
   task it files names
   `tests/css_build/test_dist_style_css.py::test_dist_style_css_matches_a_fresh_build_of_its_sources`,
   or `css-build::nonzero-exit` when the red run printed no failing node-id (it
@@ -222,7 +232,8 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   of the tree whose `uv.lock` is upgraded to the newest releases
   `pyproject.toml`'s ranges admit, the releases a consumer that re-locks
   installs. A red there usually comes from an upstream release, not from the
-  merged commit in the fix task's suspect range. A fix task it files names
+  merged commit in the fix task's suspect range. Its outage probe asks PyPI
+  (`scripts/outage_probe.py pypi`). A fix task it files names
   `tests/newest_releases/test_verify_suite_on_newest_releases.py::test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit`,
   or `newest-releases::nonzero-exit` when the red run printed no failing
   node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its

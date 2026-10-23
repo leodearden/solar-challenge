@@ -17,13 +17,23 @@ client that read the proxy variables in an earlier one, as urllib's process-wide
 urlopen opener does, is still named, but a request sent while none is open is
 refused without being named.
 
+A test that expects its child processes to ask a live service calls
+``send_child_processes_to_a_dead_proxy`` with its monkeypatch. The proxy
+variables then name a port on this machine that nothing listens on, so each of
+the children's requests off this machine fails to connect, as when the service
+is out of reach, and none is recorded.
+
 Usage::
 
-    from tests._network_guard import refusing_network
+    from tests._network_guard import refusing_network, send_child_processes_to_a_dead_proxy
 
     with refusing_network() as refused:
         run_code_that_must_stay_on_this_machine()
     assert refused == []
+
+    send_child_processes_to_a_dead_proxy(monkeypatch)
+    child = run_a_child_process_that_asks_a_live_service()
+    assert child.returncode != 0
 """
 
 import functools
@@ -50,6 +60,8 @@ _PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "htt
 _NO_PROXY_VARIABLES = ("NO_PROXY", "no_proxy")
 _HOSTS_A_CHILD_REACHES_DIRECTLY = ",".join(_NAMES_OF_THIS_MACHINE + _ADDRESSES_OF_THIS_MACHINE)
 _PROXY_HOST = "127.0.0.1"
+_DEAD_PROXY = "http://127.0.0.1:9"
+"""A proxy on this machine that nothing listens on: an unprivileged process cannot bind port 9."""
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
@@ -92,6 +104,18 @@ def refusing_network() -> Iterator[list[str]]:
         patch.setattr(socket.socket, "connect", connect)
         patch.setattr(socket.socket, "connect_ex", connect_ex)
         yield refused
+
+
+def send_child_processes_to_a_dead_proxy(patch: pytest.MonkeyPatch) -> None:
+    """For a test that expects its child processes to ask a live service: point the proxy variables they inherit at _DEAD_PROXY with *patch*.
+
+    Each of their requests off this machine then fails to connect, as when the
+    service is out of reach, and never reaches the proxy refusing_network records
+    with. It replaces whatever proxy the variables named, the offline guard's
+    included: the children's requests to the service are expected, so they must
+    fail at the dead proxy instead of counting against the test.
+    """
+    _send_child_processes_through(_DEAD_PROXY, patch)
 
 
 def _send_child_processes_through(proxy: str, patch: pytest.MonkeyPatch) -> None:
