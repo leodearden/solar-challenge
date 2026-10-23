@@ -7,6 +7,7 @@ import math
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from solar_challenge.errors import ConfigurationError
@@ -199,12 +200,14 @@ class TestAsFiniteFloat:
             pytest.param(10**400, id="integer-too-large-for-a-float"),
             pytest.param(True, id="true"),
             pytest.param(False, id="false"),
+            pytest.param(np.True_, id="numpy-true"),
+            pytest.param(np.False_, id="numpy-false"),
         ],
     )
     def test_a_value_that_is_not_a_finite_number_is_refused_naming_the_field_and_the_value(
         self, value: object
     ) -> None:
-        """A boolean, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
+        """A boolean, Python's or numpy's, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
         with pytest.raises(ConfigurationError) as exc_info:
             as_finite_float(value, "pv_kw")
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
@@ -320,6 +323,7 @@ class TestAsWholeNumber:
             pytest.param(float("inf"), id="infinity"),
             pytest.param("abc", id="non-numeric-string"),
             pytest.param(True, id="true"),
+            pytest.param(np.True_, id="numpy-true"),
         ],
     )
     def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
