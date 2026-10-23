@@ -40,6 +40,7 @@ from solar_challenge.weather import (
     IRRADIANCE_COLUMNS,
     WeatherCache,
 )
+from tests import _synthetic_weather
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
@@ -245,10 +246,9 @@ def synthetic_tmy() -> pd.DataFrame:
     Each day is the clear June day, its irradiance ramped from 0.2 on 1 January
     to 1.0 on 31 December.
     """
-    utc_1990 = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
-    return synthetic_june_weather(
-        "1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365).tolist()
-    ).set_axis(utc_1990)
+    return _synthetic_weather.synthetic_tmy(
+        irradiance_scale_per_day=np.linspace(0.2, 1.0, _synthetic_weather.TMY_DAYS).tolist()
+    )
 
 
 @pytest.fixture(scope="module")
