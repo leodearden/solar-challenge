@@ -874,7 +874,7 @@ class TestRunRecordTypeAndStatus:
     def test_a_run_record_refuses_a_type_or_status_outside_its_definition(self, north_roof_record, column, value):
         """A type that is not a run type, or a status that is not a run status, raises ValueError naming the field, the value and the values allowed."""
         allowed = {"type": "['home', 'fleet']", "status": "['running', 'completed', 'failed']"}[column]
-        refusal = f"RunRecord.{column} is {value!r}, not one of {allowed} or None"
+        refusal = f"RunRecord.{column} is {value!r}, not one of {allowed}"
 
         with pytest.raises(ValueError, match=re.escape(refusal)):
             dataclasses.replace(north_roof_record, **{column: value})

@@ -49,7 +49,8 @@ from solar_challenge.web.request_boundary import NotAJsonObject, request_json_ob
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
-from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, one_of, readable_headline
+from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, readable_headline
+from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
 

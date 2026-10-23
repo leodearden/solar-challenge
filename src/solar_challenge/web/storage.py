@@ -25,6 +25,7 @@ from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_sum
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
 from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,10 @@ class RunRecord:
     notes: str | None
 
     def __post_init__(self) -> None:
-        _require_one_of("type", self.type, RUN_TYPES)
-        _require_one_of("status", self.status, RUN_STATUSES)
+        if self.type is not None:
+            one_of(self.type, RUN_TYPES, "RunRecord.type")
+        if self.status is not None:
+            one_of(self.status, RUN_STATUSES, "RunRecord.status")
 
     @property
     def kind(self) -> RunKind:
@@ -85,12 +88,6 @@ class RunRecord:
         if self.config_json is None:
             return None
         return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
-
-
-def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]) -> None:
-    """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
-    if value is not None and value not in allowed:
-        raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
 
 
 def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
@@ -218,21 +215,6 @@ def _readable_headline(run_id: str, run_type: RunType | None, summary_json: str 
 
 RunSort = Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
 RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
-
-_Option = TypeVar("_Option", bound=str)
-
-
-def one_of(value: object, options: tuple[_Option, ...], field: str) -> _Option:
-    """The one of *options* that *value* equals, typed as the options are: a text read from a request narrows to its Literal.
-
-    Raises:
-        ValueError: *value* equals none of *options*; the message names *field*, *value* and each option.
-    """
-    for option in options:
-        if value == option:
-            return option
-    raise ValueError(f"{field} is {value!r}, not one of {list(options)}")
-
 
 _MAX_RUNS_PER_PAGE = 100
 
