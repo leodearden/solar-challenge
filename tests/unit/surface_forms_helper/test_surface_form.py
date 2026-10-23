@@ -46,6 +46,7 @@ import pytest
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
+    CallableGetter,
     Outer,
     Preset,
     imported_module,
@@ -572,10 +573,6 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
     building = functools.wraps(Built)(lambda rate: Built(rate))
     unsigned = functools.partial(zip, [1])
     unsigned.__signature__ = None
-    texted = functools.partial(zip, [1])
-    texted.__signature__ = "(rate)"
-    texted_zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
-    texted_zipping.__signature__ = "(rate)"
     wrapping = functools.partial(build, 1)
     wrapping.__wrapped__ = zip
 
@@ -591,15 +588,24 @@ def test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_
     with pytest.raises(TypeError, match=naming_zip):
         surface_form(unsigned)
     with pytest.raises(TypeError, match=naming_zip):
-        surface_form(texted)
-    with pytest.raises(TypeError, match=naming_zip):
-        surface_form(texted_zipping)
-    with pytest.raises(TypeError, match=naming_zip):
         surface_form(wrapping)
     with pytest.raises(
         TypeError, match=r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
     ):
         surface_form(building)
+
+
+def test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum() -> None:
+    class Period(enum.Enum):
+        PEAK = "peak"
+
+    naming_the_partial_and_period = r"\bfunctools\.partial\(.*\.Period\b.*\benum\.Enum\b"
+    with pytest.raises(TypeError, match=naming_the_partial_and_period):
+        surface_form(functools.partial(Period))
+    with pytest.raises(TypeError, match=naming_the_partial_and_period):
+        named_classes(functools.partial(Period))
+    with pytest.raises(TypeError, match=r"\.Period\b.*\.Period\b.*\benum\.Enum\b"):
+        surface_form(functools.wraps(Period)(lambda value: Period(value)))
 
 
 def test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature() -> None:
@@ -661,8 +667,27 @@ def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_
     assert surface_form(functools.partial(Rated)) == "(rate: int)"
 
 
-def test_a_class_whose_signature_attribute_is_no_inspect_signature_is_refused_as_its_constructor_is() -> None:
-    class Texted(dict):
+def test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value() -> None:
+    def pay(rate: int) -> None: ...
+
+    def settle(rate: int) -> None: ...
+
+    settle.__signature__ = "(rate)"
+    paying = functools.wraps(pay)(lambda rate: pay(rate))
+    paying.__signature__ = "(rate)"
+    paid = functools.partial(pay)
+    paid.__signature__ = "(rate)"
+    texted = functools.partial(zip, [1])
+    texted.__signature__ = "(rate)"
+    texted_zipping = functools.wraps(zip)(lambda *iterables: zip(*iterables))
+    texted_zipping.__signature__ = "(rate)"
+
+    class Texted:
+        __signature__ = "(rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Keyed(dict):
         __signature__ = "(rate)"
 
     class Called(dict):
@@ -672,10 +697,49 @@ def test_a_class_whose_signature_attribute_is_no_inspect_signature_is_refused_as
                 [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
             )
 
-    with pytest.raises(TypeError, match=r"\.Texted\b.*\bbuiltins\.dict\b"):
+    class Meter:
+        def read(self, rate: int) -> None: ...
+
+        read.__signature__ = "(self, rate)"
+
+    getter = CallableGetter()
+    getter.__signature__ = "(rate)"
+
+    carrying_text = r"'\(rate\)'.*\bbuiltins\.str\b.*\binspect\.Signature\b"
+    naming_settle_and_its_text = rf"\.settle\b.*{carrying_text}"
+    with pytest.raises(TypeError, match=naming_settle_and_its_text):
+        surface_form(settle)
+    with pytest.raises(TypeError, match=naming_settle_and_its_text):
+        named_classes(settle)
+    with pytest.raises(TypeError, match=rf"\.pay\b.*{carrying_text}"):
+        surface_form(paying)
+    with pytest.raises(TypeError, match=rf"\bfunctools\.partial\(.*\bpay\b.*{carrying_text}"):
+        surface_form(paid)
+    with pytest.raises(TypeError, match=rf"\bfunctools\.partial\(.*\bzip\b.*{carrying_text}"):
+        surface_form(texted)
+    with pytest.raises(TypeError, match=rf"\bbuiltins\.zip\b.*{carrying_text}"):
+        surface_form(texted_zipping)
+    naming_texted_and_its_text = rf"\.Texted\b.*{carrying_text}"
+    with pytest.raises(TypeError, match=naming_texted_and_its_text):
         surface_form(Texted)
-    with pytest.raises(TypeError, match=r"\.Called\b.*\bbuiltins\.dict\b"):
+    with pytest.raises(TypeError, match=naming_texted_and_its_text):
+        named_classes(Texted)
+    with pytest.raises(
+        TypeError, match=rf"\bfunctools\.partial\(.*\.Texted\b.*{carrying_text}"
+    ):
+        surface_form(functools.partial(Texted))
+    with pytest.raises(TypeError, match=rf"\.Keyed\b.*{carrying_text}"):
+        surface_form(Keyed)
+    with pytest.raises(
+        TypeError, match=r"\.Called\b.*\bbuiltins\.method\b.*\binspect\.Signature\b"
+    ):
         surface_form(Called)
+    with pytest.raises(
+        TypeError, match=r"\.Meter\.read\b.*'\(self, rate\)'.*\bbuiltins\.str\b"
+    ):
+        surface_form(Meter().read)
+    with pytest.raises(TypeError, match=rf"\bCallableGetter\b.*{carrying_text}"):
+        surface_form(getter)
 
 
 def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable() -> None:
@@ -700,15 +764,6 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
 
         def __init__(self, rate: int) -> None: ...
 
-    class Texted:
-        @functools.wraps(object.__new__)
-        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
-            return object.__new__(cls)
-
-        __new__.__signature__ = "(cls, rate)"
-
-        def __init__(self, rate: int) -> None: ...
-
     naming_created_and_its_new = r"\.Created\b.*\.Created\.__new__\b.*\bobject\.__new__\b"
     with pytest.raises(TypeError, match=naming_created_and_its_new):
         surface_form(Created)
@@ -727,10 +782,6 @@ def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_e
         TypeError, match=r"\.Keyed\b.*\.Keyed\.__new__\b.*\bdict\.__new__\b"
     ):
         surface_form(Keyed)
-    with pytest.raises(
-        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*\bobject\.__new__\b"
-    ):
-        surface_form(Texted)
 
 
 @pytest.mark.skipif(
@@ -810,6 +861,89 @@ def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it
         surface_form(Made)
     with pytest.raises(TypeError, match=naming_made_and_its_call):
         named_classes(Made)
+
+
+def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value() -> None:
+    class Initialised:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = "(self, rate)"
+
+    class Priced:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = lambda: "(self, rate)"
+
+    class Created:
+        def __new__(cls, rate: int) -> "Created":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+    class Recreated(Created):
+        pass
+
+    class Texted:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Counting(type):
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Counted(metaclass=Counting):
+        pass
+
+    class Wrapping(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Wrapped(metaclass=Wrapping):
+        pass
+
+    naming_initialised_its_init_and_the_text = (
+        r"\.Initialised\b.*\.Initialised\.__init__\b.*'\(self, rate\)'"
+        r".*\bbuiltins\.str\b.*\binspect\.Signature\b"
+    )
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        named_classes(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(functools.partial(Initialised))
+    with pytest.raises(
+        TypeError, match=r"\.Priced\b.*\.Priced\.__init__\b.*\bbuiltins\.function\b"
+    ):
+        surface_form(Priced)
+    with pytest.raises(
+        TypeError, match=r"\.Created\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Created)
+    with pytest.raises(
+        TypeError, match=r"\.Recreated\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Recreated)
+    with pytest.raises(
+        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Texted)
+    with pytest.raises(
+        TypeError, match=r"\.Counted\b.*\.Counting\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Counted)
+    with pytest.raises(
+        TypeError, match=r"\.Wrapped\b.*\.Wrapping\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Wrapped)
 
 
 def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
