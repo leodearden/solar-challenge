@@ -1,14 +1,49 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.number_fields, the web layer's readers of a request's number fields."""
+"""Tests for solar_challenge.number_fields, the package's number readers."""
+
+import json
+import subprocess
+import sys
 
 import pytest
 
-from solar_challenge.web.number_fields import (
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
     as_finite_float,
     as_finite_float_within,
     as_whole_number,
     as_whole_number_within,
 )
+
+_IMPORT_PROBE = """\
+import json
+import sys
+
+import solar_challenge.number_fields
+
+print(json.dumps(sorted(
+    name for name in sys.modules if name == "solar_challenge" or name.startswith("solar_challenge.")
+)))
+"""
+
+
+def test_importing_the_module_loads_only_errors_and_whole_numbers_from_the_package() -> None:
+    """A fresh ``python -I`` interpreter that imports the readers loads no other package module, so any module can import them."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", _IMPORT_PROBE],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, f"importing solar_challenge.number_fields failed:\n{result.stderr}"
+    assert json.loads(result.stdout) == [
+        "solar_challenge",
+        "solar_challenge.errors",
+        "solar_challenge.number_fields",
+        "solar_challenge.whole_numbers",
+    ]
 
 
 class TestAsFiniteFloat:
@@ -51,7 +86,7 @@ class TestAsFiniteFloat:
         self, value: object
     ) -> None:
         """A boolean, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_finite_float(value, "pv_kw")
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
 
@@ -83,7 +118,7 @@ class TestAsFiniteFloatWithin:
         self, value: object
     ) -> None:
         """The refusal shows the value as sent ('25' in quotes), not the float it converts to."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_finite_float_within(value, "pv_kw", 0.5, 20)
         assert str(exc_info.value) == f"pv_kw must be between 0.5 and 20, got {value!r}"
 
@@ -100,7 +135,7 @@ class TestAsFiniteFloatWithin:
         self, value: object
     ) -> None:
         """A value as_finite_float refuses is refused as it refuses it, before any range check."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_finite_float_within(value, "pv_kw", 0.5, 20)
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
 
@@ -133,7 +168,7 @@ class TestAsWholeNumber:
         self, value: object
     ) -> None:
         """A number with a fractional part is refused, not truncated."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number(value, "n_homes")
         assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
 
@@ -149,7 +184,7 @@ class TestAsWholeNumber:
         self, value: object
     ) -> None:
         """A value as_finite_float refuses is refused as it refuses it, before any whole-number check."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number(value, "n_homes")
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
 
@@ -185,7 +220,7 @@ class TestAsWholeNumberWithin:
         self, value: object
     ) -> None:
         """The refusal shows the value as sent (1e300 reads 1e+300), not the int it converts to."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number_within(value, "n_homes", 1, 10)
         assert str(exc_info.value) == f"n_homes must be between 1 and 10, got {value!r}"
 
@@ -196,7 +231,7 @@ class TestAsWholeNumberWithin:
         self, value: object
     ) -> None:
         """A number with a fractional part is refused as as_whole_number refuses it, before any range check."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number_within(value, "n_homes", 1, 10)
         assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
 
@@ -213,6 +248,6 @@ class TestAsWholeNumberWithin:
         self, value: object
     ) -> None:
         """A value as_finite_float refuses is refused as it refuses it, before any whole-number or range check."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             as_whole_number_within(value, "n_homes", 1, 10)
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
