@@ -80,7 +80,6 @@ filterwarnings = ["error::pytest.PytestDeprecationWarning"]
 # An unregistered mark fails collection; tests/unit/test_unregistered_marks_are_refused.py says why.
 strict_markers = true
 markers = [
-    "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
     "build: tests that invoke the build toolchain (uv build --wheel); requires uv and cached build-backend deps",
 ]

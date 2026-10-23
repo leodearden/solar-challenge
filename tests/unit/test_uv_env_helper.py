@@ -19,7 +19,7 @@ _DEV_ONLY_COMMANDS = [
 ]
 
 _DEV_AND_WEB_COMMANDS = [
-    "uv run --locked --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e",
+    "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e",
     "uv run --locked --extra dev --extra web pytest tests/unit/test_web_app.py",
 ]
 
@@ -66,7 +66,7 @@ def test_every_other_variable_of_this_process_is_kept(tmp_path: Path, monkeypatc
             ("--locked", "--extra", "dev"),
         ),
         (
-            "uv run --locked --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e",
+            "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e",
             ("--locked", "--extra", "dev", "--extra", "web"),
         ),
     ],

@@ -23,9 +23,6 @@ Every browser context a test opens refuses each request to another origin
 than the live server's, as if the network were down, and the test errors at
 teardown, naming each refused URL.
 
-Every test under this directory is marked e2e by this module's
-pytest_collection_modifyitems, so no test module here writes the mark.
-
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
@@ -491,13 +488,12 @@ def _lost_a_request_to_a_network_change(item: pytest.Item) -> bool:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark each test under this directory e2e, and run it once more if it fails after its browser lost a request to a network change.
+    """Run each test under this directory once more if it fails after its browser lost a request to a network change.
 
     The hook is given every test in the session, so it leaves the tests outside this directory alone.
     """
     for item in items:
         if item.path.is_relative_to(Path(__file__).parent):
-            item.add_marker(pytest.mark.e2e)
             item.add_marker(
                 pytest.mark.flaky(
                     reruns=_RERUNS_AFTER_A_NETWORK_CHANGE,
