@@ -10,6 +10,7 @@ Storage structure:
 """
 
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -23,6 +24,8 @@ from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_sum
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
 from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,21 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
             assert_never(summary)
 
 
+def readable_headline(record: RunRecord) -> RunHeadline | None:
+    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary does not decode.
+
+    A summary that does not decode is logged as a warning naming the run, which the run lists
+    then show without figures and the dashboard's totals without its generation, rather than
+    fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15, D-S19-9).
+    """
+    try:
+        summary = record.summary()
+    except ValueError as unreadable:
+        logger.warning("Run %r shows no figures, as its summary does not decode: %s", record.id, unreadable)
+        return None
+    return None if summary is None else run_headline(summary)
+
+
 RunSort = Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
 RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
 
@@ -231,6 +249,15 @@ class RunPage:
     total: int
 
 
+@dataclass(frozen=True)
+class RunTotals:
+    """The dashboard's totals: the count of the completed runs, of their homes, and the energy they generated."""
+
+    run_count: int
+    home_count: int
+    generation_kwh: float
+
+
 _RUN_QUERY_CONDITION = (
     "(:run_type IS NULL OR type = :run_type)"
     " AND (:pattern IS NULL OR name LIKE :pattern OR notes LIKE :pattern)"
@@ -259,6 +286,7 @@ RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 _COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
+_COMPLETED_RUN_STATUS: RunStatus = "completed"
 _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
 
@@ -323,7 +351,7 @@ def _saved_run_row(
         status=status,
         error_message=error_message,
         created_at=now if created_at is None else created_at,
-        completed_at=now if status == "completed" else None,
+        completed_at=now if status == _COMPLETED_RUN_STATUS else None,
         duration_seconds=duration_seconds,
         n_homes=n_homes,
         notes=None,
@@ -733,6 +761,26 @@ class RunStorage:
                 {**values, "limit": query.per_page, "offset": (query.page - 1) * query.per_page},
             ).fetchall()
         return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
+
+    def totals(self) -> RunTotals:
+        """The count of the completed runs and of their homes, and the generation of those whose readable_headline reads.
+
+        A run whose row records no count of homes counts as one home. A run whose summary does
+        not decode still counts, with its homes, but adds no generation; readable_headline logs it.
+        """
+        completed = {"completed": _COMPLETED_RUN_STATUS}
+        with self.database.transaction() as conn:
+            run_count, home_count = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN n_homes > 0 THEN n_homes ELSE 1 END), 0) "
+                "FROM runs WHERE status = :completed",
+                completed,
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT * FROM runs WHERE status = :completed AND summary_json IS NOT NULL", completed
+            ).fetchall()
+        headlines = (readable_headline(_record_of(row)) for row in rows)
+        generation_kwh = sum((headline.generation_kwh for headline in headlines if headline is not None), 0.0)
+        return RunTotals(run_count=run_count, home_count=home_count, generation_kwh=generation_kwh)
 
     def list_runs(
         self,
