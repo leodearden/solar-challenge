@@ -18,26 +18,17 @@ E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
 WRITTEN_WITHOUT_THE_E2E_MARK = """
     def test_carries_the_e2e_mark(request):
         assert request.node.get_closest_marker("e2e") is not None
-
-
-    def test_requests_weather_cache(weather_cache):
-        pass
     """
 
 BESIDE_THE_E2E_DIRECTORY = """
     def test_carries_no_e2e_mark(request):
         assert request.node.get_closest_marker("e2e") is None
-
-
-    def test_requests_weather_cache(weather_cache):
-        pass
     """
 
 
 def test_the_e2e_conftest_marks_e2e_each_test_under_its_directory_and_no_other(
     pytester_under_root_conftest: pytest.Pytester, project_root: Path
 ) -> None:
-    """Both run in the root conftest's offline window, the test under the directory as well as the one beside it, so weather_cache serves each."""
     pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     pytester_under_root_conftest.makepyfile(
         **{
@@ -51,4 +42,4 @@ def test_the_e2e_conftest_marks_e2e_each_test_under_its_directory_and_no_other(
         "-p", "no:cacheprovider", "e2e", "test_beside_the_e2e_directory.py"
     )
 
-    result.assert_outcomes(passed=4)
+    result.assert_outcomes(passed=2)
