@@ -15,12 +15,14 @@ the project root may restate it, since a hand-maintained copy drifts from it.
 """
 
 from importlib.metadata import metadata
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from packaging.utils import canonicalize_name
 
+from tests._collect_only import requires_uv
 from tests._declared_dependencies import (
+    E2E,
     PACKAGE_SCOPES,
     SOURCE_SCOPES,
     SourceScope,
@@ -33,13 +35,40 @@ from tests._interpreters import (
     minor_versions_where_marker_holds,
     requires_python,
 )
+from tests._lane_collection import collect_lane_job
 from tests._pyproject import core_requirements, extra_requirements, load_project_table
+from tests._uv_env import SharedUvEnvironments
+
+_E2E_LANE_JOB = "e2e"
+_E2E_CONTRACT_MODULE = PurePosixPath("tests/e2e/test_declared_dependencies.py")
 
 
 @pytest.mark.parametrize("scope", SOURCE_SCOPES, ids=lambda scope: scope.name)
 def test_sources_import_only_declared_dependencies(project_root: Path, scope: SourceScope) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
     assert_imports_only_declared(project_root, scope)
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+def test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra(
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
+) -> None:
+    """Run as the lane runs it, the e2e job collects a case of tests/e2e/test_declared_dependencies.py for every
+    scope whose extras include e2e.
+
+    The per-task verify does not install that extra, so it cannot judge those scopes.
+    """
+    collection = collect_lane_job(project_root, _E2E_LANE_JOB, env_for=shared_uv_probe_environments.for_command)
+
+    judged = {test.parametrize_id for test in collection.written_report().tests if test.path == _E2E_CONTRACT_MODULE}
+    unjudged = [scope.name for scope in SOURCE_SCOPES if E2E in scope.extras and scope.name not in judged]
+    assert not unjudged, (
+        f"the {_E2E_LANE_JOB!r} lane job {collection.command!r} collects no case of {_E2E_CONTRACT_MODULE} for the "
+        f"scopes {unjudged}, whose extras include {E2E}. No automated run then judges their imports, so an import "
+        "of a distribution that only another requirement installs (e.g. greenlet through playwright) goes unseen. "
+        f"Parametrise that module's contract over every scope whose extras include {E2E}"
+    )
 
 
 @pytest.mark.parametrize("scope", PACKAGE_SCOPES, ids=lambda scope: scope.name)
