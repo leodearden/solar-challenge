@@ -38,7 +38,6 @@ from __future__ import annotations
 import functools
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator
@@ -71,13 +70,6 @@ from tests._web_runs import store_fleet_run, store_home_run
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Route
     from pytest_playwright import CreateContextCallback
-
-
-def _find_free_port() -> int:
-    """Find an available TCP port on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +138,11 @@ def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
     _e2e_job_manager so that pytest stops this server before shutting down
     the manager its requests submit jobs to.
     """
-    port = _find_free_port()
-    server = make_server("127.0.0.1", port, _e2e_app, threaded=True)
+    server = make_server("127.0.0.1", 0, _e2e_app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    yield f"http://127.0.0.1:{port}"
+    yield f"http://127.0.0.1:{server.port}"
 
     server.shutdown()
 
