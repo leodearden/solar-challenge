@@ -20,8 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
     from solar_challenge.home import HomeConfig, SimulationResults
-    from solar_challenge.web.database import RunStatus
-    from solar_challenge.web.storage import RunStorage
+    from solar_challenge.web.storage import RunStatus, RunStorage
 
 
 def store_fleet_run(

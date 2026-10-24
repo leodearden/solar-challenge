@@ -27,10 +27,9 @@ import pandas as pd
 
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.web.database import RunType
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.storage import RunRecord, RunStorage
-from solar_challenge.web.stored_runs import RUN_KINDS
+from solar_challenge.web.stored_runs import RUN_KINDS, RunType
 
 logger = logging.getLogger(__name__)
 

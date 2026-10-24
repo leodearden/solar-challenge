@@ -9,12 +9,12 @@ home_{i}.parquet and home_{i}_summary.json. Each config and summary is its datac
 field tree in JSON.
 
 StoredHomeRun and StoredFleetRun are the runs as their directories store them: each
-writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
-behaviour table, one RunKind per RunType; a kind also decodes the summary and the
-HomeConfigs a run's record holds, and builds from the HomeConfigs the scenario its YAML
-export answers with. A kind also names the run created without a name. Where a
-run's directory lives, and the runs table that records each run's type, are RunStorage's:
-nothing here reads SQL or Flask.
+writes its documents and answers its run's CSV export. RunType names the types of run,
+RUN_TYPES in order, and RUN_KINDS is the run type to behaviour table, one RunKind per
+RunType; a kind also decodes the summary and the HomeConfigs a run's record holds, and
+builds from the HomeConfigs the scenario its YAML export answers with. A kind also names
+the run created without a name. Where a run's directory lives, and the runs table that
+records each run's type, are RunStorage's: nothing here reads SQL or Flask.
 """
 
 import functools
@@ -30,8 +30,10 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
-from solar_challenge.web.database import RunType
 from solar_challenge.web.run_names import is_run_name
+
+RunType = Literal["home", "fleet"]  # the type of a run, held by the runs table's type column
+RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
 
 T = TypeVar("T")
 

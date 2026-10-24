@@ -11,16 +11,17 @@ pytest.importorskip("pyarrow")
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.web.database import RunType, init_db
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import RunType
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage of no app under tmp_path, its database holding the schema init_db creates."""
-    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path / "data")
+    """An empty RunStorage of no app under tmp_path, its database a new store open_database created."""
+    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path / "data")
 
 
 def _stored_summary_json(storage: RunStorage, run_id: str) -> str:

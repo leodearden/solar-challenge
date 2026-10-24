@@ -10,15 +10,15 @@ pytest.importorskip("pyarrow")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
-from solar_challenge.web.database import init_db
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunRecord, RunStorage
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage under tmp_path, with the schema init_db creates."""
-    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path)
+    """An empty RunStorage under tmp_path, its database a new store open_database created."""
+    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path)
 
 
 def _a_home() -> tuple[HomeConfig, SimulationResults]:

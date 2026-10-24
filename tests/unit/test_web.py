@@ -13,8 +13,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import RunStatus
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunStatus, RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
     chart_figures,

@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""SQLite database module for Solar Challenge web dashboard persistence.
+"""The dashboard's SQLite database: the policy every connection to it applies, its tables' schema mechanism, and its chat table.
 
-Provides schema initialization for storing simulation runs, chat messages,
-and configuration presets, and Database, through which every connection to
-the dashboard's database is opened.
+Database opens every connection to the database file. TableSchema states a table as its
+owner declares it, create_table creates one, and rebuild_table rebuilds an existing table to
+its owner's current schema, keeping its rows; RowRefused names a row a migration cannot keep.
+Each table's owner states its own schema: storage.py the runs table, presets.py
+config_presets, and this module chat_messages, with the chat history's store.
 
-Schema migration strategy:
-    There is currently no automated migration framework.  When the schema
-    changes (new columns, altered constraints, etc.), delete the database
-    file (default ``~/.solar-challenge/solar-challenge.db``) and restart
-    the application.  The ``init_db()`` function will recreate all tables
-    from scratch using ``CREATE TABLE IF NOT EXISTS``.
+A store's schema version is its database file's PRAGMA user_version. web/schema.py creates a
+new store at the current version and refuses a store at any other, and
+`solar-challenge web migrate` brings an older store forward to it
+(docs/prds/run-store-one-owner.md §3.9).
 """
 
 import json
@@ -22,18 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-RunType = Literal["home", "fleet"]  # the type of a run, held by the runs table's type column
-RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
-
-RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
-RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
-UNFINISHED_RUN_STATUS: RunStatus = "running"
-
 ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
 CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
-
-PresetType = Literal["home", "fleet"]  # the type of a saved preset, held by the config_presets table's type column
-PRESET_TYPES: tuple[PresetType, ...] = get_args(PresetType)
 
 
 def sql_string_literal(text: str) -> str:
@@ -57,9 +47,9 @@ class Database:
 
         Rows are read by column name and the schema's foreign keys are enforced. Opening reads
         nothing from the file, so an unreadable database raises at the first statement, inside
-        the caller's error handling. journal_mode=WAL is a property of the file, which init_db
-        sets when it creates the schema, so a connection to an initialised database reports
-        wal. tests/unit/test_web_database_connections.py pins this policy.
+        the caller's error handling. journal_mode=WAL is a property of the file, which
+        web/schema.py's open_database sets when it creates a store, so a connection to a store
+        it created reports wal. tests/unit/test_web_database_connections.py pins this policy.
         """
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
@@ -181,86 +171,24 @@ class RowRefused(Exception):
         self.reason = reason
 
 
-def init_db(db_path: str | Path) -> Database:
-    """Initialize the SQLite database with the required schema, and return the Database for it.
-
-    Creates tables for runs, chat_messages, and config_presets.
-    The schema is created in one transaction, all or nothing.
-    Safe to call multiple times - uses CREATE TABLE IF NOT EXISTS.
-
-    Args:
-        db_path: Path to the SQLite database file. Parent directory
-            will be created if it doesn't exist.
-
-    Returns:
-        The Database for *db_path*, through which its caller opens every connection to it.
-    """
-    database = Database(Path(db_path))
-    database.path.parent.mkdir(parents=True, exist_ok=True)
-
-    with database.transaction() as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("BEGIN")
-        _create_schema(conn.cursor())
-    return database
+CHAT_MESSAGES_TABLE = TableSchema(
+    name="chat_messages",
+    columns=(
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("session_id", "TEXT"),
+        ("role", f"TEXT {check_one_of('role', CHAT_ROLES)}"),
+        ("content", "TEXT"),
+        ("created_at", "TEXT"),
+        ("metadata_json", "TEXT"),
+    ),
+    indexes=("CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id)",),
+)
+"""The chat_messages table: the assistant's conversations, each message under its browser session."""
 
 
-def _create_schema(cursor: sqlite3.Cursor) -> None:
-    """Create through *cursor* each of the dashboard's tables and indexes that is missing."""
-    # Runs table - stores metadata for home/fleet simulations
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            type TEXT {check_one_of("type", RUN_TYPES)},
-            config_json TEXT,
-            summary_json TEXT,
-            status TEXT DEFAULT {sql_string_literal(UNFINISHED_RUN_STATUS)} {check_one_of("status", RUN_STATUSES)},
-            error_message TEXT,
-            created_at TEXT,
-            completed_at TEXT,
-            duration_seconds REAL,
-            n_homes INTEGER DEFAULT 1,
-            notes TEXT
-        )
-    """)
-
-    # Chat messages table - stores AI assistant conversation history
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            role TEXT {check_one_of("role", CHAT_ROLES)},
-            content TEXT,
-            created_at TEXT,
-            metadata_json TEXT
-        )
-    """)
-
-    # Config presets table - stores saved configuration templates
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS config_presets (
-            id TEXT PRIMARY KEY,
-            name TEXT UNIQUE,
-            type TEXT {check_one_of("type", PRESET_TYPES)},
-            config_json TEXT,
-            created_at TEXT
-        )
-    """)
-
-    # Create indexes for common queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_runs_created_at
-        ON runs(created_at DESC)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_runs_type
-        ON runs(type)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
-        ON chat_messages(session_id)
-    """)
+def migrate_chat_messages_table_v1(conn: sqlite3.Connection) -> None:
+    """Schema version 1's part for the chat_messages table, run on *conn* inside its migration step's transaction: the table rebuilt to CHAT_MESSAGES_TABLE."""
+    rebuild_table(conn, CHAT_MESSAGES_TABLE)
 
 
 def save_chat_message(

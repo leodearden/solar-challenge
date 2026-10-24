@@ -43,8 +43,9 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.schema import open_database
 
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import home_summary
@@ -595,7 +596,7 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_get_run_results_with_storage(self, tmp_path: Path) -> None:
         """dispatch_tool('get_run_results', {...}) with the seeded storage in its context returns the handler's dict."""
-        database = init_db(tmp_path / "disp_grr_test.db")
+        database = open_database(tmp_path / "disp_grr_test.db")
         seed_run(
             database,
             run_id="disp-run-001",
@@ -617,7 +618,7 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_list_recent_runs_with_storage(self, tmp_path: Path) -> None:
         """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded storage in its context returns the handler's dict."""
-        database = init_db(tmp_path / "disp_lrr_test.db")
+        database = open_database(tmp_path / "disp_lrr_test.db")
         seed_run(
             database,
             run_id="disp-lrr-001",
@@ -638,7 +639,7 @@ class TestRunLookupToolSurface:
     ) -> None:
         """A limit of 0 is a whole number, so it is not refused: list_recent_runs' own rule for a
         limit <= 0 decides how many runs it lists."""
-        database = init_db(tmp_path / "disp_lrr_zero.db")
+        database = open_database(tmp_path / "disp_lrr_zero.db")
         seed_run(
             database,
             run_id="disp-lrr-zero",

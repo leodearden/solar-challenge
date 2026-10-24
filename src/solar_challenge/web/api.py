@@ -25,7 +25,6 @@ from solar_challenge.number_fields import Interval, as_finite_float, as_whole_nu
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import RUN_TYPES, PresetType
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -38,6 +37,7 @@ from solar_challenge.web.fleet_scenario import (
 from solar_challenge.web.jobs import JobEvent, JobEventType, JobStatus
 from solar_challenge.web.presets import (
     PresetNameTaken,
+    PresetType,
     SavedPresetUnreadable,
     home_preset_named,
     home_presets,
@@ -50,6 +50,7 @@ from solar_challenge.web.shared import get_database, get_job_manager, get_storag
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
+from solar_challenge.web.stored_runs import RUN_TYPES
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)

@@ -19,7 +19,6 @@ from flask import Flask
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import (
     HomeSimulator,
     JobEvent,
@@ -29,6 +28,7 @@ from solar_challenge.web.jobs import (
     live_managers,
     shutdown_all_managers,
 )
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from tests._run_storage_layout import stored_run_dir
 from tests._web_app import run_storage_of
@@ -109,7 +109,7 @@ class _ManualClock:
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
     """The RunStorage of no app that a test's JobManagers record their jobs' runs in, empty, under tmp_path."""
-    return RunStorage(init_db(tmp_path / "jobs.db"), tmp_path / "data")
+    return RunStorage(open_database(tmp_path / "jobs.db"), tmp_path / "data")
 
 
 class TestJobManagerConstruction:
@@ -969,7 +969,7 @@ class TestJobManagerCancelRun:
     def test_a_cancel_that_comes_while_the_jobs_final_save_runs_waits_for_the_save_and_leaves_the_job_completed(
         self, tmp_path: Path, save_gate: SaveGate
     ) -> None:
-        storage = RunStorageWithGatedHomeSaves(init_db(tmp_path / "jobs.db"), tmp_path / "data", save_gate)
+        storage = RunStorageWithGatedHomeSaves(open_database(tmp_path / "jobs.db"), tmp_path / "data", save_gate)
         manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
         job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
         save_gate.wait_until_a_save_waits()

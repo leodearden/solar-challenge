@@ -18,7 +18,8 @@ Usage::
 import uuid
 from datetime import datetime, timezone
 
-from solar_challenge.web.database import Database, PresetType
+from solar_challenge.web.database import Database
+from solar_challenge.web.presets import PresetType
 
 
 def insert_saved_home_preset(database: Database, name: str, config_json: str | None) -> str:

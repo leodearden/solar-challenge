@@ -16,42 +16,57 @@ import re
 import shutil
 import sqlite3
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
+from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.run_names import require_run_name
-from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunKind, RunType, StoredFleetRun, StoredHomeRun, StoredRun
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
 
+RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
+RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
+UNFINISHED_RUN_STATUS: RunStatus = "running"
+
+_COLUMN = "column"
+
+
+def _runs_column(declaration: str) -> dict[str, str]:
+    """Metadata of a RunRecord field: its runs column's *declaration*, the type and constraints CREATE TABLE states for it."""
+    return {_COLUMN: declaration}
+
 
 @dataclass(frozen=True)
 class RunRecord:
-    """One row of the runs table, each column in the field of the same name.
+    """One row of the runs table, each column in the field of the same name, whose metadata declares the column.
 
     config_json and summary_json are the JSON texts a save wrote; None while the run has none.
     type holds one of RUN_TYPES and status one of RUN_STATUSES, each None for NULL; a record
     given another value raises ValueError.
     """
 
-    id: str
-    name: str | None
-    type: RunType | None
-    config_json: str | None
-    summary_json: str | None
-    status: RunStatus | None
-    error_message: str | None
-    created_at: str | None
-    completed_at: str | None
-    duration_seconds: float | None
-    n_homes: int | None
-    notes: str | None
+    id: str = field(metadata=_runs_column("TEXT PRIMARY KEY"))
+    name: str | None = field(metadata=_runs_column("TEXT"))
+    type: RunType | None = field(metadata=_runs_column(f"TEXT {check_one_of('type', RUN_TYPES)}"))
+    config_json: str | None = field(metadata=_runs_column("TEXT"))
+    summary_json: str | None = field(metadata=_runs_column("TEXT"))
+    status: RunStatus | None = field(
+        metadata=_runs_column(
+            f"TEXT DEFAULT {sql_string_literal(UNFINISHED_RUN_STATUS)} {check_one_of('status', RUN_STATUSES)}"
+        )
+    )
+    error_message: str | None = field(metadata=_runs_column("TEXT"))
+    created_at: str | None = field(metadata=_runs_column("TEXT"))
+    completed_at: str | None = field(metadata=_runs_column("TEXT"))
+    duration_seconds: float | None = field(metadata=_runs_column("REAL"))
+    n_homes: int | None = field(metadata=_runs_column("INTEGER DEFAULT 1"))
+    notes: str | None = field(metadata=_runs_column("TEXT"))
 
     def __post_init__(self) -> None:
         if self.type is not None:
@@ -144,6 +159,19 @@ def _record_of(row: sqlite3.Row) -> RunRecord:
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
     return None if row is None else _record_of(row)
+
+
+RUNS_TABLE = TableSchema(
+    name="runs",
+    columns=tuple((each.name, each.metadata[_COLUMN]) for each in fields(RunRecord)),
+    indexes=("CREATE INDEX idx_runs_created_at ON runs(created_at DESC)", "CREATE INDEX idx_runs_type ON runs(type)"),
+)
+"""The runs table: one column per RunRecord field, in order, as its metadata declares it, and the indexes of the run list's default order and type filter."""
+
+
+def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
+    """Schema version 1's part for the runs table, run on *conn* inside its migration step's transaction: the table rebuilt to RUNS_TABLE."""
+    rebuild_table(conn, RUNS_TABLE)
 
 
 @dataclass(frozen=True)

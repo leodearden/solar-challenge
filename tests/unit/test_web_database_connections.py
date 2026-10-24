@@ -2,7 +2,7 @@
 """Every connection the dashboard opens to its database comes from a Database, which applies one policy.
 
 Rows are read by column name, the foreign keys of any table on the database are enforced, and nothing is read
-from the file before the first statement. A database init_db created journals in WAL mode,
+from the file before the first statement. A store open_database created journals in WAL mode,
 so every connection to it reports wal. A transaction commits a block that succeeds, rolls
 back a block that raises, and closes its connection either way.
 """
@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import Database
+from solar_challenge.web.schema import open_database
 
 
 def _connected(database: Database) -> AbstractContextManager[sqlite3.Connection]:
@@ -37,12 +38,12 @@ CONNECTION_OPENERS = [
 
 @pytest.fixture
 def dashboard_database(tmp_path: Path) -> Database:
-    """A dashboard database whose schema init_db has created."""
-    return init_db(tmp_path / "dashboard.db")
+    """A dashboard database, a new store open_database created."""
+    return open_database(tmp_path / "dashboard.db")
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_a_connection_to_a_database_init_db_created_reports_foreign_keys_on_and_wal_journal_mode(
+def test_a_connection_to_a_store_open_database_created_reports_foreign_keys_on_and_wal_journal_mode(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:

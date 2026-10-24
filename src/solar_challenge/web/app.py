@@ -13,11 +13,11 @@ from solar_challenge.home import simulate_home
 from solar_challenge.weather import default_weather
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
-from solar_challenge.web.database import init_db
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.scenarios import bp as scenarios_bp
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
@@ -158,8 +158,7 @@ def _open_store(app: Flask, default_data_dir: Path) -> None:
     if app.secret_key is None:
         app.secret_key = _get_secret_key(default_data_dir)
 
-    # Initialize database with configured path
-    database = init_db(Path(app.config["DATABASE"]))
+    database = open_database(Path(app.config["DATABASE"]))
     app.extensions["database"] = database
 
     # Initialize RunStorage singleton

@@ -34,7 +34,7 @@ pytest.importorskip("pyarrow")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary, calculate_fleet_summary
 from solar_challenge.home import SummaryStatistics, calculate_summary
-from solar_challenge.web.database import RUN_TYPES, init_db
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import (
     RUN_SORTS,
     RunHeadline,
@@ -47,6 +47,7 @@ from solar_challenge.web.storage import (
     readable_headline,
     run_headline,
 )
+from solar_challenge.web.stored_runs import RUN_TYPES
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._web_runs import store_fleet_run, store_home_run
@@ -54,8 +55,8 @@ from tests._web_runs import store_fleet_run, store_home_run
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage of no app under tmp_path, its database holding the schema init_db creates."""
-    return RunStorage(init_db(tmp_path / "runs.db"), tmp_path / "data")
+    """An empty RunStorage of no app under tmp_path, its database a new store open_database created."""
+    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path / "data")
 
 
 def _record(storage: RunStorage, run_id: str) -> RunRecord:
