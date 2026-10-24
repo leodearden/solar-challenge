@@ -23,7 +23,7 @@ from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table, sql_string_literal
+from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.run_names import is_run_name, require_run_name
 from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunKind, RunType, StoredFleetRun, StoredHomeRun, StoredRun
 from solar_challenge.web.text_options import one_of
@@ -172,15 +172,42 @@ RUNS_TABLE = TableSchema(
 def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
     """Schema version 1's part for the runs table, run on *conn* inside its migration step's transaction.
 
-    Each run of a type in RUN_KINDS whose name cannot name a run, NULL or blank, is first named
-    as a job given no name creates its run (contract C7): its kind's default_name of the homes
-    its config holds. The table is then rebuilt to RUNS_TABLE, whose name column is NOT NULL.
+    Every row is first checked against the two constraints version 1 adds to the table, since
+    the database's own refusal would name no row. Each run whose name cannot name a run, NULL
+    or blank, is then named as a job given no name creates its run (contract C7): its kind's
+    default_name of the homes its config holds. The table is then rebuilt to RUNS_TABLE, whose
+    name column is NOT NULL. A legacy runs table already held every other constraint of
+    RUNS_TABLE, so no other row can be refused.
+
+    Raises:
+        RowRefused: Before anything is written, for a run whose type is neither NULL nor one of
+            RUN_TYPES, as 'sweep' was once, or whose name cannot name a run while it has no
+            type to take a default name from.
     """
-    for row in conn.execute("SELECT id, name, type, config_json FROM runs").fetchall():
-        if not is_run_name(row["name"]) and row["type"] in RUN_KINDS:
+    rows = conn.execute("SELECT id, name, type, config_json FROM runs").fetchall()
+    for row in rows:
+        _require_version_1_keeps(row["id"], row["type"], row["name"])
+    for row in rows:
+        if not is_run_name(row["name"]):
             name = _name_of_a_run_given_none(row["id"], row["type"], row["config_json"])
             conn.execute("UPDATE runs SET name = ? WHERE id = ?", (name, row["id"]))
     rebuild_table(conn, RUNS_TABLE)
+
+
+def _require_version_1_keeps(run_id: str, run_type: object, name: object) -> None:
+    """Check that schema version 1's runs table can keep run *run_id* of *run_type* named *name*, once each nameless run of a type is named.
+
+    Raises:
+        RowRefused: *run_type* is neither None nor one of RUN_TYPES, the reason being one_of's
+            refusal, from which it is raised; or *name* cannot name a run and *run_type* is None.
+    """
+    if run_type is not None:
+        try:
+            one_of(run_type, RUN_TYPES, "value")
+        except ValueError as refusal:
+            raise RowRefused("runs", run_id, "type", str(refusal)) from refusal
+    elif not is_run_name(name):
+        raise RowRefused("runs", run_id, "name", "is NULL or blank, and the run has no type to take a default name from")
 
 
 def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str | None) -> str:

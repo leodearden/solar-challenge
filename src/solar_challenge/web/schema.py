@@ -19,7 +19,13 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from solar_challenge.web.database import CHAT_MESSAGES_TABLE, Database, create_table, migrate_chat_messages_table_v1
+from solar_challenge.web.database import (
+    CHAT_MESSAGES_TABLE,
+    Database,
+    RowRefused,
+    create_table,
+    migrate_chat_messages_table_v1,
+)
 from solar_challenge.web.presets import CONFIG_PRESETS_TABLE, migrate_config_presets_table_v1
 from solar_challenge.web.storage import RUNS_TABLE, migrate_runs_table_v1
 
@@ -54,8 +60,9 @@ class MigrationStep:
     """The step of the store's schema to *version*: what brings a store at version - 1 to it.
 
     migrate_database is the step's database part, run on a connection inside the step's
-    transaction, which also records *version* as the store's user_version. description says
-    what the step does, for the report of a migration.
+    transaction, which also records *version* as the store's user_version. It raises RowRefused
+    for a row a constraint the step adds refuses. description says what the step does, for the
+    report of a migration.
     """
 
     version: int
@@ -63,11 +70,27 @@ class MigrationStep:
     migrate_database: Callable[[sqlite3.Connection], None]
 
 
+class MigrationRefused(Exception):
+    """A migration step that cannot run, as a constraint it adds refuses a row; the message names the store, the step's version, the version the store stays at, and the row.
+
+    It is not a ValueError: no request causes it, as SchemaVersionMismatch is not one.
+    """
+
+    def __init__(self, path: Path, step: MigrationStep, refusal: RowRefused) -> None:
+        super().__init__(
+            f"{path} cannot be migrated to schema version {step.version}, so it stays at version "
+            f"{step.version - 1}, and the step has changed nothing in it: {refusal}"
+        )
+        self.path = path
+        self.step = step
+
+
 def _schema_v1(conn: sqlite3.Connection) -> None:
     """Version 1's database part: the retired jobs table dropped, then runs, config_presets and chat_messages rebuilt to their current schema.
 
     jobs goes first: its run_id references runs, and rebuild_table refuses a table another
-    table's foreign key references.
+    table's foreign key references. Only the runs part can refuse a row: the constraints of
+    config_presets and chat_messages at version 1 are a legacy table's.
     """
     conn.execute("DROP TABLE IF EXISTS jobs")
     migrate_runs_table_v1(conn)
@@ -150,6 +173,9 @@ def migrate_store(database_path: Path) -> MigrationReport:
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
             solar-challenge wrote; nothing is written to it.
+        MigrationRefused: A step's database part refuses a row, as a constraint the step adds
+            refuses it (RowRefused, the cause); the step has changed nothing, so the store
+            stays at the version before it.
         sqlite3.Error: A step's database part fails, or a new store cannot be created.
     """
     database = Database(database_path)
@@ -158,7 +184,10 @@ def migrate_store(database_path: Path) -> MigrationReport:
         raise SchemaVersionMismatch(database_path, found, SCHEMA_VERSION)
     pending = tuple(step for step in MIGRATIONS if step.version > found)
     for step in pending:
-        _apply_step(database, step)
+        try:
+            _apply_step(database, step)
+        except RowRefused as refusal:
+            raise MigrationRefused(database_path, step, refusal) from refusal
     return MigrationReport(database_path, from_version=found, to_version=SCHEMA_VERSION, applied_steps=pending)
 
 
