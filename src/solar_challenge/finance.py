@@ -40,13 +40,18 @@ import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.gridservices import (
+    FlatGridServices,
+    GridServicesEventsConfig,
+    GridServicesModel,
+    NoGridServices,
+)
 from solar_challenge.seg import SEGTariff
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
     from solar_challenge.fleet import FleetConfig, FleetResults
-    from solar_challenge.gridservices import GridServicesEventsConfig
     from solar_challenge.home import SummaryStatistics
 
 
@@ -191,6 +196,36 @@ class FinanceConfig:
                 f"grid_services_model must be one of {sorted(_VALID_GS_MODELS)}, "
                 f"got '{self.grid_services_model}'"
             )
+
+
+def grid_services_model_of(finance: FinanceConfig) -> GridServicesModel:
+    """Return the pricing value that *finance*'s three grid-services fields name.
+
+    The mapping is the α column of docs/prds/grid-services-pricing-model.md §5.2:
+
+    - ``grid_services_model="capacity_at_events"`` with ``grid_services_events``
+      set: that events configuration; the flat rate is ignored.
+    - ``"capacity_at_events"`` with ``grid_services_events=None``: refused.
+    - ``"flat"``, the only other model FinanceConfig accepts:
+      :class:`~solar_challenge.gridservices.NoGridServices` for a zero
+      ``grid_services_income_per_kw_per_year_gbp``, else
+      :class:`~solar_challenge.gridservices.FlatGridServices` at that rate;
+      ``grid_services_events`` is ignored.
+
+    Raises:
+        ConfigurationError: If the model is ``"capacity_at_events"`` and
+            ``grid_services_events`` is None.
+    """
+    if finance.grid_services_model == "capacity_at_events":
+        if finance.grid_services_events is None:
+            raise ConfigurationError(
+                "grid_services_model='capacity_at_events' requires "
+                "grid_services_events to be configured"
+            )
+        return finance.grid_services_events
+    if finance.grid_services_income_per_kw_per_year_gbp == 0.0:
+        return NoGridServices()
+    return FlatGridServices(finance.grid_services_income_per_kw_per_year_gbp)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,7 +1041,8 @@ class YearPoint:
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
     + SEG export income (Σ seg_export_income_gbp per home)
-    + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw).
+    + grid-services income (that age's ``pricing.annual_income_gbp`` of its
+    simulated fleet, ``pricing = grid_services_model_of(finance)``).
     """
 
     year: int
@@ -1470,6 +1506,11 @@ def project_multi_year(
     resulting per-year curves with PCHIP.  Each sampled age is simulated with
     every home's battery SOH counting its battery throughput from installation
     to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
+    Each sampled age's grid-services income is priced from that age's own
+    simulated fleet by ``grid_services_model_of(finance)``, and is annual by
+    construction.  Each distinct warning that pricing raises, such as one
+    naming an event window the simulated period never enters, is shown once
+    per call, however many ages raise it, and is attributed to the caller.
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
@@ -1498,6 +1539,9 @@ def project_multi_year(
             import or revenue, its mean PV or battery state of health, or a
             home's battery discharge or cumulative battery throughput.  The
             message names the age and each such aggregate with its value.
+        ConfigurationError: If ``grid_services_model`` is
+            ``"capacity_at_events"`` and ``grid_services_events`` is None,
+            raised before any simulation.
     """
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
@@ -1519,25 +1563,17 @@ def project_multi_year(
     start_ts = scenario.period.get_start_timestamp(tz)
     end_ts = scenario.period.get_end_timestamp(tz)
 
-    # ---- Fail-fast: validate grid_services_model prerequisites ---------------
-    # Guard here so misconfiguration is caught before any simulation work is
-    # done (the inner guard in _simulate_age would only fire after the first
-    # full fleet simulation, which wastes a full age-0 run for a 100-home fleet).
-    if finance.grid_services_model == "capacity_at_events" and finance.grid_services_events is None:
-        raise ConfigurationError(
-            "grid_services_model='capacity_at_events' requires "
-            "grid_services_events to be configured"
-        )
+    pricing = grid_services_model_of(finance)
+    # Each age's pricing can raise a warning in the same words as every other age's,
+    # e.g. naming an event window the simulated period never enters.  Each distinct
+    # one is kept here and shown once after the march
+    # (docs/prds/grid-services-pricing-model.md §5.4).
+    pricing_warnings: dict[tuple[type[Warning], str], warnings.WarningMessage] = {}
 
     asset_life = finance.asset_life_years
 
     # ---- Seed nodes ---------------------------------------------------------
     seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
-
-    # Memo dict for the capacity_at_events grid-services figure.
-    # Computed once from the representative (age-0) simulation, reused for all ages
-    # and all bisection trial nodes.  Captured by the _simulate_age closure.
-    _event_gs_memo: dict[str, float] = {}
 
     def _simulate_age(
         age: int,
@@ -1575,7 +1611,7 @@ def project_multi_year(
         # CBS fleet revenue (model doc §4), every term per 365-day year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
-        #   grid_services   = model-dependent (flat or capacity_at_events), already annual
+        #   grid_services   = pricing.annual_income_gbp(fleet_results), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
@@ -1583,22 +1619,10 @@ def project_multi_year(
         # self_consumption_override and seg scaling.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
-        if finance.grid_services_model == "capacity_at_events":
-            # None is already excluded by the top-of-function guard; this assert
-            # only narrows Optional[GridServicesEventsConfig] for mypy strict.
-            assert finance.grid_services_events is not None
-            if "value" not in _event_gs_memo:
-                from solar_challenge.gridservices import compute_grid_services_at_events
-                _event_gs_memo["value"] = compute_grid_services_at_events(
-                    fleet_results, finance.grid_services_events
-                ).annual_income_gbp
-            grid_services = _event_gs_memo["value"]
-        else:
-            grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
-                h.battery_config.max_discharge_kw
-                for h in homes
-                if h.battery_config is not None
-            )
+        with warnings.catch_warnings(record=True) as raised_by_pricing:
+            grid_services = pricing.annual_income_gbp(fleet_results)
+        for raised in raised_by_pricing:
+            pricing_warnings.setdefault((raised.category, str(raised.message)), raised)
         fleet_revenue = own_use_revenue + seg_revenue + grid_services
 
         # PV SOH: mean of calculate_degradation_factor over all homes
@@ -1735,6 +1759,10 @@ def project_multi_year(
             UserWarning,
             stacklevel=2,
         )
+
+    # ---- Pricing warnings: each distinct one once per projection ------------
+    for raised in pricing_warnings.values():
+        warnings.warn(raised.message, raised.category, stacklevel=2)
 
     # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())

@@ -80,7 +80,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
 
     ("solar_challenge.finance", "solar_challenge.battery"): _FINANCE_PARTITION,
     ("solar_challenge.finance", "solar_challenge.fleet"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.gridservices"): Transitional("task 801 (S9 α)"),
     ("solar_challenge.finance", "solar_challenge.home"): _FINANCE_PARTITION,
     ("solar_challenge.finance", "solar_challenge.pv"): _FINANCE_PARTITION,
     ("solar_challenge.load", "solar_challenge.ev"): Transitional(

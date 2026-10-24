@@ -22,7 +22,14 @@ Key public symbols:
 * :data:`DEFAULT_EVENT_WINDOWS` — default winter-weekday-16:00-19:00 schedule
   per PRD open-Q4.
 * :class:`GridServicesEventsConfig` — frozen dataclass combining band selection,
-  event windows, aggregator share, and utilisation factor.
+  event windows, aggregator share, and utilisation factor; its
+  :meth:`~GridServicesEventsConfig.annual_income_gbp` prices a simulated fleet.
+* :class:`NoGridServices` — frozen pricing value under which a fleet earns no
+  grid-services income.
+* :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
+  installed battery discharge power per year.
+* :data:`GridServicesModel` — the union of the three pricing values, each of
+  which prices a simulated fleet with ``annual_income_gbp(fleet_results)``.
 * :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
   dispatchable battery capacity (kW) summed across the fleet.
 * :class:`GridServicesAtEvents` — frozen dataclass holding the banded
@@ -33,8 +40,10 @@ Key public symbols:
   :class:`GridServicesAtEvents` breakdown.
 """
 
+import math
+import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import pandas as pd
 
@@ -43,6 +52,7 @@ from solar_challenge.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import SimulationResults
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +332,141 @@ class GridServicesEventsConfig:
                 f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
             )
 
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the annual capacity-at-events income this configuration prices *fleet_results* at.
+
+        In £ per year, net of the aggregator share:
+        ``compute_grid_services_at_events(fleet_results, self).annual_income_gbp``.
+        """
+        return compute_grid_services_at_events(fleet_results, self).annual_income_gbp
+
+
+# ---------------------------------------------------------------------------
+# The fleet's battery homes
+# ---------------------------------------------------------------------------
+
+
+def _battery_homes(
+    fleet_results: "FleetResults",
+) -> list[tuple["SimulationResults", BatteryConfig]]:
+    """Each home of *fleet_results* with a battery: its simulated results and its battery configuration, in fleet order.
+
+    A PV-only home (``battery_config is None``) has no battery to price.  A
+    length mismatch between ``per_home_results`` and ``home_configs`` raises
+    ValueError rather than truncating the fleet to the shorter list.
+    """
+    return [
+        (sim, home.battery_config)
+        for sim, home in zip(
+            fleet_results.per_home_results, fleet_results.home_configs, strict=True
+        )
+        if home.battery_config is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
+# NoGridServices + FlatGridServices + GridServicesModel
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoGridServices:
+    """The pricing under which a fleet earns no grid-services income."""
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return 0.0: no fleet earns grid-services income under this pricing."""
+        return 0.0
+
+
+@dataclass(frozen=True)
+class FlatGridServices:
+    """A flat grid-services rate per kW of installed battery discharge power per year.
+
+    Attributes:
+        income_per_kw_per_year_gbp: Income per kW of battery discharge power per
+            year, net of the aggregator share (£/kW/yr); > 0 and finite.  Zero
+            income is :class:`NoGridServices`.
+    """
+
+    income_per_kw_per_year_gbp: float
+
+    def __post_init__(self) -> None:
+        """Refuse a rate that is not > 0 and finite, raising ConfigurationError."""
+        if not 0.0 < self.income_per_kw_per_year_gbp < math.inf:
+            raise ConfigurationError(
+                "FlatGridServices.income_per_kw_per_year_gbp must be > 0 and finite, "
+                f"got {self.income_per_kw_per_year_gbp}; zero income is NoGridServices()"
+            )
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the rate × the installed discharge power of the fleet's batteries, in £ per year.
+
+        The power is the sum of ``battery_config.max_discharge_kw`` over the
+        homes of *fleet_results* that have a battery.
+        """
+        return self.income_per_kw_per_year_gbp * sum(
+            battery_config.max_discharge_kw
+            for _, battery_config in _battery_homes(fleet_results)
+        )
+
+
+GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesEventsConfig
+
 
 # ---------------------------------------------------------------------------
 # compute_fleet_spare_capacity_kw
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _WindowSpareCapacity:
+    """One event window's firm spare capacity over a fleet's battery homes.
+
+    Attributes:
+        window: The event window.
+        observed: Whether some battery home's simulated index enters the window.
+        avail_kw: Firm spare dispatchable capacity (kW), summed over the battery
+            homes whose index enters the window; 0.0 when none does.
+    """
+
+    window: EventWindow
+    observed: bool
+    avail_kw: float
+
+
+def _spare_capacity_per_window(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    windows: tuple[EventWindow, ...],
+) -> tuple[_WindowSpareCapacity, ...]:
+    """Each of *windows*' firm spare capacity over *battery_homes*, in window order.
+
+    The formula is :func:`compute_fleet_spare_capacity_kw`'s.
+    """
+    # A battery's SOC floor depends on its configuration alone: computed once, not per window.
+    floors = [
+        (sim, battery_config, Battery(battery_config).min_soc_kwh)
+        for sim, battery_config in battery_homes
+    ]
+    capacities: list[_WindowSpareCapacity] = []
+    for window in windows:
+        total = 0.0
+        observed = False
+        for sim, battery_config, min_soc_kwh in floors:
+            mask = window.mask(sim.battery_soc.index)
+            # A home whose index the window never enters adds nothing; reducing its
+            # empty in-window Series would give NaN.
+            if not bool(mask.any()):
+                continue
+            observed = True
+            soc_w = sim.battery_soc[mask]
+            dis_w = sim.battery_discharge[mask]
+            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
+            e_spare = float((soc_w - min_soc_kwh).min())
+            total += max(0.0, min(p_spare, e_spare / window.event_hours))
+        capacities.append(
+            _WindowSpareCapacity(window=window, observed=observed, avail_kw=float(total))
+        )
+    return tuple(capacities)
 
 
 def compute_fleet_spare_capacity_kw(
@@ -374,40 +515,10 @@ def compute_fleet_spare_capacity_kw(
         order).  Each value is the total firm spare dispatchable capacity in kW
         across the fleet for that window.
     """
-    # Pre-compute the SOC floor for each battery home once.  Battery construction
-    # is window-independent (min_soc_kwh depends only on the config), so computing
-    # it inside the window loop would redundantly allocate N_windows Battery objects
-    # per home.  We also collect (sim, battery_config) so the inner loop no longer
-    # needs to touch home_configs at all.
-    #
-    # strict=True (Python 3.10+): a length mismatch between per_home_results and
-    # home_configs raises ValueError immediately rather than silently truncating to
-    # the shorter list and under-counting spare capacity.
-    home_floors: list[Any] = []
-    for sim, home_cfg in zip(
-        fleet_results.per_home_results, fleet_results.home_configs, strict=True
-    ):
-        battery_config: Optional[BatteryConfig] = home_cfg.battery_config
-        if battery_config is None:
-            continue  # PV-only home: no battery to dispatch
-        home_floors.append((sim, battery_config, Battery(battery_config).min_soc_kwh))
-
-    avails: list[float] = []
-    for window in windows:
-        total = 0.0
-        for sim, battery_config, min_soc_kwh in home_floors:
-            mask = window.mask(sim.battery_soc.index)
-            # Guard: skip if window is entirely absent from this home's index
-            # (avoids NaN from reducing an empty Series)
-            if not bool(mask.any()):
-                continue
-            soc_w = sim.battery_soc[mask]
-            dis_w = sim.battery_discharge[mask]
-            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
-            e_spare = float((soc_w - min_soc_kwh).min())
-            total += max(0.0, min(p_spare, e_spare / window.event_hours))
-        avails.append(float(total))
-    return tuple(avails)
+    return tuple(
+        capacity.avail_kw
+        for capacity in _spare_capacity_per_window(_battery_homes(fleet_results), windows)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -420,15 +531,16 @@ class GridServicesAtEvents:
     """Banded availability + utilisation income breakdown from a grid-services event model.
 
     Returned by :func:`compute_grid_services_at_events`.  All income figures are
-    **net** of the aggregator share (i.e. the householder-side income).
+    **net** of the aggregator share: the CBS's grid-services revenue, which
+    :func:`~solar_challenge.finance.project_multi_year` books into fleet revenue.
 
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event
             windows (£/year).  Equals ``sum(per_window_income_gbp)``.
         per_window_avail_kw: Per-window firm spare dispatchable capacity (kW),
             in the same order as the :attr:`GridServicesEventsConfig.event_windows`
-            tuple.  Sourced directly from
-            :func:`compute_fleet_spare_capacity_kw`.
+            tuple: the figures :func:`compute_fleet_spare_capacity_kw` gives
+            for the same fleet and windows.
         per_window_income_gbp: Per-window net income (£), in window order.
             Each entry is the net (post-aggregator-share) availability +
             utilisation income for that window.
@@ -448,6 +560,32 @@ class GridServicesAtEvents:
 # ---------------------------------------------------------------------------
 # compute_grid_services_at_events
 # ---------------------------------------------------------------------------
+
+
+def _warn_unobserved_windows(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    capacities: tuple[_WindowSpareCapacity, ...],
+) -> None:
+    """Issue one UserWarning for each window of *capacities* that no battery home's simulated index enters.
+
+    Such a window contributes £0.  A fleet without a battery home has nothing to
+    observe and does not warn.  The warning is attributed to the caller of
+    :func:`compute_grid_services_at_events`, and its text names only the window
+    and the span of the battery homes' indices.
+    """
+    unobserved = [capacity.window for capacity in capacities if not capacity.observed]
+    if not battery_homes or not unobserved:
+        return
+    first = min(sim.battery_soc.index.min() for sim, _ in battery_homes)
+    last = max(sim.battery_soc.index.max() for sim, _ in battery_homes)
+    for window in unobserved:
+        warnings.warn(
+            f"Event window months={window.months}, weekdays={window.weekdays}, "
+            f"hours={window.hours} has no timestep in the fleet's simulated index, "
+            f"{first} to {last}, so it contributes £0 to the capacity-at-events income",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def compute_grid_services_at_events(
@@ -486,6 +624,9 @@ def compute_grid_services_at_events(
     NOT re-apply ``(1 - aggregator_share)`` — see
     :class:`GridServicesAtEvents`.
 
+    A window that no battery home's simulated index enters contributes £0 and
+    is named in a ``UserWarning``, once per call.
+
     Args:
         fleet_results: Simulation results for the fleet.
         cfg: Grid-services configuration (band, event windows, aggregator share,
@@ -498,7 +639,9 @@ def compute_grid_services_at_events(
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
     """
-    avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
+    battery_homes = _battery_homes(fleet_results)
+    capacities = _spare_capacity_per_window(battery_homes, cfg.event_windows)
+    _warn_unobserved_windows(battery_homes, capacities)
     band = resolve_grid_services_rate_band(cfg.band)
 
     # Override precedence: use cfg field if explicitly set, else fall back to band.
@@ -514,7 +657,8 @@ def compute_grid_services_at_events(
     )
 
     per_window_net: list[float] = []
-    for window, avail in zip(cfg.event_windows, avails):
+    for capacity in capacities:
+        window, avail = capacity.window, capacity.avail_kw
         avail_income = avail * avail_rate * window.events_per_year
         util_income = (
             avail
@@ -528,6 +672,6 @@ def compute_grid_services_at_events(
 
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
-        per_window_avail_kw=tuple(float(a) for a in avails),
+        per_window_avail_kw=tuple(capacity.avail_kw for capacity in capacities),
         per_window_income_gbp=tuple(per_window_net),
     )
