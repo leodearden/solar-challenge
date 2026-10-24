@@ -1054,6 +1054,42 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="imported-in-a-function",
         ),
+        pytest.param(
+            ("globals().update(pytest_plugins=['pytest_rerunfailures'])",),
+            "globals().update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-globals-by-a-keyword",
+        ),
+        pytest.param(
+            ("vars().update({'pytest_plugins': ['pytest_rerunfailures']})",),
+            "vars().update({'pytest_plugins': ['pytest_rerunfailures']})",
+            _UNREADABLE_USE,
+            id="updated-through-vars-by-a-dict",
+        ),
+        pytest.param(
+            ("locals().__setitem__('pytest_plugins', ['pytest_rerunfailures'])",),
+            "locals().__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-locals-by-setitem",
+        ),
+        pytest.param(
+            ("sys.modules[__name__].__dict__.setdefault('pytest_plugins', ['pytest_rerunfailures'])",),
+            "sys.modules[__name__].__dict__.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-the-dict-of-the-module-by-setdefault",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "globals().get('pytest_plugins').append('pytest_rerunfailures')"),
+            "globals().get('pytest_plugins').append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-a-get-of-globals",
+        ),
+        pytest.param(
+            ("dict.update(globals(), pytest_plugins=['pytest_rerunfailures'])",),
+            "dict.update(globals(), pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-by-a-function-given-globals",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -1070,9 +1106,12 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     global in a function. It may also be read or deleted in any scope, function and class bodies
     included, as a method call such as append, a subscript, an alias or a del does, and a read may
     sit in a case guard. Or a namespace, the dict that globals(), locals() or vars() returns or the
-    __dict__ of an object such as sys.modules[__name__], may be subscripted with the name, or an
-    attribute pytest_plugins of an object reached directly, through getattr, setattr or delattr, or
-    by a from-import of that name, in any position or scope.
+    __dict__ of an object such as sys.modules[__name__], may be subscripted with the name, or be
+    given it in a call: of a method of the namespace such as update, __setitem__, setdefault or get,
+    which hands out the list as surely as the others write it, or of a function given the
+    namespace, such as dict.update. Or an attribute pytest_plugins of an object may be reached
+    directly, through getattr, setattr or delattr, or by a from-import of that name, in any
+    position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1119,6 +1158,14 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ("import sys", "sys.modules[__name__].__dict__['other_plugins'] = ['pytest_rerunfailures']"),
             id="another-key-of-the-dict-of-the-module",
         ),
+        pytest.param(
+            ("settings = {}", "settings.update(pytest_plugins=['pytest_rerunfailures'])"),
+            id="a-keyword-of-another-dicts-method",
+        ),
+        pytest.param(
+            ("globals().update(other_plugins=['pytest_rerunfailures'])",),
+            id="another-key-updated-through-globals",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
@@ -1128,9 +1175,11 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_pl
     """Only the name pytest_plugins, its entry in a namespace, the dict that globals(), locals() or
     vars() returns or the __dict__ of an object, or an attribute of that name, reached directly,
     through getattr, setattr or delattr, or by a from-import, reaches the attribute of the module.
+    So does the name given in a call on a namespace.
 
-    The same key of another dict, another key of a namespace, a string that spells such a
-    statement, and hasattr, which only tests for the attribute, require nothing and fail nothing.
+    The same key of another dict, or given to another dict's method, another key of a namespace,
+    or another key given to a namespace's method, a string that spells such a statement, and
+    hasattr, which only tests for the attribute, require nothing and fail nothing.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
