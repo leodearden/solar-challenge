@@ -8,10 +8,11 @@ with the extras, beside [project].dependencies, of the run that loads them;
 each selector's docstring names that run. solar_challenge and tests are
 first-party. A module a file names to pytest.importorskip as a string literal
 counts as an import it requires, since the test skips wherever that module is
-missing. So does the module pytest imports for each entry of a module-level
-pytest_plugins assignment; a built-in plugin's short name, such as pytester,
-names a module of pytest's own _pytest package. _imports_required_by says when
-an import inside a try block that handles ImportError counts, and
+missing. So does the module pytest imports for each entry pytest_plugins is
+given in the module's own scope, by an assignment or an augmented assignment,
+in a block of a compound statement too; a built-in plugin's short name, such as
+pytester, names a module of pytest's own _pytest package. _imports_required_by
+says when an import inside a try block that handles ImportError counts, and
 dead_import_guards finds each such guard over declared distributions only,
 whose handler can never run. Imports map to distributions only through
 installed metadata, so a scope's check skips where its extras are not
@@ -273,13 +274,29 @@ def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Im
             yield from _unguarded_imports(ast.iter_child_nodes(node))
 
 
-def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
-    """Yield (statement, value) for each module-level statement in *tree* that assigns pytest_plugins,
-    annotated or not, or augments it. *value* is what the statement assigns or adds.
+def _module_scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
+    """Yield the statements under *nodes* that run in their module's own scope: those in a block
+    of a compound statement such as an if, a try or a with too, however deep.
 
-    An annotation with no value assigns nothing.
+    Not those in the body of a function or class, which runs in a scope of its own. The def or
+    class itself is yielded.
     """
-    for statement in tree.body:
+    for node in nodes:
+        if isinstance(node, ast.stmt):
+            yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield from _module_scope_statements(ast.iter_child_nodes(node))
+
+
+def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
+    """Yield (statement, value) for each statement of *tree*'s module scope, as
+    _module_scope_statements finds them, that assigns pytest_plugins, annotated or not, or
+    augments it. *value* is what the statement assigns or adds.
+
+    pytest reads pytest_plugins as an attribute of the module once the module has run, so each
+    such statement can give it entries. An annotation with no value assigns nothing.
+    """
+    for statement in _module_scope_statements(tree.body):
         if isinstance(statement, ast.Assign):
             targets, value = statement.targets, statement.value
         elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
@@ -306,9 +323,9 @@ def _pytest_plugins_failure(source: Path, statement: ast.stmt, defect: str) -> A
 
 
 def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
-    """Yield an import of the module pytest imports for each entry that the module-level
-    statements in *tree*, the syntax tree of *source*, give pytest_plugins. Each import sits where
-    the value of its statement does.
+    """Yield an import of the module pytest imports for each entry that the statements
+    _pytest_plugins_assignments finds in *tree*, the syntax tree of *source*, give pytest_plugins.
+    Each import sits where the value of its statement does.
 
     pytest imports each entry when it loads a conftest, test module or plugin that sets one. A
     built-in plugin's short name, such as pytester, names that module of pytest's own _pytest
