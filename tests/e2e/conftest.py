@@ -39,11 +39,9 @@ import functools
 import json
 import re
 import socket
-import sqlite3
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -67,7 +65,7 @@ from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._synthetic_weather import synthetic_tmy
-from tests._web_app import build_test_app, run_storage_of
+from tests._web_app import build_test_app, database_of, run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
 
 if TYPE_CHECKING:
@@ -360,11 +358,11 @@ def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str
     tests share the database, so the row is deleted at teardown.
     """
     config: dict[str, object] = {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000}
-    preset_id = insert_saved_home_preset(_e2e_app.config["DATABASE"], "Small Urban", json.dumps(config))
+    database = database_of(_e2e_app)
+    preset_id = insert_saved_home_preset(database, "Small Urban", json.dumps(config))
     yield config
-    with closing(sqlite3.connect(_e2e_app.config["DATABASE"])) as conn:
-        with conn:
-            conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
+    with database.transaction() as conn:
+        conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
 
 
 # ---------------------------------------------------------------------------

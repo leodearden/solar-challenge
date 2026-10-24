@@ -32,7 +32,7 @@ from solar_challenge.web.simulation_params import MAX_DAYS
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
 from tests._plotly_figure import traces
-from tests._web_app import point_store_config_at_a_missing_directory
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 
 
 class TestScenarioBuilderRoute:
@@ -576,7 +576,7 @@ class TestScenarioAPI:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A saved fleet preset the list holds, but whose config is not JSON, is a 500 naming it, not "not found"."""
-        insert_saved_fleet_preset(app.config["DATABASE"], "Broken", "{not json")
+        insert_saved_fleet_preset(database_of(app), "Broken", "{not json")
         assert "Broken" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
 
         resp = client.get("/api/scenarios/presets/Broken")
@@ -591,7 +591,7 @@ class TestScenarioAPI:
         self, app: Flask, client: FlaskClient, config_json: str
     ) -> None:
         """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as one whose config is not JSON is."""
-        insert_saved_fleet_preset(app.config["DATABASE"], "Not an object", config_json)
+        insert_saved_fleet_preset(database_of(app), "Not an object", config_json)
         assert "Not an object" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
 
         resp = client.get("/api/scenarios/presets/Not an object")
@@ -606,7 +606,7 @@ class TestScenarioAPI:
         self, app: Flask, client: FlaskClient, config_json: str | None
     ) -> None:
         """A saved fleet preset whose config is stored as empty text or as NULL is served, with the config {}."""
-        insert_saved_fleet_preset(app.config["DATABASE"], "Empty", config_json)
+        insert_saved_fleet_preset(database_of(app), "Empty", config_json)
 
         resp = client.get("/api/scenarios/presets/Empty")
 
