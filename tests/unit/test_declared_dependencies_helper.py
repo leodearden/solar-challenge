@@ -18,6 +18,7 @@ from tests._declared_dependencies import (
 
 _UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
 _ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
+_SOURCE_ASSIGNING_RERUNFAILURES = 'SOURCE = "pytest_plugins = [\'pytest_rerunfailures\']"'
 _ASSIGNS_PYTESTER = 'pytest_plugins = ["pytester"]'
 _UNREADABLE_USE = "which can bind or change pytest_plugins in a form the contract cannot read"
 
@@ -1180,6 +1181,65 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="updated-by-or-equals-through-a-variable-holding-globals",
         ),
+        pytest.param(
+            ("exec(\"pytest_plugins = ['pytest_rerunfailures']\")",),
+            "exec(\"pytest_plugins = ['pytest_rerunfailures']\")",
+            _UNREADABLE_USE,
+            id="assigned-by-exec",
+        ),
+        pytest.param(
+            ("exec(\"import sys; sys.modules['plugin'].pytest_plugins.append('pytest_rerunfailures')\", {})",),
+            "exec(\"import sys; sys.modules['plugin'].pytest_plugins.append('pytest_rerunfailures')\", {})",
+            _UNREADABLE_USE,
+            id="appended-to-an-attribute-of-a-module-by-exec-in-a-namespace-of-its-own",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE)"),
+            "exec(SOURCE)",
+            _UNREADABLE_USE,
+            id="run-by-exec-of-code-it-cannot-read",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE, None)"),
+            "exec(SOURCE, None)",
+            _UNREADABLE_USE,
+            id="run-by-exec-given-none-for-globals",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(compile(SOURCE, 'plugins', 'exec'), globals())"),
+            "exec(compile(SOURCE, 'plugins', 'exec'), globals())",
+            _UNREADABLE_USE,
+            id="run-by-exec-of-compiled-code-in-globals",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE, globals=globals())"),
+            "exec(SOURCE, globals=globals())",
+            _UNREADABLE_USE,
+            id="run-by-exec-given-globals-by-keyword",
+        ),
+        pytest.param(
+            (
+                _SOURCE_ASSIGNING_RERUNFAILURES,
+                "namespace = globals()",
+                "def configure():",
+                "    exec(SOURCE, {}, namespace)",
+            ),
+            "exec(SOURCE, {}, namespace)",
+            _UNREADABLE_USE,
+            id="run-by-exec-with-locals-held-in-a-module-variable",
+        ),
+        pytest.param(
+            ("eval(\"globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",),
+            "eval(\"globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",
+            _UNREADABLE_USE,
+            id="set-by-eval",
+        ),
+        pytest.param(
+            ("eval(\" globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",),
+            "eval(\" globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",
+            _UNREADABLE_USE,
+            id="set-by-eval-of-code-with-a-leading-blank",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -1205,6 +1265,10 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     or through an alias; such a name counts in that scope, and in a scope nested there that does
     not rebind it. Or an attribute pytest_plugins of an object may be reached directly, through
     getattr, setattr or delattr, or by a from-import of that name, in any position or scope.
+
+    exec or eval may run a literal whose code binds or uses the name, as a module would, or does
+    not parse as one. They may also run other code in a namespace that may be the module's: the
+    caller's, when given no globals or None for them, or a namespace given for globals or locals.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1286,6 +1350,23 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ),
             id="a-module-variable-holding-globals-rebound-in-a-function",
         ),
+        pytest.param(
+            ("PLUGINS = []", "exec(\"PLUGINS.append('pytester')\", globals())"),
+            id="exec-of-code-that-names-no-pytest-plugins-in-globals",
+        ),
+        pytest.param(
+            (
+                "import sys",
+                _SOURCE_ASSIGNING_RERUNFAILURES,
+                "namespace = dict(vars(sys.modules[__name__]))",
+                "exec(SOURCE, namespace)",
+            ),
+            id="exec-of-code-it-cannot-read-in-a-copy-of-the-module-namespace",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "loader = object()", "loader.exec(SOURCE)"),
+            id="a-method-named-exec-of-another-object",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
@@ -1304,6 +1385,10 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_pl
     of a frame's f_builtins, which pytest, reading an attribute of the module, never consults, nor
     one of a copy of a namespace, nor one of a name bound to a namespace only in another function
     or rebound in this one.
+
+    Code that names no pytest_plugins does not fail when exec runs it, wherever it runs. Nor does
+    code it cannot read that exec runs in a namespace of its own, such as a copy of the module's,
+    or a method named exec of another object.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
