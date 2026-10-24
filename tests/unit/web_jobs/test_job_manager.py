@@ -30,6 +30,7 @@ from solar_challenge.web.jobs import (
     shutdown_all_managers,
 )
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
+from tests._run_storage_layout import stored_run_dir
 from tests._web_app import run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
@@ -864,6 +865,73 @@ class TestJobManagerEscapedErrors:
         assert records[0].exc_info is not None
         error = records[0].exc_info[1]
         assert (type(error), str(error)) == (SystemExit, "the simulation exited")
+
+
+class TestJobManagerCancelRun:
+    """JobManager.cancel_run, which a run's delete calls first: the run's queued or running job is cancelled and saves nothing."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_running_job_whose_run_is_cancelled_reports_cancelled_at_the_progress_it_had_reached(
+        self,
+        submit_job: Callable[[JobManager], str],
+        blocking_simulation: BlockingSimulation,
+        storage: RunStorage,
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager)
+        blocking_simulation.wait_until_started()
+        running = manager.job_state(job_id)
+        assert running is not None
+
+        assert manager.cancel_run(running.run_id) is True
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        cancelled = replace(running, status="cancelled", message="Cancelled: its run was deleted")
+        assert manager.job_state(job_id) == cancelled
+        assert list(manager.get_events(job_id))[-1] == JobEvent("error", cancelled)
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_cancelled_job_writes_nothing_to_the_run_store(
+        self,
+        submit_job: Callable[[JobManager], str],
+        blocking_simulation: BlockingSimulation,
+        storage: RunStorage,
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager)
+        blocking_simulation.wait_until_started()
+        created = _run_of_job(manager, job_id, storage)
+
+        manager.cancel_run(created.id)
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        assert storage.run_record(created.id) == created
+        assert not stored_run_dir(storage, created.id).exists()
+
+    @pytest.mark.parametrize(
+        ("simulation", "status"),
+        [(RecordingSimulation(), "completed"), (a_failing_simulation, "failed")],
+        ids=["completed", "failed"],
+    )
+    def test_cancelling_the_run_of_a_finished_job_returns_false_and_leaves_the_job_as_it_ended(
+        self, simulation: HomeSimulator, status: str, storage: RunStorage
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=simulation)
+        job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
+        assert manager.wait_until_idle(timeout=30)
+        ended = manager.job_state(job_id)
+        assert ended is not None
+        assert ended.status == status
+
+        assert manager.cancel_run(run_id) is False
+        assert manager.job_state(job_id) == ended
+
+    def test_cancelling_a_run_no_job_of_the_manager_runs_returns_false(self, storage: RunStorage) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+
+        assert manager.cancel_run("no-such-run") is False
 
 
 class TestJobManagerShutdown:
