@@ -3,7 +3,8 @@
 
 A store's schema version is its database file's PRAGMA user_version. The MigrationStep of
 version N brings a store at version N - 1 to N, and SCHEMA_VERSION, the version this code
-reads and writes, is the last step's. open_database creates a new store at SCHEMA_VERSION.
+reads and writes, is the last step's. open_database creates a new store at SCHEMA_VERSION and
+refuses a store at any other version with a SchemaVersionMismatch.
 
 Each table's owner states the table's schema and its part of each step: storage.py the runs
 table, presets.py config_presets and database.py chat_messages. This module states only the
@@ -19,6 +20,31 @@ from pathlib import Path
 from solar_challenge.web.database import CHAT_MESSAGES_TABLE, Database, create_table, migrate_chat_messages_table_v1
 from solar_challenge.web.presets import CONFIG_PRESETS_TABLE, migrate_config_presets_table_v1
 from solar_challenge.web.storage import RUNS_TABLE, migrate_runs_table_v1
+
+
+class SchemaVersionMismatch(Exception):
+    """A store at a schema version other than the one this code reads; the message names its file and both versions.
+
+    It is not a ValueError: no request causes it, so it is a start-up refusal, as StoreLockError is.
+    """
+
+    def __init__(self, path: Path, found: int, expected: int) -> None:
+        super().__init__(
+            f"The dashboard database {path} is at schema version {found}; "
+            f"this solar-challenge needs version {expected}.{_remedy(found, expected)}"
+        )
+        self.path = path
+        self.found = found
+        self.expected = expected
+
+
+def _remedy(found: int, expected: int) -> str:
+    """What brings a store at schema version *found* to *expected*, as a sentence SchemaVersionMismatch's message ends with."""
+    if found < expected:
+        return " Run `solar-challenge web migrate` to migrate it."
+    if found > expected:
+        return " This database was written by a newer solar-challenge."
+    return ""
 
 
 @dataclass(frozen=True)
@@ -79,27 +105,35 @@ _CURRENT_TABLES = (RUNS_TABLE, CONFIG_PRESETS_TABLE, CHAT_MESSAGES_TABLE)
 
 
 def open_database(path: Path) -> Database:
-    """The Database of the store at *path*, which is created at SCHEMA_VERSION when the file holds no table.
+    """The Database of the store at *path* at SCHEMA_VERSION, which is created when the file holds no table.
 
-    The directory of *path* is created if need be. A new store is created all or nothing, in one
-    transaction: every table at its owner's current schema, with its indexes, and the
-    user_version SCHEMA_VERSION; its file journals in WAL mode. A file that holds a table is
-    opened as it is. Every connection is opened through Database.connect().
+    The directory of *path* is created if need be. The store's version is read before anything
+    is written. A new store is created all or nothing, in one transaction: every table at its
+    owner's current schema, with its indexes, and the user_version SCHEMA_VERSION; its file
+    journals in WAL mode. A store at SCHEMA_VERSION is opened as it is. Every connection is
+    opened through Database.connect().
 
     Raises:
+        SchemaVersionMismatch: The store is at another schema version, a legacy store that
+            records none being at version 0; nothing is written to it.
         sqlite3.Error: The new store cannot be created; the file then holds none of its tables.
     """
     database = Database(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not _holds_a_table(database):
+    found = _found_version(database)
+    if found is None:
         _create_store(database)
+    elif found != SCHEMA_VERSION:
+        raise SchemaVersionMismatch(path, found, SCHEMA_VERSION)
     return database
 
 
-def _holds_a_table(database: Database) -> bool:
-    """Whether *database*'s file holds a table, read without writing to it."""
+def _found_version(database: Database) -> int | None:
+    """The schema version *database*'s file records, read without writing to it: None when it holds no table, else its user_version."""
     with closing(database.connect()) as conn:
-        return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is not None
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is None:
+            return None
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
 def _create_store(database: Database) -> None:

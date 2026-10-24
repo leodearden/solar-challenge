@@ -106,6 +106,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         StoreLocked: If another app, in this process or another, holds
             the store's lock.
         StoreLockUnsupported: If this platform has no POSIX flock.
+        SchemaVersionMismatch: If the store's database is at a schema
+            version other than this solar-challenge's, naming the file and
+            both versions; the store is left as it was, and its lock is
+            released.
     """
     app = Flask(
         __name__,
