@@ -2,7 +2,6 @@
 
 import dataclasses
 import pickle
-import re
 from collections.abc import Iterable
 from datetime import datetime, time
 
@@ -16,6 +15,7 @@ from solar_challenge.tariff import (
     calculate_bill,
     describe_minutes_of_day,
 )
+from tests._names_as_a_word import names_as_a_word
 from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
@@ -33,11 +33,6 @@ REPEATED_OFF_PEAK_TARIFF = TariffConfig(
 
 def _derived_values(tariff: TariffConfig) -> tuple[float, float, frozenset[int]]:
     return tariff.peak_rate, tariff.mean_period_rate, tariff.cheap_minutes_of_day
-
-
-def _names_as_a_word(message: str, value: object) -> bool:
-    """Whether *message* names str(value) as a word of its own: "-inf" does not name "inf", nor does "infinite"."""
-    return re.search(rf"(?<![\w.-]){re.escape(str(value))}(?![\w.])", message) is not None
 
 
 class TestTariffPeriodBasics:
@@ -86,7 +81,7 @@ class TestTariffPeriodValidation:
 
         message = str(refusal.value)
         assert "rate_per_kwh" in message
-        assert _names_as_a_word(message, rate)
+        assert names_as_a_word(message, rate)
 
     def test_invalid_start_time_format(self):
         """Invalid start time format raises ConfigurationError."""
@@ -910,4 +905,4 @@ class TestDescribeMinutesOfDay:
         with pytest.raises(ValueError) as refusal:
             describe_minutes_of_day([0, minute])
 
-        assert _names_as_a_word(str(refusal.value), minute)
+        assert names_as_a_word(str(refusal.value), minute)

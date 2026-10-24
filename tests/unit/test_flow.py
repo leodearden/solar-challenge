@@ -28,6 +28,7 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     TOUOptimizedStrategy,
 )
+from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
 from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
@@ -1165,10 +1166,6 @@ class TestTouDispatchOnTieredTariff:
         assert result.battery_discharge > 0.0
 
 
-_MINUTES_OF_A_WINTER_DAY = pd.date_range(
-    "2024-01-10", periods=1440, freq="min", tz="Europe/London"
-)
-
 _Step = Callable[[float, float, Battery, pd.Timestamp, TariffConfig], EnergyFlowResult]
 
 
@@ -1188,12 +1185,12 @@ def _step_by_the_tou_strategy(
 
 
 def _winter_day_of_flows(step: _Step, tariff: TariffConfig) -> list[dict[str, float]]:
-    """Each minute's flows as a fresh _grid_charging_battery() steps through 2024-01-10, each hour's generation and demand held for its 60 minutes."""
+    """Each minute's flows as a fresh _grid_charging_battery() steps through MINUTES_OF_A_WINTER_DAY, each hour's generation and demand held for its 60 minutes."""
     battery = _grid_charging_battery()
     return [
         dataclasses.asdict(step(float(generation), float(demand), battery, minute, tariff))
         for minute, generation, demand in zip(
-            _MINUTES_OF_A_WINTER_DAY,
+            MINUTES_OF_A_WINTER_DAY,
             np.repeat(HOURLY_GENERATION_KW, 60),
             np.repeat(HOURLY_DEMAND_KW, 60),
             strict=True,
@@ -1216,14 +1213,14 @@ class TestDispatchFollowsTheTariffSchedule:
     ) -> None:
         stub = _RecordingStrategy()
         cheap: dict[pd.Timestamp, bool] = {}
-        for minute in _MINUTES_OF_A_WINTER_DAY:
+        for minute in MINUTES_OF_A_WINTER_DAY:
             simulate_timestep(
                 0.0, 0.0, grid_charge_battery, 1.0, minute.to_pydatetime(), stub, tariff=tariff
             )
             assert stub.received_ctx is not None
             cheap[minute] = stub.received_ctx.is_cheap_period
 
-        assert cheap == {minute: tariff.is_cheap_at(minute) for minute in _MINUTES_OF_A_WINTER_DAY}
+        assert cheap == {minute: tariff.is_cheap_at(minute) for minute in MINUTES_OF_A_WINTER_DAY}
 
     @pytest.mark.parametrize(
         "step",

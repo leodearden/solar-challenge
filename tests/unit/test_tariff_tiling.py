@@ -9,15 +9,11 @@ times, so every tariff that constructs has a rate at every minute
 import functools
 from collections.abc import Callable
 
-import pandas as pd
 import pytest
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.tariff import FlatRateTariff, TariffConfig, TariffPeriod
-
-_MINUTES_OF_A_WINTER_DAY = pd.date_range(
-    "2024-01-10", periods=1440, freq="min", tz="Europe/London"
-)
+from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
 
 
 def test_a_gap_across_midnight_is_refused_naming_it_as_one_range() -> None:
@@ -72,9 +68,9 @@ def test_a_tiling_tariff_constructs_and_rates_each_minute_as_its_first_matching_
 ) -> None:
     tariff = build()
 
-    rates = {minute: tariff.get_rate(minute) for minute in _MINUTES_OF_A_WINTER_DAY}
+    rates = {minute: tariff.get_rate(minute) for minute in MINUTES_OF_A_WINTER_DAY}
 
     assert rates == {
         minute: next(p.rate_per_kwh for p in tariff.periods if p.matches_time(minute))
-        for minute in _MINUTES_OF_A_WINTER_DAY
+        for minute in MINUTES_OF_A_WINTER_DAY
     }

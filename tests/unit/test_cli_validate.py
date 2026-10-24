@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests of the `validate` command group: its help, `validate results` on a results CSV, and `validate config` on a config file."""
 
-import re
 import tempfile
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from tests._cli_table_text import table_text
+from tests._names_as_a_word import names_as_a_word
 
 runner = CliRunner()
 
@@ -189,11 +189,6 @@ fleet_distribution:
 _TOU_ADVISORY = (
     "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
 )
-
-
-def _names_as_a_word(text: str, value: str) -> bool:
-    """Whether *text* names *value* as a word of its own: "-inf" does not name "inf", nor does "infinite"."""
-    return re.search(rf"(?<![\w.-]){re.escape(value)}(?![\w.])", text) is not None
 
 
 class TestValidateConfig:
@@ -438,7 +433,7 @@ home:
         assert result.exit_code == 1
         text = table_text(result.stdout)
         assert "ERROR" in text
-        assert _names_as_a_word(text[text.index("ERROR"):], named)
+        assert names_as_a_word(text[text.index("ERROR"):], named)
 
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
