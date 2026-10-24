@@ -5,6 +5,9 @@ Each test pins one rule, so an edit that lets one minor's own rendering through,
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
 of turning the frozen-surface lock red on one interpreter or blind to a real change.
 
+No module here imports a rule module, so each reads alone: what more than one of them
+uses is in _fixtures.py; test_no_rule_module_imports_another.py checks that.
+
 The annotations of the modules here are evaluated, as in the modules they stand in for,
 so none of them imports annotations from __future__; test_annotations_are_evaluated.py
 checks that.
