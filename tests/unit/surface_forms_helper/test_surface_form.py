@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form, one per test.
 
-Wrapper and Ledger are defined at module level, where their qualified names carry no
-'<locals>'.
+Wrapper, Ledger, GetterDeleter and CallableGetterDeleter are defined at module level,
+where their qualified names carry no '<locals>'.
 """
 
 import collections.abc
@@ -43,7 +43,7 @@ from typing import (
 
 import pytest
 
-from tests._surface_forms import named_classes, surface_form
+from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
@@ -68,6 +68,21 @@ class Wrapper:
 
 class Ledger(dict):
     """A class that inherits its constructor from dict, which CPython defines in C."""
+
+
+class GetterDeleter:
+    """A descriptor whose type defines __get__ and __delete__ but no __set__."""
+
+    def __get__(self, instance: object, owner: type) -> int:
+        return 1
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class CallableGetterDeleter(GetterDeleter):
+    """A callable GetterDeleter."""
+
+    def __call__(self, rate: int) -> str: ...
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -1030,3 +1045,22 @@ def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
     assert surface_form(Preset(rate=0.15)) == "Preset"
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "name"),
+    [
+        pytest.param(GetterDeleter(), "GetterDeleter", id="getter-deleter"),
+        pytest.param(CallableGetterDeleter(), "CallableGetterDeleter", id="callable-getter-deleter"),
+    ],
+)
+def test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant_spelled_by_its_type_qualified_name(
+    descriptor: object, name: str
+) -> None:
+    class Meter:
+        reset = descriptor
+
+    assert surface_form(descriptor) == name
+    assert named_classes(descriptor) == {type(descriptor)}
+    assert member_forms(Meter) == {"reset": name}
+    assert named_classes(Meter) == {type(descriptor)}
