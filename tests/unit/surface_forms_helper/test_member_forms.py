@@ -22,6 +22,7 @@ from tests._surface_forms import (
 )
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
+    CallableGetter,
     Preset,
     imported_module,
 )
@@ -428,6 +429,19 @@ def test_a_partial_member_raises_a_type_error_naming_the_class_the_member_and_th
 
     with pytest.raises(
         TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partial\b.*\b3\.14\b.*\bmethod\b"
+    ):
+        member_forms(Meter)
+
+
+def test_a_partial_member_that_wraps_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_that_routine_and_its_kind_instead_of_the_binding() -> None:
+    getter = CallableGetter()
+
+    class Meter:
+        half = functools.partial(getter)
+
+    with pytest.raises(
+        TypeError,
+        match=rf"\.Meter\.half\b.*\bfunctools\.partial\b.*{re.escape(repr(getter))}.*\.CallableGetter\b",
     ):
         member_forms(Meter)
 

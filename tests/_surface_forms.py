@@ -126,8 +126,8 @@ def member_forms(cls: type) -> dict[str, str]:
     TypeError, and a module another of the same name has replaced in sys.modules raises
     LookupError. A public member that no member rule spells and that is a routine whose
     signature inspect cannot read, as surface_form describes one, raises TypeError naming
-    *cls*, the member and its kind; one that is a functools.partial, which Python 3.14
-    binds to the instance as a method and earlier minors call without it, raises
+    *cls*, the member and its kind; any other that is a functools.partial, which Python
+    3.14 binds to the instance as a method and earlier minors call without it, raises
     TypeError naming *cls*, the member and that binding.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
