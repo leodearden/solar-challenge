@@ -15,6 +15,7 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
 from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._fleet_form import valid_distribution_form
+from tests._run_storage_layout import stored_run_dir
 from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import build_test_app, release_store_lock, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
@@ -132,6 +133,7 @@ _FLEET_COMPLETED = _sse(
     ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
 )
 _FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
+_CANCELLED = _sse("error", '{"status": "cancelled", "message": "Cancelled: its run was deleted"}')
 
 
 class TestGetJobStatusEndpoint:
@@ -305,6 +307,84 @@ class TestASubmittedJobsRunInRunHistory:
         assert (interrupted["status"], interrupted["error_message"]) == ("failed", "Interrupted by server restart")
         assert interrupted["completed_at"] is not None
         assert after_restart.get(f"/api/history/runs/{first_run_id}").get_json()["status"] == "completed"
+
+
+class TestDeletingARunCancelsItsJob:
+    """DELETE /api/history/runs/<id> of a run whose job is queued or running cancels the job, which saves nothing: contract C8."""
+
+    def test_a_run_deleted_while_its_home_job_simulates_stays_deleted_and_its_job_reports_cancelled(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, new_id=CountingIds())
+        client = client_using(app, manager)
+        assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+        blocking_simulation.wait_until_started()
+        running = client.get("/api/jobs/id-1").get_json()
+
+        assert client.delete("/api/history/runs/id-2").status_code == 200
+        assert client.get("/api/history/runs/id-2").status_code == 404
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        assert client.get("/api/history/runs/id-2").status_code == 404
+        assert not stored_run_dir(run_storage_of(app), "id-2").exists()
+        assert client.get("/api/jobs/id-1").get_json() == {
+            **running,
+            "status": "cancelled",
+            "message": "Cancelled: its run was deleted",
+        }
+        assert client.get("/api/jobs/id-1/progress").get_data(as_text=True) == _STARTING + _SIMULATING + _CANCELLED
+
+    def test_a_run_deleted_while_its_job_waits_in_the_queue_is_never_simulated(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation)
+        client = client_using(app, manager)
+        ahead = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
+        blocking_simulation.wait_until_started()
+        queued = client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "pv_kw": 3.0}).get_json()
+
+        assert client.delete(f"/api/history/runs/{queued['run_id']}").status_code == 200
+
+        assert client.get(f"/api/jobs/{queued['job_id']}").get_json()["status"] == "cancelled"
+        assert client.get(f"/api/jobs/{queued['job_id']}/progress").get_data(as_text=True) == _CANCELLED
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        assert [config.pv_config.capacity_kw for config, _, _ in blocking_simulation.calls] == [4.0]
+        assert client.get(f"/api/history/runs/{queued['run_id']}").status_code == 404
+        assert not stored_run_dir(run_storage_of(app), queued["run_id"]).exists()
+        assert client.get(f"/api/history/runs/{ahead['run_id']}").get_json()["status"] == "completed"
+
+    def test_a_fleet_run_deleted_while_its_first_home_simulates_never_simulates_the_others_and_saves_nothing(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
+        client = client_using(app, manager)
+        submitted = client.post(
+            "/api/simulate/fleet",
+            json={
+                "homes": [
+                    A_HOME_JOB_REQUEST,
+                    {**A_HOME_JOB_REQUEST, "pv_kw": 3.0},
+                    {**A_HOME_JOB_REQUEST, "pv_kw": 2.0},
+                ]
+            },
+        ).get_json()
+        blocking_simulation.wait_until_started()
+
+        assert client.delete(f"/api/history/runs/{submitted['run_id']}").status_code == 200
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        assert [config.pv_config.capacity_kw for config, _, _ in blocking_simulation.calls] == [4.0]
+        assert client.get(f"/api/history/runs/{submitted['run_id']}").status_code == 404
+        assert not stored_run_dir(run_storage_of(app), submitted["run_id"]).exists()
+        job = client.get(f"/api/jobs/{submitted['job_id']}").get_json()
+        assert (job["status"], job["current_step"], job["message"]) == (
+            "cancelled",
+            "Home 1/3",
+            "Cancelled: its run was deleted",
+        )
 
 
 class TestJobProgressEndpoint:
