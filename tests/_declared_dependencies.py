@@ -298,18 +298,19 @@ def _nodes_outside_nested_statements(node: ast.AST) -> Iterator[ast.AST]:
             yield from _nodes_outside_nested_statements(child)
 
 
-def _assignment_parts(statement: ast.stmt) -> tuple[list[ast.expr], ast.expr | None]:
-    """Return (targets, value) for a *statement* that assigns, annotates or augments: the
-    expressions it writes to, and the value it assigns or adds, None for an annotation with no
+def _assignment_parts(statement: ast.stmt) -> tuple[ast.expr | None, ast.expr | None]:
+    """Return (target, value) for a *statement* that assigns to one target, annotates or augments:
+    the expression it writes to, and the value it assigns or adds, None for an annotation with no
     value.
 
-    Any other statement has no targets and no value.
+    Any other statement has no target and no value, a chained assignment among them: its targets
+    alias one another, so none is the sole one.
     """
-    if isinstance(statement, ast.Assign):
-        return statement.targets, statement.value
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+        return statement.targets[0], statement.value
     if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
-        return [statement.target], statement.value
-    return [], None
+        return statement.target, statement.value
+    return None, None
 
 
 def _binds_pytest_plugins(node: ast.AST) -> bool:
@@ -319,15 +320,15 @@ def _binds_pytest_plugins(node: ast.AST) -> bool:
 
 def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
     """Yield (statement, value) for each statement of *tree*'s module scope, as
-    _module_scope_statements finds them, that assigns pytest_plugins, annotated or not, or
-    augments it. *value* is what the statement assigns or adds.
+    _module_scope_statements finds them, that assigns pytest_plugins as its one target, annotated
+    or not, or augments it. *value* is what the statement assigns or adds.
 
     pytest reads pytest_plugins as an attribute of the module once the module has run, so each
     such statement can give it entries. An annotation with no value assigns nothing.
     """
     for statement in _module_scope_statements(tree.body):
-        targets, value = _assignment_parts(statement)
-        if value is not None and any(_binds_pytest_plugins(target) for target in targets):
+        target, value = _assignment_parts(statement)
+        if value is not None and target is not None and _binds_pytest_plugins(target):
             yield statement, value
 
 
@@ -362,17 +363,18 @@ def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt
     _pytest_plugins_assignments does not read.
 
     In the module's scope, as _module_scope_statements finds them, one holds the name as a target
-    other than the bare one of an assignment, an annotation or an augmentation: one of a tuple, a
-    for, a with or a walrus. In any scope, one reads or deletes the name, through which a method
-    call such as append, a subscript or an alias can change the list; subscripts globals(),
-    locals() or vars() with the name; or declares it global, since a function or class that does
-    can rebind the attribute of the module. A read in a function or class body counts even where
-    the name is a local there, since scopes are not resolved.
+    other than the sole target of an assignment, an annotation or an augmentation: one of a tuple,
+    a for, a with or a walrus, or beside another target of a chained assignment. In any scope, one
+    reads or deletes the name, through which a method call such as append, a subscript or an alias
+    can change the list; subscripts globals(), locals() or vars() with the name; or declares it
+    global, since a function or class that does can rebind the attribute of the module. A read in
+    a function or class body counts even where the name is a local there, since scopes are not
+    resolved.
     """
     for statement in _module_scope_statements(tree.body):
-        read_targets, _ = _assignment_parts(statement)
+        read_target, _ = _assignment_parts(statement)
         if any(
-            _binds_pytest_plugins(node) and node not in read_targets
+            _binds_pytest_plugins(node) and node is not read_target
             for node in _nodes_outside_nested_statements(statement)
         ):
             yield statement
