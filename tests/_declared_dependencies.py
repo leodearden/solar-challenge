@@ -322,18 +322,27 @@ def _assignment_parts(statement: _StatementOrClause) -> tuple[ast.expr | None, a
 
 def _binds_pytest_plugins(node: ast.AST) -> bool:
     """Return whether *node* binds the name pytest_plugins: as a target, the position of a Name
-    that binds it; as the name of an except clause; or as a capture of a match pattern, whether
-    of one value, of the rest of a sequence or of the rest of a mapping.
+    that binds it; as the name of a def, a class or an except clause; as a capture of a match
+    pattern, whether of one value, of the rest of a sequence or of the rest of a mapping; or as a
+    name a from-import binds, which `from m import *` does for every public name of m.
+
+    An import statement binds a module, which pytest reads as naming no plugin, so it binds
+    nothing the contract follows.
     """
     match node:
         case (
             ast.Name(id=name, ctx=ast.Store())
+            | ast.FunctionDef(name=name)
+            | ast.AsyncFunctionDef(name=name)
+            | ast.ClassDef(name=name)
             | ast.ExceptHandler(name=name)
             | ast.MatchAs(name=name)
             | ast.MatchStar(name=name)
             | ast.MatchMapping(rest=name)
         ):
             return name == _PYTEST_PLUGINS
+        case ast.ImportFrom(names=aliases):
+            return any((alias.asname or alias.name) in (_PYTEST_PLUGINS, "*") for alias in aliases)
     return False
 
 
@@ -383,8 +392,8 @@ def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_Statement
     _module_scope_statements_and_clauses finds them, that binds pytest_plugins in a form
     _pytest_plugins_assignments does not read: it holds the name as a target other than the sole
     target of an assignment, an annotation or an augmentation, such as one of a tuple, a for, a
-    with or a walrus, or beside another target of a chained assignment; or as the name of an
-    except clause or a capture of a match pattern.
+    with or a walrus, or beside another target of a chained assignment; as the name of a def, a
+    class or an except clause; as a capture of a match pattern; or as a name a from-import binds.
     """
     for statement in _module_scope_statements_and_clauses(tree.body):
         read_target, _ = _assignment_parts(statement)
