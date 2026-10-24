@@ -81,7 +81,7 @@ fleet_distribution:
 
 # Financial parameters matching bristol-phase1.yaml baseline.
 # grid_services_income_per_kw_per_year_gbp: Central band from
-#   flex.resolve_grid_services_band("central") == £12.0/kW/yr,
+#   gridservices.GRID_SERVICES_RATE_BANDS.central.flat_gbp_per_kw_per_year == £12.0/kW/yr,
 #   matching this scenario's flex_band: central (default Central for the board).
 #   Units: per kW of battery max_discharge_kw (Σ across all battery homes).
 #   Source: W1 δ (task 55) — seam gate proving band → project surplus.

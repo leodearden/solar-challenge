@@ -11,7 +11,8 @@ The two revenue streams modelled here are:
   peak imports; from consulting §1.1.
 * **Grid services (firm flex capacity)** — payments for contracted kW of dispatchable
   discharge power; from docs/prds/flexibility-value-finance-integration.md §6,
-  resolved decision 2 (per-kW basis).
+  resolved decision 2 (per-kW basis).  The per-kW rates are the flat rates of
+  :data:`~solar_challenge.gridservices.GRID_SERVICES_RATE_BANDS`.
 
 Three uncertainty bands (Low / Central / High) bound the plausible range for
 a 2-kW-ish domestic battery in the Bristol context.  The ``total_gbp`` headline
@@ -22,9 +23,12 @@ against simple column-maxima addition). The contention is material only for
 the low band (100 + 4 = 104 ≠ 120); central and high happen to sum exactly.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 
 
 @dataclass(frozen=True)
@@ -47,9 +51,10 @@ class FlexibilityValueBand:
             (consulting §1.1).
         grid_services_per_home_gbp: Grid-services capacity payment in
             £/home/yr for a representative 2.5-kW battery (consulting §1.1).
-        grid_services_per_kw_gbp: Grid-services rate in £/kW-discharge/yr
-            (docs/prds/flexibility-value-finance-integration.md §6; rate × 2.5 ≈
-            per_home within the doc's banding tolerance).
+        grid_services_per_kw_gbp: Grid-services rate in £/kW-discharge/yr; in
+            :data:`FLEX_VALUE_BANDS` it is the band's flat rate in
+            :data:`~solar_challenge.gridservices.GRID_SERVICES_RATE_BANDS`
+            (rate × 2.5 ≈ per_home within the doc's banding tolerance).
         total_gbp: Documented headline total increment in £/home/yr
             (consulting §1.1).  Not necessarily the arithmetic sum of the two
             streams — consulting §1.1 warns against simple column-maxima
@@ -93,20 +98,40 @@ class FlexibilityValueBand:
             )
 
 
-# Representative battery discharge power in kW — matches BatteryConfig.max_discharge_kw
-# default (config.py:264).  Used to anchor the per-kW ↔ per-home cross-check in the
+# Representative battery discharge power in kW — matches the default of
+# BatteryConfig.max_discharge_kw.  Used to anchor the per-kW ↔ per-home cross-check in the
 # consulting §1.1 table.  Finance's grid-services formula uses each home's ACTUAL
 # max_discharge_kw; 2.5 is the consulting model's representative figure only.
-REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; config.py:264 default
+REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; the default of BatteryConfig.max_discharge_kw
 
 _PROVENANCE = (
-    "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4"
-    " + docs/prds/flexibility-value-finance-integration.md §6"
+    "per-home figures: consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4; "
+    "per-kW rate: the band's flat rate in solar_challenge.gridservices.GRID_SERVICES_RATE_BANDS, "
+    "whose provenance cites its source"
 )
 
-# Canonical band presets keyed "low"/"central"/"high".
-# Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total)
-# and docs/prds/flexibility-value-finance-integration.md §6 (grid-services per-kW rate).
+
+def _consulting_band(
+    band: GridServicesBand,
+    *,
+    time_shift_gbp: float,
+    grid_services_per_home_gbp: float,
+    total_gbp: float,
+) -> FlexibilityValueBand:
+    """*band*'s consulting §1.1 per-home figures, with the rate table's flat rate for *band* as its per-kW rate."""
+    return FlexibilityValueBand(
+        name=band.value,
+        time_shift_gbp=time_shift_gbp,
+        grid_services_per_home_gbp=grid_services_per_home_gbp,
+        grid_services_per_kw_gbp=GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year,
+        total_gbp=total_gbp,
+        provenance=_PROVENANCE,
+    )
+
+
+# Canonical band presets keyed by GridServicesBand, in band order.
+# Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total);
+# each band's grid-services per-kW rate is GRID_SERVICES_RATE_BANDS' flat rate.
 #
 # NOTE: total_gbp is the DOCUMENTED HEADLINE INCREMENT, not necessarily the
 # arithmetic sum of time_shift_gbp + grid_services_per_home_gbp.  Consulting
@@ -114,75 +139,34 @@ _PROVENANCE = (
 # The adjustment is material only for the low band (100+4=104 ≠ 120); central
 # (250+30=280) and high (330+120=450) happen to sum exactly.
 #
-# Per-home ↔ per-kW cross-check (rate × 2.5 ≈ per-home, within ±£1.0):
-#   low:     1.5 × 2.5 = 3.75 ≈ 4  (doc rounds to ~1.5)
-#   central: 12.0 × 2.5 = 30.0 (exact)
-#   high:    48.0 × 2.5 = 120.0 (exact)
-FLEX_VALUE_BANDS: dict[str, FlexibilityValueBand] = {
-    "low": FlexibilityValueBand(
-        name="low",
-        time_shift_gbp=100.0,
-        grid_services_per_home_gbp=4.0,
-        grid_services_per_kw_gbp=1.5,
-        total_gbp=120.0,
-        provenance=_PROVENANCE,
+# Each band's per-kW rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ its per-home figure,
+# within ±£1.0:
+# tests/unit/test_flex.py::TestFlexValueBands::test_per_kw_rate_at_the_representative_power_is_the_per_home_figure
+FLEX_VALUE_BANDS: Mapping[GridServicesBand, FlexibilityValueBand] = MappingProxyType({
+    GridServicesBand.LOW: _consulting_band(
+        GridServicesBand.LOW, time_shift_gbp=100.0, grid_services_per_home_gbp=4.0, total_gbp=120.0
     ),
-    "central": FlexibilityValueBand(
-        name="central",
-        time_shift_gbp=250.0,
-        grid_services_per_home_gbp=30.0,
-        grid_services_per_kw_gbp=12.0,
-        total_gbp=280.0,
-        provenance=_PROVENANCE,
+    GridServicesBand.CENTRAL: _consulting_band(
+        GridServicesBand.CENTRAL, time_shift_gbp=250.0, grid_services_per_home_gbp=30.0, total_gbp=280.0
     ),
-    "high": FlexibilityValueBand(
-        name="high",
-        time_shift_gbp=330.0,
-        grid_services_per_home_gbp=120.0,
-        grid_services_per_kw_gbp=48.0,
-        total_gbp=450.0,
-        provenance=_PROVENANCE,
+    GridServicesBand.HIGH: _consulting_band(
+        GridServicesBand.HIGH, time_shift_gbp=330.0, grid_services_per_home_gbp=120.0, total_gbp=450.0
     ),
-}
+})
 
 
 def resolve_flex_band(band: str) -> FlexibilityValueBand:
     """Validate *band* and return the corresponding :class:`FlexibilityValueBand`.
 
     Args:
-        band: Uncertainty band name — ``"low"``, ``"central"``, or ``"high"``.
+        band: Uncertainty band name — ``"low"``, ``"central"``, or ``"high"`` — or a
+            :class:`~solar_challenge.gridservices.GridServicesBand`.
 
     Returns:
         The matching :class:`FlexibilityValueBand` from :data:`FLEX_VALUE_BANDS`.
 
     Raises:
-        ValueError: If *band* is not a known key.  The message lists available
-            bands (mirroring :func:`~solar_challenge.seg.resolve_seg_tariff`).
+        ConfigurationError: If *band* is not a band (a ValueError).  The message
+            lists the bands.
     """
-    if band in FLEX_VALUE_BANDS:
-        return FLEX_VALUE_BANDS[band]
-    available = ", ".join(sorted(FLEX_VALUE_BANDS.keys()))
-    raise ValueError(
-        f"Unknown flexibility band '{band}'. Available: {available}"
-    )
-
-
-def resolve_grid_services_band(band: str) -> float:
-    """Return the grid-services rate in £/kW-of-max-discharge/yr for *band*.
-
-    Delegates to :func:`resolve_flex_band` (single validation path) and
-    returns the ``grid_services_per_kw_gbp`` field.
-
-    Finance's grid-services income formula is: income = Σ max_discharge_kw × rate,
-    where *rate* is the value returned here (central exactly £12.0/kW/yr).
-
-    Args:
-        band: Uncertainty band name — ``"low"``, ``"central"``, or ``"high"``.
-
-    Returns:
-        £/kW-of-max-discharge/yr rate for the requested band.
-
-    Raises:
-        ValueError: If *band* is unknown (propagated from :func:`resolve_flex_band`).
-    """
-    return resolve_flex_band(band).grid_services_per_kw_gbp
+    return FLEX_VALUE_BANDS[GridServicesBand.parse(band, what="flexibility band")]

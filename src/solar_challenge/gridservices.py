@@ -10,13 +10,16 @@ Key public symbols:
 * :class:`EventWindow` — frozen dataclass describing *when* grid-service events
   can occur (months, weekdays, hours), with a :meth:`~EventWindow.mask` helper
   that returns a boolean :class:`pandas.Series` selecting in-window timesteps.
+* :class:`GridServicesBand` — the one low / central / high uncertainty-band
+  vocabulary, whose :meth:`~GridServicesBand.parse` refuses any other value.
 * :class:`GridServicesRateBand` — frozen dataclass holding per-event availability
-  and utilisation rates for one uncertainty band.
+  and utilisation rates, and a flat rate per kW of battery discharge power per
+  year, for one uncertainty band.
 * :class:`GridServicesRateBands` — frozen container for the three canonical
   (low / central / high) bands with a :meth:`~GridServicesRateBands.resolve`
   helper.
-* :data:`GRID_SERVICES_RATE_BANDS` — module-level constant (sibling to
-  :data:`~solar_challenge.flex.FLEX_VALUE_BANDS`).
+* :data:`GRID_SERVICES_RATE_BANDS` — module-level constant holding every
+  grid-services rate per band.
 * :func:`resolve_grid_services_rate_band` — convenience helper delegating to
   the module constant.
 * :data:`DEFAULT_EVENT_WINDOWS` — default winter-weekday-16:00-19:00 schedule
@@ -43,6 +46,7 @@ Key public symbols:
 import math
 import warnings
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import pandas as pd
@@ -56,16 +60,44 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
+# GridServicesBand
+# ---------------------------------------------------------------------------
+
+
+class GridServicesBand(str, Enum):
+    """The three uncertainty bands every grid-services rate is quoted in, from low to high."""
+
+    LOW = "low"
+    CENTRAL = "central"
+    HIGH = "high"
+
+    @classmethod
+    def parse(cls, value: object, *, what: str) -> "GridServicesBand":
+        """Return the band *value* names: a band's value, exactly, or a band itself.
+
+        Raises:
+            ConfigurationError: If *value* is anything else; the message names
+                *what*, the bands in order and *value*.
+        """
+        try:
+            return cls(value)
+        except ValueError:
+            raise ConfigurationError(
+                f"{what} must be one of {', '.join(band.value for band in cls)}, got {value!r}"
+            ) from None
+
+
+# ---------------------------------------------------------------------------
 # GridServicesRateBand + GridServicesRateBands
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class GridServicesRateBand:
-    """Per-event capacity-at-events rate decomposition for one uncertainty band.
+    """One uncertainty band's grid-services rates: per event, and flat per kW of battery discharge power per year.
 
-    Mirrors :class:`~solar_challenge.flex.FlexibilityValueBand` in structure
-    but is specific to the capacity-at-events pricing model.
+    Capacity-at-events pricing reads the per-event rates; flat pricing reads
+    the flat rate.
 
     Attributes:
         availability_gbp_per_kw_per_event: Availability payment per kW of
@@ -73,14 +105,17 @@ class GridServicesRateBand:
         utilisation_gbp_per_mwh: Utilisation payment per MWh of actual energy
             dispatched during events (£/MWh).
         provenance: Source reference for these rates.
+        flat_gbp_per_kw_per_year: Flat payment per kW of installed battery
+            discharge power per year (£/kW/yr); >= 0 and finite.
     """
 
     availability_gbp_per_kw_per_event: float
     utilisation_gbp_per_mwh: float
     provenance: str = ""
+    flat_gbp_per_kw_per_year: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate non-negativity, raising ConfigurationError on violation."""
+        """Refuse a negative rate, or a flat rate that is not finite, raising ConfigurationError."""
         if self.availability_gbp_per_kw_per_event < 0:
             raise ConfigurationError(
                 "availability_gbp_per_kw_per_event must be non-negative, "
@@ -90,6 +125,11 @@ class GridServicesRateBand:
             raise ConfigurationError(
                 f"utilisation_gbp_per_mwh must be non-negative, "
                 f"got {self.utilisation_gbp_per_mwh}"
+            )
+        if not 0.0 <= self.flat_gbp_per_kw_per_year < math.inf:
+            raise ConfigurationError(
+                "flat_gbp_per_kw_per_year must be >= 0 and finite, "
+                f"got {self.flat_gbp_per_kw_per_year}"
             )
 
 
@@ -111,32 +151,30 @@ class GridServicesRateBands:
         """Return the band matching *band*.
 
         Args:
-            band: One of ``"low"``, ``"central"``, ``"high"``.
+            band: One of ``"low"``, ``"central"``, ``"high"``, or a
+                :class:`GridServicesBand`.
 
         Returns:
             The matching :class:`GridServicesRateBand`.
 
         Raises:
-            ValueError: If *band* is not a known name.
+            ConfigurationError: If *band* is not a band (a ValueError).
         """
-        if band == "low":
-            return self.low
-        if band == "central":
-            return self.central
-        if band == "high":
-            return self.high
-        raise ValueError(
-            f"Unknown grid-services rate band '{band}'. Available: high, central, low"
-        )
+        match GridServicesBand.parse(band, what="grid-services rate band"):
+            case GridServicesBand.LOW:
+                return self.low
+            case GridServicesBand.CENTRAL:
+                return self.central
+            case GridServicesBand.HIGH:
+                return self.high
 
 
-# PRD open-Q2: default band rates to be calibrated in a tuning task.
-# Seeded near the flat-rate neighbourhood (central £12/kW/yr ≈ £1/kW/event
-# for ~12 events/yr).  Availability is per-kW per event; utilisation is per MWh
-# dispatched during the event.
+# The two columns are independent calibrations of the same bands (docs/cost-recovery-finance-model.md §8.1).
 _RATE_PROVENANCE = (
-    "PRD docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2 "
-    "(calibrated defaults; tuning task to follow)"
+    "per-event rates: PRD docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2 "
+    "(calibrated defaults; tuning task to follow); "
+    "flat rates: consulting 2026-06-16-flexibility-value-buildability-model.md §1.1 "
+    "+ docs/prds/flexibility-value-finance-integration.md §6"
 )
 
 GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
@@ -144,16 +182,19 @@ GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
         availability_gbp_per_kw_per_event=0.50,
         utilisation_gbp_per_mwh=30.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=1.5,
     ),
     central=GridServicesRateBand(
         availability_gbp_per_kw_per_event=1.00,
         utilisation_gbp_per_mwh=60.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=12.0,
     ),
     high=GridServicesRateBand(
         availability_gbp_per_kw_per_event=2.00,
         utilisation_gbp_per_mwh=120.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=48.0,
     ),
 )
 
@@ -164,14 +205,15 @@ def resolve_grid_services_rate_band(band: str) -> GridServicesRateBand:
     Delegates to :meth:`GRID_SERVICES_RATE_BANDS.resolve`.
 
     Args:
-        band: One of ``"low"``, ``"central"``, ``"high"``.
+        band: One of ``"low"``, ``"central"``, ``"high"``, or a
+            :class:`GridServicesBand`.
 
     Returns:
         The matching :class:`GridServicesRateBand` from
         :data:`GRID_SERVICES_RATE_BANDS`.
 
     Raises:
-        ValueError: If *band* is not a known key.
+        ConfigurationError: If *band* is not a band (a ValueError).
     """
     return GRID_SERVICES_RATE_BANDS.resolve(band)
 
@@ -277,7 +319,8 @@ class GridServicesEventsConfig:
     """Configuration for the capacity-at-events grid-services pricing model.
 
     Attributes:
-        band: Uncertainty band name (``"low"``, ``"central"``, or ``"high"``).
+        band: Uncertainty band name, a :class:`GridServicesBand` value
+            (``"low"``, ``"central"``, or ``"high"``).
         event_windows: Tuple of :class:`EventWindow` objects describing when
             activation events can occur.
         aggregator_share: Fraction of gross income paid to the aggregator;
@@ -301,12 +344,7 @@ class GridServicesEventsConfig:
 
     def __post_init__(self) -> None:
         """Validate domain constraints, raising ConfigurationError on violation."""
-        _VALID_BANDS = frozenset({"low", "central", "high"})
-        if self.band not in _VALID_BANDS:
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.band must be one of "
-                f"{sorted(_VALID_BANDS)}, got '{self.band}'"
-            )
+        GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band")
         if not self.event_windows:
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"

@@ -34,7 +34,11 @@ from solar_challenge.finance import (
 )
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.gridservices import GridServicesAtEvents, compute_grid_services_at_events
+from solar_challenge.gridservices import (
+    GridServicesAtEvents,
+    GridServicesBand,
+    compute_grid_services_at_events,
+)
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEGTariff
@@ -50,14 +54,6 @@ class AssumptionMode(str, enum.Enum):
     both = "both"
 
 
-class FlexBand(str, enum.Enum):
-    """Flexibility-value uncertainty band for the finance report block."""
-
-    low = "low"
-    central = "central"
-    high = "high"
-
-
 def _required_finance_block(raw: Mapping[str, Any]) -> FinanceConfig:
     """The scenario's parsed finance: block, raising ConfigurationError when it has none."""
     finance = parse_finance_config(raw.get("finance"))
@@ -69,13 +65,22 @@ def _required_finance_block(raw: Mapping[str, Any]) -> FinanceConfig:
     return finance
 
 
-def _flex_band_name(flag: Optional[FlexBand], scenario_value: object) -> Optional[str]:
-    """The flexibility band to report: the --flex-band flag's, else the scenario's flex_band key lower-cased to match the flag's case-insensitive values, else None."""
+def _flex_band(
+    flag: Optional[GridServicesBand], scenario_value: object
+) -> Optional[GridServicesBand]:
+    """The flexibility band to report: the --flex-band flag's, else the scenario's flex_band key's, else None when the key is absent or null.
+
+    A string key is read case-insensitively, as the flag is; any other value is
+    refused with ConfigurationError.
+    """
     if flag is not None:
-        return flag.value
-    if isinstance(scenario_value, str):
-        return scenario_value.lower()
-    return None
+        return flag
+    if scenario_value is None:
+        return None
+    return GridServicesBand.parse(
+        scenario_value.lower() if isinstance(scenario_value, str) else scenario_value,
+        what="flex_band",
+    )
 
 
 def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> FleetConfig:
@@ -189,13 +194,12 @@ def run(
         ),
     ] = False,
     flex_band: Annotated[
-        Optional[FlexBand],
+        Optional[GridServicesBand],
         typer.Option(
             "--flex-band",
             help=(
                 "Render the flexibility-value (time-shift / grid-services) block for the "
-                "given uncertainty band {low,central,high}; overrides a scenario-level "
-                "flex_band key."
+                "given uncertainty band; overrides a scenario-level flex_band key."
             ),
             case_sensitive=False,
         ),
@@ -218,8 +222,7 @@ def run(
     """
     raw = load_config(scenario)
     finance = _required_finance_block(raw)
-    band_name = _flex_band_name(flex_band, raw.get("flex_band"))
-    resolved_flex_band = resolve_flex_band(band_name) if band_name else None
+    band = _flex_band(flex_band, raw.get("flex_band"))
 
     fleet_config = load_fleet_config(scenario)
     seg_rate = parse_seg_rate(raw.get("seg"))
@@ -267,8 +270,8 @@ def run(
         scenario_name=scenario_config.name,
         economics=economics_result,
         cost_recovery=cost_recovery_result,
-        flex_band=resolved_flex_band,
-        flex_band_name=band_name or "",
+        flex_band=resolve_flex_band(band) if band is not None else None,
+        flex_band_name=band.value if band is not None else "",
         grid_services_at_events=grid_services_at_events,
     )
     print_report(report)

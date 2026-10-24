@@ -5,6 +5,7 @@ import dataclasses
 import math
 import pickle
 import warnings
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -18,6 +19,7 @@ from solar_challenge.gridservices import (
     EventWindow,
     FlatGridServices,
     GridServicesAtEvents,
+    GridServicesBand,
     GridServicesEventsConfig,
     GridServicesRateBand,
     NoGridServices,
@@ -202,6 +204,61 @@ class TestEventWindowValidation:
 
 
 # ---------------------------------------------------------------------------
+# GridServicesBand: the one band vocabulary (docs/prds/grid-services-pricing-model.md §9 P4)
+# ---------------------------------------------------------------------------
+
+
+class TestGridServicesBand:
+    """GridServicesBand is the one low/central/high vocabulary, and every band entry point refuses in its words."""
+
+    def test_members_are_the_three_bands_from_low_to_high(self) -> None:
+        assert [band.value for band in GridServicesBand] == ["low", "central", "high"]
+
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_parse_returns_the_member_its_value_names(self, band: GridServicesBand) -> None:
+        assert GridServicesBand.parse(band.value, what="test band") is band
+
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_parse_returns_a_member_it_is_given(self, band: GridServicesBand) -> None:
+        assert GridServicesBand.parse(band, what="test band") is band
+
+    @pytest.mark.parametrize("value", ["medium", "Central", "", 5, None])
+    def test_parse_refuses_any_other_value_naming_what_and_the_bands(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            GridServicesBand.parse(value, what="test band")
+
+        assert str(excinfo.value) == f"test band must be one of low, central, high, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("refuse", "message"),
+        [
+            pytest.param(
+                lambda: GridServicesEventsConfig(band="medium"),
+                "GridServicesEventsConfig.band must be one of low, central, high, got 'medium'",
+                id="GridServicesEventsConfig",
+            ),
+            pytest.param(
+                lambda: GRID_SERVICES_RATE_BANDS.resolve("medium"),
+                "grid-services rate band must be one of low, central, high, got 'medium'",
+                id="GridServicesRateBands.resolve",
+            ),
+            pytest.param(
+                lambda: resolve_grid_services_rate_band("medium"),
+                "grid-services rate band must be one of low, central, high, got 'medium'",
+                id="resolve_grid_services_rate_band",
+            ),
+        ],
+    )
+    def test_each_entry_point_refuses_an_unknown_band_with_the_one_message(
+        self, refuse: Callable[[], object], message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            refuse()
+
+        assert str(excinfo.value) == message
+
+
+# ---------------------------------------------------------------------------
 # Step-5: GridServicesRateBand + GridServicesRateBands + module constant
 # ---------------------------------------------------------------------------
 
@@ -264,6 +321,52 @@ class TestGridServicesRateBands:
         band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             band.availability_gbp_per_kw_per_event = 2.0  # type: ignore[misc]
+
+    @pytest.mark.parametrize(
+        ("band", "rates"),
+        [
+            ("low", (0.50, 30.0, 1.5)),
+            ("central", (1.00, 60.0, 12.0)),
+            ("high", (2.00, 120.0, 48.0)),
+        ],
+    )
+    def test_each_band_holds_its_per_event_rates_and_its_flat_rate(
+        self, band: str, rates: tuple[float, float, float]
+    ) -> None:
+        """Per band: (£/kW/event, £/MWh, £/kW-of-discharge-power/yr); the per-event rates are unchanged."""
+        resolved = GRID_SERVICES_RATE_BANDS.resolve(band)
+
+        assert (
+            resolved.availability_gbp_per_kw_per_event,
+            resolved.utilisation_gbp_per_mwh,
+            resolved.flat_gbp_per_kw_per_year,
+        ) == rates
+
+    def test_resolve_takes_a_band_member(self) -> None:
+        assert GRID_SERVICES_RATE_BANDS.resolve(GridServicesBand.HIGH) is GRID_SERVICES_RATE_BANDS.high
+
+    def test_rate_band_built_with_only_the_per_event_rates_has_no_flat_rate(self) -> None:
+        band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
+
+        assert band.flat_gbp_per_kw_per_year == 0.0
+
+    @pytest.mark.parametrize("rate", [-1.0, float("nan"), float("inf")])
+    def test_rate_band_refuses_a_flat_rate_that_is_negative_or_not_finite(self, rate: float) -> None:
+        with pytest.raises(ConfigurationError, match="flat_gbp_per_kw_per_year"):
+            GridServicesRateBand(
+                availability_gbp_per_kw_per_event=1.0,
+                utilisation_gbp_per_mwh=5.0,
+                flat_gbp_per_kw_per_year=rate,
+            )
+
+    def test_rate_band_accepts_a_zero_flat_rate(self) -> None:
+        band = GridServicesRateBand(
+            availability_gbp_per_kw_per_event=1.0,
+            utilisation_gbp_per_mwh=5.0,
+            flat_gbp_per_kw_per_year=0.0,
+        )
+
+        assert band.flat_gbp_per_kw_per_year == 0.0
 
 
 # ---------------------------------------------------------------------------

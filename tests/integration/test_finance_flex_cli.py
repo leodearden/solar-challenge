@@ -8,7 +8,9 @@ loop.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import yaml
@@ -16,7 +18,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.fleet import FleetResults
-from tests._cli_fleet_simulator import invoke_finance_run
+from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
 
 
@@ -29,14 +31,21 @@ def _write_scenario(
     tmp_path: Path,
     *,
     name: str = "Flex CLI Test",
-    flex_band: str | None = None,
+    flex_band: object = None,
+    grid_services_events: dict[str, object] | None = None,
     n_homes: int = 5,
 ) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.
 
     When flex_band is not None, the top-level ``flex_band`` key is written so
-    the CLI can pick it up as the scenario-level default.
+    the CLI can pick it up as the scenario-level default.  When
+    grid_services_events is not None, the finance block prices grid services
+    at events (``grid_services_model: capacity_at_events``) with that block.
     """
+    finance: dict[str, object] = {"standing_charge_pence_per_day": 28.0}
+    if grid_services_events is not None:
+        finance["grid_services_model"] = "capacity_at_events"
+        finance["grid_services_events"] = grid_services_events
     scenario: dict = {  # type: ignore[type-arg]
         "name": name,
         "location": {
@@ -51,9 +60,7 @@ def _write_scenario(
             "battery": {"capacity_kwh": 5.0},
             "load": {"annual_consumption_kwh": 3500},
         },
-        "finance": {
-            "standing_charge_pence_per_day": 28.0,
-        },
+        "finance": finance,
     }
     if flex_band is not None:
         scenario["flex_band"] = flex_band
@@ -180,7 +187,8 @@ class TestFinanceFlexCLIBehaviour:
     ) -> None:
         """--flex-band bogus must exit with a non-zero code.
 
-        (d) FlexBand enum gives typer-native rejection; CliRunner must report exit != 0.
+        (d) --flex-band is typed GridServicesBand, so Typer refuses the value
+        itself; CliRunner must report exit != 0.
         """
         scenario_file = _write_scenario(tmp_path / "d")
 
@@ -197,10 +205,10 @@ class TestFinanceFlexCLIBehaviour:
     def test_invalid_scenario_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
-        """A scenario-level flex_band with an unknown value must exit non-zero.
+        """A scenario-level flex_band with an unknown value must exit 1 with a configuration error.
 
-        This validates the scenario-key rejection path (goes via resolve_flex_band →
-        ValueError → handle_errors → Exit(1)), which is distinct from the typer-enum
+        This validates the scenario-key rejection path (goes via GridServicesBand.parse →
+        ConfigurationError → handle_errors → Exit(1)), which is distinct from the typer-enum
         rejection of an invalid CLI flag.
         """
         # Scenario has flex_band: bogus (not low/central/high)
@@ -209,18 +217,19 @@ class TestFinanceFlexCLIBehaviour:
 
         result = invoke_finance_run([str(scenario_file)], fr)
 
-        assert result.exit_code != 0, (
-            f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
+        assert result.exit_code == 1, (
+            f"Expected exit 1 for invalid scenario flex_band 'bogus', "
             f"got {result.exit_code}.\n{result.output}"
         )
+        assert "Configuration error:" in result.output, result.output
 
     def test_scenario_flex_band_case_insensitive(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Scenario-level flex_band with mixed case (e.g. 'Central') must work.
 
-        The YAML value is normalised to lowercase before being passed to
-        resolve_flex_band, matching the CLI's case-insensitive FlexBand enum.
+        A string key is lower-cased, then parsed through GridServicesBand,
+        matching the case-insensitive --flex-band flag.
         """
         # Scenario has flex_band: Central (capital C)
         scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
@@ -238,6 +247,88 @@ class TestFinanceFlexCLIBehaviour:
         assert "central" in result.output, (
             f"Expected 'central' band name in output:\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §D2 — Every band entry point refuses in the one vocabulary's words
+# (docs/prds/grid-services-pricing-model.md §9 C10)
+# ---------------------------------------------------------------------------
+
+
+def _whitespace_normalised(output: str) -> str:
+    """*output* with every run of whitespace one space, so Rich's line wrapping cannot split a message."""
+    return " ".join(output.split())
+
+
+def _simulate_must_not_run(fleet_config: object, start: object, end: object) -> NoReturn:
+    pytest.fail("finance run simulated a fleet before refusing its band")
+
+
+class TestFinanceFlexCLIBandEntryPoints:
+    """The scenario's flex_band key, an events block's band and --flex-band each refuse a non-band naming low, central, high."""
+
+    def test_scenario_flex_band_medium_is_refused_before_any_simulation(self, tmp_path: Path) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band="medium")
+
+        result = invoke_cli(["finance", "run", str(scenario_file)], _simulate_must_not_run)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: flex_band must be one of low, central, high, got 'medium'"
+            in _whitespace_normalised(result.output)
+        ), result.output
+
+    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band=5)
+
+        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: flex_band must be one of low, central, high, got 5"
+            in _whitespace_normalised(result.output)
+        ), result.output
+
+    def test_an_events_band_medium_is_refused(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        scenario_file = _write_scenario(tmp_path, grid_services_events={"band": "medium"})
+
+        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: GridServicesEventsConfig.band must be one of low, central, high, "
+            "got 'medium'"
+        ) in _whitespace_normalised(result.output), result.output
+
+    def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
+        """Typer refuses --flex-band medium as a usage error naming it and each band, in whatever words Typer chooses."""
+        scenario_file = _write_scenario(tmp_path)
+
+        result = CliRunner().invoke(
+            app,
+            ["finance", "run", "--flex-band", "medium", str(scenario_file)],
+            env={"COLUMNS": "200"},
+        )
+
+        assert result.exit_code == 2, result.output
+        words = set(re.findall(r"\w+", result.output))
+        assert {"medium", "low", "central", "high"} <= words, result.output
+
+    def test_flex_band_flag_high_labels_the_block_with_the_bands_value(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        """The block names the band by its value, never its repr, and quotes the rate table's high flat rate."""
+        scenario_file = _write_scenario(tmp_path)
+
+        result = invoke_finance_run(["--flex-band", "high", str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 0, result.output
+        assert "Band: **high**" in result.output, result.output
+        assert "£48.0/kW-discharge/yr" in result.output, result.output
 
 
 # ---------------------------------------------------------------------------
