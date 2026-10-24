@@ -14,6 +14,7 @@ from flask.testing import FlaskClient
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
 from solar_challenge.web.simulation_params import DAYS_WINDOW_START
+from tests._fleet_form import valid_distribution_form
 from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import build_test_app, release_store_lock, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
@@ -258,6 +259,23 @@ class TestASubmittedJobsRunInRunHistory:
             ("running", default_name),
             ("completed", default_name),
         ]
+
+    @pytest.mark.parametrize("name_sent", [{}, {"name": ""}], ids=["no-name", "an-empty-name"])
+    def test_a_fleet_form_submitted_without_a_name_runs_as_fleet_simulation(
+        self, app: Flask, name_sent: dict[str, str]
+    ) -> None:
+        """The run lists under the fleet kind's default name (RunKind.default_name)."""
+        manager = JobManager(run_storage_of(app), simulate_home=RecordingSimulation())
+        client = client_using(app, manager)
+
+        response = client.post(
+            "/api/simulate/fleet-from-distribution", json={**valid_distribution_form(), "days": 1, **name_sent}
+        )
+        assert response.status_code == 201, response.get_json()
+        assert manager.wait_until_idle(timeout=30)
+        run = client.get(f"/api/history/runs/{response.get_json()['run_id']}").get_json()
+
+        assert (run["status"], run["name"]) == ("completed", "Fleet Simulation")
 
     def test_a_failed_jobs_run_reads_failed_with_the_jobs_message(self, app: Flask) -> None:
         client = _client_of_a_finished_job(app, a_failing_simulation)

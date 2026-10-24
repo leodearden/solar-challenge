@@ -134,20 +134,18 @@ class TestExportFleetYAML:
         homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
         assert load_fleet_config(path).homes == homes
 
-    def test_export_names_a_nameless_fleet_as_simulate_runs_it(
+    def test_a_nameless_fleet_is_exported_without_a_name_and_submitted_with_none(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A form without a name is exported under the name its simulation runs as."""
+        """A form without a name is exported with no name and submitted with none, so its run takes its kind's default name (RunKind.default_name)."""
         body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
         assert (export.status_code, simulate.status_code) == (200, 201)
-        assert (
-            yaml.safe_load(export.get_data(as_text=True))["name"]
-            == mock_job_manager.submit_fleet_job.call_args.kwargs["name"]
-        )
+        assert "name" not in yaml.safe_load(export.get_data(as_text=True))
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
     @pytest.mark.parametrize(
         ("patch", "reason"),
