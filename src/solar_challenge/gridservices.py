@@ -160,11 +160,13 @@ class GridServicesRateBands:
         Raises:
             ConfigurationError: If *band* is not a band (a ValueError).
         """
-        return {
-            GridServicesBand.LOW: self.low,
-            GridServicesBand.CENTRAL: self.central,
-            GridServicesBand.HIGH: self.high,
-        }[GridServicesBand.parse(band, what="grid-services rate band")]
+        match GridServicesBand.parse(band, what="grid-services rate band"):
+            case GridServicesBand.LOW:
+                return self.low
+            case GridServicesBand.CENTRAL:
+                return self.central
+            case GridServicesBand.HIGH:
+                return self.high
 
 
 # The two columns are independent calibrations of the same bands (docs/cost-recovery-finance-model.md §8.1).
