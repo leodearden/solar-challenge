@@ -71,6 +71,15 @@ from solar_challenge.cli import app
 app(["web", "start", *sys.argv[1:]])
 """
 
+PRINTS_ON_STDOUT_AND_STDERR = """
+import sys
+import time
+
+print("a line on stdout", flush=True)
+print("a line on stderr", file=sys.stderr, flush=True)
+time.sleep(600)
+"""
+
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -164,6 +173,23 @@ def _store_holder_pid(home: Path) -> int | None:
         return int(_store_lock_file(home).read_text())
     except (OSError, ValueError):
         return None
+
+
+def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_on_stdout_and_stderr(
+    tmp_path: Path,
+) -> None:
+    """The failure's own text carries both logs, so a red verify keeps what the server said."""
+    with pytest.raises(pytest.fail.Exception) as failed:
+        with _server(tmp_path, PRINTS_ON_STDOUT_AND_STDERR) as server:
+            _wait_until(
+                server,
+                lambda: "a line on stderr" in (tmp_path / "stderr.log").read_text(),
+                "the server has printed on both streams",
+            )
+            pytest.fail("a check failed")
+
+    assert "a line on stdout" in failed.exconly()
+    assert "a line on stderr" in failed.exconly()
 
 
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
