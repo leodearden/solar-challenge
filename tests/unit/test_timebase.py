@@ -9,6 +9,7 @@ import pytest
 from solar_challenge.timebase import (
     HOURS_PER_MINUTE,
     MINUTES_PER_DAY,
+    MINUTES_PER_HOUR,
     SimulationWindow,
     covered_days,
 )
@@ -112,6 +113,12 @@ def test_minutes_per_day_is_the_whole_minutes_in_24_hours() -> None:
     """An int, since its readers use it as an array length, a range and slice bound, and a modulus whose remainder is formatted :02d."""
     assert MINUTES_PER_DAY == timedelta(hours=24) // _MINUTE
     assert isinstance(MINUTES_PER_DAY, int)
+
+
+def test_minutes_per_hour_is_the_whole_minutes_in_an_hour() -> None:
+    """An int, since its readers build whole minute counts from it: range and slice bounds, an index into a minute table, and a divmod whose quotient and remainder are formatted :02d."""
+    assert MINUTES_PER_HOUR == timedelta(hours=1) // _MINUTE
+    assert isinstance(MINUTES_PER_HOUR, int)
 
 
 def test_row_energy_kwh_is_each_rows_kw_times_the_hours_it_lasts_and_energy_kwh_their_sum() -> None:
