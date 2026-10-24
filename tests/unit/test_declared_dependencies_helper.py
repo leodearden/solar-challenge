@@ -980,6 +980,52 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="a-def-in-an-if",
         ),
+        pytest.param(
+            ("sys.modules[__name__].pytest_plugins = ['pytest_rerunfailures']",),
+            "sys.modules[__name__].pytest_plugins = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="an-attribute-of-the-module-assigned",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "def configure():",
+                "    sys.modules[__name__].pytest_plugins.append('pytest_rerunfailures')",
+            ),
+            "sys.modules[__name__].pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="an-attribute-of-the-module-appended-in-a-function",
+        ),
+        pytest.param(
+            ("setattr(sys.modules[__name__], 'pytest_plugins', ['pytest_rerunfailures'])",),
+            "setattr(sys.modules[__name__], 'pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-by-setattr",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "getattr(sys.modules[__name__], 'pytest_plugins').append('pytest_rerunfailures')"),
+            "getattr(sys.modules[__name__], 'pytest_plugins').append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-getattr",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "delattr(sys.modules[__name__], 'pytest_plugins')"),
+            "delattr(sys.modules[__name__], 'pytest_plugins')",
+            _UNREADABLE_USE,
+            id="deleted-by-delattr",
+        ),
+        pytest.param(
+            ("from tests._plugins import pytest_plugins as lane_plugins",),
+            "from tests._plugins import pytest_plugins as lane_plugins",
+            _UNREADABLE_USE,
+            id="imported-under-another-name",
+        ),
+        pytest.param(
+            ("def configure():", "    from tests._plugins import pytest_plugins"),
+            "from tests._plugins import pytest_plugins",
+            _UNREADABLE_USE,
+            id="imported-in-a-function",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -995,8 +1041,9 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     another target of a chained assignment, which aliases the list; or be declared global in a
     function. It may also be read or deleted in any scope, function and class bodies included, as a
     method call such as append, a subscript, an alias or a del does, and a read may sit in a case
-    guard. Or globals(), locals() or vars() may be subscripted with the name, in any position or
-    scope.
+    guard. Or globals(), locals() or vars() may be subscripted with the name, or an attribute
+    pytest_plugins of an object, such as sys.modules[__name__], reached directly, through getattr,
+    setattr or delattr, or by a from-import of that name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1038,17 +1085,19 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ("SOURCE = \"pytest_plugins.append('pytest_rerunfailures')\"",),
             id="spelled-in-a-string",
         ),
+        pytest.param(("import sys", "hasattr(sys.modules[__name__], 'pytest_plugins')"), id="tested-by-hasattr"),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
     tmp_path: Path,
     lines: tuple[str, ...],
 ) -> None:
-    """Only the name pytest_plugins, or its entry in the namespace that globals(), locals() or
-    vars() returns, reaches the attribute of the module.
+    """Only the name pytest_plugins, its entry in the namespace that globals(), locals() or vars()
+    returns, or an attribute of that name, reached directly, through getattr, setattr or delattr,
+    or by a from-import, reaches the attribute of the module.
 
-    The same key of another dict, and a string that spells such a statement, require nothing and
-    fail nothing.
+    The same key of another dict, a string that spells such a statement, and hasattr, which only
+    tests for the attribute, require nothing and fail nothing.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
