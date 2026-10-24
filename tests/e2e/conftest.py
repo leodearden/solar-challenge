@@ -138,13 +138,14 @@ def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
     _e2e_job_manager so that pytest stops this server before shutting down
     the manager its requests submit jobs to.
     """
-    server = make_server("127.0.0.1", 0, _e2e_app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    with make_server("127.0.0.1", 0, _e2e_app, threaded=True) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
 
-    yield f"http://127.0.0.1:{server.port}"
+        yield f"http://127.0.0.1:{server.port}"
 
-    server.shutdown()
+        server.shutdown()
+        thread.join()
 
 
 _JOBS_FINISH_TIMEOUT_S = 120
