@@ -404,6 +404,21 @@ def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_only_if
     assert member_forms(OnX) == {"y": "attribute int"}
 
 
+def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fields() -> None:
+    class Pair(tuple):
+        first: int
+
+    class Node:
+        _fields = ("value",)
+        value: int
+
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    assert member_forms(Pair) == {"first": "attribute int"}
+    assert member_forms(Node) == {"value": "attribute int"}
+
+
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
     class Base:
         def read(self) -> float: ...
