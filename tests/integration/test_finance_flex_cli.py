@@ -8,7 +8,9 @@ loop.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import yaml
@@ -258,7 +260,7 @@ def _whitespace_normalised(output: str) -> str:
     return " ".join(output.split())
 
 
-def _simulate_must_not_run(fleet_config, start, end):  # type: ignore[no-untyped-def]
+def _simulate_must_not_run(fleet_config: object, start: object, end: object) -> NoReturn:
     pytest.fail("finance run simulated a fleet before refusing its band")
 
 
@@ -303,6 +305,7 @@ class TestFinanceFlexCLIBandEntryPoints:
         ) in _whitespace_normalised(result.output), result.output
 
     def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
+        """Typer refuses --flex-band medium as a usage error naming it and each band, in whatever words Click uses."""
         scenario_file = _write_scenario(tmp_path)
 
         result = CliRunner().invoke(
@@ -312,9 +315,8 @@ class TestFinanceFlexCLIBandEntryPoints:
         )
 
         assert result.exit_code == 2, result.output
-        assert "'medium' is not one of 'low', 'central', 'high'" in _whitespace_normalised(
-            result.output
-        ), result.output
+        words = set(re.findall(r"\w+", result.output))
+        assert {"medium", "low", "central", "high"} <= words, result.output
 
     def test_flex_band_flag_high_labels_the_block_with_the_bands_value(
         self, tmp_path: Path, flex_fleet_results: FleetResults
