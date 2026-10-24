@@ -876,7 +876,7 @@ _PARTIAL_BOUND_BY_MINOR = (
 def _refuse_partial_bound_as_method(
     cls: type, owner: type, name: str, constructor: object
 ) -> None:
-    """Raise TypeError naming *cls* and *owner*'s *name* if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial: Python 3.14 binds one to the instance as a method, and earlier minors call it without one."""
+    """Raise TypeError naming *cls* and *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial."""
     if isinstance(constructor, functools.partial):
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(owner)}.{name}, "
@@ -1451,7 +1451,8 @@ def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
     A member that _spelled_function has no rule for raises the TypeError
-    _refuse_unspellable_member raises for it, if any, naming *cls* and the member.
+    _refuse_member_without_a_portable_form raises for it, if any, naming *cls* and the
+    member.
     """
     pinned = _pinned_by_class_form(cls)
     members = {
@@ -1461,12 +1462,12 @@ def _public_members(cls: type) -> dict[str, object]:
     }
     for name, member in members.items():
         if _spelled_function(member) is None:
-            _refuse_unspellable_member(f"{_label(cls)}.{name}", member)
+            _refuse_member_without_a_portable_form(f"{_label(cls)}.{name}", member)
     return members
 
 
-def _refuse_unspellable_member(label: str, member: object) -> None:
-    """Raise TypeError for *member*, which *label* names and no member rule spells, if it is a routine whose signature inspect cannot read, as _unreadable_link finds one, or a functools.partial, which Python 3.14 binds to the instance and earlier minors do not."""
+def _refuse_member_without_a_portable_form(label: str, member: object) -> None:
+    """Raise TypeError for *member*, which *label* names and no member rule spells, if no form of it holds on every admitted minor: the error _unreadable_routine_error gives if it is a routine whose signature inspect cannot read, as _unreadable_link finds one, else, if it is a functools.partial, one that states _PARTIAL_BOUND_BY_MINOR."""
     link = _unreadable_link(member)
     if link is not None:
         raise _unreadable_routine_error(label, member, link)
