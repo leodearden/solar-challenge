@@ -2,6 +2,7 @@
 """Tests for solar_challenge.gridservices — EventWindow, rate bands, events config."""
 
 import dataclasses
+import math
 import pickle
 
 import pandas as pd
@@ -14,9 +15,11 @@ from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
     EventWindow,
+    FlatGridServices,
     GridServicesAtEvents,
     GridServicesEventsConfig,
     GridServicesRateBand,
+    NoGridServices,
     compute_fleet_spare_capacity_kw,
     compute_grid_services_at_events,
     resolve_grid_services_rate_band,
@@ -442,9 +445,9 @@ def _make_gs_fleet_results(
 
 
 def _make_gs_home_config(
-    battery_config: BatteryConfig,
+    battery_config: BatteryConfig | None,
 ) -> HomeConfig:
-    """Build a minimal HomeConfig with the given BatteryConfig."""
+    """Build a minimal HomeConfig with the given BatteryConfig (None for a PV-only home)."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
         load_config=LoadConfig(annual_consumption_kwh=3500.0),
@@ -1200,4 +1203,104 @@ class TestComputeGridServicesAtEvents:
         assert result.per_window_avail_kw == pytest.approx(beta_avails)
         assert result.per_window_avail_kw == pytest.approx((expected_avail,))
         assert result.annual_income_gbp == pytest.approx(expected_net)
+
+
+# ---------------------------------------------------------------------------
+# Pricing values: each prices a simulated fleet (PRD §9 P1, P2)
+# ---------------------------------------------------------------------------
+
+
+def _fleet_of_two_battery_homes_and_a_pv_only_home() -> FleetResults:
+    """Battery homes at 2.5 and 3.0 kW discharge, plus a PV-only home, on a December weekday evening.
+
+    Each battery home holds 10 kWh (floor 1.0 kWh) at SOC 5.0 kWh, discharging
+    1.0 kW, so it is firm in the default winter window.
+    """
+    idx = pd.DatetimeIndex(
+        ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+        tz="Europe/London",
+    )
+    battery_homes = [
+        (
+            _make_gs_sim_results([5.0, 5.0, 5.0], [1.0, 1.0, 1.0], idx),
+            _make_gs_home_config(
+                BatteryConfig(
+                    capacity_kwh=10.0,
+                    max_discharge_kw=max_discharge_kw,
+                    min_soc_fraction=0.1,
+                    soh=1.0,
+                )
+            ),
+        )
+        for max_discharge_kw in (2.5, 3.0)
+    ]
+    pv_only_home = (
+        _make_gs_sim_results([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], idx),
+        _make_gs_home_config(None),
+    )
+    return _make_gs_fleet_results([*battery_homes, pv_only_home])
+
+
+class TestPricingValuesPriceAFleet:
+    """NoGridServices, FlatGridServices and GridServicesEventsConfig each price a simulated fleet."""
+
+    def test_no_grid_services_prices_zero(self) -> None:
+        fleet = _fleet_of_two_battery_homes_and_a_pv_only_home()
+
+        assert NoGridServices().annual_income_gbp(fleet) == 0.0
+
+    def test_flat_prices_its_rate_per_kw_of_battery_discharge(self) -> None:
+        """12 £/kW-yr × (2.5 + 3.0) kW = £66; the PV-only home adds nothing."""
+        fleet = _fleet_of_two_battery_homes_and_a_pv_only_home()
+
+        assert FlatGridServices(12.0).annual_income_gbp(fleet) == pytest.approx(66.0)
+
+    def test_events_config_prices_what_compute_grid_services_at_events_prices(self) -> None:
+        fleet = _fleet_of_two_battery_homes_and_a_pv_only_home()
+        cfg = GridServicesEventsConfig()
+        priced = compute_grid_services_at_events(fleet, cfg).annual_income_gbp
+
+        assert priced > 0.0
+        assert cfg.annual_income_gbp(fleet) == priced
+
+    @pytest.mark.parametrize("rate", [0.0, -1.0, math.inf, math.nan])
+    def test_flat_refuses_a_rate_that_is_not_positive_and_finite(self, rate: float) -> None:
+        with pytest.raises(ConfigurationError, match="income_per_kw_per_year_gbp"):
+            FlatGridServices(rate)
+
+    def test_pricing_values_are_frozen(self) -> None:
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            FlatGridServices(12.0).income_per_kw_per_year_gbp = 48.0  # type: ignore[misc]
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            NoGridServices().income_per_kw_per_year_gbp = 12.0  # type: ignore[attr-defined]
+
+
+class TestWorkedCapacityAtEventsFigure:
+    """The model doc's worked figure: what each band pays for 1 kW of firm spare capacity a year."""
+
+    @pytest.mark.parametrize(
+        ("band", "expected"),
+        [("central", 9.972), ("low", 4.986), ("high", 19.944)],
+    )
+    def test_band_prices_one_kw_of_firm_spare_capacity(self, band: str, expected: float) -> None:
+        """A default 5 kWh battery all year at SOC 3.5 kWh, discharging 0.5 kW.
+
+        Spare = min(2.5 − 0.5, (3.5 − 0.5) / 3 h) = 1.0 kW in the default winter
+        window. Central: (1.00 × 12 + 0.6 × 3 h × 0.060 £/kWh × 12) × (1 − 0.25)
+        = £9.972; low and high halve and double each rate.
+        """
+        idx = pd.date_range(
+            "2024-01-01 00:00", "2024-12-31 23:00", freq="h", tz="Europe/London"
+        )
+        sim = _make_gs_sim_results([3.5] * len(idx), [0.5] * len(idx), idx)
+        fleet = _make_gs_fleet_results(
+            [(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))]
+        )
+
+        assert compute_fleet_spare_capacity_kw(
+            fleet, DEFAULT_EVENT_WINDOWS
+        ) == pytest.approx((1.0,))
+        assert GridServicesEventsConfig(band=band).annual_income_gbp(
+            fleet
+        ) == pytest.approx(expected, abs=1e-9)
 
