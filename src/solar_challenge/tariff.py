@@ -195,10 +195,10 @@ class TariffConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Refuse a tariff without periods; reading the minute table builds it, refusing a gap or an overlap."""
+        """Refuse a tariff without periods, then build the minute table, so construction, not the first rate read, refuses a gap or an overlap."""
         if not self.periods:
             raise ConfigurationError("Tariff must have at least one period")
-        self._rate_by_minute
+        _ = self._rate_by_minute
 
     # Derived from periods; cached_property keeps them out of fields(), as for
     # TariffPeriod's parsed times.
