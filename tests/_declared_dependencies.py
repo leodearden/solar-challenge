@@ -273,8 +273,9 @@ def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Im
             yield from _unguarded_imports(ast.iter_child_nodes(node))
 
 
-def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
-    """Yield the value of each module-level assignment of pytest_plugins in *tree*, annotated or not.
+def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
+    """Yield (statement, value) for each module-level statement in *tree* that assigns pytest_plugins,
+    annotated or not, or augments it. *value* is what the statement assigns or adds.
 
     An annotation with no value assigns nothing.
     """
@@ -283,50 +284,52 @@ def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
             targets, value = statement.targets, statement.value
         elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
             targets, value = [statement.target], statement.value
+        elif isinstance(statement, ast.AugAssign):
+            targets, value = [statement.target], statement.value
         else:
             continue
         if any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
-            yield value
+            yield statement, value
 
 
-def _pytest_plugins_failure(source: Path, value: ast.expr, defect: str) -> AssertionError:
-    """Return the failure for the pytest_plugins assignment *value* in *source* that the contract
-    cannot follow. It names *source*, the line and the expression; *defect* is the clause that
-    says what is wrong with it, such as "is not a literal". It also says how to write
+def _pytest_plugins_failure(source: Path, statement: ast.stmt, defect: str) -> AssertionError:
+    """Return the failure for the pytest_plugins *statement* in *source* whose value the contract
+    cannot follow. It names *source*, the line and the statement; *defect* is the clause that
+    says what is wrong with its value, such as "is not a literal". It also says how to write
     pytest_plugins instead.
     """
     return AssertionError(
-        f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which {defect}; "
+        f"{source}:{statement.lineno} has `{ast.unparse(statement)}`, whose value {defect}; "
         "write pytest_plugins as a literal list or tuple of module names, or as a "
         "comma-separated string, for the declared-dependency contract to follow the plugins it names"
     )
 
 
 def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
-    """Yield an import of the module pytest imports for each entry of the module-level
-    pytest_plugins assignments in *tree*, the syntax tree of *source*. Each import sits where
-    its assignment's value does.
+    """Yield an import of the module pytest imports for each entry that the module-level
+    statements in *tree*, the syntax tree of *source*, give pytest_plugins. Each import sits where
+    the value of its statement does.
 
     pytest imports each entry when it loads a conftest, test module or plugin that sets one. A
     built-in plugin's short name, such as pytester, names that module of pytest's own _pytest
     package, as PytestPluginManager.import_plugin reads builtin_plugins; any other entry names
-    the module it spells. The entries are read without running *source*, so the value must be a
-    literal: a str, split at commas as pytest splits it, or a list or tuple of str. An empty
-    str, like None, names no plugin. Any other value fails, naming *source*, the line and the
-    expression.
+    the module it spells. The entries are read without running *source*, so each value must be a
+    literal: a str, whose entries are its non-empty pieces between commas, or a list or tuple of
+    str. None names no plugin. Any other value fails, naming *source*, the line and the statement.
     """
-    for value in _pytest_plugins_values(tree):
+    for statement, value in _pytest_plugins_assignments(tree):
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
-            raise _pytest_plugins_failure(source, value, "is not a literal") from None
-        if plugins is None or plugins == "":
+            raise _pytest_plugins_failure(source, statement, "is not a literal") from None
+        if plugins is None:
             continue
         if not isinstance(plugins, (str, list, tuple)):
-            raise _pytest_plugins_failure(source, value, "is neither a str nor a list or tuple")
-        for entry in plugins.split(",") if isinstance(plugins, str) else plugins:
+            raise _pytest_plugins_failure(source, statement, "is neither a str nor a list or tuple")
+        entries = [piece for piece in plugins.split(",") if piece] if isinstance(plugins, str) else plugins
+        for entry in entries:
             if not isinstance(entry, str):
-                raise _pytest_plugins_failure(source, value, f"names {entry!r}, not a module name")
+                raise _pytest_plugins_failure(source, statement, f"names {entry!r}, not a module name")
             module = f"_pytest.{entry}" if entry in builtin_plugins else entry
             yield ast.copy_location(ast.Import(names=[ast.alias(name=module)]), value)
 
