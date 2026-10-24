@@ -105,8 +105,9 @@ class FlexibilityValueBand:
 REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; the default of BatteryConfig.max_discharge_kw
 
 _PROVENANCE = (
-    "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4"
-    " + docs/prds/flexibility-value-finance-integration.md §6"
+    "per-home figures: consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4; "
+    "per-kW rate: the band's flat rate in solar_challenge.gridservices.GRID_SERVICES_RATE_BANDS, "
+    "whose provenance cites its source"
 )
 
 
