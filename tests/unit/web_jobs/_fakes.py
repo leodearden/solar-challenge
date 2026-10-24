@@ -47,16 +47,18 @@ def a_failing_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date:
 
 
 class BlockingSimulation:
-    """Stands in for simulate_home: every job waits inside the simulation until release(), then gets an hour at its home's PV size.
+    """Stands in for simulate_home: records each home it is asked to simulate, as RecordingSimulation does, then every job waits inside the simulation until release(), then gets an hour at its home's PV size.
 
     wait_until_started() returns once the first job is inside the simulation.
     """
 
     def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
         self._started = threading.Event()
         self._released = threading.Event()
 
     def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.calls.append((config, start_date, end_date))
         self._started.set()
         self._released.wait()
         return _an_hour_at(config.pv_config.capacity_kw)
