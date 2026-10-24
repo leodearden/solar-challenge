@@ -17,6 +17,7 @@ from tests._declared_dependencies import (
 )
 
 _UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
+_ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
 
 
 def _write_module(path: Path, *lines: str) -> Path:
@@ -160,6 +161,52 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
             ('pytest_plugins = "pytester"', 'pytest_plugins += ",pytest_rerunfailures"'),
             id="a-str-extended-after-a-comma",
         ),
+        pytest.param(('if sys.platform == "linux":', f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-if"),
+        pytest.param(
+            ("if not sys.platform:", "    pass", "else:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-else"
+        ),
+        pytest.param(
+            ("try:", f"    {_ASSIGNS_RERUNFAILURES}", "except Exception:", "    pass"), id="in-a-try"
+        ),
+        pytest.param(
+            ("try:", "    pass", "except Exception:", f"    {_ASSIGNS_RERUNFAILURES}"),
+            id="in-an-except-handler",
+        ),
+        pytest.param(
+            ("try:", "    pass", "finally:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-finally"
+        ),
+        pytest.param(
+            ("try:", "    pass", "except* Exception:", f"    {_ASSIGNS_RERUNFAILURES}"),
+            id="in-an-except-star-handler",
+        ),
+        pytest.param(
+            ("with contextlib.suppress(Exception):", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-with"
+        ),
+        pytest.param(("for _ in range(1):", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-for"),
+        pytest.param(("while True:", f"    {_ASSIGNS_RERUNFAILURES}", "    break"), id="in-a-while"),
+        pytest.param(
+            ("match sys.platform:", "    case _:", f"        {_ASSIGNS_RERUNFAILURES}"), id="in-a-match-case"
+        ),
+        pytest.param(
+            (
+                'if sys.platform == "linux":',
+                "    if sys.version_info >= (3, 11):",
+                f"        {_ASSIGNS_RERUNFAILURES}",
+            ),
+            id="two-blocks-deep",
+        ),
+        pytest.param(
+            ('if sys.platform == "linux":', '    pytest_plugins: list[str] = ["pytest_rerunfailures"]'),
+            id="annotated-in-an-if",
+        ),
+        pytest.param(
+            (
+                'pytest_plugins = ["pytester"]',
+                'if sys.platform == "linux":',
+                '    pytest_plugins += ("pytest_rerunfailures",)',
+            ),
+            id="extended-in-an-if",
+        ),
     ],
 )
 def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_scope_gives(
@@ -170,7 +217,8 @@ def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_sc
 
     pytest reads pytest_plugins as an attribute of the module once the module has run, so an
     augmented assignment adds its entries to those the assignment before it gave. A str extended
-    after a comma adds the names after the comma, not the empty piece before it.
+    after a comma adds the names after the comma, not the empty piece before it. An assignment,
+    annotated or not, in any block of a compound statement, however deep, counts as well.
     """
     plugin = _write_module(tmp_path / "plugin.py", "import contextlib", "import sys", *lines)
 
@@ -180,6 +228,35 @@ def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_sc
         "the undeclared-distributions detector missed the pytest_rerunfailures module, which the "
         "undeclared pytest-rerunfailures provides, among the entries a module gives pytest_plugins "
         f"with these lines: {lines}"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(("def configure():", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-function"),
+        pytest.param(("async def configure():", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-async-function"),
+        pytest.param(("class Plugins:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-class"),
+        pytest.param(
+            ('if sys.platform == "linux":', "    def configure():", f"        {_ASSIGNS_RERUNFAILURES}"),
+            id="in-a-function-inside-an-if",
+        ),
+    ],
+)
+def test_undeclared_distributions_ignores_a_pytest_plugins_that_is_no_attribute_of_its_module(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """A pytest_plugins assigned in the body of a function or a class requires nothing, wherever
+    that def or class stands in the module.
+
+    It is a local or a class attribute, not the attribute of the module that pytest reads.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import sys", *lines)
+
+    assert undeclared_distributions(tmp_path, [plugin], declared={"pytest"}) == [], (
+        "the undeclared-distributions detector read a requirement of pytest-rerunfailures from a "
+        f"pytest_plugins that is no attribute of its module, with these lines: {lines}"
     )
 
 
@@ -447,7 +524,9 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "scripts": ("scripts/measure.py",),
     "tests-dev-only-lanes": (
         "tests/__init__.py",
+        "tests/_linux_plugin.py",
         "tests/_lock.py",
+        "tests/_nested_plugin.py",
         "tests/_network.py",
         "tests/_newest.py",
         "tests/_paths.py",
@@ -477,17 +556,29 @@ _OWN_FILES_OF_EACH_SCOPE = {
 }
 _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     # a conftest every run loads; its pytest_plugins list names a pytest built-in, which is no file
-    # of the project, beside a plugin of the project
+    # of the project, beside a plugin of the project. The += inside the if adds a plugin of the
+    # project, which is followed; the list in the function's body is no attribute of the module, so
+    # the helper it names stays with the verify
     "tests/conftest.py": (
+        "import sys",
         "from tests._network import refusing_network",
         'pytest_plugins = ["pytester", "tests._plugin"]',
+        'if sys.platform == "linux":',
+        '    pytest_plugins += ["tests._linux_plugin"]',
+        "def pytest_configure(config):",
+        '    pytest_plugins = ["tests._helpers"]',
     ),
     # a plugin's own entries, in the comma-separated string form pytest also accepts
     "tests/_plugin.py": ('pytest_plugins = "pytester,tests._plugin_fixtures"',),
     # an annotated assignment, which pytest honours too
     "tests/_plugin_fixtures.py": ('pytest_plugins: list[str] = ["tests._plugin_hooks"]',),
-    # an annotation with no value assigns nothing
-    "tests/_plugin_hooks.py": ("pytest_plugins: list[str]",),
+    # an annotation with no value assigns nothing; an assignment in the block of a with does
+    "tests/_plugin_hooks.py": (
+        "import contextlib",
+        "pytest_plugins: list[str]",
+        "with contextlib.suppress(Exception):",
+        '    pytest_plugins = ["tests._nested_plugin"]',
+    ),
     # module level; the trailing name is an attribute of the module
     "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
     # transitive
@@ -557,7 +648,9 @@ def test_each_source_scope_selects_only_its_own_files(
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
-    one that an annotated assignment names; an annotation with no value names none. A built-in
+    one that an annotated assignment names, one that += adds, and one that a block of a compound
+    statement, such as an if or a with, gives. An annotation with no value names none, and nor
+    does a pytest_plugins in a function's body, which is no attribute of the module. A built-in
     such as pytester names no file of the project.
     """
     project_files = _write_project_of_every_scope(tmp_path)
@@ -648,6 +741,12 @@ def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_pl
             "pytest_plugins += [1]",
             "names 1, not a module name",
             id="an-int-added-with-plus-equals",
+        ),
+        pytest.param(
+            ('if sys.platform == "linux":', "    pytest_plugins = PLUGINS"),
+            "pytest_plugins = PLUGINS",
+            "is not a literal",
+            id="a-name-in-an-if",
         ),
     ],
 )
