@@ -204,7 +204,7 @@ class TestEventWindowValidation:
 
 
 # ---------------------------------------------------------------------------
-# GridServicesBand: the one band vocabulary (PRD §9 P4)
+# GridServicesBand: the one band vocabulary (docs/prds/grid-services-pricing-model.md §9 P4)
 # ---------------------------------------------------------------------------
 
 

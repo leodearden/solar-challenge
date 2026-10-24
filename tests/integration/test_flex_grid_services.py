@@ -26,7 +26,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
 from solar_challenge.fleet import FleetResults
-from solar_challenge.flex import resolve_grid_services_band
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -42,7 +42,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 
 def test_board_scenario_grid_services_filled_from_central_band() -> None:
     """Board scenario finance.grid_services_income_per_kw_per_year_gbp must equal
-    resolve_grid_services_band("central") == £12.0/kW.
+    GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year == £12.0/kW.
 
     The YAML writes 12.0 directly, with a provenance comment.
 
@@ -57,11 +57,10 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     # The finance field must match the resolved central band value (no magic numbers)
     finance = parse_finance_config(cfg.get("finance"))
     assert finance is not None
-    assert finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(
-        resolve_grid_services_band("central")
-    ), (
+    central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
+    assert finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(central_rate), (
         f"Expected grid_services_income_per_kw_per_year_gbp == "
-        f"resolve_grid_services_band('central') == {resolve_grid_services_band('central')}, "
+        f"GRID_SERVICES_RATE_BANDS.resolve('central').flat_gbp_per_kw_per_year == {central_rate}, "
         f"got {finance.grid_services_income_per_kw_per_year_gbp}"
     )
 
@@ -153,7 +152,7 @@ def _surplus_at(
 
 def test_loaded_board_surplus_carries_central_increment() -> None:
     """Board-as-shipped surplus minus (same with grid_services=0.0) equals
-    resolve_grid_services_band("central") × Σ max_discharge_kw (== £3000).
+    GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year × Σ max_discharge_kw (== £3000).
 
     Uses constant simulate (PVGIS-free, age-independent) → exact delta to rel=1e-9.
     The board fleet has 100 homes × 2.5 kW battery → Σ = 250 kW.
@@ -179,7 +178,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     surplus_loaded = _surplus_at(scenario, finance_loaded, simulate)
     surplus_zeroed = _surplus_at(scenario, finance_zeroed, simulate)
 
-    expected_increment = resolve_grid_services_band("central") * sigma  # £3000
+    expected_increment = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year * sigma  # £3000
     assert surplus_loaded - surplus_zeroed == pytest.approx(
         expected_increment, rel=1e-9
     ), (
@@ -196,7 +195,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
 
 def test_each_band_moves_project_surplus_by_its_increment() -> None:
     """For each band {low, central, high} the surplus delta equals
-    resolve_grid_services_band(band) × Σ max_discharge_kw (rel=1e-9).
+    GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year × Σ max_discharge_kw (rel=1e-9).
 
     Additionally asserts strict monotonicity: surplus(low) < surplus(central) < surplus(high).
     """
@@ -218,7 +217,7 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
     band_surpluses: dict[str, float] = {}
     for band in ("low", "central", "high"):
-        rate = resolve_grid_services_band(band)
+        rate = GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year
         finance_band = dataclasses.replace(
             finance_base, grid_services_income_per_kw_per_year_gbp=rate
         )
@@ -364,7 +363,7 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     finance_zero = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=0.0
     )
-    central_rate = resolve_grid_services_band("central")
+    central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     finance_central = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=central_rate
     )

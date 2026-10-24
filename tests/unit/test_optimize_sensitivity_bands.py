@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import pytest
 
-from solar_challenge.flex import resolve_grid_services_band
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
 from solar_challenge.optimize import SENSITIVITY_BANDS
 
 
-def test_grid_services_band_is_the_flex_value_models_per_kw_rates_low_to_high() -> None:
-    assert SENSITIVITY_BANDS["grid_services_income_per_kw_per_year_gbp"] == tuple(
-        resolve_grid_services_band(band) for band in ("low", "central", "high")
+def test_grid_services_band_is_the_rate_tables_flat_column_low_to_high() -> None:
+    assert SENSITIVITY_BANDS["grid_services_income_per_kw_per_year_gbp"] == (
+        GRID_SERVICES_RATE_BANDS.low.flat_gbp_per_kw_per_year,
+        GRID_SERVICES_RATE_BANDS.central.flat_gbp_per_kw_per_year,
+        GRID_SERVICES_RATE_BANDS.high.flat_gbp_per_kw_per_year,
     )
 
 
