@@ -464,15 +464,29 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
             yield unit
 
 
-def _pytest_plugins_failure(source: Path, unit: _Unit, fault: str) -> AssertionError:
-    """Return the failure for the pytest_plugins *unit* in *source* that the contract cannot
-    follow. It names *source*, the line and the unit, quoted by its first line when it is
-    compound; *fault* says what is wrong with it, such as "whose value is not a literal". It also
-    says how to write pytest_plugins instead.
+def _first_unparsed_line(tree: ast.Module, unit: _Unit) -> str:
+    """Return the first line of *unit*, a part of *tree*, as ast.unparse renders it, except that an
+    except clause of a try* keeps its star, which ast.unparse leaves out when it renders the clause
+    alone. That clause is rendered in a try* of its own, and its line is the one after the try.
+    """
+    if isinstance(unit, ast.ExceptHandler) and any(
+        unit in try_star.handlers for try_star in ast.walk(tree) if isinstance(try_star, ast.TryStar)
+    ):
+        try_star_of_the_clause = ast.TryStar(body=[], handlers=[unit], orelse=[], finalbody=[])
+        _try_line, clause_line, *_rest = ast.unparse(try_star_of_the_clause).splitlines()
+        return clause_line
+    return ast.unparse(unit).partition("\n")[0]
+
+
+def _pytest_plugins_failure(source: Path, tree: ast.Module, unit: _Unit, fault: str) -> AssertionError:
+    """Return the failure for the pytest_plugins *unit* in *source*, whose syntax tree is *tree*,
+    that the contract cannot follow. It names *source*, the line and the unit, quoted by its first
+    line when it is compound; *fault* says what is wrong with it, such as "whose value is not a
+    literal". It also says how to write pytest_plugins instead.
 
     A case clause carries no position of its own, so its line is its pattern's.
     """
-    quoted = ast.unparse(unit).partition("\n")[0]
+    quoted = _first_unparsed_line(tree, unit)
     line = unit.pattern.lineno if isinstance(unit, ast.match_case) else unit.lineno
     return AssertionError(
         f"{source}:{line} has `{quoted}`, {fault}; "
@@ -504,21 +518,28 @@ def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Impor
     )
     if unreadable is not None:
         raise _pytest_plugins_failure(
-            source, unreadable, "which can bind or change pytest_plugins in a form the contract cannot read"
+            source,
+            tree,
+            unreadable,
+            "which can bind or change pytest_plugins in a form the contract cannot read",
         )
     for unit, value in _pytest_plugins_assignments(tree):
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
-            raise _pytest_plugins_failure(source, unit, "whose value is not a literal") from None
+            raise _pytest_plugins_failure(source, tree, unit, "whose value is not a literal") from None
         if plugins is None:
             continue
         if not isinstance(plugins, (str, list, tuple)):
-            raise _pytest_plugins_failure(source, unit, "whose value is neither a str nor a list or tuple")
+            raise _pytest_plugins_failure(
+                source, tree, unit, "whose value is neither a str nor a list or tuple"
+            )
         entries = [piece for piece in plugins.split(",") if piece] if isinstance(plugins, str) else plugins
         for entry in entries:
             if not isinstance(entry, str):
-                raise _pytest_plugins_failure(source, unit, f"whose value names {entry!r}, not a module name")
+                raise _pytest_plugins_failure(
+                    source, tree, unit, f"whose value names {entry!r}, not a module name"
+                )
             module = f"_pytest.{entry}" if entry in builtin_plugins else entry
             yield ast.copy_location(ast.Import(names=[ast.alias(name=module)]), value)
 

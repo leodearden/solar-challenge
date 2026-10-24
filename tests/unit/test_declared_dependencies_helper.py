@@ -931,6 +931,12 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             id="an-except-clause-name",
         ),
         pytest.param(
+            ("try:", "    pass", "except* Exception as pytest_plugins: pass"),
+            "except* Exception as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="an-except-star-clause-name",
+        ),
+        pytest.param(
             ("match [['pytest_rerunfailures']]:", "    case [pytest_plugins]: pass"),
             "case [pytest_plugins]:",
             _UNREADABLE_USE,
@@ -1058,15 +1064,15 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 ) -> None:
     """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for, a with, an except clause, a capture of a match
-    pattern or a from-import, a star import among them; be the name of a def or class; sit beside
-    another target of a chained assignment, which aliases the list; or be declared global in a
-    function. It may also be read or deleted in any scope, function and class bodies included, as a
-    method call such as append, a subscript, an alias or a del does, and a read may sit in a case
-    guard. Or a namespace, the dict that globals(), locals() or vars() returns or the __dict__ of
-    an object such as sys.modules[__name__], may be subscripted with the name, or an attribute
-    pytest_plugins of an object reached directly, through getattr, setattr or delattr, or by a
-    from-import of that name, in any position or scope.
+    may be bound by a tuple, a walrus, a for, a with, an except clause, of a try* too, a capture
+    of a match pattern or a from-import, a star import among them; be the name of a def or class;
+    sit beside another target of a chained assignment, which aliases the list; or be declared
+    global in a function. It may also be read or deleted in any scope, function and class bodies
+    included, as a method call such as append, a subscript, an alias or a del does, and a read may
+    sit in a case guard. Or a namespace, the dict that globals(), locals() or vars() returns or the
+    __dict__ of an object such as sys.modules[__name__], may be subscripted with the name, or an
+    attribute pytest_plugins of an object reached directly, through getattr, setattr or delattr, or
+    by a from-import of that name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1074,9 +1080,9 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 
     The failure names the file, the line and the statement, or the except or case clause, that starts
     on the last of *lines*, as written, or by its first line when it is compound, with what is wrong
-    with it. An augmented assignment is quoted whole, not described as setting pytest_plugins. It
-    says how to write pytest_plugins instead: as a literal list or tuple of module names, added to
-    only with += and such a literal.
+    with it. An augmented assignment is quoted whole, not described as setting pytest_plugins, and
+    an except clause of a try* keeps its star. It says how to write pytest_plugins instead: as a
+    literal list or tuple of module names, added to only with += and such a literal.
     """
     prefix = ("import contextlib", "import sys", 'PLUGINS = ["pytester"]')
     plugin = _write_module(tmp_path / "plugin.py", *prefix, *lines)
