@@ -2,6 +2,7 @@
 """The rules of tests/_surface_forms.py's member_forms, one per test."""
 
 import abc
+import collections
 import enum
 import functools
 import inspect
@@ -10,13 +11,14 @@ import re
 import types
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
-from typing import ClassVar, Optional
+from typing import ClassVar, NamedTuple, Optional
 
 import pytest
 
 from tests._surface_forms import (
     member_forms,
     named_classes,
+    surface_form,
     undeclared_attributes,
     unset_attributes,
 )
@@ -366,6 +368,40 @@ def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:
         def label(self) -> str: ...
 
     assert member_forms(Period) == {"label": "(self) -> str"}
+
+
+def test_a_named_tuple_field_is_not_a_member_since_its_class_form_pins_it_but_a_constant_or_method_its_body_defines_is() -> None:
+    class Reading(NamedTuple):
+        kwh: float
+        site: Optional[str] = None
+        UNITS = "kWh"
+
+        def doubled(self) -> float: ...
+
+    Plain = collections.namedtuple("Plain", ["kwh", "site"])
+
+    assert surface_form(Reading) == "(kwh: float, site: str | None = None)"
+    assert member_forms(Reading) == {"UNITS": "str", "doubled": "(self) -> float"}
+    assert surface_form(Plain) == "(kwh, site)"
+    assert member_forms(Plain) == {}
+
+
+def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_only_if_the_subclass_constructor_does_not_take_it() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Retyped(Point):
+        y: int
+
+    class OnX(Point):
+        y: int
+
+        def __new__(cls, x: int) -> "OnX":
+            return super().__new__(cls, x, 0)
+
+    assert member_forms(Retyped) == {}
+    assert member_forms(OnX) == {"y": "attribute int"}
 
 
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
