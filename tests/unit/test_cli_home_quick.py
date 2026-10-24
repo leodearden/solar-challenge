@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names."""
+"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
 
 import os
 import re
@@ -110,3 +110,11 @@ def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_
     assert result.returncode == 0, result.stderr
     assert _total_generation_kwh(result.stdout) > 0
     assert not (working_dir / DEFAULT_CACHE_DIR).exists()
+
+
+def test_home_quick_help_names_the_consumption_it_defaults_to() -> None:
+    """`home quick --help` gives --consumption-kwh's default as a figure: the annual consumption a LoadConfig with no total simulates."""
+    result = runner.invoke(app, ["home", "quick", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert f"{LoadConfig().get_annual_consumption():,.0f}" in result.stdout
