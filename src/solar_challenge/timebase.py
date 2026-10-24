@@ -8,10 +8,13 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-HOURS_PER_MINUTE = 1 / 60
+MINUTES_PER_HOUR: int = 60
+"""Minutes in one hour: hours times this is minutes, and a wall-clock time's minute of the day is its hour times this plus its minute."""
+
+HOURS_PER_MINUTE: float = 1 / MINUTES_PER_HOUR
 """Hours in one minute: minutes times this is hours. It says nothing about a series' cadence; SimulationWindow.step_hours is how long one row lasts."""
 
-MINUTES_PER_DAY: int = 24 * 60
+MINUTES_PER_DAY: int = 24 * MINUTES_PER_HOUR
 """Minutes on a 24-hour wall clock, 00:00 to 23:59: the length of a minute-of-day table or profile. A local day across a clock change lasts 23 or 25 hours, so it is not how many one-minute rows every day of a zoned series has."""
 
 

@@ -14,17 +14,17 @@ from functools import cached_property
 import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.timebase import MINUTES_PER_DAY
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 
 def _minute_of_day(clock: time | datetime) -> int:
     """The minute of the day, 0 to 1439, that *clock* reads on its own wall clock."""
-    return clock.hour * 60 + clock.minute
+    return clock.hour * MINUTES_PER_HOUR + clock.minute
 
 
 def _clock_text(minute: int) -> str:
     """Minute *minute* of the day written as HH:MM, the day's end (1440) as 00:00."""
-    hours, minutes = divmod(minute % MINUTES_PER_DAY, 60)
+    hours, minutes = divmod(minute % MINUTES_PER_DAY, MINUTES_PER_HOUR)
     return f"{hours:02d}:{minutes:02d}"
 
 

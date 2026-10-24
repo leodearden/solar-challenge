@@ -16,7 +16,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from solar_challenge.timebase import MINUTES_PER_DAY, SimulationWindow
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
@@ -249,7 +249,7 @@ def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) ->
     electricity = ElectricityProfile(appliances, lights)
 
     # A sinusoidal daylight for the lighting model, in W/m²: 6 am to 8 pm, peak at 1 pm.
-    hour = np.arange(MINUTES_PER_DAY) / 60.0
+    hour = np.arange(MINUTES_PER_DAY) / MINUTES_PER_HOUR
     daylight_irradiance = np.where(
         (hour >= 6.0) & (hour <= 20.0),
         100.0 * np.maximum(0.0, np.sin((hour - 6.0) * np.pi / 14.0)),
