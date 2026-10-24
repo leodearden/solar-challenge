@@ -1064,3 +1064,53 @@ def test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant
     assert named_classes(descriptor) == {type(descriptor)}
     assert member_forms(Meter) == {"reset": name}
     assert named_classes(Meter) == {type(descriptor)}
+
+
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_raises_a_type_error_naming_it_that_descriptor_and_its_type() -> None:
+    called = CallableGetterDeleter()
+    uncalled = GetterDeleter()
+    partial = functools.partial(called)
+
+    @functools.wraps(called)
+    def calling(rate: int) -> str: ...
+
+    @functools.wraps(uncalled)
+    def reading(rate: int) -> str: ...
+
+    naming_the_partial_and_called = (
+        rf"{re.escape(repr(partial))}.*{re.escape(repr(called))}"
+        r".*\.CallableGetterDeleter\b.*\b__delete__\b"
+    )
+    with pytest.raises(TypeError, match=naming_the_partial_and_called):
+        surface_form(partial)
+    with pytest.raises(TypeError, match=naming_the_partial_and_called):
+        named_classes(partial)
+    with pytest.raises(
+        TypeError,
+        match=rf"\.calling\b.*{re.escape(repr(called))}.*\.CallableGetterDeleter\b.*\b__delete__\b",
+    ):
+        surface_form(calling)
+    with pytest.raises(
+        TypeError,
+        match=rf"\.reading\b.*{re.escape(repr(uncalled))}.*\.GetterDeleter\b.*\b__delete__\b",
+    ):
+        surface_form(reading)
+
+
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it() -> None:
+    class Settable(CallableGetterDeleter):
+        def __set__(self, instance: object, value: object) -> None: ...
+
+    class Getless:
+        def __delete__(self, instance: object) -> None: ...
+
+        def __call__(self, rate: int) -> str: ...
+
+    signed = CallableGetterDeleter()
+    signed.__signature__ = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    assert surface_form(functools.partial(Settable())) == "(rate: int) -> str"
+    assert surface_form(functools.partial(Getless())) == "(rate: int) -> str"
+    assert surface_form(functools.partial(signed)) == "(rate: int)"
