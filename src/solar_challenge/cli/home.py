@@ -187,6 +187,9 @@ def run(
         print_success(f"Results saved to {output}")
 
 
+_DEFAULT_LOAD = LoadConfig()
+
+
 @app.command()
 @handle_errors
 def quick(
@@ -210,8 +213,8 @@ def quick(
         typer.Option(
             "--consumption-kwh", "-c",
             help=(
-                f"Annual consumption in kWh (default: {LoadConfig().get_annual_consumption():,.0f}, "
-                f"the simulator's own figure for a {LoadConfig().household_occupants}-person household)"
+                f"Annual consumption in kWh (default: {_DEFAULT_LOAD.get_annual_consumption():,.0f}, "
+                f"the simulator's own figure for a {_DEFAULT_LOAD.household_occupants}-person household)"
             ),
         ),
     ] = None,
@@ -239,7 +242,7 @@ def quick(
     if battery_kwh is not None and has_battery(battery_kwh, "battery_kwh"):
         battery_config = BatteryConfig(capacity_kwh=battery_kwh)
 
-    load_config = LoadConfig(annual_consumption_kwh=consumption_kwh)
+    load_config = dataclasses.replace(_DEFAULT_LOAD, annual_consumption_kwh=consumption_kwh)
 
     home_config = HomeConfig(
         pv_config=pv_config,
