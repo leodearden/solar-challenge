@@ -119,18 +119,18 @@ def member_forms(cls: type) -> dict[str, str]:
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
     attribute by annotating it alone or as a dataclass field, except those
-    surface_form(cls) already pins: the dataclass fields and init-only variables its
-    constructor's signature takes, and an Enum's members. The attributes the body
-    declares come first, in annotation order, then the other names it defines, in
-    class-body order. A ClassVar annotation declares a class variable, not an instance
-    attribute; a string annotation is read as named_classes reads one, so a name its
-    module does not bind raises NameError, a module inspect reads no source for raises
-    TypeError, and a module another of the same name has replaced in sys.modules raises
-    LookupError. A public member that no member rule spells and that is a routine whose
-    signature inspect cannot read, as surface_form describes one, raises TypeError naming
-    *cls*, the member and its kind; any other that is a functools.partial, which Python
-    3.14 binds to the instance as a method and earlier minors call without it, raises
-    TypeError naming *cls*, the member and that binding.
+    surface_form(cls) already pins: the dataclass fields, named tuple fields and
+    init-only variables its constructor's signature takes, and an Enum's members. The
+    attributes the body declares come first, in annotation order, then the other names
+    it defines, in class-body order. A ClassVar annotation declares a class variable,
+    not an instance attribute; a string annotation is read as named_classes reads one,
+    so a name its module does not bind raises NameError, a module inspect reads no
+    source for raises TypeError, and a module another of the same name has replaced in
+    sys.modules raises LookupError. A public member that no member rule spells and that
+    is a routine whose signature inspect cannot read, as surface_form describes one,
+    raises TypeError naming *cls*, the member and its kind; any other that is a
+    functools.partial, which Python 3.14 binds to the instance as a method and earlier
+    minors call without it, raises TypeError naming *cls*, the member and that binding.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -1395,11 +1395,13 @@ def _has_source(module: types.ModuleType) -> bool:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field its constructor takes."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass or named tuple field its constructor takes."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
         return _fields(cls).keys() & _constructor_parameters(cls)
+    if _is_named_tuple(cls):
+        return set(cls._fields) & _constructor_parameters(cls)
     return set()
 
 
@@ -1408,6 +1410,11 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
+    """Whether *cls* is a named tuple, as dataclasses.asdict recognises one: a tuple whose class records its fields' names as _fields, as each class typing.NamedTuple or collections.namedtuple makes does, and each subclass of one."""
+    return issubclass(cls, tuple) and hasattr(cls, "_fields")
 
 
 def _constructor_parameters(cls: type) -> set[str]:
