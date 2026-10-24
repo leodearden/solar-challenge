@@ -679,12 +679,11 @@ class JobManager:
     ) -> None:
         """Run a job's simulation, reporting its progress, then make the save it returns and report its completion; or report its cancellation or its failure.
 
-        Each progress report, the 'Starting' one included, is a checkpoint: once the job is cancelled, the next
-        one raises _JobCancelled instead, and the job is reported cancelled. The save is made under the job's
-        cancellation lock, through _Cancellation.save_unless_cancelled, so this is the one place a job's run is
-        saved. An Exception the simulation or the save raises fails the job, and its run is recorded failed. An
-        error that is not an Exception, other than _JobCancelled, escapes to _fail_job_if_its_runner_raised,
-        which fails the job.
+        Each progress report, the 'Starting' one included, is a checkpoint at which a cancelled job stops, and the
+        save is made through _Cancellation.save_unless_cancelled, the one place a job's run is saved. A cancelled
+        job reports cancelled even if its simulation then raises an Exception. Otherwise an Exception the
+        simulation or the save raises fails the job, and its run is recorded failed. An error that is not an
+        Exception, other than _JobCancelled, escapes to _fail_job_if_its_runner_raised, which fails the job.
         """
         cancellation = self._cancellation_of(job_id)
 
@@ -699,7 +698,10 @@ class JobManager:
         except _JobCancelled:
             self._report_cancelled_job(job_id)
         except Exception as exc:
-            self._record_failed_job(job_id, str(exc))
+            if cancellation.is_cancelled:
+                self._report_cancelled_job(job_id)
+            else:
+                self._record_failed_job(job_id, str(exc))
 
     def _run_home_simulation(
         self,

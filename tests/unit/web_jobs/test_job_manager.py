@@ -917,6 +917,29 @@ class TestJobManagerCancelRun:
         assert storage.run_record(created.id) == created
         assert not stored_run_dir(storage, created.id).exists()
 
+    def test_a_job_whose_simulation_raises_once_its_run_is_cancelled_reports_cancelled_and_writes_nothing_to_the_run_store(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+    ) -> None:
+        manager = JobManager(
+            storage,
+            max_workers=1,
+            simulate_home=_released_then_raising(blocking_simulation, lambda: RuntimeError("the simulation failed")),
+        )
+        job_id = _submit_home_job(manager)
+        blocking_simulation.wait_until_started()
+        running = manager.job_state(job_id)
+        assert running is not None
+        created = _run_of_job(manager, job_id, storage)
+
+        assert manager.cancel_run(created.id) is True
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        cancelled = replace(running, status="cancelled", message="Cancelled: its run was deleted")
+        assert manager.job_state(job_id) == cancelled
+        assert list(manager.get_events(job_id))[-1] == JobEvent("error", cancelled)
+        assert storage.run_record(created.id) == created
+
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_queued_job_whose_run_is_cancelled_is_dropped_at_once_and_never_runs(
         self,
