@@ -144,7 +144,7 @@ class TestGetJobProgress:
     def test_a_cancelled_job_whose_events_another_stream_drained_is_sent_its_final_frame_at_once(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A cancelled job ends its stream as a failed one does, with an error frame, until S20 gives cancellation its own event."""
+        """A cancelled job ends its stream as a failed one does, with an error frame."""
         mock_job_manager.job_state.return_value = _A_CANCELLED_JOB
         mock_job_manager.get_events.return_value = iter([])
 

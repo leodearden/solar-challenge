@@ -745,9 +745,7 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
 def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     """Delete a run and its associated files, cancelling the run's queued or running job first.
 
-    Deletion wins over the job's final save: cancel_run returns only once the job can no longer
-    write the run, so the delete removes whatever the job saved (contract C8,
-    docs/prds/run-store-one-owner.md §3.7). Run History offers Delete on running runs too.
+    The job then cannot write the run back (contract C8, docs/prds/run-store-one-owner.md §3.7).
 
     Args:
         run_id: Unique run identifier.

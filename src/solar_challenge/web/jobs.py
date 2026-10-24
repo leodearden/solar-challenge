@@ -108,7 +108,7 @@ class JobState:
 
 
 # The event a job's progress stream names: the job progressed, completed or failed. A cancelled job's stream ends
-# with the error event too, until S20 gives cancellation an event of its own.
+# with the error event too, as docs/prds/run-store-one-owner.md §3.7 records.
 JobEventType = Literal["progress", "complete", "error"]
 
 
@@ -131,12 +131,8 @@ class _JobCancelled(BaseException):
 class _Cancellation:
     """Whether a job is cancelled, which its run's delete does through JobManager.cancel_run, under a lock of the job's own.
 
-    The job's final save is made under the same lock, through save_unless_cancelled. So either the cancel comes first
-    and the save never starts, or the save does, and the cancel waits for it and finds the job past cancelling
-    (contract C8, docs/prds/run-store-one-owner.md §3.7).
-
-    Lock rule: never take a job's cancellation lock while holding its JobManager's _lock. Only the cancellation's own
-    lock may be held while the manager's _lock is taken, never the reverse.
+    The job's final save is made under the same lock, which is how contract C8 holds (docs/prds/run-store-one-owner.md
+    §3.7). Lock order: a job's cancellation lock may be held while its JobManager's _lock is taken, never the reverse.
     """
 
     def __init__(self) -> None:
@@ -396,13 +392,10 @@ class JobManager:
     def cancel_run(self, run_id: str) -> bool:
         """Cancel the queued or running job of run *run_id*, as the run's delete does before it removes the run.
 
-        The job reports 'cancelled' with the message "Cancelled: its run was deleted", writing nothing to the
-        RunStorage. A queued job is dropped from the queue at once, and reports it before cancel_run returns. A
-        running job stops at its runner's next checkpoint, a progress report: a home job only once its current
-        simulation returns, up to one whole simulation (about 40 s for a year), and a fleet job before its next
-        home. Once the job's final save has started, cancel_run waits for it to end and returns False, so a delete
-        that follows removes the saved run. This is contract C8, docs/prds/run-store-one-owner.md §3.7: after a
-        delete, no job writes the run back.
+        The job reports 'cancelled' and writes nothing to the RunStorage (contract C8, docs/prds/run-store-one-owner.md
+        §3.7). A queued job is dropped from the queue and reports cancelled before cancel_run returns. A running job
+        stops at its runner's next progress report: a home job once its current simulation returns, a fleet job before
+        its next home. Once the job's final save has started, cancel_run waits for it to end.
 
         Args:
             run_id: The id of the run whose job to cancel.
