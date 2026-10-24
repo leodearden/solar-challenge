@@ -793,6 +793,15 @@ Under `grid_services_model = "capacity_at_events"` the income is §4's
 capacity-at-events term, priced at each projection age from that age's simulated
 fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
 
+The flat rates (£1.5, £12 and £48 per kW of installed discharge power per year
+in the low, central and high bands) and the events rates are
+independent calibrations of the same three bands, held side by side in
+`gridservices.GRID_SERVICES_RATE_BANDS`. With the default window, utilisation
+0.6 and aggregator share 0.25, the events rates net £4.99, £9.97 and £19.94 per
+kW of firm spare capacity per year (§4). Neither column is derived from the
+other, and both are provisional
+(docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2).
+
 ### 8.2 TOU Arbitrage / Time-Shift (Endogenous Physics) — Basis C
 
 W1's TOU + grid-charging dispatch buys off-peak grid energy into the battery

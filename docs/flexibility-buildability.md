@@ -3,7 +3,7 @@
 **Source:** Consulting model `2026-06-16-flexibility-value-buildability-model.md` §1.1/§1.3/§1.4/§2/§5; 2026-06-15 deployment-readiness survey §9
 **Task:** #56 — W1 ε: flexibility buildability/risk note
 **PRD:** [docs/prds/flexibility-value-finance-integration.md](prds/flexibility-value-finance-integration.md) §1/§6/§7/§10
-**Value-model code:** [`src/solar_challenge/flex.py`](../src/solar_challenge/flex.py) (`FLEX_VALUE_BANDS`, `resolve_grid_services_band`)
+**Value-model code:** [`src/solar_challenge/flex.py`](../src/solar_challenge/flex.py) (`FLEX_VALUE_BANDS`) and [`src/solar_challenge/gridservices.py`](../src/solar_challenge/gridservices.py) (`GRID_SERVICES_RATE_BANDS`, whose flat column `FLEX_VALUE_BANDS`' per-kW figures read)
 
 ---
 
@@ -11,8 +11,9 @@
 
 The canonical Low/Central/High decomposition below is transcribed verbatim from
 `src/solar_challenge/flex.py` `FLEX_VALUE_BANDS` — the code is the single source of
-truth.  Numbers derive from consulting §1.1/§1.4 (time-shift + per-home grid-services)
-and PRD §6 (per-kW grid-services rate).
+truth, and its per-kW column reads the flat rates of `src/solar_challenge/gridservices.py`
+`GRID_SERVICES_RATE_BANDS`.  Numbers derive from consulting §1.1/§1.4 (time-shift +
+per-home grid-services) and PRD §6 (per-kW grid-services rate).
 
 | Band | Time-shift (£/home/yr) | Grid-services (£/home/yr) | Grid-services (£/kW/yr) | **Total (£/home/yr)** |
 |------|------------------------|---------------------------|-------------------------|----------------------|
@@ -109,12 +110,14 @@ The in-repo provenance chain is complete without it:
 
 - **Banded figures** (§1) → transcribed verbatim into
   `src/solar_challenge/flex.py` `FLEX_VALUE_BANDS`, which is the canonical
-  in-repo single source of truth.  Clone the repo and read `flex.py` — no
-  external file is required to verify or reproduce the numbers.
+  in-repo single source of truth; its per-kW column reads the flat rates of
+  `src/solar_challenge/gridservices.py` `GRID_SERVICES_RATE_BANDS`.  Clone the
+  repo and read `flex.py` and `gridservices.py` — no external file is required
+  to verify or reproduce the numbers.
 - **Prerequisites and risk rating** (§2–§3) → distilled into this note from
   consulting §1.3/§2/§5 and the deployment-readiness survey §9 (2026-06-15);
   both are summarised in full here, so no external document is needed to
   understand or audit the assessments.
 
 The consulting document is cited by filename (matching the convention used in
-`flex.py:5` and `flex.py:98`) for audit-trail completeness only.
+`flex.py`'s module docstring and `_PROVENANCE`) for audit-trail completeness only.

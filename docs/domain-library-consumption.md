@@ -723,6 +723,23 @@ simulated age, shows each such warning once per call, attributed to its own
 caller; the 0.5.0 tag prices the window at £0 silently.
 Consumers need no change when they re-pin.
 
+**Unreleased on main** (task 803): `GridServicesRateBand` gains a last field,
+`flat_gbp_per_kw_per_year: float = 0.0`, refused unless it is >= 0 and finite.
+`GRID_SERVICES_RATE_BANDS`' rows hold 1.5, 12.0 and 48.0 there, in £ per kW of
+installed battery discharge power per year, beside unchanged per-event rates;
+the two columns are independent calibrations of the same three bands. Every
+band refusal shares one message, "LABEL must be one of low, central, high, got
+VALUE". `GridServicesRateBands.resolve`, `resolve_grid_services_rate_band` and
+`solar_challenge.flex.resolve_flex_band` raise `ConfigurationError`, a
+`ValueError`, for a band they do not know, where the 0.5.0 tag raises a plain
+`ValueError`; this supersedes the task 774 line's "still raise a plain
+`ValueError`". `GridServicesEventsConfig`'s band refusal lists the bands in that
+order. `solar_challenge.flex.FLEX_VALUE_BANDS` is read-only and keyed by
+`solar_challenge.gridservices.GridServicesBand`; string lookups still work.
+`solar_challenge.flex.resolve_grid_services_band` is gone; read
+`GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year` instead.
+Consumers that catch `ValueError` need no change when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
