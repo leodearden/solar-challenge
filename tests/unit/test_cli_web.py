@@ -227,13 +227,12 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
     """Ctrl+C drops the jobs still waiting for a worker, so they never run."""
     started_dir = tmp_path / "started"
     started_dir.mkdir()
-    port = _free_port()
 
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0") as server:
+        port = _serving_port(server)
         for pv_kw in (1.0, 2.0, 3.0):
             _submit_home_job(port, pv_kw)
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
@@ -248,7 +247,7 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     port = _free_port()
 
     with _server(tmp_path, WEB_START, "--port", str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+        _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
 
     status = server.stderr().splitlines()
     status_line = f"Starting web dashboard at http://127.0.0.1:{port}"
@@ -264,16 +263,15 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
     """COLUMNS keeps Rich from folding the long lock path at 80 columns on the second server's stderr, which is not a terminal."""
     started_dir = tmp_path / "started"
     started_dir.mkdir()
-    port = _free_port()
     lock_path = str(_store_lock_file(tmp_path))
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0") as server:
+        port = _serving_port(server)
         run_id = _submit_home_job(port, 1.0)
         _wait_until(server, lambda: (started_dir / "1.0").exists(), "its job's simulation starts")
 
         second = subprocess.run(
-            [sys.executable, "-c", WEB_START, "--port", str(_free_port())],
+            [sys.executable, "-c", WEB_START, "--port", "0"],
             cwd=tmp_path,
             env={**os.environ, "HOME": str(tmp_path), "COLUMNS": "1000"},
             capture_output=True,
@@ -290,10 +288,8 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
 
 def test_web_start_debug_serves_the_dashboard(tmp_path: Path) -> None:
     """B13: werkzeug's reloader binds the port at once, and the process it serves from accepts the queued request once it serves."""
-    port = _free_port()
-
-    with _server(tmp_path, WEB_START, "--debug", "--port", str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+    with _server(tmp_path, WEB_START, "--debug", "--port", "0") as server:
+        port = _serving_port(server)
 
         assert _dashboard_status(port) == 200
 
@@ -308,10 +304,9 @@ def test_web_start_debug_serves_again_after_a_source_file_changes_from_a_restart
     source_file = tmp_path / "source_file.py"
     source_file.write_text("")
     os.utime(source_file, (0, 0))
-    port = _free_port()
 
-    with _server(tmp_path, WEB_START_IMPORTING_SOURCE_FILE, "--debug", "--port", str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+    with _server(tmp_path, WEB_START_IMPORTING_SOURCE_FILE, "--debug", "--port", "0") as server:
+        port = _serving_port(server)
         assert _dashboard_status(port) == 200
         first_holder = _store_holder_pid(tmp_path)
         assert first_holder not in (None, server.process.pid)
