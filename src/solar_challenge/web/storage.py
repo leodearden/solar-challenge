@@ -566,7 +566,7 @@ class RunStorage:
             summary: Summary statistics
             name: The name the save records a run it records for the first time under, None
                 for none. A run already recorded, as a job's submit records it through
-                create_run, keeps its name (_upsert_run_row).
+                create_run, keeps its name, as a re-save keeps a run's labels.
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -649,7 +649,7 @@ class RunStorage:
             per_home_summaries: List of SummaryStatistics for each home
             name: The name the save records a run it records for the first time under, None
                 for none. A run already recorded, as a job's submit records it through
-                create_run, keeps its name (_upsert_run_row).
+                create_run, keeps its name, as a re-save keeps a run's labels.
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration

@@ -587,14 +587,7 @@ class TestSavedRunRow:
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_given_no_name_gives_its_run_no_default_name(self, storage, saves, kind):
-        """A run a save records for the first time with no name has none, not its home's or a default.
-
-        A job's run is named when its submit creates it, at create_run, and the job's save keeps
-        that name as a re-save keeps a run's labels
-        (test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_the_run_labels),
-        so a save has no name of its own to give. The runs table refuses a NULL name only once
-        its name column is NOT NULL (docs/prds/run-store-one-owner.md §3.9).
-        """
+        """A run a save records for the first time with no name has none."""
         saves[kind]("new-run")
 
         assert storage.run_name("new-run") is None
