@@ -64,6 +64,7 @@ from tests._pyproject import core_requirements, extra_requirements
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PYTEST_PLUGINS = "pytest_plugins"
 _NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
+_ATTRIBUTE_FUNCTIONS = frozenset({"getattr", "setattr", "delattr"})
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
 WEB_SUBPACKAGE = f"{_PACKAGE}.web"
@@ -387,6 +388,30 @@ def _subscripts_namespace_call_with_pytest_plugins(node: ast.AST) -> bool:
     )
 
 
+def _reaches_attribute_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* reaches an attribute named pytest_plugins: as one in any context, a
+    load, a store or a del, as `sys.modules[__name__].pytest_plugins = ...` does; through getattr,
+    setattr or delattr given the str pytest_plugins; or by a from-import of the name, whatever name
+    it binds, which reads that attribute of its module.
+
+    The object is not resolved, so an attribute of that name on any object counts, since the
+    object may be a module whose attribute pytest reads, such as sys.modules[__name__]. hasattr is
+    not read, since the bool it returns cannot change the attribute.
+    """
+    if isinstance(node, ast.Attribute):
+        return node.attr == _PYTEST_PLUGINS
+    if isinstance(node, ast.ImportFrom):
+        return any(alias.name == _PYTEST_PLUGINS for alias in node.names)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _ATTRIBUTE_FUNCTIONS
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == _PYTEST_PLUGINS
+    )
+
+
 def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_StatementOrClause]:
     """Yield each statement or clause of *tree*'s module scope, as
     _module_scope_statements_and_clauses finds them, that binds pytest_plugins in a form
@@ -405,7 +430,8 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_StatementOrCl
     """Yield each statement or clause of *tree*, in any scope, that can change pytest_plugins in a
     form _pytest_plugins_assignments does not read: one that reads or deletes the name, through
     which a method call such as append, a subscript or an alias can change the list; subscripts
-    globals(), locals() or vars() with the name; or declares it global, since a function or class
+    globals(), locals() or vars() with the name; reaches an attribute of that name, as
+    _reaches_attribute_pytest_plugins reads it; or declares it global, since a function or class
     that does can rebind the attribute of the module.
 
     A read in a function or class body counts even where the name is a local there, since scopes
@@ -414,7 +440,9 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_StatementOrCl
     """
     for statement in (node for node in ast.walk(tree) if isinstance(node, _StatementOrClause)):
         if (isinstance(statement, ast.Global) and _PYTEST_PLUGINS in statement.names) or any(
-            _reads_or_deletes_pytest_plugins(node) or _subscripts_namespace_call_with_pytest_plugins(node)
+            _reads_or_deletes_pytest_plugins(node)
+            or _subscripts_namespace_call_with_pytest_plugins(node)
+            or _reaches_attribute_pytest_plugins(node)
             for node in _own_nodes(statement)
         ):
             yield statement
