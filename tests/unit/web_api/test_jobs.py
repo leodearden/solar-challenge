@@ -34,6 +34,7 @@ _A_COMPLETED_JOB = replace(
     message="Simulation completed successfully",
 )
 _A_FAILED_JOB = replace(_A_RUNNING_JOB, status="failed", message="Something went wrong")
+_A_CANCELLED_JOB = replace(_A_RUNNING_JOB, status="cancelled", message="Cancelled: its run was deleted")
 
 _FINAL_EVENTS_AND_THEIR_FRAMES = [
     pytest.param(
@@ -139,6 +140,25 @@ class TestGetJobProgress:
         frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
 
         assert frames == [final_frame]
+
+    def test_a_cancelled_job_whose_events_another_stream_drained_is_sent_its_final_frame_at_once(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A cancelled job ends its stream as a failed one does, with an error frame, until S20 gives cancellation its own event."""
+        mock_job_manager.job_state.return_value = _A_CANCELLED_JOB
+        mock_job_manager.get_events.return_value = iter([])
+
+        response = client.get("/api/jobs/job-running/progress", buffered=False)
+        try:
+            chunks = iter(response.response)
+            first = next(chunks)
+
+            assert parse_sse_events(first.decode()) == [
+                SseFrame("error", {"status": "cancelled", "message": "Cancelled: its run was deleted"})
+            ]
+            assert next(chunks, None) is None
+        finally:
+            response.close()
 
 
 class TestGetJobResults:
