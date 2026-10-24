@@ -210,8 +210,8 @@ def quick(
         typer.Option(
             "--consumption-kwh", "-c",
             help=(
-                "Annual consumption in kWh (default: Ofgem TDCV for a "
-                f"{LoadConfig().household_occupants}-person household)"
+                f"Annual consumption in kWh (default: {LoadConfig().get_annual_consumption():,.0f}, "
+                f"the simulator's own figure for a {LoadConfig().household_occupants}-person household)"
             ),
         ),
     ] = None,
