@@ -1114,3 +1114,12 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_t
     assert surface_form(functools.partial(Settable())) == "(rate: int) -> str"
     assert surface_form(functools.partial(Getless())) == "(rate: int) -> str"
     assert surface_form(functools.partial(signed)) == "(rate: int)"
+
+
+def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
+    class Deleting(functools.partial):
+        def __delete__(self, instance: object) -> None: ...
+
+    def settle(rate: int, share: float) -> str: ...
+
+    assert surface_form(Deleting(settle, 1)) == "(share: float) -> str"
