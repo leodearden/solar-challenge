@@ -252,6 +252,10 @@ def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_sc
             id="unpacked-in-a-function-inside-an-if",
         ),
         pytest.param(("pytest_plugins: list[str]",), id="annotated-with-no-value"),
+        pytest.param(
+            ("def configure():", "    try:", "        pass", "    except Exception as pytest_plugins:", "        pass"),
+            id="caught-in-a-function",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_a_pytest_plugins_that_binds_no_attribute_of_its_module(
@@ -889,6 +893,52 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="assigned-through-locals",
         ),
+        pytest.param(
+            ("try:", "    pass", "except Exception as pytest_plugins: pass"),
+            "except Exception as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="an-except-clause-name",
+        ),
+        pytest.param(
+            ("match [['pytest_rerunfailures']]:", "    case [pytest_plugins]: pass"),
+            "case [pytest_plugins]:",
+            _UNREADABLE_USE,
+            id="a-match-capture",
+        ),
+        pytest.param(
+            ("match ['pytest_rerunfailures']:", "    case [*pytest_plugins]: pass"),
+            "case [*pytest_plugins]:",
+            _UNREADABLE_USE,
+            id="a-match-star-capture",
+        ),
+        pytest.param(
+            ("match {'plugin': 'pytest_rerunfailures'}:", "    case {**pytest_plugins}: pass"),
+            "case {**pytest_plugins}:",
+            _UNREADABLE_USE,
+            id="a-match-mapping-rest",
+        ),
+        pytest.param(
+            ("match ['pytest_rerunfailures']:", "    case [str()] as pytest_plugins: pass"),
+            "case [str()] as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="a-match-as-pattern",
+        ),
+        pytest.param(
+            ("match sys.platform:", "    case _ if (pytest_plugins := ['pytest_rerunfailures']): pass"),
+            "case _ if (pytest_plugins := ['pytest_rerunfailures']):",
+            _UNREADABLE_USE,
+            id="a-walrus-in-a-case-guard",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "match sys.platform:",
+                "    case _ if pytest_plugins.append('pytest_rerunfailures'): pass",
+            ),
+            "case _ if pytest_plugins.append('pytest_rerunfailures'):",
+            _UNREADABLE_USE,
+            id="appended-in-a-case-guard",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -899,20 +949,22 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 ) -> None:
     """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for or a with, or beside another target of a chained
-    assignment, which aliases the list, or declared global in a function. It may also be read or
-    deleted in any scope, function and class bodies included, as a method call such as append, a
-    subscript, an alias or a del does. Or globals(), locals() or vars() may be subscripted with the
-    name, in any position or scope.
+    may be bound by a tuple, a walrus, a for, a with, an except clause or a capture of a match
+    pattern, or beside another target of a chained assignment, which aliases the list, or declared
+    global in a function. It may also be read or deleted in any scope, function and class bodies
+    included, as a method call such as append, a subscript, an alias or a del does, and a read may
+    sit in a case guard. Or globals(), locals() or vars() may be subscripted with the name, in any
+    position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
     empty str name no plugin, so an empty dict fails like any other value of the wrong type.
 
-    The failure names the file, the line and the statement, the last of *lines*, as written, or by its
-    first line when it is compound, with what is wrong with it. An augmented assignment is quoted
-    whole, not described as setting pytest_plugins. It says how to write pytest_plugins instead: as
-    a literal list or tuple of module names, added to only with += and such a literal.
+    The failure names the file, the line and the statement, or the except or case clause, that starts
+    on the last of *lines*, as written, or by its first line when it is compound, with what is wrong
+    with it. An augmented assignment is quoted whole, not described as setting pytest_plugins. It
+    says how to write pytest_plugins instead: as a literal list or tuple of module names, added to
+    only with += and such a literal.
     """
     prefix = ("import contextlib", "import sys", 'PLUGINS = ["pytester"]')
     plugin = _write_module(tmp_path / "plugin.py", *prefix, *lines)
