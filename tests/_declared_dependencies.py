@@ -62,6 +62,7 @@ from tests._pyproject import core_requirements, extra_requirements
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PYTEST_PLUGINS = "pytest_plugins"
+_NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
 WEB_SUBPACKAGE = f"{_PACKAGE}.web"
@@ -340,6 +341,22 @@ def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
 
 
+def _is_namespace_entry_of_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* is what globals(), locals() or vars() returns, subscripted with the
+    str pytest_plugins, in any position: the entry of a namespace that may be the module's own.
+
+    Whatever the call is given counts, so vars(module) does.
+    """
+    return (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in _NAMESPACE_FUNCTIONS
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == _PYTEST_PLUGINS
+    )
+
+
 def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt]:
     """Yield each statement of *tree* that can bind or change pytest_plugins in a form
     _pytest_plugins_assignments does not read.
@@ -347,9 +364,10 @@ def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt
     In the module's scope, as _module_scope_statements finds them, one holds the name as a target
     other than the bare one of an assignment, an annotation or an augmentation: one of a tuple, a
     for, a with or a walrus. In any scope, one reads or deletes the name, through which a method
-    call such as append, a subscript or an alias can change the list, or declares it global, since
-    a function or class that does can rebind the attribute of the module. A read in a function or
-    class body counts even where the name is a local there, since scopes are not resolved.
+    call such as append, a subscript or an alias can change the list; subscripts globals(),
+    locals() or vars() with the name; or declares it global, since a function or class that does
+    can rebind the attribute of the module. A read in a function or class body counts even where
+    the name is a local there, since scopes are not resolved.
     """
     for statement in _module_scope_statements(tree.body):
         read_targets, _ = _assignment_parts(statement)
@@ -360,7 +378,8 @@ def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt
             yield statement
     for statement in (node for node in ast.walk(tree) if isinstance(node, ast.stmt)):
         if (isinstance(statement, ast.Global) and _PYTEST_PLUGINS in statement.names) or any(
-            _reads_or_deletes_pytest_plugins(node) for node in _nodes_outside_nested_statements(statement)
+            _reads_or_deletes_pytest_plugins(node) or _is_namespace_entry_of_pytest_plugins(node)
+            for node in _nodes_outside_nested_statements(statement)
         ):
             yield statement
 
