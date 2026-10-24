@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's named_classes, one per test."""
+"""The rules of tests/_surface_forms.py's named_classes for the callable or class that spells a class's signature, the constructor inspect reads for it or the class holding a signature it carries, and the errors raised when neither is known, one per test."""
 
 import decimal
 import fractions
