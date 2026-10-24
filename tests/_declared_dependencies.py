@@ -8,14 +8,12 @@ with the extras, beside [project].dependencies, of the run that loads them;
 each selector's docstring names that run. solar_challenge and tests are
 first-party. A module a file names to pytest.importorskip as a string literal
 counts as an import it requires, since the test skips wherever that module is
-missing. So does the module pytest imports for each entry of a module-level
-pytest_plugins assignment; a built-in plugin's short name, such as pytester,
-names a module of pytest's own _pytest package. _imports_required_by says when
-an import inside a try block that handles ImportError counts, and
-dead_import_guards finds each such guard over declared distributions only,
-whose handler can never run. Imports map to distributions only through
-installed metadata, so a scope's check skips where its extras are not
-installed.
+missing. So does the module pytest imports for each pytest_plugins entry, as
+_pytest_plugin_imports reads them. _imports_required_by says when an import
+inside a try block that handles ImportError counts, and dead_import_guards
+finds each such guard over declared distributions only, whose handler can
+never run. Imports map to distributions only through installed metadata, so a
+scope's check skips where its extras are not installed.
 
 The package's web subpackage, WEB_SUBPACKAGE, is first-party, yet any of its
 modules may import the web extra at module top. So no file of
@@ -63,6 +61,7 @@ from packaging.utils import canonicalize_name
 from tests._pyproject import core_requirements, extra_requirements
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
+_PYTEST_PLUGINS = "pytest_plugins"
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
 WEB_SUBPACKAGE = f"{_PACKAGE}.web"
@@ -273,60 +272,139 @@ def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Im
             yield from _unguarded_imports(ast.iter_child_nodes(node))
 
 
-def _pytest_plugins_values(tree: ast.Module) -> Iterator[ast.expr]:
-    """Yield the value of each module-level assignment of pytest_plugins in *tree*, annotated or not.
+def _module_scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
+    """Yield the statements under *nodes* that run in their module's own scope: those in a block
+    of a compound statement such as an if, a try or a with too, however deep.
 
-    An annotation with no value assigns nothing.
+    Not those in the body of a function or class, which runs in a scope of its own. The def or
+    class itself is yielded.
     """
-    for statement in tree.body:
-        if isinstance(statement, ast.Assign):
-            targets, value = statement.targets, statement.value
-        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
-            targets, value = [statement.target], statement.value
-        else:
-            continue
-        if any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
-            yield value
+    for node in nodes:
+        if isinstance(node, ast.stmt):
+            yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield from _module_scope_statements(ast.iter_child_nodes(node))
 
 
-def _pytest_plugins_failure(source: Path, value: ast.expr, defect: str) -> AssertionError:
-    """Return the failure for the pytest_plugins assignment *value* in *source* that the contract
-    cannot follow. It names *source*, the line and the expression; *defect* is the clause that
-    says what is wrong with it, such as "is not a literal". It also says how to write
-    pytest_plugins instead.
+def _nodes_outside_nested_statements(node: ast.AST) -> Iterator[ast.AST]:
+    """Yield the nodes under *node*, a statement or a part of one, that lie under no statement
+    nested in it: what the statement itself evaluates, such as its targets, values, tests and
+    context managers, not what the statements of its blocks do.
     """
+    for child in ast.iter_child_nodes(node):
+        if not isinstance(child, ast.stmt):
+            yield child
+            yield from _nodes_outside_nested_statements(child)
+
+
+def _assignment_parts(statement: ast.stmt) -> tuple[list[ast.expr], ast.expr | None]:
+    """Return (targets, value) for a *statement* that assigns, annotates or augments: the
+    expressions it writes to, and the value it assigns or adds, None for an annotation with no
+    value.
+
+    Any other statement has no targets and no value.
+    """
+    if isinstance(statement, ast.Assign):
+        return statement.targets, statement.value
+    if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        return [statement.target], statement.value
+    return [], None
+
+
+def _binds_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* is the name pytest_plugins as a target, the position that binds it."""
+    return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and isinstance(node.ctx, ast.Store)
+
+
+def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
+    """Yield (statement, value) for each statement of *tree*'s module scope, as
+    _module_scope_statements finds them, that assigns pytest_plugins, annotated or not, or
+    augments it. *value* is what the statement assigns or adds.
+
+    pytest reads pytest_plugins as an attribute of the module once the module has run, so each
+    such statement can give it entries. An annotation with no value assigns nothing.
+    """
+    for statement in _module_scope_statements(tree.body):
+        targets, value = _assignment_parts(statement)
+        if value is not None and any(_binds_pytest_plugins(target) for target in targets):
+            yield statement, value
+
+
+def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield each statement of *tree* that can bind pytest_plugins in a form
+    _pytest_plugins_assignments does not read.
+
+    One is a statement of the module's scope, as _module_scope_statements finds them, that holds
+    the name as a target other than the bare one of an assignment, an annotation or an
+    augmentation: one of a tuple, a for, a with or a walrus. The other is a global declaration of
+    the name in any scope, since a function or class that declares it global can rebind the
+    attribute of the module.
+    """
+    for statement in _module_scope_statements(tree.body):
+        read_targets, _ = _assignment_parts(statement)
+        if any(
+            _binds_pytest_plugins(node) and node not in read_targets
+            for node in _nodes_outside_nested_statements(statement)
+        ):
+            yield statement
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global) and _PYTEST_PLUGINS in node.names:
+            yield node
+
+
+def _pytest_plugins_failure(source: Path, statement: ast.stmt, clause: str) -> AssertionError:
+    """Return the failure for the pytest_plugins *statement* in *source* that the contract cannot
+    follow. It names *source*, the line and the statement, quoted by its first line when it is
+    compound; *clause* says what is wrong with it, such as "whose value is not a literal". It also
+    says how to write pytest_plugins instead.
+    """
+    quoted = ast.unparse(statement).partition("\n")[0]
     return AssertionError(
-        f"{source}:{value.lineno} sets pytest_plugins to {ast.unparse(value)}, which {defect}; "
+        f"{source}:{statement.lineno} has `{quoted}`, {clause}; "
         "write pytest_plugins as a literal list or tuple of module names, or as a "
         "comma-separated string, for the declared-dependency contract to follow the plugins it names"
     )
 
 
 def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
-    """Yield an import of the module pytest imports for each entry of the module-level
-    pytest_plugins assignments in *tree*, the syntax tree of *source*. Each import sits where
-    its assignment's value does.
+    """Yield an import of the module pytest imports for each entry that the statements
+    _pytest_plugins_assignments finds in *tree*, the syntax tree of *source*, give pytest_plugins.
+    Each import sits where the value of its statement does.
 
     pytest imports each entry when it loads a conftest, test module or plugin that sets one. A
     built-in plugin's short name, such as pytester, names that module of pytest's own _pytest
     package, as PytestPluginManager.import_plugin reads builtin_plugins; any other entry names
-    the module it spells. The entries are read without running *source*, so the value must be a
-    literal: a str, split at commas as pytest splits it, or a list or tuple of str. An empty
-    str, like None, names no plugin. Any other value fails, naming *source*, the line and the
-    expression.
+    the module it spells. The entries are read without running *source*, so each value must be a
+    literal: a str, whose entries are its pieces between commas, or a list or tuple of str. None
+    names no plugin. Any other value fails, naming *source*, the line and the statement, and so
+    does a binding that _unreadable_pytest_plugins_bindings finds.
+
+    Each statement's value is read on its own, not added to what the module held before it. That
+    is why a str's empty pieces are dropped, such as the one before the comma of `+= ",x"`, and why
+    a str added to a list reads as the module it spells, not as the characters list.extend adds.
     """
-    for value in _pytest_plugins_values(tree):
+    unreadable = next(_unreadable_pytest_plugins_bindings(tree), None)
+    if unreadable is not None:
+        raise _pytest_plugins_failure(
+            source, unreadable, "which can bind pytest_plugins in a form the contract cannot read"
+        )
+    for statement, value in _pytest_plugins_assignments(tree):
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
-            raise _pytest_plugins_failure(source, value, "is not a literal") from None
-        if plugins is None or plugins == "":
+            raise _pytest_plugins_failure(source, statement, "whose value is not a literal") from None
+        if plugins is None:
             continue
         if not isinstance(plugins, (str, list, tuple)):
-            raise _pytest_plugins_failure(source, value, "is neither a str nor a list or tuple")
-        for entry in plugins.split(",") if isinstance(plugins, str) else plugins:
+            raise _pytest_plugins_failure(
+                source, statement, "whose value is neither a str nor a list or tuple"
+            )
+        entries = [piece for piece in plugins.split(",") if piece] if isinstance(plugins, str) else plugins
+        for entry in entries:
             if not isinstance(entry, str):
-                raise _pytest_plugins_failure(source, value, f"names {entry!r}, not a module name")
+                raise _pytest_plugins_failure(
+                    source, statement, f"whose value names {entry!r}, not a module name"
+                )
             module = f"_pytest.{entry}" if entry in builtin_plugins else entry
             yield ast.copy_location(ast.Import(names=[ast.alias(name=module)]), value)
 
@@ -415,7 +493,7 @@ def _import_targets(project_root: Path, source: Path) -> Iterator[tuple[Path, li
     *source*'s package directory. Imports count as _imports_required_by reads them. The last
     part of a from-import's name may be an attribute of the module before it, not a module.
 
-    A relative import that climbs out of *project_root*, or a pytest_plugins value that
+    A relative import that climbs out of *project_root*, or a pytest_plugins that
     _pytest_plugin_imports cannot read, fails naming *source* and the line.
     """
     for node in _imports_required_by(project_root, source):

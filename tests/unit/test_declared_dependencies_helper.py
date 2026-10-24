@@ -17,6 +17,8 @@ from tests._declared_dependencies import (
 )
 
 _UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
+_ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
+_UNREADABLE_BINDING = "which can bind pytest_plugins in a form the contract cannot read"
 
 
 def _write_module(path: Path, *lines: str) -> Path:
@@ -146,6 +148,126 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "beside the built-in pytester. builtin_pytest_plugin names only pytester, which pytest "
         "imports from its own _pytest package. empty_pytest_plugins sets pytest_plugins to an "
         "empty string, which names no plugin. So neither of the last two may be flagged"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(
+            ("pytest_plugins = []", 'pytest_plugins += ["pytest_rerunfailures"]'),
+            id="extended-with-plus-equals",
+        ),
+        pytest.param(
+            ('pytest_plugins = "pytester"', 'pytest_plugins += ",pytest_rerunfailures"'),
+            id="a-str-extended-after-a-comma",
+        ),
+        pytest.param(('if sys.platform == "linux":', f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-if"),
+        pytest.param(
+            ("if not sys.platform:", "    pass", "else:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-else"
+        ),
+        pytest.param(
+            ("try:", f"    {_ASSIGNS_RERUNFAILURES}", "except Exception:", "    pass"), id="in-a-try"
+        ),
+        pytest.param(
+            ("try:", "    pass", "except Exception:", f"    {_ASSIGNS_RERUNFAILURES}"),
+            id="in-an-except-handler",
+        ),
+        pytest.param(
+            ("try:", "    pass", "finally:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-finally"
+        ),
+        pytest.param(
+            ("try:", "    pass", "except* Exception:", f"    {_ASSIGNS_RERUNFAILURES}"),
+            id="in-an-except-star-handler",
+        ),
+        pytest.param(
+            ("with contextlib.suppress(Exception):", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-with"
+        ),
+        pytest.param(("for _ in range(1):", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-for"),
+        pytest.param(("while True:", f"    {_ASSIGNS_RERUNFAILURES}", "    break"), id="in-a-while"),
+        pytest.param(
+            ("match sys.platform:", "    case _:", f"        {_ASSIGNS_RERUNFAILURES}"), id="in-a-match-case"
+        ),
+        pytest.param(
+            (
+                'if sys.platform == "linux":',
+                "    if sys.version_info >= (3, 11):",
+                f"        {_ASSIGNS_RERUNFAILURES}",
+            ),
+            id="two-blocks-deep",
+        ),
+        pytest.param(
+            ('if sys.platform == "linux":', '    pytest_plugins: list[str] = ["pytest_rerunfailures"]'),
+            id="annotated-in-an-if",
+        ),
+        pytest.param(
+            (
+                'pytest_plugins = ["pytester"]',
+                'if sys.platform == "linux":',
+                '    pytest_plugins += ("pytest_rerunfailures",)',
+            ),
+            id="extended-in-an-if",
+        ),
+    ],
+)
+def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_scope_gives(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """A pytest_plugins entry counts as a requirement wherever a statement of the module's own scope gives it.
+
+    pytest reads pytest_plugins as an attribute of the module once the module has run, so an
+    augmented assignment adds its entries to those the assignment before it gave. A str extended
+    after a comma adds the names after the comma, not the empty piece before it. An assignment,
+    annotated or not, in any block of a compound statement, however deep, counts as well.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import contextlib", "import sys", *lines)
+
+    assert undeclared_distributions(tmp_path, [plugin], declared={"pytest"}) == [
+        (plugin, ["pytest-rerunfailures"])
+    ], (
+        "the undeclared-distributions detector missed the pytest_rerunfailures module, which the "
+        "undeclared pytest-rerunfailures provides, among the entries a module gives pytest_plugins "
+        f"with these lines: {lines}"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(("def configure():", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-function"),
+        pytest.param(("async def configure():", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-an-async-function"),
+        pytest.param(("class Plugins:", f"    {_ASSIGNS_RERUNFAILURES}"), id="in-a-class"),
+        pytest.param(
+            ('if sys.platform == "linux":', "    def configure():", f"        {_ASSIGNS_RERUNFAILURES}"),
+            id="in-a-function-inside-an-if",
+        ),
+        pytest.param(
+            (
+                'if sys.platform == "linux":',
+                "    def configure():",
+                "        pytest_plugins, count = ['pytest_rerunfailures'], 1",
+            ),
+            id="unpacked-in-a-function-inside-an-if",
+        ),
+        pytest.param(("pytest_plugins: list[str]",), id="annotated-with-no-value"),
+    ],
+)
+def test_undeclared_distributions_ignores_a_pytest_plugins_that_binds_no_attribute_of_its_module(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """A pytest_plugins requires nothing when it binds no attribute of the module, wherever the def
+    or class around it stands in the module.
+
+    A function that declares no global binds it as a local, in whatever form, and a class as an
+    attribute of the class: pytest reads neither. An annotation with no value assigns nothing.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import sys", *lines)
+
+    assert undeclared_distributions(tmp_path, [plugin], declared={"pytest"}) == [], (
+        "the undeclared-distributions detector read a requirement of pytest-rerunfailures from a "
+        f"pytest_plugins that binds no attribute of its module, with these lines: {lines}"
     )
 
 
@@ -413,7 +535,9 @@ _OWN_FILES_OF_EACH_SCOPE = {
     "scripts": ("scripts/measure.py",),
     "tests-dev-only-lanes": (
         "tests/__init__.py",
+        "tests/_linux_plugin.py",
         "tests/_lock.py",
+        "tests/_nested_plugin.py",
         "tests/_network.py",
         "tests/_newest.py",
         "tests/_paths.py",
@@ -443,17 +567,29 @@ _OWN_FILES_OF_EACH_SCOPE = {
 }
 _LINES_OF_EACH_IMPORTING_FILE: dict[str, tuple[str, ...]] = {
     # a conftest every run loads; its pytest_plugins list names a pytest built-in, which is no file
-    # of the project, beside a plugin of the project
+    # of the project, beside a plugin of the project. The += inside the if adds a plugin of the
+    # project, which is followed; the list in the function's body is a local of the function, so
+    # the helper it names stays with the verify
     "tests/conftest.py": (
+        "import sys",
         "from tests._network import refusing_network",
         'pytest_plugins = ["pytester", "tests._plugin"]',
+        'if sys.platform == "linux":',
+        '    pytest_plugins += ["tests._linux_plugin"]',
+        "def pytest_configure(config):",
+        '    pytest_plugins = ["tests._helpers"]',
     ),
     # a plugin's own entries, in the comma-separated string form pytest also accepts
     "tests/_plugin.py": ('pytest_plugins = "pytester,tests._plugin_fixtures"',),
     # an annotated assignment, which pytest honours too
     "tests/_plugin_fixtures.py": ('pytest_plugins: list[str] = ["tests._plugin_hooks"]',),
-    # an annotation with no value assigns nothing
-    "tests/_plugin_hooks.py": ("pytest_plugins: list[str]",),
+    # an annotation with no value assigns nothing; an assignment in the block of a with does
+    "tests/_plugin_hooks.py": (
+        "import contextlib",
+        "pytest_plugins: list[str]",
+        "with contextlib.suppress(Exception):",
+        '    pytest_plugins = ["tests._nested_plugin"]',
+    ),
     # module level; the trailing name is an attribute of the module
     "tests/interpreter_matrix/test_matrix.py": ("from tests._uv import isolated_env",),
     # transitive
@@ -523,7 +659,9 @@ def test_each_source_scope_selects_only_its_own_files(
 
     A module that a pytest_plugins entry names, as a list or a comma-separated string, in a
     conftest or in a plugin it loads, counts as imported: pytest imports each entry. So does
-    one that an annotated assignment names; an annotation with no value names none. A built-in
+    one that an annotated assignment names, one that += adds, and one that a block of a compound
+    statement, such as an if or a with, gives. An annotation with no value names none, and nor
+    does a pytest_plugins that a function's body binds as a local. A built-in
     such as pytester names no file of the project.
     """
     project_files = _write_project_of_every_scope(tmp_path)
@@ -563,37 +701,117 @@ def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_liter
 
 
 @pytest.mark.parametrize(
-    ("assigned", "defect"),
+    ("lines", "statement", "clause"),
     [
-        pytest.param("[1]", "names 1, not a module name", id="an-int-entry"),
-        pytest.param("['tests._plugin', None]", "names None, not a module name", id="none-beside-a-module-name"),
-        pytest.param("(['tests._plugin'],)", "names ['tests._plugin'], not a module name", id="a-nested-list-entry"),
-        pytest.param("5", "is neither a str nor a list or tuple", id="an-int-for-the-whole-value"),
-        pytest.param("{}", "is neither a str nor a list or tuple", id="an-empty-dict-is-no-empty-value"),
+        pytest.param(
+            ("pytest_plugins = [1]",),
+            "pytest_plugins = [1]",
+            "whose value names 1, not a module name",
+            id="an-int-entry",
+        ),
+        pytest.param(
+            ("pytest_plugins = ['tests._plugin', None]",),
+            "pytest_plugins = ['tests._plugin', None]",
+            "whose value names None, not a module name",
+            id="none-beside-a-module-name",
+        ),
+        pytest.param(
+            ("pytest_plugins = (['tests._plugin'],)",),
+            "pytest_plugins = (['tests._plugin'],)",
+            "whose value names ['tests._plugin'], not a module name",
+            id="a-nested-list-entry",
+        ),
+        pytest.param(
+            ("pytest_plugins = 5",),
+            "pytest_plugins = 5",
+            "whose value is neither a str nor a list or tuple",
+            id="an-int-for-the-whole-value",
+        ),
+        pytest.param(
+            ("pytest_plugins = {}",),
+            "pytest_plugins = {}",
+            "whose value is neither a str nor a list or tuple",
+            id="an-empty-dict-is-no-empty-value",
+        ),
+        pytest.param(
+            ("pytest_plugins = []", "pytest_plugins += PLUGINS"),
+            "pytest_plugins += PLUGINS",
+            "whose value is not a literal",
+            id="a-name-added-with-plus-equals",
+        ),
+        pytest.param(
+            ("pytest_plugins = []", "pytest_plugins += [1]"),
+            "pytest_plugins += [1]",
+            "whose value names 1, not a module name",
+            id="an-int-added-with-plus-equals",
+        ),
+        pytest.param(
+            ('if sys.platform == "linux":', "    pytest_plugins = PLUGINS"),
+            "pytest_plugins = PLUGINS",
+            "whose value is not a literal",
+            id="a-name-in-an-if",
+        ),
+        pytest.param(
+            ("pytest_plugins, count = ['pytest_rerunfailures'], 1",),
+            "pytest_plugins, count = (['pytest_rerunfailures'], 1)",
+            _UNREADABLE_BINDING,
+            id="a-tuple-target",
+        ),
+        pytest.param(
+            ("if (pytest_plugins := ['pytest_rerunfailures']): pass",),
+            "if (pytest_plugins := ['pytest_rerunfailures']):",
+            _UNREADABLE_BINDING,
+            id="a-walrus-in-an-if-test",
+        ),
+        pytest.param(
+            ("for pytest_plugins in [['pytest_rerunfailures']]: pass",),
+            "for pytest_plugins in [['pytest_rerunfailures']]:",
+            _UNREADABLE_BINDING,
+            id="a-for-target",
+        ),
+        pytest.param(
+            ("with contextlib.nullcontext(['pytest_rerunfailures']) as pytest_plugins: pass",),
+            "with contextlib.nullcontext(['pytest_rerunfailures']) as pytest_plugins:",
+            _UNREADABLE_BINDING,
+            id="a-with-target",
+        ),
+        pytest.param(
+            ("def configure():", "    global pytest_plugins"),
+            "global pytest_plugins",
+            _UNREADABLE_BINDING,
+            id="a-global-declaration-in-a-function",
+        ),
     ],
 )
-def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_str_nor_list_or_tuple_of_str(
+def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
     tmp_path: Path,
-    assigned: str,
-    defect: str,
+    lines: tuple[str, ...],
+    statement: str,
+    clause: str,
 ) -> None:
-    """A pytest_plugins value that is no str, list or tuple, or that holds an entry that is no str,
-    fails the detector, naming the file, the line, the expression and what is wrong with it.
+    """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
+    scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
+    may be bound by a tuple, a walrus, a for or a with, or declared global in a function.
 
-    pytest imports each entry as a module name, which it requires to be text, and accepts None,
-    a str or a sequence only. An int read as a module name would otherwise fail on its first
-    string method, naming no file. Only None and the empty str name no plugin, so an empty dict
-    fails like any other value of the wrong type.
+    pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
+    read as one would otherwise fail on its first string method, naming no file. Only None and the
+    empty str name no plugin, so an empty dict fails like any other value of the wrong type.
+
+    The failure names the file, the line and the statement, the last of *lines*, as written, or by its
+    first line when it is compound, with what is wrong with it. An augmented assignment is quoted
+    whole, not described as setting pytest_plugins. It says how to write pytest_plugins instead.
     """
-    plugin = _write_module(tmp_path / "plugin.py", "import pytest", f"pytest_plugins = {assigned}")
+    prefix = ("import contextlib", "import sys", 'PLUGINS = ["pytester"]')
+    plugin = _write_module(tmp_path / "plugin.py", *prefix, *lines)
+    line = len(prefix) + len(lines)
 
     with pytest.raises(AssertionError) as failure:
         undeclared_distributions(tmp_path, [plugin], declared={"pytest"})
 
     message = str(failure.value)
-    assert f"{plugin}:2 sets pytest_plugins to {assigned}, which {defect}" in message, (
-        f"the failure does not name line 2 of {plugin}, the pytest_plugins expression `{assigned}` on "
-        f"it and what is wrong with it, `which {defect}`: {message}"
+    assert f"{plugin}:{line} has `{statement}`, {clause}" in message, (
+        f"the failure does not name line {line} of {plugin}, the statement `{statement}` on it and "
+        f"what is wrong with it, `{clause}`: {message}"
     )
     assert "list or tuple of module names" in message, (
         f"the failure does not say how to write pytest_plugins: {message}"
