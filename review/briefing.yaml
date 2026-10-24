@@ -71,6 +71,13 @@ conventions:
       fix surfaced a downstream finance seam — scenario-level seg_tariff_pence_per_kwh is ignored
       by the 25-yr CBS projection, yielding £0 CBS export income — tracked separately, not this rule.)
 
+  - rule: "A TariffConfig's periods tile the local day exactly once; TariffConfig refuses a gap or overlap at construction, naming the clock times (tests/unit/test_tariff_tiling.py)"
+    why: >
+      get_rate reads the minute table construction builds, so the check and the lookup are one
+      structure: a gap no longer fails mid-simulation at its first uncovered minute, and an
+      overlap is no longer billed at the first listed period's rate (fk-872021ade9b6; D27
+      invariant 2; docs/prds/tariff-coverage-classifier-presets.md §5.1).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are

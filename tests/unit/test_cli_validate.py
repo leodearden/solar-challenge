@@ -13,6 +13,7 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from tests._cli_table_text import table_text
+from tests._names_as_a_word import names_as_a_word
 
 runner = CliRunner()
 
@@ -400,6 +401,39 @@ home:
         assert "homes[0].battery.dispatch_strategy.strategy_type 'tou_optimised'" in error_row
         for strategy in ("peak_shaving", "self_consumption", "tou_optimized"):
             assert strategy in error_row
+
+    @pytest.mark.parametrize(
+        ("tariff", "named"),
+        [
+            pytest.param(
+                "{type: custom, periods: ["
+                "{start_time: '07:00', end_time: '23:00', rate_per_kwh: 0.30}]}",
+                "23:00-07:00",
+                id="gap",
+            ),
+            pytest.param(
+                "{type: custom, periods: ["
+                "{start_time: '00:00', end_time: '12:00', rate_per_kwh: 0.10}, "
+                "{start_time: '06:00', end_time: '00:00', rate_per_kwh: 0.30}]}",
+                "06:00-12:00",
+                id="overlap",
+            ),
+            pytest.param("{type: flat_rate, rate_per_kwh: .nan}", "nan", id="nan-rate"),
+            pytest.param("{type: flat_rate, rate_per_kwh: .inf}", "inf", id="inf-rate"),
+        ],
+    )
+    def test_a_tariff_block_its_constructor_refuses_is_an_error_row_naming_the_clock_range_or_rate(
+        self, tmp_path: Path, tariff: str, named: str
+    ) -> None:
+        """Times are quoted: PyYAML reads an unquoted 23:00 as the sexagesimal integer 1380."""
+        result = self._validate_config(
+            tmp_path, f"home:\n  pv: {{capacity_kw: 4.0}}\n  tariff: {tariff}\n"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        assert names_as_a_word(text[text.index("ERROR"):], named)
 
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

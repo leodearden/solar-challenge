@@ -28,6 +28,11 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     TOUOptimizedStrategy,
 )
+from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
+from tests._same_schedule_tariffs import (
+    NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
+    NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
+)
 
 
 @pytest.fixture
@@ -496,8 +501,7 @@ def peak_ts() -> pd.Timestamp:
     return pd.Timestamp("2024-01-01 18:00")
 
 
-@pytest.fixture
-def grid_charge_battery() -> Battery:
+def _grid_charging_battery() -> Battery:
     """Battery with grid charging enabled; initial SOC below target so gap > 0."""
     config = BatteryConfig(
         capacity_kwh=5.0,
@@ -507,6 +511,12 @@ def grid_charge_battery() -> Battery:
     )
     # target_kwh = 0.9 * 5 = 4.5; initial = 2.0 → gap = 2.5 kWh
     return Battery(config, initial_soc_kwh=2.0)
+
+
+@pytest.fixture
+def grid_charge_battery() -> Battery:
+    """A fresh _grid_charging_battery() for each test."""
+    return _grid_charging_battery()
 
 
 class _RecordingStrategy(DispatchStrategy):
@@ -1002,14 +1012,14 @@ SPREAD_FREE_TARIFFS = [
         TariffConfig.economy_7(off_peak_rate=0.25, peak_rate=0.25),
         id="two_periods_one_rate",
     ),
-    # The float mean of these six rates is 0.10000000000000002, above the shared rate.
+    # Six periods at one rate: no minute's rate is below the peak rate, so none is cheap.
     pytest.param(
         TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
         id="six_periods_one_rate",
     ),
 ]
 
-# Mean rate 0.25, so the 0.30 day rate sits above it.
+# Its duration-weighted mean rate is 0.2583, so the 0.30 day rate sits above it.
 THREE_TIER_TARIFF = TariffConfig(
     periods=(
         TariffPeriod(start_time="00:00", end_time="07:00", rate_per_kwh=0.10, name="Night"),
@@ -1118,8 +1128,8 @@ class TestTouDispatchOnSpreadFreeTariff:
 
 
 class TestTouDispatchOnTieredTariff:
-    """Tariffs with a rate spread keep the mean-rate classification: TOU holds the
-    battery in cheap windows and discharges elsewhere.
+    """Tariffs with a rate spread keep the duration-weighted mean-rate classification:
+    TOU holds the battery in cheap windows and discharges elsewhere.
     """
 
     @pytest.mark.parametrize(
@@ -1154,6 +1164,77 @@ class TestTouDispatchOnTieredTariff:
     ) -> None:
         result = _tou_shortfall_step(tariff, pd.Timestamp(f"2024-01-01 {time_of_day}"))
         assert result.battery_discharge > 0.0
+
+
+_Step = Callable[[float, float, Battery, pd.Timestamp, TariffConfig], EnergyFlowResult]
+
+
+def _step_by_the_tou_function(
+    generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
+) -> EnergyFlowResult:
+    return simulate_timestep_tou(generation_kw, demand_kw, battery, minute, tariff)
+
+
+def _step_by_the_tou_strategy(
+    generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
+) -> EnergyFlowResult:
+    strategy = TOUOptimizedStrategy(peak_hours=[(16, 19)])
+    return simulate_timestep(
+        generation_kw, demand_kw, battery, 1.0, minute.to_pydatetime(), strategy, tariff=tariff
+    )
+
+
+def _winter_day_of_flows(step: _Step, tariff: TariffConfig) -> list[dict[str, float]]:
+    """Each minute's flows as a fresh _grid_charging_battery() steps through MINUTES_OF_A_WINTER_DAY, each hour's generation and demand held for its 60 minutes."""
+    battery = _grid_charging_battery()
+    return [
+        dataclasses.asdict(step(float(generation), float(demand), battery, minute, tariff))
+        for minute, generation, demand in zip(
+            MINUTES_OF_A_WINTER_DAY,
+            np.repeat(HOURLY_GENERATION_KW, 60),
+            np.repeat(HOURLY_DEMAND_KW, 60),
+            strict=True,
+        )
+    ]
+
+
+class TestDispatchFollowsTheTariffSchedule:
+    """Each minute is cheap when the tariff's is_cheap_at says so, so dispatch depends on the schedule, not its period list."""
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy_7"),
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS, id="night_day_peak_day"),
+        ],
+    )
+    def test_the_grid_charge_context_is_cheap_at_each_minute_the_tariff_is(
+        self, tariff: TariffConfig, grid_charge_battery: Battery
+    ) -> None:
+        stub = _RecordingStrategy()
+        cheap: dict[pd.Timestamp, bool] = {}
+        for minute in MINUTES_OF_A_WINTER_DAY:
+            simulate_timestep(
+                0.0, 0.0, grid_charge_battery, 1.0, minute.to_pydatetime(), stub, tariff=tariff
+            )
+            assert stub.received_ctx is not None
+            cheap[minute] = stub.received_ctx.is_cheap_period
+
+        assert cheap == {minute: tariff.is_cheap_at(minute) for minute in MINUTES_OF_A_WINTER_DAY}
+
+    @pytest.mark.parametrize(
+        "step",
+        [
+            pytest.param(_step_by_the_tou_function, id="simulate_timestep_tou"),
+            pytest.param(_step_by_the_tou_strategy, id="tou_optimized_strategy"),
+        ],
+    )
+    def test_one_schedule_as_four_or_five_periods_gives_the_same_flows(self, step: _Step) -> None:
+        four = _winter_day_of_flows(step, NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS)
+        five = _winter_day_of_flows(step, NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS)
+
+        assert any(flows["grid_charge"] > 0 for flows in five)
+        assert four == five
 
 
 # ---------------------------------------------------------------------------

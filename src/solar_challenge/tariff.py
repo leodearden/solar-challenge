@@ -5,11 +5,53 @@ Supports time-of-use (TOU) tariffs with multiple rate periods,
 flat-rate tariffs, and preset UK tariff configurations.
 """
 
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 from functools import cached_property
 
 import pandas as pd
+
+from solar_challenge.errors import ConfigurationError
+
+_MINUTES_PER_DAY = 24 * 60
+
+
+def _minute_of_day(clock: time | datetime) -> int:
+    """The minute of the day, 0 to 1439, that *clock* reads on its own wall clock."""
+    return clock.hour * 60 + clock.minute
+
+
+def _clock_text(minute: int) -> str:
+    """Minute *minute* of the day written as HH:MM, the day's end (1440) as 00:00."""
+    hours, minutes = divmod(minute % _MINUTES_PER_DAY, 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def _runs_of_consecutive_minutes(minutes: set[int]) -> list[tuple[int, int]]:
+    """The [start, end) of each run of consecutive minutes, in order of start; a run across midnight is one, its end below its start."""
+    starts = sorted(minute for minute in minutes if minute - 1 not in minutes)
+    ends = sorted(minute + 1 for minute in minutes if minute + 1 not in minutes)
+    runs = list(zip(starts, ends, strict=True))
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == _MINUTES_PER_DAY:
+        return [*runs[1:-1], (runs[-1][0], runs[0][1])]
+    return runs
+
+
+def describe_minutes_of_day(minutes: Iterable[int]) -> str:
+    """Minutes of the day, 0 to 1439, as HH:MM-HH:MM clock ranges, each ending at the minute after its last, a run across midnight as one range, in order of their start."""
+    present = set(minutes)
+    outside = sorted(minute for minute in present if not 0 <= minute < _MINUTES_PER_DAY)
+    if outside:
+        raise ValueError(
+            f"A minute of the day is 0 to {_MINUTES_PER_DAY - 1}, "
+            f"got {', '.join(str(minute) for minute in outside)}"
+        )
+    return ", ".join(
+        f"{_clock_text(start)}-{_clock_text(end)}"
+        for start, end in _runs_of_consecutive_minutes(present)
+    )
 
 
 @dataclass(frozen=True)
@@ -17,9 +59,10 @@ class TariffPeriod:
     """A time period with a specific electricity rate.
 
     Attributes:
-        start_time: Period start time (HH:MM format or time object)
-        end_time: Period end time (HH:MM format or time object)
-        rate_per_kwh: Electricity rate in £/kWh
+        start_time: Period start, an "HH:MM" string only: the local wall-clock minute
+        end_time: Period end, an "HH:MM" string only; an end at or before the start
+            wraps midnight, and an end equal to the start is the whole day
+        rate_per_kwh: Electricity rate in £/kWh, at least 0 and finite
         name: Descriptive name for the period (e.g., "Off-peak", "Peak")
     """
 
@@ -29,16 +72,14 @@ class TariffPeriod:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate tariff period parameters and parse the times once."""
-        if self.rate_per_kwh < 0:
-            raise ValueError(f"Rate cannot be negative, got {self.rate_per_kwh} £/kWh")
-
-        # Validate time format (this also fills the parsed-time caches)
-        try:
-            self.get_start_time()
-            self.get_end_time()
-        except ValueError as e:
-            raise ValueError(f"Invalid time format: {e}")
+        """Refuse a rate that is negative or not finite, and parse the times once, refusing any that is not HH:MM."""
+        if not 0 <= self.rate_per_kwh < math.inf:
+            raise ConfigurationError(
+                "Tariff period rate_per_kwh must be finite and not negative, "
+                f"got {self.rate_per_kwh} £/kWh"
+            )
+        self.get_start_time()
+        self.get_end_time()
 
     @staticmethod
     def _parse_time(time_str: str) -> time:
@@ -51,7 +92,7 @@ class TariffPeriod:
             time object
 
         Raises:
-            ValueError: If time format is invalid
+            ConfigurationError: If time format is invalid, naming the string and why
         """
         try:
             parts = time_str.split(":")
@@ -65,11 +106,11 @@ class TariffPeriod:
                 raise ValueError(f"Minute must be 0-59, got {minute}")
             return time(hour=hour, minute=minute)
         except (ValueError, AttributeError) as e:
-            raise ValueError(f"Invalid time format '{time_str}': {e}")
+            raise ConfigurationError(f"Invalid time format '{time_str}': {e}") from e
 
-    # cached_property, not dataclass fields: the parsed times go in the instance
-    # __dict__ and stay out of fields(). web/stored_runs.py's JSON round-trip walks
-    # fields() and cannot encode a datetime.time.
+    # cached_property, not dataclass fields: the parsed times and the minutes they
+    # bound go in the instance __dict__ and stay out of fields(). web/stored_runs.py's
+    # JSON round-trip walks fields() and cannot encode a datetime.time or a frozenset.
     @cached_property
     def _parsed_start(self) -> time:
         return self._parse_time(self.start_time)
@@ -77,6 +118,10 @@ class TariffPeriod:
     @cached_property
     def _parsed_end(self) -> time:
         return self._parse_time(self.end_time)
+
+    @cached_property
+    def _minutes_covered(self) -> frozenset[int]:
+        return frozenset(_minutes_covered_by(self))
 
     def get_start_time(self) -> time:
         """Get start time as time object."""
@@ -87,25 +132,49 @@ class TariffPeriod:
         return self._parsed_end
 
     def matches_time(self, timestamp: pd.Timestamp) -> bool:
-        """Check if a timestamp falls within this period.
+        """Whether the timestamp's wall-clock minute is one this period covers."""
+        return _minute_of_day(timestamp) in self._minutes_covered
 
-        Args:
-            timestamp: Timestamp to check
 
-        Returns:
-            True if timestamp falls within this period
-        """
-        time_of_day = timestamp.time()
-        start = self.get_start_time()
-        end = self.get_end_time()
+def _minutes_covered_by(period: TariffPeriod) -> list[int]:
+    """The minutes of the day *period* covers: from its start up to its end, across midnight when the end comes first, all day when they are equal."""
+    start = _minute_of_day(period.get_start_time())
+    length = (_minute_of_day(period.get_end_time()) - start) % _MINUTES_PER_DAY or _MINUTES_PER_DAY
+    return [(start + offset) % _MINUTES_PER_DAY for offset in range(length)]
 
-        # Handle periods that cross midnight
-        if start < end:
-            # Normal period (e.g., 07:00-23:00)
-            return start <= time_of_day < end  # type: ignore[no-any-return]
-        else:
-            # Crosses midnight (e.g., 23:00-07:00)
-            return time_of_day >= start or time_of_day < end  # type: ignore[no-any-return]
+
+def _periods_covering_each_minute(periods: Sequence[TariffPeriod]) -> list[tuple[int, ...]]:
+    """For each minute of the day, the indices in *periods* of the periods that cover it."""
+    covering: list[list[int]] = [[] for _ in range(_MINUTES_PER_DAY)]
+    for index, period in enumerate(periods):
+        for minute in _minutes_covered_by(period):
+            covering[minute].append(index)
+    return [tuple(indices) for indices in covering]
+
+
+def _period_label(period: TariffPeriod) -> str:
+    """A period as a tiling refusal names it: its quoted name, when it has one, then the clock range it covers."""
+    clock_range = describe_minutes_of_day(_minutes_covered_by(period))
+    return f"'{period.name}' {clock_range}" if period.name else clock_range
+
+
+def _tiling_refusal(
+    tariff_name: str, periods: Sequence[TariffPeriod], covering: Sequence[tuple[int, ...]]
+) -> str:
+    """The message refusing *periods*, given the periods *covering* each minute: the minutes none covers, then each group of minutes the same periods cover, naming those periods."""
+    gap = [minute for minute, indices in enumerate(covering) if not indices]
+    overlaps: dict[tuple[int, ...], list[int]] = {}
+    for minute, indices in enumerate(covering):
+        if len(indices) > 1:
+            overlaps.setdefault(indices, []).append(minute)
+    findings = [f"no period covers {describe_minutes_of_day(gap)}"] if gap else []
+    findings += [
+        f"{describe_minutes_of_day(minutes)} is covered by "
+        + ", ".join(_period_label(periods[index]) for index in indices)
+        for indices, minutes in overlaps.items()
+    ]
+    subject = f"The periods of tariff '{tariff_name}'" if tariff_name else "Tariff periods"
+    return f"{subject} must cover each minute of the day exactly once: {'; '.join(findings)}"
 
 
 @dataclass(frozen=True)
@@ -113,7 +182,9 @@ class TariffConfig:
     """Configuration for an electricity tariff.
 
     Supports both flat-rate and time-of-use (TOU) tariffs with
-    multiple rate periods.
+    multiple rate periods. Its periods cover each minute of the local day exactly
+    once, and construction refuses a gap or an overlap (invariant 2,
+    tests/unit/test_tariff_tiling.py).
 
     Attributes:
         periods: Tuple of TariffPeriod objects defining rate schedule
@@ -124,17 +195,21 @@ class TariffConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate tariff configuration."""
+        """Refuse a tariff without periods, then build the minute table, so construction, not the first rate read, refuses a gap or an overlap."""
         if not self.periods:
-            raise ValueError("Tariff must have at least one period")
-
-        # Validate all periods have valid times
-        for period in self.periods:
-            period.get_start_time()
-            period.get_end_time()
+            raise ConfigurationError("Tariff must have at least one period")
+        _ = self._rate_by_minute
 
     # Derived from periods; cached_property keeps them out of fields(), as for
     # TariffPeriod's parsed times.
+    @cached_property
+    def _rate_by_minute(self) -> tuple[float, ...]:
+        """The rate in £/kWh at each minute of the local day, refusing periods that leave a minute uncovered or cover one twice."""
+        covering = _periods_covering_each_minute(self.periods)
+        if any(len(indices) != 1 for indices in covering):
+            raise ConfigurationError(_tiling_refusal(self.name, self.periods, covering))
+        return tuple(self.periods[index].rate_per_kwh for (index,) in covering)
+
     @cached_property
     def peak_rate(self) -> float:
         """Highest period rate in £/kWh."""
@@ -146,42 +221,37 @@ class TariffConfig:
         rates = [period.rate_per_kwh for period in self.periods]
         return sum(rates) / len(rates)
 
+    @cached_property
+    def cheap_minutes_of_day(self) -> frozenset[int]:
+        """The minutes of the local day, 0 to 1439, whose rate is below peak_rate and at or below the duration-weighted mean rate; a tariff whose minutes share one rate has none."""
+        weighted_mean_rate = math.fsum(self._rate_by_minute) / _MINUTES_PER_DAY
+        return frozenset(
+            minute
+            for minute, rate in enumerate(self._rate_by_minute)
+            if rate < self.peak_rate and rate <= weighted_mean_rate
+        )
+
     def get_rate(self, timestamp: pd.Timestamp) -> float:
-        """Get the electricity rate for a specific timestamp.
+        """Get the electricity rate at the timestamp's wall-clock minute, from the minute table built at construction.
 
         Args:
             timestamp: Timestamp to get rate for
 
         Returns:
             Rate in £/kWh
-
-        Raises:
-            ValueError: If no period matches the timestamp
         """
-        for period in self.periods:
-            if period.matches_time(timestamp):
-                return period.rate_per_kwh
+        return self._rate_by_minute[_minute_of_day(timestamp)]
 
-        # If no period matches, raise error — likely a gap in user-defined periods.
-        # Hint: to guarantee full-24 h coverage (including 23:59), end your last
-        # period with start_time=="00:00" and end_time=="00:00" so it midnight-
-        # crosses and matches every time-of-day.
-        raise ValueError(
-            f"No tariff period matches timestamp {timestamp}. "
-            "Tariff periods may have gaps in coverage. "
-            "For full-day coverage (including 23:59) use a midnight-crossing "
-            'period: TariffPeriod(start_time="00:00", end_time="00:00", ...).'
-        )
+    def is_cheap_at(self, timestamp: datetime) -> bool:
+        """Whether the timestamp's wall-clock minute is one of cheap_minutes_of_day."""
+        return _minute_of_day(timestamp) in self.cheap_minutes_of_day
 
     @classmethod
     def flat_rate(cls, rate_per_kwh: float, name: str = "") -> "TariffConfig":
         """Create a flat-rate tariff (single rate all day).
 
-        Uses a midnight-crossing period with start_time=="00:00" and
-        end_time=="00:00".  When start==end, TariffPeriod.matches_time routes
-        to the midnight-crossing branch (``t >= start or t < end``), which
-        evaluates to True for every time-of-day including 23:59:00 — giving
-        exact, gap-free 24-hour coverage.
+        Its one period runs from 00:00 to 00:00: a period whose end equals its
+        start covers the whole day.
 
         Args:
             rate_per_kwh: Electricity rate in £/kWh

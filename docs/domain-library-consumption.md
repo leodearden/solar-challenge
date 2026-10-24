@@ -662,6 +662,54 @@ that catch `ValueError`, and pass at least one peak period, change only code
 that builds or reads `config.DispatchStrategyConfig`, which builds or reads its
 strategy's variant instead.
 
+**Unreleased on main** (task 838): `TariffConfig` refuses input the 0.5.0 tag
+accepts: periods that leave a minute of the local day uncovered, or cover one
+twice. It raises `ConfigurationError`, a `ValueError`, naming each gap and each
+overlap as clock ranges, a range across midnight as one (e.g. `23:00-07:00`),
+and each overlap's periods by name and times, e.g. `Tariff periods must cover
+each minute of the day exactly once: 06:00-12:00 is covered by 'Off-peak'
+00:00-12:00, 'Day' 06:00-00:00`. The tag builds such a tariff, then its
+`get_rate` raises `ValueError` ("No tariff period matches timestamp") at the
+first uncovered minute, part-way through a simulation, and bills an overlapped
+minute at the first listed period's rate; `get_rate` now raises for no minute.
+`solar-challenge validate config` reports such a custom tariff as an ERROR row
+where the tag reports it valid, and a stored run or scenario file holding one
+no longer loads. The platform's `integrations/tariff_adapter.to_solar_challenge`
+now refuses a `Tariff` row whose periods do not tile at conversion, not at the
+first uncovered half-hour. `TariffPeriod` refuses a NaN or infinite
+`rate_per_kwh`, naming it, which the tag accepts: `Tariff period rate_per_kwh
+must be finite and not negative, got nan £/kWh`. Its other refusals, of a
+negative rate and of a time that is not an `HH:MM` string (a `datetime.time`
+included), and `TariffConfig`'s refusal of no periods now raise
+`ConfigurationError` where the tag raises a plain `ValueError`. A negative rate's
+message is the one above, where the tag's is `Rate cannot be negative, got -0.1
+£/kWh`, and a time's gives its prefix once, `Invalid time format '9': Expected
+HH:MM format, got '9'`, where the tag's begins `Invalid time format: Invalid time
+format '9'`. `validate config` reports a `.nan` or `.inf` rate as an ERROR row.
+Consumers that catch `ValueError`, whose tariffs tile and whose rates are finite
+and 0 or more, need no change when they re-pin.
+
+**Unreleased on main** (task 838): `TariffConfig` gains two read-only members,
+`cheap_minutes_of_day`, the frozenset of minutes of the local day (0 to 1439)
+whose rate is below `peak_rate` and at or below the tariff's duration-weighted
+mean rate, the mean of its 1,440 per-minute rates, and `is_cheap_at(timestamp)`,
+whether the wall-clock minute of `timestamp` is one of them; a tariff whose
+minutes share one rate has none. The 0.5.0 tag has neither.
+`simulate_timestep_tou`, and the `GridChargeContext` that `simulate_timestep`
+builds from a tariff for a grid-charging battery (its `is_cheap_period`),
+classify each minute with `is_cheap_at`. The tag compares the minute's rate
+with `mean_period_rate`, which counts each period once whatever its length, so
+one schedule written as different period lists could dispatch differently.
+Dispatch changes only on tariffs with three or more distinct rates: night 0.10
+(00:00-07:00), day 0.20 (07:00-16:00), peak 0.35 (16:00-19:00) and day 0.20
+(19:00-00:00) as four periods holds the battery and grid-charges at the 0.20 day
+rate on the tag (`mean_period_rate` 0.2125) and now does not (duration-weighted
+mean 0.1896), as the same schedule with the night split at 03:00 already did.
+Every two-rate tariff (Economy 7, Economy 10) and every flat tariff dispatches
+as on the tag, and `mean_period_rate` is unchanged. Consumers on tariffs with
+three or more distinct rates re-baseline the figures built on them when they
+re-pin; other consumers need no change.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
