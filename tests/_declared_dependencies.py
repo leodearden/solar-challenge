@@ -51,6 +51,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
+from itertools import chain
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,7 @@ from tests._pyproject import core_requirements, extra_requirements
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PYTEST_PLUGINS = "pytest_plugins"
+_NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
 WEB_SUBPACKAGE = f"{_PACKAGE}.web"
@@ -297,18 +299,19 @@ def _nodes_outside_nested_statements(node: ast.AST) -> Iterator[ast.AST]:
             yield from _nodes_outside_nested_statements(child)
 
 
-def _assignment_parts(statement: ast.stmt) -> tuple[list[ast.expr], ast.expr | None]:
-    """Return (targets, value) for a *statement* that assigns, annotates or augments: the
-    expressions it writes to, and the value it assigns or adds, None for an annotation with no
+def _assignment_parts(statement: ast.stmt) -> tuple[ast.expr | None, ast.expr | None]:
+    """Return (target, value) for a *statement* that assigns to one target, annotates or augments:
+    the expression it writes to, and the value it assigns or adds, None for an annotation with no
     value.
 
-    Any other statement has no targets and no value.
+    Any other statement has no target and no value, a chained assignment among them: its targets
+    alias one another, so none is the sole one.
     """
-    if isinstance(statement, ast.Assign):
-        return statement.targets, statement.value
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+        return statement.targets[0], statement.value
     if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
-        return [statement.target], statement.value
-    return [], None
+        return statement.target, statement.value
+    return None, None
 
 
 def _binds_pytest_plugins(node: ast.AST) -> bool:
@@ -318,38 +321,76 @@ def _binds_pytest_plugins(node: ast.AST) -> bool:
 
 def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, ast.expr]]:
     """Yield (statement, value) for each statement of *tree*'s module scope, as
-    _module_scope_statements finds them, that assigns pytest_plugins, annotated or not, or
-    augments it. *value* is what the statement assigns or adds.
+    _module_scope_statements finds them, that assigns pytest_plugins as its one target, annotated
+    or not, or augments it. *value* is what the statement assigns or adds.
 
     pytest reads pytest_plugins as an attribute of the module once the module has run, so each
     such statement can give it entries. An annotation with no value assigns nothing.
     """
     for statement in _module_scope_statements(tree.body):
-        targets, value = _assignment_parts(statement)
-        if value is not None and any(_binds_pytest_plugins(target) for target in targets):
+        target, value = _assignment_parts(statement)
+        if value is not None and target is not None and _binds_pytest_plugins(target):
             yield statement, value
 
 
-def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[ast.stmt]:
-    """Yield each statement of *tree* that can bind pytest_plugins in a form
-    _pytest_plugins_assignments does not read.
+def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* is the name pytest_plugins in a position that does not bind it: a read
+    or a deletion.
 
-    One is a statement of the module's scope, as _module_scope_statements finds them, that holds
-    the name as a target other than the bare one of an assignment, an annotation or an
-    augmentation: one of a tuple, a for, a with or a walrus. The other is a global declaration of
-    the name in any scope, since a function or class that declares it global can rebind the
-    attribute of the module.
+    A read is how a method call such as append, a subscript or an alias changes the list the name
+    holds.
+    """
+    return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
+
+
+def _subscripts_namespace_call_with_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* subscripts a call of globals(), locals() or vars() with the str
+    pytest_plugins, in any position, as `globals()["pytest_plugins"]` does.
+
+    Whatever the call is given counts, so vars(module) does. Only that subscript is read: a method
+    call on the namespace, such as update or setdefault, is not.
+    """
+    return (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in _NAMESPACE_FUNCTIONS
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == _PYTEST_PLUGINS
+    )
+
+
+def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield each statement of *tree*'s module scope, as _module_scope_statements finds them, that
+    binds pytest_plugins in a form _pytest_plugins_assignments does not read: it holds the name as
+    a target other than the sole target of an assignment, an annotation or an augmentation, such
+    as one of a tuple, a for, a with or a walrus, or beside another target of a chained assignment.
     """
     for statement in _module_scope_statements(tree.body):
-        read_targets, _ = _assignment_parts(statement)
+        read_target, _ = _assignment_parts(statement)
         if any(
-            _binds_pytest_plugins(node) and node not in read_targets
+            _binds_pytest_plugins(node) and node is not read_target
             for node in _nodes_outside_nested_statements(statement)
         ):
             yield statement
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Global) and _PYTEST_PLUGINS in node.names:
-            yield node
+
+
+def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield each statement of *tree*, in any scope, that can change pytest_plugins in a form
+    _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
+    method call such as append, a subscript or an alias can change the list; subscripts globals(),
+    locals() or vars() with the name; or declares it global, since a function or class that does
+    can rebind the attribute of the module.
+
+    A read in a function or class body counts even where the name is a local there, since scopes
+    are not resolved.
+    """
+    for statement in (node for node in ast.walk(tree) if isinstance(node, ast.stmt)):
+        if (isinstance(statement, ast.Global) and _PYTEST_PLUGINS in statement.names) or any(
+            _reads_or_deletes_pytest_plugins(node) or _subscripts_namespace_call_with_pytest_plugins(node)
+            for node in _nodes_outside_nested_statements(statement)
+        ):
+            yield statement
 
 
 def _pytest_plugins_failure(source: Path, statement: ast.stmt, clause: str) -> AssertionError:
@@ -361,8 +402,9 @@ def _pytest_plugins_failure(source: Path, statement: ast.stmt, clause: str) -> A
     quoted = ast.unparse(statement).partition("\n")[0]
     return AssertionError(
         f"{source}:{statement.lineno} has `{quoted}`, {clause}; "
-        "write pytest_plugins as a literal list or tuple of module names, or as a "
-        "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+        "assign pytest_plugins, in the module's own scope, a literal list or tuple of module names "
+        "or a comma-separated string, and add to it only with += and such a literal, "
+        "for the declared-dependency contract to follow the plugins it names"
     )
 
 
@@ -377,16 +419,19 @@ def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Impor
     the module it spells. The entries are read without running *source*, so each value must be a
     literal: a str, whose entries are its pieces between commas, or a list or tuple of str. None
     names no plugin. Any other value fails, naming *source*, the line and the statement, and so
-    does a binding that _unreadable_pytest_plugins_bindings finds.
+    does a statement that _unreadable_pytest_plugins_bindings or _unreadable_pytest_plugins_uses
+    finds.
 
     Each statement's value is read on its own, not added to what the module held before it. That
     is why a str's empty pieces are dropped, such as the one before the comma of `+= ",x"`, and why
     a str added to a list reads as the module it spells, not as the characters list.extend adds.
     """
-    unreadable = next(_unreadable_pytest_plugins_bindings(tree), None)
+    unreadable = next(
+        chain(_unreadable_pytest_plugins_bindings(tree), _unreadable_pytest_plugins_uses(tree)), None
+    )
     if unreadable is not None:
         raise _pytest_plugins_failure(
-            source, unreadable, "which can bind pytest_plugins in a form the contract cannot read"
+            source, unreadable, "which can bind or change pytest_plugins in a form the contract cannot read"
         )
     for statement, value in _pytest_plugins_assignments(tree):
         try:
