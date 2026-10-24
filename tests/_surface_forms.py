@@ -55,8 +55,10 @@ def surface_form(obj: object) -> str:
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name; a
     functools.partial is a routine on every admitted minor, as inspect counts one from
-    3.14. Any other class's or routine's is its signature, a class's being its
-    constructor's without self and a partial's the one it leaves of the callable it wraps.
+    3.14, and any other descriptor whose type defines __get__ and __delete__ but no
+    __set__ is no routine on any, as inspect counts none from 3.13. Any other class's
+    or routine's is its signature, a class's being its constructor's without self and
+    a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -78,7 +80,11 @@ def surface_form(obj: object) -> str:
     carries it. That applies on the routine or class itself, on the link of a routine's
     chain where inspect stops, and on the constructor inspect reads for a class, its
     metaclass __call__ included. A routine that wraps an Enum, whose signature inspect
-    reads differently on each minor, raises TypeError naming it and that Enum.
+    reads differently on each minor, raises TypeError naming it and that Enum. A routine
+    that wraps a descriptor whose type defines __get__ and __delete__ but no __set__,
+    which inspect reads as a builtin before 3.13 and as a data descriptor from 3.13,
+    raises TypeError naming it, that descriptor and its type, unless the descriptor or
+    one of the routine's links carries a signature.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
@@ -584,8 +590,18 @@ def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]
 
 
 def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
-    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
-    return inspect.isroutine(obj) or isinstance(obj, functools.partial)
+    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one, and before 3.13 it counts each descriptor _is_get_delete_descriptor finds."""
+    return isinstance(obj, functools.partial) or (
+        inspect.isroutine(obj) and not _is_get_delete_descriptor(obj)
+    )
+
+
+def _is_get_delete_descriptor(obj: object) -> bool:
+    """Whether *obj*'s type defines __get__ and __delete__ but no __set__: a data descriptor, as inspect.isdatadescriptor reads one on every admitted minor, that inspect before Python 3.13 also counts as a method descriptor."""
+    kind = type(obj)
+    return (
+        inspect.isdatadescriptor(obj) and hasattr(kind, "__get__") and not hasattr(kind, "__set__")
+    )
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
@@ -595,6 +611,7 @@ def _signature(obj: Callable[..., object]) -> inspect.Signature:
         raise _unreadable_routine_error(_label(obj), obj, link)
     end = _chain_end(obj, stop=_has_non_none_signature)
     _refuse_wrapped_enum(obj, end)
+    _refuse_wrapped_get_delete_descriptor(obj, end)
     _refuse_minor_dependent_signature(obj, end)
     if inspect.isclass(end) and not _carries_inspect_signature(end):
         _refuse_minor_dependent_constructor(end)
@@ -722,6 +739,23 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
             "inspect reads from EnumType.__call__ on Python 3.11, from Enum.__signature__ "
             "on 3.12 and 3.13, and from EnumType.__signature__ on 3.14: make the name "
             "private, or wrap a function defined with def"
+        )
+
+
+def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
+    """Raise TypeError naming *obj*, *end* and *end*'s type if *end*, the end of the chain inspect follows from *obj*, is a descriptor _is_get_delete_descriptor finds that carries no signature for inspect to read in its place.
+
+    Such a descriptor is no routine, so it never reaches here as *obj*; a routine that
+    wraps one does.
+    """
+    if _is_get_delete_descriptor(end) and not _has_non_none_signature(end):
+        raise TypeError(
+            f"{_label(obj)} wraps {_label(end)}, a {_label(type(end))}, whose type defines "
+            "__get__ and __delete__ but no __set__: inspect reads it as a method descriptor, "
+            "by a text signature only a routine defined in C gives, on Python 3.11 and 3.12, "
+            "and as a data descriptor, through its type's __call__, from 3.13: make the name "
+            "private, wrap a function defined with def, or set a __signature__ that is an "
+            "inspect.Signature on the routine or on what it wraps"
         )
 
 

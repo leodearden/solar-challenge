@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form, one per test.
 
-Wrapper and Ledger are defined at module level, where their qualified names carry no
-'<locals>'.
+Wrapper, Ledger, GetterDeleter and CallableGetterDeleter are defined at module level,
+where their qualified names carry no '<locals>'.
 """
 
 import collections.abc
@@ -43,7 +43,7 @@ from typing import (
 
 import pytest
 
-from tests._surface_forms import named_classes, surface_form
+from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
@@ -68,6 +68,21 @@ class Wrapper:
 
 class Ledger(dict):
     """A class that inherits its constructor from dict, which CPython defines in C."""
+
+
+class GetterDeleter:
+    """A descriptor whose type defines __get__ and __delete__ but no __set__."""
+
+    def __get__(self, instance: object, owner: type) -> int:
+        return 1
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class CallableGetterDeleter(GetterDeleter):
+    """A callable GetterDeleter."""
+
+    def __call__(self, rate: int) -> str: ...
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -1030,3 +1045,82 @@ def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
     assert surface_form(Preset(rate=0.15)) == "Preset"
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "name"),
+    [
+        pytest.param(GetterDeleter(), "GetterDeleter", id="getter-deleter"),
+        pytest.param(CallableGetterDeleter(), "CallableGetterDeleter", id="callable-getter-deleter"),
+    ],
+)
+def test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant_spelled_by_its_type_qualified_name(
+    descriptor: object, name: str
+) -> None:
+    class Meter:
+        reset = descriptor
+
+    assert surface_form(descriptor) == name
+    assert named_classes(descriptor) == {type(descriptor)}
+    assert member_forms(Meter) == {"reset": name}
+    assert named_classes(Meter) == {type(descriptor)}
+
+
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_raises_a_type_error_naming_it_that_descriptor_and_its_type() -> None:
+    called = CallableGetterDeleter()
+    uncalled = GetterDeleter()
+    partial = functools.partial(called)
+
+    @functools.wraps(called)
+    def calling(rate: int) -> str: ...
+
+    @functools.wraps(uncalled)
+    def reading(rate: int) -> str: ...
+
+    naming_the_partial_and_called = (
+        rf"{re.escape(repr(partial))}.*{re.escape(repr(called))}"
+        r".*\.CallableGetterDeleter\b.*\b__delete__\b"
+    )
+    naming_calling_and_called = (
+        rf"\.calling\b.*{re.escape(repr(called))}.*\.CallableGetterDeleter\b.*\b__delete__\b"
+    )
+    naming_reading_and_uncalled = (
+        rf"\.reading\b.*{re.escape(repr(uncalled))}.*\.GetterDeleter\b.*\b__delete__\b"
+    )
+    for routine, naming_it in (
+        (partial, naming_the_partial_and_called),
+        (calling, naming_calling_and_called),
+        (reading, naming_reading_and_uncalled),
+    ):
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(routine)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(routine)
+
+
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it() -> None:
+    class Settable(CallableGetterDeleter):
+        def __set__(self, instance: object, value: object) -> None: ...
+
+    class Getless:
+        def __delete__(self, instance: object) -> None: ...
+
+        def __call__(self, rate: int) -> str: ...
+
+    signed = CallableGetterDeleter()
+    signed.__signature__ = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    assert surface_form(functools.partial(Settable())) == "(rate: int) -> str"
+    assert surface_form(functools.partial(Getless())) == "(rate: int) -> str"
+    assert surface_form(functools.partial(signed)) == "(rate: int)"
+
+
+def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
+    class Deleting(functools.partial):
+        def __delete__(self, instance: object) -> None: ...
+
+    def settle(rate: int, share: float) -> str: ...
+
+    assert surface_form(Deleting(settle, 1)) == "(share: float) -> str"
