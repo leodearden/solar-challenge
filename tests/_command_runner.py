@@ -41,6 +41,8 @@ _PYTEST_SECTION_HEADER = re.compile(r"^=+ (?P<title>.+?) =+$", re.MULTILINE)
 
 _PYTEST_FAILURE_SECTION_TITLES = frozenset({"ERRORS", "FAILURES"})
 
+_FAILURE_SECTION_HEAD_CHARS = 20_000
+
 _DRAIN_AFTER_KILL_SECS = 5
 
 _MAX_KILL_SWEEPS = 10
@@ -108,14 +110,15 @@ def describe_pytest_outcome(outcome: Outcome) -> str:
     Those are the ERRORS and FAILURES sections of the pytest report in its stdout,
     which hold each failing test's traceback and captured output. pytest prints
     them before its warnings summary, so a long summary pushes them out of
-    stdout's tail. A stdout with neither, as when uv refused to start pytest or the
-    run passed, is described exactly as describe_outcome describes it.
+    stdout's tail. Each keeps at most its first _FAILURE_SECTION_HEAD_CHARS chars.
+    A stdout with neither, as when uv refused to start pytest or the run passed,
+    is described exactly as describe_outcome describes it.
     """
     return f"exit {outcome.returncode}\n{_failure_sections(outcome.stdout)}{_tails(outcome.stdout, outcome.stderr)}"
 
 
 def _failure_sections(stdout: str) -> str:
-    """Return each ERRORS and FAILURES section of the pytest report in *stdout*, in report order, each ending a line.
+    """Return the excerpt of each ERRORS and FAILURES section of the pytest report in *stdout*, in report order.
 
     A section runs from the line that opens it to the line that opens the next
     section, or to the end of *stdout*.
@@ -131,7 +134,18 @@ def _failure_sections(stdout: str) -> str:
 
 
 def _excerpt(section: str) -> str:
-    """Return *section* as a description quotes it: ending a line, so whatever follows starts a line of its own."""
+    """Return *section* as a description quotes it, ending a line, so whatever follows starts a line of its own.
+
+    A section longer than _FAILURE_SECTION_HEAD_CHARS keeps only that many of its
+    first chars, then a line saying it was cut there and how long it was. So a
+    section that holds hundreds of failures can neither crowd out the section
+    after it nor put megabytes into a lane's log.
+    """
+    if len(section) > _FAILURE_SECTION_HEAD_CHARS:
+        return (
+            f"{section[:_FAILURE_SECTION_HEAD_CHARS]}\n"
+            f"... this section is cut here, after the first {_FAILURE_SECTION_HEAD_CHARS} of its {len(section)} chars\n"
+        )
     return section if section.endswith("\n") else f"{section}\n"
 
 
