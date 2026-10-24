@@ -28,6 +28,7 @@ from typing import (
     Callable,
     List,
     Literal,
+    NamedTuple,
     NewType,
     NoReturn,
     Optional,
@@ -2175,6 +2176,14 @@ def test_an_enum_names_its_methods_classes_but_not_its_members() -> None:
         def label(self) -> str: ...
 
     assert named_classes(Period) == {str}
+
+
+def test_a_named_tuple_names_the_classes_its_constructor_annotates_its_fields_with_not_the_class_of_their_descriptors() -> None:
+    class Reading(NamedTuple):
+        site: pathlib.Path
+        preset: Optional[Preset] = None
+
+    assert named_classes(Reading) == {pathlib.Path, Preset}
 
 
 def test_a_constant_names_its_type() -> None:

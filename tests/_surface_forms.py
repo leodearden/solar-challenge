@@ -119,18 +119,21 @@ def member_forms(cls: type) -> dict[str, str]:
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
     attribute by annotating it alone or as a dataclass field, except those
-    surface_form(cls) already pins: the dataclass fields and init-only variables its
-    constructor's signature takes, and an Enum's members. The attributes the body
-    declares come first, in annotation order, then the other names it defines, in
-    class-body order. A ClassVar annotation declares a class variable, not an instance
-    attribute; a string annotation is read as named_classes reads one, so a name its
-    module does not bind raises NameError, a module inspect reads no source for raises
-    TypeError, and a module another of the same name has replaced in sys.modules raises
-    LookupError. A public member that no member rule spells and that is a routine whose
-    signature inspect cannot read, as surface_form describes one, raises TypeError naming
-    *cls*, the member and its kind; any other that is a functools.partial, which Python
-    3.14 binds to the instance as a method and earlier minors call without it, raises
-    TypeError naming *cls*, the member and that binding.
+    surface_form(cls) already pins: the dataclass fields, named tuple fields and
+    init-only variables its constructor's signature takes, and an Enum's members.
+    surface_form(cls) pins a named tuple field only while instances read it from the
+    tuple: while no class in *cls*'s MRO, *cls* included, binds a value to its name
+    before the class typing.NamedTuple or collections.namedtuple made. The attributes
+    the body declares come first, in annotation order, then the other names it defines,
+    in class-body order. A ClassVar annotation declares a class variable, not an
+    instance attribute; a string annotation is read as named_classes reads one, so a
+    name its module does not bind raises NameError, a module inspect reads no source for
+    raises TypeError, and a module another of the same name has replaced in sys.modules
+    raises LookupError. A public member that no member rule spells and that is a routine
+    whose signature inspect cannot read, as surface_form describes one, raises TypeError
+    naming *cls*, the member and its kind; any other that is a functools.partial, which
+    Python 3.14 binds to the instance as a method and earlier minors call without it,
+    raises TypeError naming *cls*, the member and that binding.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -1395,19 +1398,35 @@ def _has_source(module: types.ModuleType) -> bool:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field its constructor takes."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes, or each named tuple field it takes that instances read from the tuple."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _fields(cls).keys() & _constructor_parameters(cls)
+        return _dataclass_fields(cls).keys() & _constructor_parameters(cls)
+    if _is_named_tuple(cls):
+        return _fields_read_from_the_tuple(cls) & _constructor_parameters(cls)
     return set()
 
 
-def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
+def _dataclass_fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     """*cls*'s dataclass fields by name, inherited ones included; none if *cls* is no dataclass."""
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
+    """Whether *cls* is a named tuple, as dataclasses.asdict recognises one: a tuple whose class records its fields' names as _fields, as each class typing.NamedTuple or collections.namedtuple makes does, and each subclass of one."""
+    return issubclass(cls, tuple) and hasattr(cls, "_fields")
+
+
+def _fields_read_from_the_tuple(cls: type[typing.NamedTuple]) -> set[str]:
+    """The names of the named tuple *cls*'s fields that its instances read from the tuple: each that no class in *cls*'s MRO binds before the class typing.NamedTuple or collections.namedtuple made, which binds each field's descriptor beside _fields; a value bound earlier hides the field."""
+    return {
+        name
+        for name in cls._fields
+        if "_fields" in vars(next(_namespace_holders(cls.__mro__, name, "_fields")))
+    }
 
 
 def _constructor_parameters(cls: type) -> set[str]:
@@ -1419,7 +1438,7 @@ def _defaulted_fields(cls: type) -> set[str]:
     """The names of *cls*'s dataclass fields with a default, which instances read from the class, or a default factory, which the generated __init__ calls."""
     return {
         name
-        for name, field in _fields(cls).items()
+        for name, field in _dataclass_fields(cls).items()
         if field.default is not dataclasses.MISSING
         or field.default_factory is not dataclasses.MISSING
     }
@@ -1439,7 +1458,7 @@ def _init_only_variables(cls: type) -> set[str]:
         for name, annotation in inspect.get_annotations(cls).items()
         if not _is_class_var(annotation, cls)
     }
-    return (annotated & _constructor_parameters(cls)) - _fields(cls).keys()
+    return (annotated & _constructor_parameters(cls)) - _dataclass_fields(cls).keys()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1501,7 +1520,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    class_values = vars(cls).keys() - _fields(cls).keys()
+    class_values = vars(cls).keys() - _dataclass_fields(cls).keys()
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()

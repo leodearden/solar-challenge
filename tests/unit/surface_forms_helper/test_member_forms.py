@@ -2,6 +2,7 @@
 """The rules of tests/_surface_forms.py's member_forms, one per test."""
 
 import abc
+import collections
 import enum
 import functools
 import inspect
@@ -10,13 +11,14 @@ import re
 import types
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
-from typing import ClassVar, Optional
+from typing import ClassVar, NamedTuple, Optional
 
 import pytest
 
 from tests._surface_forms import (
     member_forms,
     named_classes,
+    surface_form,
     undeclared_attributes,
     unset_attributes,
 )
@@ -366,6 +368,76 @@ def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:
         def label(self) -> str: ...
 
     assert member_forms(Period) == {"label": "(self) -> str"}
+
+
+def test_a_named_tuple_field_is_not_a_member_since_its_class_form_pins_it_but_a_constant_or_method_its_body_defines_is() -> None:
+    class Reading(NamedTuple):
+        kwh: float
+        site: Optional[str] = None
+        UNITS = "kWh"
+
+        def doubled(self) -> float: ...
+
+    Plain = collections.namedtuple("Plain", ["kwh", "site"])
+
+    assert surface_form(Reading) == "(kwh: float, site: str | None = None)"
+    assert member_forms(Reading) == {"UNITS": "str", "doubled": "(self) -> float"}
+    assert surface_form(Plain) == "(kwh, site)"
+    assert member_forms(Plain) == {}
+
+
+def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_unless_the_subclass_constructor_takes_it_and_its_instances_read_it_from_the_tuple() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Retyped(Point):
+        y: int
+
+    class OnX(Point):
+        y: int
+
+        def __new__(cls, x: int) -> "OnX":
+            return super().__new__(cls, x, 0)
+
+    class Constant(Point):
+        y = 0
+
+    class RetypedConstant(Constant):
+        y: int
+
+    assert member_forms(Retyped) == {}
+    assert member_forms(OnX) == {"y": "attribute int"}
+    assert member_forms(RetypedConstant) == {"y": "attribute int"}
+
+
+def test_a_named_tuple_field_a_subclass_body_binds_to_a_value_is_a_member_since_its_instances_read_that_value_in_place_of_the_field() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Shadow(Point):
+        x = 5
+
+        def y(self) -> int: ...
+
+    assert Shadow(1, 2).x == 5
+    assert member_forms(Shadow) == {"x": "int", "y": "(self) -> int"}
+
+
+def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fields() -> None:
+    class Pair(tuple):
+        first: int
+
+    class Node:
+        _fields = ("value",)
+        value: int
+
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    assert member_forms(Pair) == {"first": "attribute int"}
+    assert member_forms(Node) == {"value": "attribute int"}
 
 
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
