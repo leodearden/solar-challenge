@@ -386,7 +386,7 @@ def test_a_named_tuple_field_is_not_a_member_since_its_class_form_pins_it_but_a_
     assert member_forms(Plain) == {}
 
 
-def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_only_if_the_subclass_constructor_does_not_take_it() -> None:
+def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_unless_the_subclass_constructor_takes_it_and_its_instances_read_it_from_the_tuple() -> None:
     class Point(NamedTuple):
         x: int
         y: int
@@ -400,8 +400,29 @@ def test_a_named_tuple_field_a_subclass_body_annotates_again_is_a_member_only_if
         def __new__(cls, x: int) -> "OnX":
             return super().__new__(cls, x, 0)
 
+    class Constant(Point):
+        y = 0
+
+    class RetypedConstant(Constant):
+        y: int
+
     assert member_forms(Retyped) == {}
     assert member_forms(OnX) == {"y": "attribute int"}
+    assert member_forms(RetypedConstant) == {"y": "attribute int"}
+
+
+def test_a_named_tuple_field_a_subclass_body_binds_to_a_value_is_a_member_since_its_instances_read_that_value_in_place_of_the_field() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Shadow(Point):
+        x = 5
+
+        def y(self) -> int: ...
+
+    assert Shadow(1, 2).x == 5
+    assert member_forms(Shadow) == {"x": "int", "y": "(self) -> int"}
 
 
 def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fields() -> None:
