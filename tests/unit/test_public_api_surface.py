@@ -115,7 +115,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "calculate_seg_revenue": "(export_kwh: float, tariff: SEGTariff) -> float",
     "SEG_PRESETS": "dict",
     # --- gridservices (gridservices.py) ---
-    "GridServicesRateBand": "dataclass[eq, frozen] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '') -> None",
+    "GridServicesRateBand": "dataclass[eq, frozen] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '', flat_gbp_per_kw_per_year: float = 0.0) -> None",
     "GridServicesRateBands": "dataclass[eq, frozen] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
     "resolve_grid_services_rate_band": "(band: str) -> GridServicesRateBand",
     "EventWindow": "dataclass[eq, frozen] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
