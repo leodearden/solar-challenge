@@ -7,8 +7,9 @@ them. It refuses a store at any other version, a legacy store with no version be
 0, with a SchemaVersionMismatch naming the file and both versions, and writes nothing to it.
 migrate_store brings an older store to SCHEMA_VERSION, whose tables are then a new store's,
 keeping its rows and naming each run that had no name after its kind (D27 invariant 7, part
-2). MIGRATIONS' versions run from 1 without a gap, and SCHEMA_VERSION is the last of them
-(contract C5).
+2). A row a step's new constraints refuse makes migrate_store raise MigrationRefused, naming
+the table, the row's id and the column, and leaves the store as it was. MIGRATIONS' versions
+run from 1 without a gap, and SCHEMA_VERSION is the last of them (contract C5).
 """
 
 import logging
@@ -21,11 +22,12 @@ from typing import Any
 
 import pytest
 
-from solar_challenge.web.database import CHAT_ROLES, Database, get_chat_history
+from solar_challenge.web.database import CHAT_ROLES, Database, RowRefused, get_chat_history
 from solar_challenge.web.presets import PRESET_TYPES, home_presets
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
+    MigrationRefused,
     MigrationReport,
     SchemaVersionMismatch,
     migrate_store,
@@ -322,6 +324,58 @@ def test_migrate_store_creates_a_new_store_at_the_schema_version_where_there_is_
     assert report == MigrationReport(path=path, from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION, applied_steps=())
     assert _user_version(path) == SCHEMA_VERSION
     assert schema_of(path) == schema_of(open_database(tmp_path / "fresh.db").path)
+
+
+ROWS_V1_REFUSES = [
+    pytest.param(
+        {"id": "legacy-sweep", "name": "Sweep Run", "type": "sweep"},
+        "type",
+        ["'sweep'", str(list(RUN_TYPES))],
+        id="a-sweep-run",
+    ),
+    pytest.param({"id": "legacy-untyped", "name": None, "type": None}, "name", [], id="a-nameless-run-of-no-type"),
+]
+
+
+@pytest.mark.parametrize(("row", "column", "named_in_the_reason"), ROWS_V1_REFUSES)
+def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it_and_changes_nothing(
+    legacy_store: Path, row: dict[str, object], column: str, named_in_the_reason: list[str]
+) -> None:
+    """Version 1 refuses a run type other than RUN_TYPES and a nameless run with no type to name it after."""
+    _insert_run(legacy_store, row)
+    schema_before, rows_before = schema_of(legacy_store), _runs_rows(legacy_store)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(legacy_store)
+
+    assert (refused.value.path, refused.value.step) == (legacy_store, MIGRATIONS[0])
+    message = str(refused.value)
+    for named in [str(legacy_store), "schema version 1", "stays at version 0", "runs", repr(row["id"]), column]:
+        assert named in message, (named, message)
+    for named in named_in_the_reason:
+        assert named in message, (named, message)
+    cause = refused.value.__cause__
+    assert isinstance(cause, RowRefused)
+    assert (cause.table, cause.row_id, cause.column) == ("runs", row["id"], column)
+    assert schema_of(legacy_store) == schema_before
+    assert _user_version(legacy_store) == 0
+    assert _runs_rows(legacy_store) == rows_before
+
+
+def test_a_migration_refused_is_not_a_value_error() -> None:
+    """No request causes it: the migration that meets the row refuses to run."""
+    assert not issubclass(MigrationRefused, ValueError)
+
+
+def test_migrate_store_keeps_a_named_run_of_no_type_with_no_type(legacy_store: Path, tmp_path: Path) -> None:
+    """Only a run with no name needs a kind to be named after, so a named run of no type migrates as it is."""
+    _insert_run(legacy_store, {"id": "legacy-untyped-named", "name": "Untyped Run", "type": None})
+
+    migrate_store(legacy_store)
+
+    record = RunStorage(open_database(legacy_store), tmp_path).run_record("legacy-untyped-named")
+    assert record is not None
+    assert (record.name, record.type) == ("Untyped Run", None)
 
 
 RUNS_COLUMN_VALUES = [
