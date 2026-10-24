@@ -1081,20 +1081,21 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but
         rf"{re.escape(repr(partial))}.*{re.escape(repr(called))}"
         r".*\.CallableGetterDeleter\b.*\b__delete__\b"
     )
-    with pytest.raises(TypeError, match=naming_the_partial_and_called):
-        surface_form(partial)
-    with pytest.raises(TypeError, match=naming_the_partial_and_called):
-        named_classes(partial)
-    with pytest.raises(
-        TypeError,
-        match=rf"\.calling\b.*{re.escape(repr(called))}.*\.CallableGetterDeleter\b.*\b__delete__\b",
+    naming_calling_and_called = (
+        rf"\.calling\b.*{re.escape(repr(called))}.*\.CallableGetterDeleter\b.*\b__delete__\b"
+    )
+    naming_reading_and_uncalled = (
+        rf"\.reading\b.*{re.escape(repr(uncalled))}.*\.GetterDeleter\b.*\b__delete__\b"
+    )
+    for routine, naming_it in (
+        (partial, naming_the_partial_and_called),
+        (calling, naming_calling_and_called),
+        (reading, naming_reading_and_uncalled),
     ):
-        surface_form(calling)
-    with pytest.raises(
-        TypeError,
-        match=rf"\.reading\b.*{re.escape(repr(uncalled))}.*\.GetterDeleter\b.*\b__delete__\b",
-    ):
-        surface_form(reading)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(routine)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(routine)
 
 
 def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it() -> None:
