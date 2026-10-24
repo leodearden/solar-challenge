@@ -24,14 +24,8 @@ from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
-from solar_challenge.web.stored_runs import (
-    RUN_KINDS,
-    RunKind,
-    StoredFleetRun,
-    StoredHomeRun,
-    StoredRun,
-    require_run_name,
-)
+from solar_challenge.web.run_names import require_run_name
+from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)

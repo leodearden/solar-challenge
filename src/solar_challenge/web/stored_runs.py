@@ -12,8 +12,7 @@ StoredHomeRun and StoredFleetRun are the runs as their directories store them: e
 writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
 behaviour table, one RunKind per RunType; a kind also decodes the summary and the
 HomeConfigs a run's record holds, and builds from the HomeConfigs the scenario its YAML
-export answers with. A kind also names the run created without a name, and is_run_name
-and require_run_name say which texts can name a run. Where a
+export answers with. A kind also names the run created without a name. Where a
 run's directory lives, and the runs table that records each run's type, are RunStorage's:
 nothing here reads SQL or Flask.
 """
@@ -24,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, Type, TypeGuard, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -32,6 +31,7 @@ from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.database import RunType
+from solar_challenge.web.run_names import is_run_name
 
 T = TypeVar("T")
 
@@ -216,22 +216,6 @@ def _fleet_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[s
         ValueError: The scenario grammar cannot express the homes, as fleet_scenario refuses them.
     """
     return fleet_scenario(home_configs, name=name)
-
-
-def is_run_name(name: object) -> TypeGuard[str]:
-    """Whether *name* can name a run: a str holding a character other than whitespace."""
-    return isinstance(name, str) and name.strip() != ""
-
-
-def require_run_name(name: object) -> str:
-    """*name*, unchanged, when it can name a run (is_run_name).
-
-    Raises:
-        ValueError: *name* cannot name a run; the message starts "name is <name!r>".
-    """
-    if is_run_name(name):
-        return name
-    raise ValueError(f"name is {name!r}, not a run's name: a run's name holds a character other than whitespace")
 
 
 def _home_run_default_name(home_configs: Sequence[HomeConfig]) -> str:
