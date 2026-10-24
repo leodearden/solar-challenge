@@ -740,7 +740,13 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
     }
 
 
-@pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
+@pytest.mark.parametrize(
+    ("routine", "kind"),
+    [
+        *UNREADABLE_ROUTINES,
+        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
+    ],
+)
 def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
     routine: object, kind: str
 ) -> None:
