@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Rule tests for tests/_surface_forms.py: test_<function>.py pins that public function's rules, one rule per test.
 
+named_classes has more rules than one module holds, so test_named_classes_<family>.py
+splits them by rule family, each module's docstring naming its family. A new rule test
+goes in the module of the function, or the family, whose rule its name states.
+
 Each test pins one rule, so an edit that lets one minor's own rendering through, drops
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
 of turning the frozen-surface lock red on one interpreter or blind to a real change.

@@ -9,8 +9,8 @@ some names' forms name, directly or through another such class. member_forms rea
 bodies, so undeclared_attributes and unset_attributes check the attributes a class
 declares against those its own __init__ and __post_init__ set on self.
 
-tests/unit/surface_forms_helper/test_<function>.py pins each function's rules, one rule
-per test.
+tests/unit/surface_forms_helper/ pins each function's rules, one rule per test; its
+__init__.py says which module holds which.
 
 Usage::
 
