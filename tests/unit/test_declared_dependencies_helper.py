@@ -1117,6 +1117,69 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="assigned-through-the-dict-of-the-module-by-getattr",
         ),
+        pytest.param(
+            ("namespace = globals()", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-variable-holding-globals",
+        ),
+        pytest.param(
+            (
+                "namespace: dict[str, object] = sys.modules[__name__].__dict__",
+                "namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            "namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-an-annotated-variable-holding-the-dict-of-the-module",
+        ),
+        pytest.param(
+            (
+                "namespace = vars(sys.modules[__name__])",
+                "alias = namespace",
+                "alias.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            ),
+            "alias.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-an-alias-of-a-variable-holding-a-namespace",
+        ),
+        pytest.param(
+            (
+                "namespace = globals()",
+                "def configure():",
+                "    namespace.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            ),
+            "namespace.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-in-a-function-through-a-module-variable-holding-globals",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    frame_globals = sys._getframe().f_globals",
+                "    frame_globals.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            "frame_globals.update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-a-function-variable-holding-the-globals-of-a-frame",
+        ),
+        pytest.param(
+            ("(namespace := globals()).update(pytest_plugins=['pytest_rerunfailures'])",),
+            "(namespace := globals()).update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-a-walrus-of-globals",
+        ),
+        pytest.param(
+            ("if (namespace := globals()): pass", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-variable-a-walrus-binds-to-globals",
+        ),
+        pytest.param(
+            ("namespace = globals()", "namespace |= {'pytest_plugins': ['pytest_rerunfailures']}"),
+            "namespace |= {'pytest_plugins': ['pytest_rerunfailures']}",
+            _UNREADABLE_USE,
+            id="updated-by-or-equals-through-a-variable-holding-globals",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -1132,14 +1195,16 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     sit beside another target of a chained assignment, which aliases the list; or be declared
     global in a function. It may also be read or deleted in any scope, function and class bodies
     included, as a method call such as append, a subscript, an alias or a del does, and a read may
-    sit in a case guard. Or a namespace may be subscripted with the name, or be given it in a call:
-    of a method of the namespace such as update, __setitem__, setdefault or get, which hands out
-    the list as surely as the others write it, or of a function given the namespace, such as
-    dict.update. A namespace is the dict that globals(), locals() or vars() returns, the __dict__
-    of an object such as sys.modules[__name__], also when reached through getattr, the f_globals or
-    f_locals of a frame, or the __globals__ of a function. Or an attribute pytest_plugins of an
-    object may be reached directly, through getattr, setattr or delattr, or by a from-import of
-    that name, in any position or scope.
+    sit in a case guard. Or a namespace may be subscripted with the name, |='d with it, or be given
+    it in a call: of a method of the namespace such as update, __setitem__, setdefault or get,
+    which hands out the list as surely as the others write it, or of a function given the
+    namespace, such as dict.update. A namespace is the dict that globals(), locals() or vars()
+    returns, the __dict__ of an object such as sys.modules[__name__], also when reached through
+    getattr, the f_globals or f_locals of a frame, or the __globals__ of a function. It may also be
+    held in a name that an assignment, an annotated assignment or a walrus binds to one, directly
+    or through an alias; such a name counts in that scope, and in a scope nested there that does
+    not rebind it. Or an attribute pytest_plugins of an object may be reached directly, through
+    getattr, setattr or delattr, or by a from-import of that name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1198,6 +1263,29 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ("import sys", "sys._getframe().f_builtins['pytest_plugins'] = ['pytest_rerunfailures']"),
             id="a-key-of-the-builtins-of-a-frame",
         ),
+        pytest.param(
+            ("namespace = dict(globals())", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            id="a-key-of-a-copy-of-a-namespace",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    namespace = globals()",
+                "def report():",
+                "    namespace = {}",
+                "    namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            id="a-name-holding-a-namespace-in-another-function",
+        ),
+        pytest.param(
+            (
+                "namespace = globals()",
+                "def report():",
+                "    namespace = {}",
+                "    namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            id="a-module-variable-holding-globals-rebound-in-a-function",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
@@ -1213,7 +1301,9 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_pl
     The same key of another dict, or given to another dict's method, another key of a namespace,
     or another key given to a namespace's method, a string that spells such a statement, and
     hasattr, which only tests for the attribute, require nothing and fail nothing. Nor does a key
-    of a frame's f_builtins, which pytest, reading an attribute of the module, never consults.
+    of a frame's f_builtins, which pytest, reading an attribute of the module, never consults, nor
+    one of a copy of a namespace, nor one of a name bound to a namespace only in another function
+    or rebound in this one.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
