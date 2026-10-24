@@ -4,6 +4,7 @@
 import dataclasses
 import math
 import pickle
+import warnings
 
 import pandas as pd
 import pytest
@@ -1303,4 +1304,92 @@ class TestWorkedCapacityAtEventsFigure:
         assert GridServicesEventsConfig(band=band).annual_income_gbp(
             fleet
         ) == pytest.approx(expected, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# An event window the simulated period never enters warns (PRD §9 P3, §5.4)
+# ---------------------------------------------------------------------------
+
+_JUNE_2024_HOURS = pd.date_range(
+    "2024-06-01 00:00", "2024-06-30 23:00", freq="h", tz="Europe/London"
+)
+
+_DEFAULT_WINDOW_FIELDS = (
+    "months=(11, 12, 1, 2)",
+    "weekdays=(0, 1, 2, 3, 4)",
+    "hours=(16, 17, 18)",
+)
+
+
+def _june_only_battery_fleet() -> FleetResults:
+    """A default 5 kWh battery home simulated over June 2024 only, at SOC 3.5 kWh discharging 0.5 kW."""
+    steps = len(_JUNE_2024_HOURS)
+    sim = _make_gs_sim_results([3.5] * steps, [0.5] * steps, _JUNE_2024_HOURS)
+    return _make_gs_fleet_results(
+        [(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))]
+    )
+
+
+def _user_warning_texts(record: list[warnings.WarningMessage]) -> list[str]:
+    return [str(w.message) for w in record if issubclass(w.category, UserWarning)]
+
+
+class TestUnobservedEventWindowWarns:
+    """compute_grid_services_at_events names each event window the fleet's simulated index never enters."""
+
+    def test_warns_once_naming_the_window_and_the_simulated_span(self) -> None:
+        fleet = _june_only_battery_fleet()
+
+        with pytest.warns(UserWarning) as record:
+            result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+
+        texts = _user_warning_texts(record.list)
+        assert len(texts) == 1, texts
+        for fragment in (
+            *_DEFAULT_WINDOW_FIELDS,
+            str(_JUNE_2024_HOURS[0]),
+            str(_JUNE_2024_HOURS[-1]),
+        ):
+            assert fragment in texts[0]
+        assert result.annual_income_gbp == 0.0
+
+    def test_a_fleet_without_a_battery_does_not_warn(self) -> None:
+        zeros = [0.0] * len(_JUNE_2024_HOURS)
+        sim = _make_gs_sim_results(zeros, zeros, _JUNE_2024_HOURS)
+        pv_only_fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(None))])
+
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            result = compute_grid_services_at_events(
+                pv_only_fleet, GridServicesEventsConfig()
+            )
+
+        assert not [
+            text for text in _user_warning_texts(record) if _DEFAULT_WINDOW_FIELDS[0] in text
+        ]
+        assert result.annual_income_gbp == 0.0
+
+    def test_only_the_unobserved_window_warns(self) -> None:
+        june_window = EventWindow(
+            months=(6,),
+            weekdays=(0, 1, 2, 3, 4),
+            hours=(16, 17, 18),
+            events_per_year=12,
+            event_hours=3.0,
+        )
+        cfg = GridServicesEventsConfig(
+            event_windows=(DEFAULT_EVENT_WINDOWS[0], june_window)
+        )
+        fleet = _june_only_battery_fleet()
+
+        with pytest.warns(UserWarning) as record:
+            result = compute_grid_services_at_events(fleet, cfg)
+
+        texts = _user_warning_texts(record.list)
+        assert len(texts) == 1, texts
+        assert _DEFAULT_WINDOW_FIELDS[0] in texts[0]
+        assert "months=(6,)" not in texts[0]
+        assert result.per_window_income_gbp[0] == 0.0
+        assert result.annual_income_gbp == pytest.approx(result.per_window_income_gbp[1])
+        assert result.annual_income_gbp > 0.0
 
