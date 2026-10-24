@@ -10,9 +10,10 @@ and Python's requests and urllib honour. While ``refusing_network`` is open, the
 name a proxy on this machine, which forwards nothing: it records the destination
 of each request sent through it as "host:port", like the socket refusals, and
 refuses it. NO_PROXY names only this machine, so a child's loopback traffic stays
-direct. A request whose target is a bare path (origin-form) names no host, because
-its client sent it straight to the proxy, taking it for a server. Nothing was
-routed off this machine, so the proxy refuses it without recording it.
+direct. A request whose target is a bare path (origin-form) or "*" (asterisk-form)
+names no host, because its client sent it straight to the proxy, taking it for a
+server. Nothing was routed off this machine, so the proxy refuses it without
+recording it.
 
 The first ``refusing_network`` starts the proxy, which then serves until the
 process ends, and the innermost one open records the destinations the proxy is
@@ -176,7 +177,7 @@ class _RefusingHandler(BaseHTTPRequestHandler):
         raise AttributeError(name)
 
     def _refuse(self) -> None:
-        if _is_origin_form(self.path):
+        if _is_addressed_to_the_proxy_itself(self.path):
             reason = _REASON_FOR_REFUSING_A_REQUEST_TO_THE_PROXY_ITSELF
         else:
             destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
@@ -188,9 +189,9 @@ class _RefusingHandler(BaseHTTPRequestHandler):
         pass
 
 
-def _is_origin_form(request_target: str) -> bool:
-    """Whether *request_target* is a bare path, which names no host (RFC 9112, section 3.2.1): a client sends one to the server it addresses, never through a proxy."""
-    return request_target.startswith("/")
+def _is_addressed_to_the_proxy_itself(request_target: str) -> bool:
+    """Whether *request_target* is origin-form, a bare path, or asterisk-form, "*" (RFC 9112, section 3.2): neither names a host, and a client sends one to the server it addresses, never through a proxy."""
+    return request_target.startswith("/") or request_target == "*"
 
 
 def _destination_of(request_target: str) -> str:

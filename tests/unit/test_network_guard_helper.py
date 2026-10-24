@@ -223,10 +223,10 @@ class TestRefusingNetwork:
 
     @pytest.mark.parametrize(
         ("method", "request_target"),
-        [("GET", "/"), ("POST", "/api/simulate/home")],
-        ids=["GET-root", "POST-web-api-path"],
+        [("GET", "/"), ("POST", "/api/simulate/home"), ("OPTIONS", "*")],
+        ids=["GET-root", "POST-web-api-path", "OPTIONS-asterisk"],
     )
-    def test_an_origin_form_request_sent_straight_to_the_proxy_is_refused_and_not_recorded(
+    def test_a_request_addressed_to_the_proxy_itself_is_refused_and_not_recorded(
         self, method: str, request_target: str
     ) -> None:
         """Its client took the proxy for the server it meant, so nothing was routed off this machine."""
