@@ -837,10 +837,9 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """POST with run_id injects summary into messages[-1]['content'] before API call."""
-        db_path = app.config["DATABASE"]
         summary_marker = 987.65
         seed_run(
-            db_path,
+            database_of(app).path,
             run_id="ctx-run-001",
             name="ctx-signal-run",
             status="completed",
@@ -876,9 +875,8 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """The persisted user row contains only the original user message, not injected context."""
-        db_path = app.config["DATABASE"]
         seed_run(
-            db_path,
+            database_of(app).path,
             run_id="ctx-run-002",
             name="ctx-persist-run",
             status="completed",
@@ -921,7 +919,7 @@ class TestRunContextInjection:
     ) -> None:
         """A turn with run context sends the system block a turn without it sends, so the cached prompt prefix still matches."""
         seed_run(
-            app.config["DATABASE"],
+            database_of(app).path,
             run_id="ctx-run-003",
             name="ctx-cache-run",
             status="completed",

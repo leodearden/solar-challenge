@@ -39,7 +39,7 @@ def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, obj
     Another connection holds the database's write lock while the saves are sent and lets go
     half a second later, so every save is in flight before any of them can write.
     """
-    with closing(sqlite3.connect(app.config["DATABASE"], isolation_level=None)) as other_writer:
+    with closing(sqlite3.connect(database_of(app).path, isolation_level=None)) as other_writer:
         other_writer.execute("BEGIN IMMEDIATE")
         with ThreadPoolExecutor(max_workers=len(saves)) as pool:
             sent = [pool.submit(app.test_client().post, path, json=body) for path, body in saves]
@@ -113,7 +113,7 @@ class TestListPresets:
     ) -> None:
         """A database that cannot be read leaves the list answering, with the built-in presets alone."""
         assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
 
         resp = client.get("/api/presets")
 
@@ -336,7 +336,7 @@ class TestGetPreset:
     ) -> None:
         """A database fault in the lookup of a saved home preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
         assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
 
         with caplog.at_level(logging.WARNING):
             resp = client.get("/api/presets/Mine")
@@ -352,7 +352,7 @@ class TestGetPreset:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A database that cannot be read leaves the list holding the built-in presets alone, and each of their names still answers the entry the list holds under it."""
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
         listed = client.get("/api/presets").get_json()
         assert [(p["name"], p["source"]) for p in listed] == [(name, "builtin") for name in _BUILTIN_PRESET_NAMES]
 

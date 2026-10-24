@@ -541,7 +541,7 @@ class TestScenarioAPI:
         ]
         assert builtin_names, "the list holds no built-in preset, so it cannot show them listed alone"
         assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
 
         with caplog.at_level(logging.WARNING):
             resp = client.get("/api/scenarios/presets")
@@ -560,7 +560,7 @@ class TestScenarioAPI:
     ) -> None:
         """A database fault in the lookup of a saved preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
         assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
 
         with caplog.at_level(logging.WARNING):
             resp = client.get("/api/scenarios/presets/Mine")
