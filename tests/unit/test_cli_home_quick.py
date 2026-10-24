@@ -65,7 +65,7 @@ def test_home_quick_saves_the_minutes_from_midnight_on_1_june_2024(tmp_path: Pat
 @pytest.mark.parametrize(
     ("consumption_options", "expected_load"),
     [
-        pytest.param([], LoadConfig(), id="default-is-the-ofgem-tdcv"),
+        pytest.param([], LoadConfig(), id="no-c-takes-load-configs-default"),
         pytest.param(
             ["-c", "4200"],
             LoadConfig(annual_consumption_kwh=4200.0),
