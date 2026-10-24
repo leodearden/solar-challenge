@@ -11,6 +11,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -90,16 +91,43 @@ def _free_port() -> int:
         return port
 
 
+@dataclass(frozen=True)
+class _ChildServer:
+    """A server running in a child process, with the two files that its stdout and its stderr are written to."""
+
+    process: subprocess.Popen[bytes]
+    stdout_log: Path
+    stderr_log: Path
+
+    def stdout(self) -> str:
+        """What the server has printed on its stdout so far."""
+        return self.stdout_log.read_text(errors="replace")
+
+    def stderr(self) -> str:
+        """What the server has printed on its stderr so far."""
+        return self.stderr_log.read_text(errors="replace")
+
+    def logs(self) -> str:
+        """Both logs in full, each headed by its file's name; a log that holds nothing reads as (empty)."""
+        return "\n".join(
+            f"the server's {log.name}:\n{text.rstrip() or '(empty)'}"
+            for log, text in ((self.stdout_log, self.stdout()), (self.stderr_log, self.stderr()))
+        )
+
+
 @contextlib.contextmanager
-def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Popen[bytes]]:
-    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; on exit kill its whole process group.
+def _server(tmp_path: Path, script: str, *args: str) -> Iterator[_ChildServer]:
+    """Run script with args in a child process working in tmp_path, also its HOME, and yield it with its stdout in stdout.log and its stderr in stderr.log there; on exit kill its whole process group.
 
     The whole group: under --debug werkzeug's reloader serves from a second process, which
     a kill of the first alone would orphan, still holding the port and the store.
+
+    An exception that leaves the block gets both logs as a note, added once the process is
+    dead and the logs are complete, so the report of a red run says what the server printed.
     """
     stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
     with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
-        server = subprocess.Popen(
+        process = subprocess.Popen(
             [sys.executable, "-c", script, *args],
             cwd=tmp_path,
             env={**os.environ, "HOME": str(tmp_path)},
@@ -107,21 +135,24 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Pope
             stderr=stderr,
             start_new_session=True,
         )
+        server = _ChildServer(process, stdout_log, stderr_log)
         try:
-            yield server
-        finally:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(server.pid, signal.SIGKILL)
-            server.wait()
-            print(stdout_log.read_text())
-            print(stderr_log.read_text(), file=sys.stderr)
+            try:
+                yield server
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+        except BaseException as failure:
+            failure.add_note(server.logs())
+            raise
 
 
-def _wait_until(server: subprocess.Popen[bytes], condition: Callable[[], bool], what: str) -> None:
+def _wait_until(server: _ChildServer, condition: Callable[[], bool], what: str) -> None:
     deadline = time.monotonic() + 60
     while not condition():
-        if server.poll() is not None:
-            pytest.fail(f"the server exited with code {server.returncode} before {what}")
+        if server.process.poll() is not None:
+            pytest.fail(f"the server exited with code {server.process.returncode} before {what}")
         if time.monotonic() > deadline:
             pytest.fail(f"timed out waiting until {what}")
         time.sleep(0.05)
@@ -183,7 +214,7 @@ def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_
         with _server(tmp_path, PRINTS_ON_STDOUT_AND_STDERR) as server:
             _wait_until(
                 server,
-                lambda: "a line on stderr" in (tmp_path / "stderr.log").read_text(),
+                lambda: "a line on stderr" in server.stderr(),
                 "the server has printed on both streams",
             )
             pytest.fail("a check failed")
@@ -207,10 +238,9 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
             _submit_home_job(port, pv_kw)
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
-        server.send_signal(signal.SIGINT)
-        server.wait(timeout=60)
-
-    assert started() == ["1.0", "2.0"]
+        server.process.send_signal(signal.SIGINT)
+        server.process.wait(timeout=60)
+        assert started() == ["1.0", "2.0"]
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
@@ -220,12 +250,12 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
     with _server(tmp_path, WEB_START, "--port", str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
 
-    status = (tmp_path / "stderr.log").read_text().splitlines()
+    status = server.stderr().splitlines()
     status_line = f"Starting web dashboard at http://127.0.0.1:{port}"
     assert status_line in status
     start = status.index(status_line)
     assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
-    assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
+    assert "Press Ctrl+C to stop the server." not in server.stdout()
 
 
 def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_holder_and_the_first_servers_run_stays_running(
@@ -253,7 +283,7 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
 
         assert second.returncode == 1, second.stderr
         assert lock_path in second.stderr
-        assert re.search(rf"(?<!\d){server.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
+        assert re.search(rf"(?<!\d){server.process.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
         assert "Traceback" not in second.stderr
         assert _run_status(port, run_id) == "running"
 
@@ -284,7 +314,7 @@ def test_web_start_debug_serves_again_after_a_source_file_changes_from_a_restart
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
         assert _dashboard_status(port) == 200
         first_holder = _store_holder_pid(tmp_path)
-        assert first_holder not in (None, server.pid)
+        assert first_holder not in (None, server.process.pid)
 
         source_file.write_text("CHANGED = True\n")
         _wait_until(
