@@ -66,6 +66,7 @@ _PROXY_HOST = "127.0.0.1"
 _DEAD_PROXY = "http://127.0.0.1:9"
 """A proxy on this machine that nothing listens on: an unprivileged process cannot bind port 9."""
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+_REASON_FOR_REFUSING_A_REQUEST_TO_THE_PROXY_ITSELF = "this is a proxy, which serves nothing itself"
 
 
 @contextmanager
@@ -176,11 +177,12 @@ class _RefusingHandler(BaseHTTPRequestHandler):
 
     def _refuse(self) -> None:
         if _is_origin_form(self.path):
-            self.send_error(HTTPStatus.FORBIDDEN, "this is a proxy, which serves nothing itself")
-            return
-        destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
-        self.server.record(destination)
-        self.send_error(HTTPStatus.FORBIDDEN, _reason_for_refusing(destination))
+            reason = _REASON_FOR_REFUSING_A_REQUEST_TO_THE_PROXY_ITSELF
+        else:
+            destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
+            self.server.record(destination)
+            reason = _reason_for_refusing(destination)
+        self.send_error(HTTPStatus.FORBIDDEN, reason)
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
