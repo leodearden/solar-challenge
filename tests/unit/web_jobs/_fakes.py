@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Stand-ins for the simulation and the id source a JobManager is given."""
+"""Stand-ins for the simulation, the id source and the run store a JobManager is given."""
 
 import threading
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
 
 from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.web.database import Database
+from solar_challenge.web.storage import RunStorage
 
 
 def _an_hour_at(generation_kw: float) -> SimulationResults:
@@ -47,16 +51,18 @@ def a_failing_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date:
 
 
 class BlockingSimulation:
-    """Stands in for simulate_home: every job waits inside the simulation until release(), then gets an hour at its home's PV size.
+    """Stands in for simulate_home: records each home it is asked to simulate, as RecordingSimulation does, then every job waits inside the simulation until release(), then gets an hour at its home's PV size.
 
     wait_until_started() returns once the first job is inside the simulation.
     """
 
     def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
         self._started = threading.Event()
         self._released = threading.Event()
 
     def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.calls.append((config, start_date, end_date))
         self._started.set()
         self._released.wait()
         return _an_hour_at(config.pv_config.capacity_kw)
@@ -67,6 +73,42 @@ class BlockingSimulation:
 
     def release(self) -> None:
         self._released.set()
+
+
+class SaveGate:
+    """Holds each save that waits at it until open(): hold() marks a save as waiting, then waits until open().
+
+    wait_until_a_save_waits() returns once a save waits at the gate.
+    """
+
+    def __init__(self) -> None:
+        self._waiting = threading.Event()
+        self._opened = threading.Event()
+
+    def hold(self) -> None:
+        self._waiting.set()
+        self._opened.wait()
+
+    def wait_until_a_save_waits(self) -> None:
+        if not self._waiting.wait(timeout=30):
+            pytest.fail("no save waited at the gate within 30 s")
+
+    def open(self) -> None:
+        self._opened.set()
+
+
+class RunStorageWithGatedHomeSaves(RunStorage):
+    """Stands in for a JobManager's RunStorage: each home job's final save waits at *gate* until it opens, then saves as RunStorage does."""
+
+    def __init__(self, database: Database, data_dir: str | Path, gate: SaveGate) -> None:
+        super().__init__(database, data_dir)
+        self._gate = gate
+
+    def save_home_run_from_results(
+        self, run_id: str, config: HomeConfig, results: SimulationResults, **save: Any
+    ) -> None:
+        self._gate.hold()
+        super().save_home_run_from_results(run_id, config, results, **save)
 
 
 class CountingIds:

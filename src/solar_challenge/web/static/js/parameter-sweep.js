@@ -159,11 +159,15 @@ document.addEventListener('alpine:init', () => {
                     end();
                 });
 
-                const fail = () => {
-                    row.status = 'failed';
+                const endWith = (status) => {
+                    row.status = status;
                     end();
                 };
-                onJobProgressStreamErrors(es, { failed: fail, lost: fail });
+                onJobProgressStreamErrors(es, {
+                    failed: () => endWith('failed'),
+                    cancelled: () => endWith('cancelled'),
+                    lost: () => endWith('failed'),
+                });
             });
         },
 

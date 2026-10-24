@@ -7,7 +7,9 @@ does not show. A run started after a completed one starts its tracker afresh.
 A run whose progress stream disconnects shows it is reconnecting until the
 stream the browser reopens reaches the server, which goes on to report the
 run's progress and end. A reopened stream the server refuses fails the run,
-as does a stream that stays broken past the page's reconnect limit.
+as does a stream that stays broken past the page's reconnect limit. A run
+whose job is cancelled because its run was deleted shows the cancellation,
+not a failure.
 """
 
 import itertools
@@ -277,3 +279,50 @@ def test_a_run_whose_progress_stream_stays_broken_past_the_reconnect_limit_is_sh
     assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
         f"Errors on {simulate_page.path}: {page_errors}"
     )
+
+
+def test_a_run_whose_job_is_cancelled_shows_its_cancellation_not_a_failure(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+    page_errors: list[str],
+) -> None:
+    """Run, then answer job-1's progress stream with the error event of a job cancelled because its run was deleted: the tracker shows the step 'Cancelled' and the server's message, not 'Simulation Failed', and no results link."""
+    page.goto(live_server + simulate_page.path)
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+
+    running_jobs.answer(
+        "job-1",
+        sse_event("error", {"status": "cancelled", "message": "Cancelled: its run was deleted"}),
+    )
+
+    expect(page.get_by_text("Cancelled: its run was deleted", exact=True)).to_be_visible()
+    expect(page.get_by_text("Cancelled", exact=True)).to_be_visible()
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
+    assert page_errors == [], f"Errors on {simulate_page.path}: {page_errors}"
+
+
+def test_a_run_deleted_while_its_job_runs_on_the_server_shows_its_job_cancelled(
+    page: Page,
+    live_server: str,
+    release_held_simulations: Callable[[], None],
+    page_errors: list[str],
+) -> None:
+    """Run on /simulate/home while the live server holds the job in its simulation, then delete its run, as Run History's Delete does: once the job is released, the tracker shows its cancellation, not 'Simulation Failed', and no results link."""
+    page.goto(live_server + "/simulate/home")
+    with page.expect_response("**/api/simulate/home") as submission:
+        page.get_by_role("button", name="Run Simulation", exact=True).click()
+    run_id = submission.value.json()["run_id"]
+    expect(page.get_by_text("Running home simulation...", exact=True)).to_be_visible()
+
+    response = page.request.delete(f"{live_server}/api/history/runs/{run_id}")
+    assert response.status == 200
+    release_held_simulations()
+
+    expect(page.get_by_text("Cancelled: its run was deleted", exact=True)).to_be_visible()
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
+    assert page_errors == [], f"Errors on /simulate/home: {page_errors}"
