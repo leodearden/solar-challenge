@@ -33,7 +33,14 @@ from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from tests._run_storage_layout import stored_run_dir
 from tests._web_app import run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
-from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
+from tests.unit.web_jobs._fakes import (
+    BlockingSimulation,
+    CountingIds,
+    RecordingSimulation,
+    RunStorageWithGatedHomeSaves,
+    SaveGate,
+    a_failing_simulation,
+)
 
 
 _A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)
@@ -935,6 +942,29 @@ class TestJobManagerCancelRun:
         assert len(blocking_simulation.calls) == 1
         assert manager.job_state(queued_job_id) == cancelled
         assert storage.run_record(queued.run_id) == created
+
+    def test_a_cancel_that_comes_while_the_jobs_final_save_runs_waits_for_the_save_and_leaves_the_job_completed(
+        self, tmp_path: Path, save_gate: SaveGate
+    ) -> None:
+        storage = RunStorageWithGatedHomeSaves(init_db(tmp_path / "jobs.db"), tmp_path / "data", save_gate)
+        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+        job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
+        save_gate.wait_until_a_save_waits()
+        answers: list[bool] = []
+        cancel = threading.Thread(target=lambda: answers.append(manager.cancel_run(run_id)), daemon=True)
+
+        cancel.start()
+        cancel.join(timeout=0.2)
+        assert cancel.is_alive(), "cancel_run returned while the job's final save still ran"
+        save_gate.open()
+        cancel.join(timeout=30)
+
+        assert answers == [False]
+        assert manager.wait_until_idle(timeout=30)
+        assert _status_of(manager, job_id) == "completed"
+        run = storage.run_record(run_id)
+        assert run is not None
+        assert run.status == "completed"
 
     @pytest.mark.parametrize(
         ("simulation", "status"),

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager."""
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +18,16 @@ from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._fleet_form import valid_distribution_form
 from tests._run_storage_layout import stored_run_dir
 from tests._seeded_tmy import ClearJuneDays
-from tests._web_app import build_test_app, release_store_lock, run_storage_of
+from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
-from tests.unit.web_jobs._fakes import BlockingSimulation, CountingIds, RecordingSimulation, a_failing_simulation
+from tests.unit.web_jobs._fakes import (
+    BlockingSimulation,
+    CountingIds,
+    RecordingSimulation,
+    RunStorageWithGatedHomeSaves,
+    SaveGate,
+    a_failing_simulation,
+)
 
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
@@ -385,6 +393,34 @@ class TestDeletingARunCancelsItsJob:
             "Home 1/3",
             "Cancelled: its run was deleted",
         )
+
+    def test_a_delete_that_comes_while_the_jobs_final_save_runs_waits_for_the_save_then_removes_the_saved_run(
+        self, app: Flask, save_gate: SaveGate
+    ) -> None:
+        storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
+        manager = JobManager(storage, simulate_home=RecordingSimulation())
+        client = client_using(app, manager)
+        submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
+        save_gate.wait_until_a_save_waits()
+        answers: list[int] = []
+        delete = threading.Thread(
+            target=lambda: answers.append(
+                app.test_client().delete(f"/api/history/runs/{submitted['run_id']}").status_code
+            ),
+            daemon=True,
+        )
+
+        delete.start()
+        delete.join(timeout=0.2)
+        assert delete.is_alive(), "the DELETE answered while the job's final save still ran"
+        save_gate.open()
+        delete.join(timeout=30)
+
+        assert answers == [200]
+        assert manager.wait_until_idle(timeout=30)
+        assert client.get(f"/api/history/runs/{submitted['run_id']}").status_code == 404
+        assert not stored_run_dir(run_storage_of(app), submitted["run_id"]).exists()
+        assert client.get(f"/api/jobs/{submitted['job_id']}").get_json()["status"] == "completed"
 
 
 class TestJobProgressEndpoint:
