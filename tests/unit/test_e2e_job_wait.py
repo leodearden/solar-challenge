@@ -18,7 +18,7 @@ SCENARIOS = """
     import pandas as pd
     import pytest
 
-    from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
+    from solar_challenge.weather import WeatherCache
     from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 
     from tests._seeded_tmy import ClearJuneDays
@@ -31,14 +31,12 @@ SCENARIOS = """
 
 
     # HOME_JOB's days window starts on DAYS_WINDOW_START, so Bristol's TMY is a clear day on that date.
-    # It overrides the e2e conftest's live_server_weather_in_place, which the live server's app is built after.
+    # It overrides the e2e conftest's live_server_weather, the weather cache the live server's jobs read.
     @pytest.fixture(scope="session")
-    def live_server_weather_in_place(tmp_path_factory):
+    def live_server_weather(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
         ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(cache)
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setenv(CACHE_DIR_VARIABLE, str(cache.cache_dir))
-            yield
+        return cache
 
 
     def test_an_earlier_test_submits_a_job_and_ends_without_waiting_for_it(live_server):
