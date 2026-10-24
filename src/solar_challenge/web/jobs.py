@@ -126,7 +126,11 @@ class _JobCancelled(BaseException):
 
 
 class _Cancellation:
-    """Whether a job is cancelled, which its run's delete does through JobManager.cancel_run, under a lock of the job's own."""
+    """Whether a job is cancelled, which its run's delete does through JobManager.cancel_run, under a lock of the job's own.
+
+    Lock rule: never take a job's cancellation lock while holding its JobManager's _lock. Only the cancellation's own
+    lock may be held while the manager's _lock is taken, never the reverse.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -155,14 +159,17 @@ class _TrackedJob:
     """A job a JobManager tracks.
 
     The state job_state reports, the SSE events get_events has not yet yielded, the manager's
-    clock reading when the job finished (None while it is queued or running), and the job's
-    cancellation, which cancel_run sets when the job's run is deleted.
+    clock reading when the job finished (None while it is queued or running), the job's
+    cancellation, which cancel_run sets when the job's run is deleted, and the executor's future
+    of the job once it is queued (None until then), which cancel_run cancels to drop the job
+    from the queue.
     """
 
     state: JobState
     events: collections.deque[JobEvent] = field(default_factory=lambda: collections.deque(maxlen=100))
     finished_at: float | None = None
     cancellation: _Cancellation = field(default_factory=_Cancellation)
+    future: Future[None] | None = None
 
 
 class JobManager:
@@ -362,11 +369,11 @@ class JobManager:
     def cancel_run(self, run_id: str) -> bool:
         """Cancel the queued or running job of run *run_id*, as the run's delete does before it removes the run.
 
-        The job stops at its runner's next checkpoint, a progress report, and reports 'cancelled' with the message
-        "Cancelled: its run was deleted", writing nothing to the RunStorage. A home job reaches its next checkpoint
-        only once its current simulation returns, up to one whole simulation (about 40 s for a year); a fleet job
-        reaches one before its next home. This is contract C8, docs/prds/run-store-one-owner.md §3.7: after a
-        delete, no job writes the run back.
+        The job reports 'cancelled' with the message "Cancelled: its run was deleted", writing nothing to the
+        RunStorage. A queued job is dropped from the queue at once, and reports it before cancel_run returns. A
+        running job stops at its runner's next checkpoint, a progress report: a home job only once its current
+        simulation returns, up to one whole simulation (about 40 s for a year), and a fleet job before its next
+        home. This is contract C8, docs/prds/run-store-one-owner.md §3.7: after a delete, no job writes the run back.
 
         Args:
             run_id: The id of the run whose job to cancel.
@@ -375,7 +382,16 @@ class JobManager:
             True if the run's job will save nothing; False if this manager has no queued or running job of the run.
         """
         job = self._unfinished_job_of_run(run_id)
-        return False if job is None else job.cancellation.cancel()
+        if job is None or not job.cancellation.cancel():
+            return False
+        with self._lock:
+            future = job.future
+        # A future _schedule has not stored yet is not cancelled here: the flag stops its job at the 'Starting'
+        # checkpoint. Cancelling a queued future runs its done-callback, which takes self._lock, before cancel()
+        # returns, so no lock is held here.
+        if future is not None:
+            future.cancel()
+        return True
 
     def _unfinished_job_of_run(self, run_id: str) -> _TrackedJob | None:
         """Return the job of run *run_id* this manager tracks whose status is queued or running, or None if it has none."""
@@ -449,41 +465,51 @@ class JobManager:
         return _NewJob(job_id=job_id, run=run)
 
     def _schedule(self, job_id: str, run_id: str, job: Callable[[], None]) -> None:
-        """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
+        """Queue *job* on the thread pool, counting it as unfinished until it completes, fails, is cancelled or is dropped from the queue.
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
         """
         with self._idle:
             self._unfinished_job_count += 1
-        # Hold no lock from here on: the executor may run the done-callback, which takes self._lock,
-        # under its own shutdown lock or at once in this thread.
+        # No lock is held while the executor may run the done-callback, which takes self._lock: under its own
+        # shutdown lock, or at once in this thread once the callback is added.
         try:
             future = self._executor.submit(job)
         except RuntimeError:
             self._stop_counting_job()
             self._forget_job(job_id, run_id)
             raise
+        with self._lock:
+            self._jobs[job_id].future = future
         future.add_done_callback(functools.partial(self._on_job_done, job_id))
 
     def _on_job_done(self, job_id: str, future: Future[None]) -> None:
-        """Fail job *job_id* if its runner raised, then finish it, even if failing it raised.
+        """Report job *job_id* cancelled if its run's delete dropped it from the queue, or failed if its runner raised, then finish it, even if reporting it raised.
 
-        The job therefore reports failed before it stops counting as unfinished. Both steps stay in this one callback:
-        the executor runs a callback added after the job finished at once, in the thread that adds it, so two callbacks
-        could run out of order.
+        The job therefore reports cancelled or failed before it stops counting as unfinished. Both steps stay in this
+        one callback: the executor runs a callback added after the job finished at once, in the thread that adds it,
+        so two callbacks could run out of order.
         """
         try:
-            self._fail_job_if_its_runner_raised(job_id, future)
+            if future.cancelled():
+                self._report_job_dropped_from_the_queue(job_id)
+            else:
+                self._fail_job_if_its_runner_raised(job_id, future)
         finally:
             self._finish_job(job_id)
 
-    def _fail_job_if_its_runner_raised(self, job_id: str, future: Future[None]) -> None:
-        """Fail job *job_id* with the error its runner raised, if it raised one.
+    def _report_job_dropped_from_the_queue(self, job_id: str) -> None:
+        """Report job *job_id*, which the executor dropped from its queue before it ran, cancelled if its run's delete cancelled it.
 
         A job shutdown dropped never ran, so it is not failed: it keeps the state it was queued in.
         """
-        error = None if future.cancelled() else future.exception()
+        if self._cancellation_of(job_id).is_cancelled:
+            self._report_cancelled_job(job_id)
+
+    def _fail_job_if_its_runner_raised(self, job_id: str, future: Future[None]) -> None:
+        """Fail job *job_id* with the error its runner raised, if it raised one."""
+        error = future.exception()
         if error is not None:
             self._fail_job_whose_runner_raised(job_id, error)
 
