@@ -305,7 +305,7 @@ class TestFinanceFlexCLIBandEntryPoints:
         ) in _whitespace_normalised(result.output), result.output
 
     def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
-        """Typer refuses --flex-band medium as a usage error naming it and each band, in whatever words Click uses."""
+        """Typer refuses --flex-band medium as a usage error naming it and each band, in whatever words Typer chooses."""
         scenario_file = _write_scenario(tmp_path)
 
         result = CliRunner().invoke(
