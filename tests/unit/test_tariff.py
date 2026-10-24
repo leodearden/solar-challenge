@@ -297,15 +297,7 @@ class TestTariffPeriodMidnightCrossing:
         assert period.matches_time(pd.Timestamp("2024-01-15 07:29:00")) is True
 
     def test_full_day_00_00_matches_all_times(self):
-        """TariffPeriod("00:00","00:00") is a full-24h period covering every minute.
-
-        Characterisation test: when start==end=="00:00", matches_time routes to
-        the midnight-crossing else-branch (`t >= start or t < end`), which is
-        `t >= 00:00 or t < 00:00` == True for all t.  This is the mechanism
-        flat_rate() relies on after the fix (end_time changed from "23:59" to
-        "00:00").  The test passes before and after the fix — it documents an
-        already-correct invariant of matches_time.
-        """
+        """TariffPeriod("00:00","00:00") is a full-24h period covering every minute: an end equal to the start is the whole day, as flat_rate() relies on."""
         period = TariffPeriod(start_time="00:00", end_time="00:00", rate_per_kwh=0.20)
         assert period.matches_time(pd.Timestamp("2024-01-15 00:00:00")) is True
         assert period.matches_time(pd.Timestamp("2024-01-15 12:00:00")) is True

@@ -108,9 +108,9 @@ class TariffPeriod:
         except (ValueError, AttributeError) as e:
             raise ConfigurationError(f"Invalid time format '{time_str}': {e}") from e
 
-    # cached_property, not dataclass fields: the parsed times go in the instance
-    # __dict__ and stay out of fields(). web/stored_runs.py's JSON round-trip walks
-    # fields() and cannot encode a datetime.time.
+    # cached_property, not dataclass fields: the parsed times and the minutes they
+    # bound go in the instance __dict__ and stay out of fields(). web/stored_runs.py's
+    # JSON round-trip walks fields() and cannot encode a datetime.time or a frozenset.
     @cached_property
     def _parsed_start(self) -> time:
         return self._parse_time(self.start_time)
@@ -118,6 +118,10 @@ class TariffPeriod:
     @cached_property
     def _parsed_end(self) -> time:
         return self._parse_time(self.end_time)
+
+    @cached_property
+    def _minutes_covered(self) -> frozenset[int]:
+        return frozenset(_minutes_covered_by(self))
 
     def get_start_time(self) -> time:
         """Get start time as time object."""
@@ -128,25 +132,8 @@ class TariffPeriod:
         return self._parsed_end
 
     def matches_time(self, timestamp: pd.Timestamp) -> bool:
-        """Check if a timestamp falls within this period.
-
-        Args:
-            timestamp: Timestamp to check
-
-        Returns:
-            True if timestamp falls within this period
-        """
-        time_of_day = timestamp.time()
-        start = self.get_start_time()
-        end = self.get_end_time()
-
-        # Handle periods that cross midnight
-        if start < end:
-            # Normal period (e.g., 07:00-23:00)
-            return start <= time_of_day < end  # type: ignore[no-any-return]
-        else:
-            # Crosses midnight (e.g., 23:00-07:00)
-            return time_of_day >= start or time_of_day < end  # type: ignore[no-any-return]
+        """Whether the timestamp's wall-clock minute is one this period covers."""
+        return _minute_of_day(timestamp) in self._minutes_covered
 
 
 def _minutes_covered_by(period: TariffPeriod) -> list[int]:
