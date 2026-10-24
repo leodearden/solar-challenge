@@ -197,6 +197,7 @@ def _job_event_frame(event: JobEvent) -> str:
 _FINAL_EVENT_TYPE_BY_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType({
     "completed": "complete",
     "failed": "error",
+    "cancelled": "error",
 })
 
 
