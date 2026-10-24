@@ -83,8 +83,14 @@ time.sleep(600)
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+_PATIENCE_SECS = 60
 
-def _free_port() -> int:
+# Ends in \n, not $, which would also match a last line werkzeug is still writing, whose port may be cut short.
+_WERKZEUG_STARTUP_LINE = re.compile(r"^ \* Running on http://127\.0\.0\.1:(\d+)\n", re.MULTILINE)
+
+
+def _lately_free_port() -> int:
+    """A port that was free when this returned; another process can take it before a server binds it, so it is only for a test that never connects to it."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port: int = sock.getsockname()[1]
@@ -149,21 +155,35 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator[_ChildServer]:
 
 
 def _wait_until(server: _ChildServer, condition: Callable[[], bool], what: str) -> None:
-    deadline = time.monotonic() + 60
-    while not condition():
-        if server.process.poll() is not None:
+    """Wait until condition holds, failing if the server has exited by then or _PATIENCE_SECS pass.
+
+    Whether the server has exited is read before condition is, so a condition checked after an
+    exit sees all that the server wrote: one that prints what the test waits for and exits at
+    once is not reported as having exited before it.
+    """
+    deadline = time.monotonic() + _PATIENCE_SECS
+    while True:
+        exited = server.process.poll() is not None
+        if condition():
+            return
+        if exited:
             pytest.fail(f"the server exited with code {server.process.returncode} before {what}")
         if time.monotonic() > deadline:
             pytest.fail(f"timed out waiting until {what}")
         time.sleep(0.05)
 
 
-def _accepts_connections(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            return True
-    except OSError:
-        return False
+def _serving_port(server: _ChildServer) -> int:
+    """The port that server listens on, which werkzeug names on its stderr once its socket listens: under --debug the reloader's watcher does so at once, and the serving process it starts serves on the same socket.
+
+    The CLI's own status line names only the port it was asked for.
+    """
+
+    def reported() -> list[str]:
+        return _WERKZEUG_STARTUP_LINE.findall(server.stderr())
+
+    _wait_until(server, lambda: bool(reported()), "it reports the port it listens on")
+    return int(reported()[0])
 
 
 def _submit_home_job(port: int, pv_kw: float) -> str:
@@ -173,7 +193,7 @@ def _submit_home_job(port: int, pv_kw: float) -> str:
         data=json.dumps({"pv_kw": pv_kw, "days": 1}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with _LOCALHOST.open(request, timeout=30) as response:
+    with _LOCALHOST.open(request, timeout=_PATIENCE_SECS) as response:
         assert response.status == 201
         run_id: str = json.load(response)["run_id"]
         return run_id
@@ -181,14 +201,14 @@ def _submit_home_job(port: int, pv_kw: float) -> str:
 
 def _run_status(port: int, run_id: str) -> str:
     """The status of run run_id, as the server on port reports it."""
-    with _LOCALHOST.open(f"http://127.0.0.1:{port}/api/history/runs/{run_id}", timeout=30) as response:
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/api/history/runs/{run_id}", timeout=_PATIENCE_SECS) as response:
         status: str = json.load(response)["status"]
         return status
 
 
 def _dashboard_status(port: int) -> int:
     """The status with which the server on port answers GET /."""
-    with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=60) as response:
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=_PATIENCE_SECS) as response:
         status: int = response.status
         return status
 
@@ -238,13 +258,13 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
         server.process.send_signal(signal.SIGINT)
-        server.process.wait(timeout=60)
+        server.process.wait(timeout=_PATIENCE_SECS)
         assert started() == ["1.0", "2.0"]
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
     """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
-    port = _free_port()
+    port = _lately_free_port()
 
     with _server(tmp_path, WEB_START, "--port", str(port)) as server:
         _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
@@ -276,7 +296,7 @@ def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_ho
             env={**os.environ, "HOME": str(tmp_path), "COLUMNS": "1000"},
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_PATIENCE_SECS,
         )
 
         assert second.returncode == 1, second.stderr
