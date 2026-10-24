@@ -14,8 +14,7 @@ from functools import cached_property
 import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
-
-_MINUTES_PER_DAY = 24 * 60
+from solar_challenge.timebase import MINUTES_PER_DAY
 
 
 def _minute_of_day(clock: time | datetime) -> int:
@@ -25,7 +24,7 @@ def _minute_of_day(clock: time | datetime) -> int:
 
 def _clock_text(minute: int) -> str:
     """Minute *minute* of the day written as HH:MM, the day's end (1440) as 00:00."""
-    hours, minutes = divmod(minute % _MINUTES_PER_DAY, 60)
+    hours, minutes = divmod(minute % MINUTES_PER_DAY, 60)
     return f"{hours:02d}:{minutes:02d}"
 
 
@@ -34,7 +33,7 @@ def _runs_of_consecutive_minutes(minutes: set[int]) -> list[tuple[int, int]]:
     starts = sorted(minute for minute in minutes if minute - 1 not in minutes)
     ends = sorted(minute + 1 for minute in minutes if minute + 1 not in minutes)
     runs = list(zip(starts, ends, strict=True))
-    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == _MINUTES_PER_DAY:
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == MINUTES_PER_DAY:
         return [*runs[1:-1], (runs[-1][0], runs[0][1])]
     return runs
 
@@ -42,10 +41,10 @@ def _runs_of_consecutive_minutes(minutes: set[int]) -> list[tuple[int, int]]:
 def describe_minutes_of_day(minutes: Iterable[int]) -> str:
     """Minutes of the day, 0 to 1439, as HH:MM-HH:MM clock ranges, each ending at the minute after its last, a run across midnight as one range, in order of their start."""
     present = set(minutes)
-    outside = sorted(minute for minute in present if not 0 <= minute < _MINUTES_PER_DAY)
+    outside = sorted(minute for minute in present if not 0 <= minute < MINUTES_PER_DAY)
     if outside:
         raise ValueError(
-            f"A minute of the day is 0 to {_MINUTES_PER_DAY - 1}, "
+            f"A minute of the day is 0 to {MINUTES_PER_DAY - 1}, "
             f"got {', '.join(str(minute) for minute in outside)}"
         )
     return ", ".join(
@@ -139,13 +138,13 @@ class TariffPeriod:
 def _minutes_covered_by(period: TariffPeriod) -> list[int]:
     """The minutes of the day *period* covers: from its start up to its end, across midnight when the end comes first, all day when they are equal."""
     start = _minute_of_day(period.get_start_time())
-    length = (_minute_of_day(period.get_end_time()) - start) % _MINUTES_PER_DAY or _MINUTES_PER_DAY
-    return [(start + offset) % _MINUTES_PER_DAY for offset in range(length)]
+    length = (_minute_of_day(period.get_end_time()) - start) % MINUTES_PER_DAY or MINUTES_PER_DAY
+    return [(start + offset) % MINUTES_PER_DAY for offset in range(length)]
 
 
 def _periods_covering_each_minute(periods: Sequence[TariffPeriod]) -> list[tuple[int, ...]]:
     """For each minute of the day, the indices in *periods* of the periods that cover it."""
-    covering: list[list[int]] = [[] for _ in range(_MINUTES_PER_DAY)]
+    covering: list[list[int]] = [[] for _ in range(MINUTES_PER_DAY)]
     for index, period in enumerate(periods):
         for minute in _minutes_covered_by(period):
             covering[minute].append(index)
@@ -224,7 +223,7 @@ class TariffConfig:
     @cached_property
     def cheap_minutes_of_day(self) -> frozenset[int]:
         """The minutes of the local day, 0 to 1439, whose rate is below peak_rate and at or below the duration-weighted mean rate; a tariff whose minutes share one rate has none."""
-        weighted_mean_rate = math.fsum(self._rate_by_minute) / _MINUTES_PER_DAY
+        weighted_mean_rate = math.fsum(self._rate_by_minute) / MINUTES_PER_DAY
         return frozenset(
             minute
             for minute, rate in enumerate(self._rate_by_minute)
