@@ -41,6 +41,7 @@ Key public symbols:
 """
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 
@@ -517,6 +518,43 @@ class GridServicesAtEvents:
 # ---------------------------------------------------------------------------
 
 
+def _warn_unobserved_windows(
+    fleet_results: "FleetResults",
+    windows: tuple[EventWindow, ...],
+) -> None:
+    """Issue one UserWarning for each window that no battery home's simulated index enters.
+
+    Such a window contributes £0.  A fleet without a battery home has nothing to
+    observe and does not warn.  The warning is attributed to the caller of
+    :func:`compute_grid_services_at_events`, and its text names only the window
+    and the indices' span.
+    """
+    indices = [
+        sim.battery_soc.index
+        for sim, home_cfg in zip(
+            fleet_results.per_home_results, fleet_results.home_configs, strict=True
+        )
+        if home_cfg.battery_config is not None
+    ]
+    unobserved = [
+        window
+        for window in windows
+        if not any(bool(window.mask(index).any()) for index in indices)
+    ]
+    if not indices or not unobserved:
+        return
+    first = min(index.min() for index in indices)
+    last = max(index.max() for index in indices)
+    for window in unobserved:
+        warnings.warn(
+            f"Event window months={window.months}, weekdays={window.weekdays}, "
+            f"hours={window.hours} has no timestep in the fleet's simulated index, "
+            f"{first} to {last}, so it contributes £0 to the capacity-at-events income",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def compute_grid_services_at_events(
     fleet_results: "FleetResults",
     cfg: "GridServicesEventsConfig",
@@ -553,6 +591,9 @@ def compute_grid_services_at_events(
     NOT re-apply ``(1 - aggregator_share)`` — see
     :class:`GridServicesAtEvents`.
 
+    A window that no battery home's simulated index enters contributes £0 and
+    is named in a ``UserWarning``, once per call.
+
     Args:
         fleet_results: Simulation results for the fleet.
         cfg: Grid-services configuration (band, event windows, aggregator share,
@@ -565,6 +606,7 @@ def compute_grid_services_at_events(
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
     """
+    _warn_unobserved_windows(fleet_results, cfg.event_windows)
     avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
     band = resolve_grid_services_rate_band(cfg.band)
 

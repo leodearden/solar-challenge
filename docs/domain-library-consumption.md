@@ -714,7 +714,12 @@ re-pin; other consumers need no change.
 `annual_income_gbp(fleet_results)`, the annual capacity-at-events income in £,
 net of the aggregator share, that it prices a simulated fleet at, equal to
 `compute_grid_services_at_events(fleet_results, self).annual_income_gbp`; the
-0.5.0 tag lacks it. Consumers need no change when they re-pin.
+0.5.0 tag lacks it. `compute_grid_services_at_events` now issues a
+`UserWarning`, once per call, for each event window the fleet's simulated index
+never enters, naming the window's months, weekdays and hours and the index's
+first and last timestamps. That window still contributes £0, and a fleet with
+no battery home does not warn; the 0.5.0 tag prices the window at £0 silently.
+Consumers need no change when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
