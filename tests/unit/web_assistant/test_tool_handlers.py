@@ -35,7 +35,7 @@ from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run
-from tests.unit.web_assistant._fakes import seed_run
+from tests.unit.web_assistant._fakes import run_storage_over, seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
 
 
@@ -218,11 +218,6 @@ class TestSuggestConfig:
         )
 
 
-def _storage(db_path: Path) -> RunStorage:
-    """The RunStorage over the database at *db_path*, its run files beside it."""
-    return RunStorage(Database(db_path), db_path.parent)
-
-
 class TestGetRunResults:
     """Tests for get_run_results(run_id_or_name, storage) -> dict."""
 
@@ -231,10 +226,10 @@ class TestGetRunResults:
 
         seed_run leaves n_homes at the schema's default, 1.
         """
-        db_path = tmp_path / "grr_test.db"
+        database = init_db(tmp_path / "grr_test.db")
         summary = home_summary(total_generation_kwh=1234.5, self_consumption_ratio=0.62)
         seed_run(
-            db_path,
+            database,
             run_id="run-abc-123",
             name="test-run",
             type="home",
@@ -243,7 +238,7 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result = get_run_results("run-abc-123", _storage(db_path))
+        result = get_run_results("run-abc-123", run_storage_over(database))
 
         assert result == {
             "run_id": "run-abc-123",
@@ -266,10 +261,10 @@ class TestGetRunResults:
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
-        db_path = tmp_path / "grr_name_test.db"
+        database = init_db(tmp_path / "grr_name_test.db")
         summary = fleet_summary()
         seed_run(
-            db_path,
+            database,
             run_id="run-xyz-456",
             name="my-named-run",
             type="fleet",
@@ -278,8 +273,8 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result_by_id = get_run_results("run-xyz-456", _storage(db_path))
-        result_by_name = get_run_results("my-named-run", _storage(db_path))
+        result_by_id = get_run_results("run-xyz-456", run_storage_over(database))
+        result_by_name = get_run_results("my-named-run", run_storage_over(database))
 
         # Both should resolve to the same row
         assert result_by_id.get("run_id") == "run-xyz-456"
@@ -292,9 +287,9 @@ class TestGetRunResults:
 
     def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
         """get_run_results with unknown id returns a graceful dict, does NOT raise."""
-        db_path = tmp_path / "grr_unknown_test.db"
+        database = init_db(tmp_path / "grr_unknown_test.db")
         seed_run(
-            db_path,
+            database,
             run_id="run-known",
             name="known-run",
             status="completed",
@@ -303,7 +298,7 @@ class TestGetRunResults:
         )
 
         try:
-            result = get_run_results("totally-unknown-id-xyz", _storage(db_path))
+            result = get_run_results("totally-unknown-id-xyz", run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for unknown id; got: {exc!r}"
@@ -318,10 +313,10 @@ class TestGetRunResults:
 
     def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
         """When two rows share a name, get_run_results returns the one with the later created_at."""
-        db_path = tmp_path / "grr_collision_test.db"
+        database = init_db(tmp_path / "grr_collision_test.db")
         # Older run seeded first
         seed_run(
-            db_path,
+            database,
             run_id="run-old-collision",
             name="shared-run-name",
             status="completed",
@@ -330,7 +325,7 @@ class TestGetRunResults:
         )
         # Newer run with same name seeded second
         seed_run(
-            db_path,
+            database,
             run_id="run-new-collision",
             name="shared-run-name",
             status="completed",
@@ -338,7 +333,7 @@ class TestGetRunResults:
             summary=home_summary(total_generation_kwh=200.0),
         )
 
-        result = get_run_results("shared-run-name", _storage(db_path))
+        result = get_run_results("shared-run-name", run_storage_over(database))
 
         assert result.get("run_id") == "run-new-collision", (
             f"Name tie-break should return newest run (run-new-collision); "
@@ -347,9 +342,8 @@ class TestGetRunResults:
 
     def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
-        db_path = tmp_path / "grr_null_summary.db"
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
+        database = init_db(tmp_path / "grr_null_summary.db")
+        with database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -358,7 +352,7 @@ class TestGetRunResults:
             )
 
         try:
-            result = get_run_results("run-null-summary", _storage(db_path))
+            result = get_run_results("run-null-summary", run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
@@ -372,11 +366,11 @@ class TestGetRunResults:
         self, tmp_path: Path
     ) -> None:
         """The error is RunRecord.summary's refusal, which names the run and runs.summary_json."""
-        db_path = tmp_path / "grr_garbled.db"
-        seed_run(db_path, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
-        with Database(db_path).transaction() as conn:
+        database = init_db(tmp_path / "grr_garbled.db")
+        seed_run(database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
+        with database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
-        storage = _storage(db_path)
+        storage = run_storage_over(database)
         record = storage.run_record("garbled-run")
         assert record is not None
         with pytest.raises(ValueError) as refusal:
@@ -389,7 +383,7 @@ class TestGetRunResults:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", RunStorage(Database(bad_path), tmp_path))
+            result = get_run_results("any-run-id", run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -406,11 +400,11 @@ class TestListRecentRuns:
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
-        db_path = tmp_path / "lrr_test.db"
+        database = init_db(tmp_path / "lrr_test.db")
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
             seed_run(
-                db_path,
+                database,
                 run_id=f"run-{i:03d}",
                 name=f"run-name-{i}",
                 status="completed",
@@ -418,7 +412,7 @@ class TestListRecentRuns:
                 summary=home_summary(total_generation_kwh=float(i * 100)),
             )
 
-        result = list_recent_runs(3, _storage(db_path))
+        result = list_recent_runs(3, run_storage_over(database))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -436,9 +430,9 @@ class TestListRecentRuns:
 
     def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
         """Each entry carries id/run_id, name, type, status, created_at."""
-        db_path = tmp_path / "lrr_fields_test.db"
+        database = init_db(tmp_path / "lrr_fields_test.db")
         seed_run(
-            db_path,
+            database,
             run_id="run-fields-001",
             name="fields-run",
             type="fleet",
@@ -447,7 +441,7 @@ class TestListRecentRuns:
             summary=fleet_summary(fleet_self_consumption_ratio=0.70),
         )
 
-        result = list_recent_runs(10, _storage(db_path))
+        result = list_recent_runs(10, run_storage_over(database))
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -462,11 +456,10 @@ class TestListRecentRuns:
 
     def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
         """list_recent_runs on empty DB returns {'runs': []} without raising."""
-        db_path = tmp_path / "lrr_empty_test.db"
-        init_db(db_path)
+        database = init_db(tmp_path / "lrr_empty_test.db")
 
         try:
-            result = list_recent_runs(10, _storage(db_path))
+            result = list_recent_runs(10, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -480,11 +473,11 @@ class TestListRecentRuns:
 
     def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
         """A very large limit is clamped so returned count <= clamp ceiling."""
-        db_path = tmp_path / "lrr_clamp_test.db"
+        database = init_db(tmp_path / "lrr_clamp_test.db")
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
             seed_run(
-                db_path,
+                database,
                 run_id=f"clamp-run-{i:03d}",
                 name=f"clamp-{i}",
                 status="completed",
@@ -492,7 +485,7 @@ class TestListRecentRuns:
                 summary=home_summary(),
             )
 
-        result = list_recent_runs(9999, _storage(db_path))
+        result = list_recent_runs(9999, run_storage_over(database))
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -501,9 +494,9 @@ class TestListRecentRuns:
 
     def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
         """A non-positive limit is handled gracefully (clamped to default, no raise)."""
-        db_path = tmp_path / "lrr_nonpos_test.db"
+        database = init_db(tmp_path / "lrr_nonpos_test.db")
         seed_run(
-            db_path,
+            database,
             run_id="run-np-001",
             name="np-run",
             status="completed",
@@ -512,7 +505,7 @@ class TestListRecentRuns:
         )
 
         try:
-            result = list_recent_runs(0, _storage(db_path))
+            result = list_recent_runs(0, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -527,9 +520,8 @@ class TestListRecentRuns:
 
     def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
-        db_path = tmp_path / "lrr_null_summary.db"
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
+        database = init_db(tmp_path / "lrr_null_summary.db")
+        with database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -538,7 +530,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, _storage(db_path))
+            result = list_recent_runs(5, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -557,7 +549,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, _storage(bad_path))
+            result = list_recent_runs(5, run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
@@ -590,26 +582,26 @@ class TestListRecentRuns:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """One damaged run neither fails the list nor hides the other runs' figures, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
-        db_path = tmp_path / "lrr_garbled.db"
+        database = init_db(tmp_path / "lrr_garbled.db")
         seed_run(
-            db_path,
+            database,
             run_id="readable-run",
             name="readable",
             created_at="2026-01-02T00:00:00+00:00",
             summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37),
         )
         seed_run(
-            db_path,
+            database,
             run_id="garbled-run",
             name="garbled",
             created_at="2026-01-01T00:00:00+00:00",
             summary=home_summary(),
         )
-        with Database(db_path).transaction() as conn:
+        with database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
-        result = list_recent_runs(10, _storage(db_path))
+        result = list_recent_runs(10, run_storage_over(database))
 
         assert "error" not in result, result
         assert [
