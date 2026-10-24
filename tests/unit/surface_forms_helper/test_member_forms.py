@@ -418,3 +418,24 @@ def test_a_member_that_is_a_routine_whose_signature_inspect_cannot_read_raises_a
 
     with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
         member_forms(Meter)
+
+
+def test_a_partial_member_raises_a_type_error_naming_the_class_the_member_and_that_only_python_3_14_binds_it_to_the_instance() -> None:
+    def settle(self: object, share: float, rate: int) -> None: ...
+
+    class Meter:
+        half = functools.partial(settle, rate=1)
+
+    with pytest.raises(
+        TypeError, match=r"\.Meter\.half\b.*\bfunctools\.partial\b.*\b3\.14\b.*\bmethod\b"
+    ):
+        member_forms(Meter)
+
+
+def test_a_partial_member_wrapped_in_staticmethod_is_spelled_staticmethod_then_the_signature_the_partial_leaves() -> None:
+    def settle(share: float, rate: int) -> None: ...
+
+    class Meter:
+        half = staticmethod(functools.partial(settle, rate=1))
+
+    assert member_forms(Meter) == {"half": "staticmethod (share: float, *, rate: int = 1) -> None"}
