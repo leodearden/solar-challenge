@@ -5,7 +5,6 @@ Gauge is defined at module level, where its forward reference to itself resolves
 module's namespace.
 """
 
-import collections
 import collections.abc
 import datetime
 import enum
