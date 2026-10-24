@@ -33,7 +33,7 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
-from solar_challenge.web.database import RUN_TYPES, Database
+from solar_challenge.web.database import RUN_TYPES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
@@ -42,7 +42,7 @@ from tests._html_page import element_attributes, element_count, texts_after
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import point_store_config_at_a_missing_directory
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -79,18 +79,17 @@ def _insert_test_run(
     config: dict | None = None,
     created_at: str = "2025-06-01T12:00:00",
 ) -> None:
-    """Insert a test run directly into the database, created at *created_at*.
+    """Insert a test run directly into *app*'s database, created at *created_at*.
 
     Its summary_json is the text a save writes for *summary*, home_summary() by default, and
     its config_json *config* in JSON, _A_HOME's field tree by default.
 
     This avoids needing to run a full simulation for route tests.
     """
-    db_path = app.config["DATABASE"]
     summary = home_summary() if summary is None else summary
     config = _A_HOME_FIELD_TREE if config is None else config
 
-    with Database(Path(db_path)).transaction() as conn:
+    with database_of(app).transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -117,7 +116,7 @@ def _insert_test_run(
 
 def _garble(app: Flask, run_id: str, column: str) -> None:
     """Overwrite run *run_id*'s *column*, summary_json or config_json, with text that is not JSON."""
-    with Database(Path(app.config["DATABASE"])).transaction() as conn:
+    with database_of(app).transaction() as conn:
         conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", ("{not json", run_id))
 
 
@@ -446,7 +445,7 @@ class TestRunDetailAPI:
 
         The row is the placeholder JobManager.submit_fleet_job writes when it queues a fleet run.
         """
-        with Database(Path(app.config["DATABASE"])).transaction() as conn:
+        with database_of(app).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, n_homes)"
                 " VALUES ('running-run', 'Still Running', 'fleet', 'running', '2025-06-02T09:00:00', 3)"
