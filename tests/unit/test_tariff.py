@@ -637,18 +637,25 @@ class TestTariffConfigCheapMinutes:
                 frozenset(range(1440)) - frozenset(range(1020, 1080)),
                 id="low_rate_most_of_the_day",
             ),
-            pytest.param(TariffConfig.flat_rate(0.25), frozenset(), id="flat_rate"),
+        ],
+    )
+    def test_a_two_rate_tariffs_cheap_minutes_are_the_minutes_at_its_lower_rate(
+        self, tariff: TariffConfig, expected: frozenset[int]
+    ) -> None:
+        assert tariff.cheap_minutes_of_day == expected
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.flat_rate(0.25), id="flat_rate"),
             pytest.param(
                 TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
-                frozenset(),
                 id="six_periods_one_rate",
             ),
         ],
     )
-    def test_a_two_rate_tariffs_cheap_minutes_are_its_lower_rates(
-        self, tariff: TariffConfig, expected: frozenset[int]
-    ) -> None:
-        assert tariff.cheap_minutes_of_day == expected
+    def test_a_one_rate_tariff_has_no_cheap_minutes(self, tariff: TariffConfig) -> None:
+        assert tariff.cheap_minutes_of_day == frozenset()
 
     @pytest.mark.parametrize(
         "tariff",
