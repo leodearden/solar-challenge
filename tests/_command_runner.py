@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The one runner through which the orchestrator contract tests start a command, and the one description of how it ended.
+"""The one runner through which the orchestrator contract tests start a command, and the descriptions of how it ended.
 
 run_command starts a command as the orchestrator does: verbatim through `sh -c`,
 in the command's directory, and, for a command with a role, such as an
@@ -7,18 +7,26 @@ OrchestratorCommand, with DF_VERIFY_ROLE set to that role. The command runs in a
 session of its own, and no process in that session outlives a hang: at its
 timeout, every one of them is killed.
 
+describe_outcome describes how any run ended: its exit code, then the tail of
+each stream. describe_pytest_outcome describes a pytest run, such as the verify
+suite's, with its report's ERRORS and FAILURES sections ahead of those tails.
+
 Usage::
 
-    from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
+    from tests._command_runner import (
+        CommandTimedOut, ShellCommand, describe_outcome, describe_pytest_outcome, run_command,
+    )
     from tests._orchestrator_config import verify_command
 
     result = run_command(verify_command(project_root, "test_command"), env, timeout_secs=600)
-    assert result.returncode == 0, describe_outcome(result)
+    assert result.returncode == 0, describe_pytest_outcome(result)
     version = run_command(ShellCommand("uv --version", project_root), timeout_secs=60)
+    assert version.returncode == 0, describe_outcome(version)
 """
 
 import contextlib
 import os
+import re
 import signal
 import subprocess
 from collections.abc import Mapping
@@ -27,6 +35,11 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 _STREAM_TAIL_CHARS = 5000
+
+# The line TerminalWriter.sep("=", title) prints to open each section of pytest's report.
+_PYTEST_SECTION_HEADER = re.compile(r"^=+ (?P<title>.+?) =+$", re.MULTILINE)
+
+_PYTEST_FAILURE_SECTION_TITLES = frozenset({"ERRORS", "FAILURES"})
 
 _DRAIN_AFTER_KILL_SECS = 5
 
@@ -87,6 +100,39 @@ def _tails(stdout: str, stderr: str) -> str:
 def describe_outcome(outcome: Outcome) -> str:
     """Describe how *outcome*'s run ended, for an assertion message: its exit code, then the tail of each stream."""
     return f"exit {outcome.returncode}\n{_tails(outcome.stdout, outcome.stderr)}"
+
+
+def describe_pytest_outcome(outcome: Outcome) -> str:
+    """Describe how *outcome*'s pytest run ended, as describe_outcome does, with its report's failure sections first.
+
+    Those are the ERRORS and FAILURES sections of the pytest report in its stdout,
+    which hold each failing test's traceback and captured output. pytest prints
+    them before its warnings summary, so a long summary pushes them out of
+    stdout's tail. A stdout with neither, as when uv refused to start pytest or the
+    run passed, is described exactly as describe_outcome describes it.
+    """
+    return f"exit {outcome.returncode}\n{_failure_sections(outcome.stdout)}{_tails(outcome.stdout, outcome.stderr)}"
+
+
+def _failure_sections(stdout: str) -> str:
+    """Return each ERRORS and FAILURES section of the pytest report in *stdout*, in report order, each ending a line.
+
+    A section runs from the line that opens it to the line that opens the next
+    section, or to the end of *stdout*.
+    """
+    headers = list(_PYTEST_SECTION_HEADER.finditer(stdout))
+    # A stdout with no header still has an end, so the zip below pairs headers with ends non-strictly.
+    ends = [header.start() for header in headers[1:]] + [len(stdout)]
+    return "".join(
+        _excerpt(stdout[header.start() : end])
+        for header, end in zip(headers, ends)
+        if header["title"] in _PYTEST_FAILURE_SECTION_TITLES
+    )
+
+
+def _excerpt(section: str) -> str:
+    """Return *section* as a description quotes it: ending a line, so whatever follows starts a line of its own."""
+    return section if section.endswith("\n") else f"{section}\n"
 
 
 class CommandTimedOut(Exception):
