@@ -400,6 +400,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "EventWindow": {
         "mask": "(self, index: DatetimeIndex) -> Series",
     },
+    "GridServicesEventsConfig": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
     # --- pv (pv.py) ---
     "PVConfig": {
         "effective_inverter_capacity_kw": "property (self) -> float",

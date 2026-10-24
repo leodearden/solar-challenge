@@ -22,7 +22,14 @@ Key public symbols:
 * :data:`DEFAULT_EVENT_WINDOWS` — default winter-weekday-16:00-19:00 schedule
   per PRD open-Q4.
 * :class:`GridServicesEventsConfig` — frozen dataclass combining band selection,
-  event windows, aggregator share, and utilisation factor.
+  event windows, aggregator share, and utilisation factor; its
+  :meth:`~GridServicesEventsConfig.annual_income_gbp` prices a simulated fleet.
+* :class:`NoGridServices` — frozen pricing value under which a fleet earns no
+  grid-services income.
+* :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
+  installed battery discharge power per year.
+* :data:`GridServicesModel` — the union of the three pricing values, each of
+  which prices a simulated fleet with ``annual_income_gbp(fleet_results)``.
 * :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
   dispatchable battery capacity (kW) summed across the fleet.
 * :class:`GridServicesAtEvents` — frozen dataclass holding the banded
@@ -33,8 +40,9 @@ Key public symbols:
   :class:`GridServicesAtEvents` breakdown.
 """
 
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 
 import pandas as pd
 
@@ -322,6 +330,64 @@ class GridServicesEventsConfig:
                 f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
             )
 
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the annual capacity-at-events income this configuration prices *fleet_results* at.
+
+        In £ per year, net of the aggregator share:
+        ``compute_grid_services_at_events(fleet_results, self).annual_income_gbp``.
+        """
+        return compute_grid_services_at_events(fleet_results, self).annual_income_gbp
+
+
+# ---------------------------------------------------------------------------
+# NoGridServices + FlatGridServices + GridServicesModel
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoGridServices:
+    """The pricing under which a fleet earns no grid-services income."""
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return 0.0: no fleet earns grid-services income under this pricing."""
+        return 0.0
+
+
+@dataclass(frozen=True)
+class FlatGridServices:
+    """A flat grid-services rate per kW of installed battery discharge power per year.
+
+    Attributes:
+        income_per_kw_per_year_gbp: Income per kW of battery discharge power per
+            year, net of the aggregator share (£/kW/yr); > 0 and finite.  Zero
+            income is :class:`NoGridServices`.
+    """
+
+    income_per_kw_per_year_gbp: float
+
+    def __post_init__(self) -> None:
+        """Refuse a rate that is not > 0 and finite, raising ConfigurationError."""
+        if not 0.0 < self.income_per_kw_per_year_gbp < math.inf:
+            raise ConfigurationError(
+                "FlatGridServices.income_per_kw_per_year_gbp must be > 0 and finite, "
+                f"got {self.income_per_kw_per_year_gbp}; zero income is NoGridServices()"
+            )
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the rate × the installed discharge power of the fleet's batteries, in £ per year.
+
+        The power is the sum of ``battery_config.max_discharge_kw`` over the
+        homes of *fleet_results* that have a battery.
+        """
+        return self.income_per_kw_per_year_gbp * sum(
+            home.battery_config.max_discharge_kw
+            for home in fleet_results.home_configs
+            if home.battery_config is not None
+        )
+
+
+GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesEventsConfig
+
 
 # ---------------------------------------------------------------------------
 # compute_fleet_spare_capacity_kw
@@ -420,7 +486,8 @@ class GridServicesAtEvents:
     """Banded availability + utilisation income breakdown from a grid-services event model.
 
     Returned by :func:`compute_grid_services_at_events`.  All income figures are
-    **net** of the aggregator share (i.e. the householder-side income).
+    **net** of the aggregator share: the CBS's grid-services revenue, which
+    :func:`~solar_challenge.finance.project_multi_year` books into fleet revenue.
 
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event

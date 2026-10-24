@@ -710,6 +710,12 @@ as on the tag, and `mean_period_rate` is unchanged. Consumers on tariffs with
 three or more distinct rates re-baseline the figures built on them when they
 re-pin; other consumers need no change.
 
+**Unreleased on main** (task 801): `GridServicesEventsConfig` gains
+`annual_income_gbp(fleet_results)`, the annual capacity-at-events income in £,
+net of the aggregator share, that it prices a simulated fleet at, equal to
+`compute_grid_services_at_events(fleet_results, self).annual_income_gbp`; the
+0.5.0 tag lacks it. Consumers need no change when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
