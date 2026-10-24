@@ -342,11 +342,12 @@ def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
 
 
-def _is_namespace_entry_of_pytest_plugins(node: ast.AST) -> bool:
-    """Return whether *node* is what globals(), locals() or vars() returns, subscripted with the
-    str pytest_plugins, in any position: the entry of a namespace that may be the module's own.
+def _subscripts_namespace_call_with_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* subscripts a call of globals(), locals() or vars() with the str
+    pytest_plugins, in any position, as `globals()["pytest_plugins"]` does.
 
-    Whatever the call is given counts, so vars(module) does.
+    Whatever the call is given counts, so vars(module) does. Only that subscript is read: a method
+    call on the namespace, such as update or setdefault, is not.
     """
     return (
         isinstance(node, ast.Subscript)
@@ -380,7 +381,7 @@ def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt
             yield statement
     for statement in (node for node in ast.walk(tree) if isinstance(node, ast.stmt)):
         if (isinstance(statement, ast.Global) and _PYTEST_PLUGINS in statement.names) or any(
-            _reads_or_deletes_pytest_plugins(node) or _is_namespace_entry_of_pytest_plugins(node)
+            _reads_or_deletes_pytest_plugins(node) or _subscripts_namespace_call_with_pytest_plugins(node)
             for node in _nodes_outside_nested_statements(statement)
         ):
             yield statement
