@@ -13,6 +13,7 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 pytest.importorskip("flask")
@@ -89,8 +90,8 @@ _PATIENCE_SECS = 60
 _WERKZEUG_STARTUP_LINE = re.compile(r"^ \* Running on http://127\.0\.0\.1:(\d+)\n", re.MULTILINE)
 
 
-def _lately_free_port() -> int:
-    """A port that was free when this returned; another process can take it before a server binds it, so it is only for a test that never connects to it."""
+def _port_free_when_asked() -> int:
+    """A port that was free when asked for; another process can take it before a server binds it, so it is only for a test that never connects to it."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port: int = sock.getsockname()[1]
@@ -154,8 +155,11 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator[_ChildServer]:
             raise
 
 
-def _wait_until(server: _ChildServer, condition: Callable[[], bool], what: str) -> None:
-    """Wait until condition holds, failing if the server has exited by then or _PATIENCE_SECS pass.
+_Found = TypeVar("_Found")
+
+
+def _wait_until(server: _ChildServer, condition: Callable[[], _Found | None], what: str) -> _Found:
+    """Wait until condition returns something true, and return that; fail if the server has exited by then or _PATIENCE_SECS pass.
 
     Whether the server has exited is read before condition is, so a condition checked after an
     exit sees all that the server wrote: one that prints what the test waits for and exits at
@@ -164,8 +168,9 @@ def _wait_until(server: _ChildServer, condition: Callable[[], bool], what: str) 
     deadline = time.monotonic() + _PATIENCE_SECS
     while True:
         exited = server.process.poll() is not None
-        if condition():
-            return
+        found = condition()
+        if found:
+            return found
         if exited:
             pytest.fail(f"the server exited with code {server.process.returncode} before {what}")
         if time.monotonic() > deadline:
@@ -178,12 +183,10 @@ def _serving_port(server: _ChildServer) -> int:
 
     The CLI's own status line names only the port it was asked for.
     """
-
-    def reported() -> list[str]:
-        return _WERKZEUG_STARTUP_LINE.findall(server.stderr())
-
-    _wait_until(server, lambda: bool(reported()), "it reports the port it listens on")
-    return int(reported()[0])
+    startup_line = _wait_until(
+        server, lambda: _WERKZEUG_STARTUP_LINE.search(server.stderr()), "it reports the port it listens on"
+    )
+    return int(startup_line.group(1))
 
 
 def _submit_home_job(port: int, pv_kw: float) -> str:
@@ -264,7 +267,7 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
     """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
-    port = _lately_free_port()
+    port = _port_free_when_asked()
 
     with _server(tmp_path, WEB_START, "--port", str(port)) as server:
         _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
