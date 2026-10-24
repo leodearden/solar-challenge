@@ -782,6 +782,12 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             id="a-tuple-target",
         ),
         pytest.param(
+            ("plugins = pytest_plugins = ['pytest_rerunfailures']",),
+            "plugins = pytest_plugins = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="chained-with-another-target",
+        ),
+        pytest.param(
             ("if (pytest_plugins := ['pytest_rerunfailures']): pass",),
             "if (pytest_plugins := ['pytest_rerunfailures']):",
             _UNREADABLE_USE,
@@ -893,10 +899,11 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 ) -> None:
     """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for or a with, or declared global in a function. It may
-    also be read or deleted in any scope, function and class bodies included, as a method call such
-    as append, a subscript, an alias or a del does. Or globals(), locals() or vars() may be
-    subscripted with the name, in any position or scope.
+    may be bound by a tuple, a walrus, a for or a with, or beside another target of a chained
+    assignment, which aliases the list, or declared global in a function. It may also be read or
+    deleted in any scope, function and class bodies included, as a method call such as append, a
+    subscript, an alias or a del does. Or globals(), locals() or vars() may be subscripted with the
+    name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
