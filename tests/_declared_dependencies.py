@@ -10,11 +10,10 @@ first-party. A module a file names to pytest.importorskip as a string literal
 counts as an import it requires, since the test skips wherever that module is
 missing. So does the module pytest imports for each entry of a module-level
 pytest_plugins assignment; a built-in plugin's short name, such as pytester,
-names a module of pytest's own _pytest package. An import inside a try block
-that handles ImportError is optional in the package, where dead_import_guards
-finds each such guard over declared distributions only, whose handler can
-never run, and required like any other in every other file, for the reasons
-_imports_required_by gives. Imports map to distributions only through
+names a module of pytest's own _pytest package. _imports_required_by says when
+an import inside a try block that handles ImportError counts, and
+dead_import_guards finds each such guard over declared distributions only,
+whose handler can never run. Imports map to distributions only through
 installed metadata, so a scope's check skips where its extras are not
 installed.
 
@@ -370,15 +369,8 @@ def _imports_required_by(project_root: Path, source: Path) -> Iterator[ast.Impor
     import of each module it names to pytest.importorskip, and an import of the module pytest
     imports for each entry of its pytest_plugins.
 
-    Every reading of what a file requires starts here, so this decides, for all of them, whether
-    an import inside a try that handles ImportError counts. In a package file it does not: the
-    file's own imports are its _unguarded_imports, since a consumer installs the package with or
-    without each extra, so the guard's handler is a real path, and dead_import_guards flags each
-    guard whose handler can never run. Any other file runs only in the project's own runs, which
-    install exactly what its scope declares. There a guarded import of an undeclared module
-    either never imports, so its handler runs every time, skipping the test or falling back, or
-    imports only while another requirement pulls the module in. So outside the package every
-    import counts, guarded or not.
+    Every reading of what a file requires starts here. A file's own imports are its
+    _unguarded_imports in the package, and every import in it, guarded or not, anywhere else.
     """
     tree = _parse(source)
     if source.is_relative_to(_package_dir(project_root)):
@@ -484,8 +476,8 @@ def web_subpackage_imports(project_root: Path, sources: Iterable[Path]) -> list[
     """Return (file, web files run) for every file in *sources* whose imports run a file of
     WEB_SUBPACKAGE under *project_root*.
 
-    Imports count as _imports_required_by reads them, which also decides when an import inside a
-    try that handles ImportError counts: a function-local import, a TYPE_CHECKING import, a module
+    Imports count as _imports_required_by reads them; it also says when an import inside a try
+    that handles ImportError counts. A function-local import, a TYPE_CHECKING import, a module
     named to pytest.importorskip and a pytest_plugins entry count. Names resolve as Python finds
     them, so a module named web elsewhere is not the subpackage. Only files are read; no
     installed metadata is needed.
@@ -630,8 +622,7 @@ def assert_imports_only_declared(project_root: Path, scope: SourceScope) -> None
         "A module a file names to pytest.importorskip counts as required, since its test skips "
         "wherever the module is missing; so does a plugin module a pytest_plugins entry names, "
         "since pytest imports it when it loads the file; and so, outside src/solar_challenge, does "
-        "an import inside a try block that handles ImportError, since the run that loads the file "
-        "installs only what its scope declares. Declare them in one of those groups in "
-        "pyproject.toml, or, in src/solar_challenge, make the import optional inside a try block "
+        "an import inside a try block that handles ImportError. Declare them in one of those groups "
+        "in pyproject.toml, or, in src/solar_challenge, make the import optional inside a try block "
         "that handles ImportError"
     )
