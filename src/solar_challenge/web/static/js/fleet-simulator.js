@@ -105,7 +105,7 @@ document.addEventListener('alpine:init', () => {
         /* ---- Build payload from current state ---- */
         buildPayload() {
             const payload = {
-                name: this.simName || 'Fleet Simulation',
+                name: this.simName,
                 n_homes: parseInt(this.n_homes),
                 seed: this.seed,
                 pv: { capacity_kw: this._buildDistPayload(this.pvDist) },

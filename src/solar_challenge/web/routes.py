@@ -32,7 +32,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunQuery
-from solar_challenge.web.stored_runs import StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun
 
 bp = Blueprint("main", __name__)
 
@@ -63,12 +63,17 @@ def simulate_home_page() -> str:
 
 @bp.route("/simulate/fleet", methods=["GET"])
 def simulate_fleet_page() -> str:
-    """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads."""
+    """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads.
+
+    Its Simulation Name placeholder shows the name a fleet run given none is created under,
+    whatever its homes.
+    """
     return str(render_template(
         "simulate/fleet.html",
         fleet_components=FLEET_COMPONENTS,
         presets=fleet_preset_names(),
         seg_presets=SEG_PRESETS,
+        default_run_name=RUN_KINDS["fleet"].default_name(()),
     ))
 
 

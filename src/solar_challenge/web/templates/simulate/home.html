@@ -134,7 +134,7 @@ document.addEventListener('alpine:init', () => {
                 location: f.location === 'custom'
                     ? f.custom_lat + ',' + f.custom_lon
                     : f.location,
-                name: f.name || 'Web Simulation'
+                name: f.name
             };
             if (f.period_mode === 'preset') {
                 payload.days = parseInt(f.period_days);
