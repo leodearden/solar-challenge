@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names."""
+"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
 
 import os
 import re
@@ -65,7 +65,7 @@ def test_home_quick_saves_the_minutes_from_midnight_on_1_june_2024(tmp_path: Pat
 @pytest.mark.parametrize(
     ("consumption_options", "expected_load"),
     [
-        pytest.param([], LoadConfig(), id="default-is-the-ofgem-tdcv"),
+        pytest.param([], LoadConfig(), id="no-c-takes-load-configs-default"),
         pytest.param(
             ["-c", "4200"],
             LoadConfig(annual_consumption_kwh=4200.0),
@@ -110,3 +110,16 @@ def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_
     assert result.returncode == 0, result.stderr
     assert _total_generation_kwh(result.stdout) > 0
     assert not (working_dir / DEFAULT_CACHE_DIR).exists()
+
+
+def test_home_quick_help_names_the_consumption_it_defaults_to() -> None:
+    """`home quick --help` gives --consumption-kwh's default as a figure in that option's row: the annual consumption a LoadConfig with no total simulates.
+
+    COLUMNS keeps Rich from wrapping the row at 80 columns, so the row is the one line of the help that names the option.
+    """
+    result = runner.invoke(app, ["home", "quick", "--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0, result.output
+    option_rows = [line for line in result.stdout.splitlines() if "--consumption-kwh" in line]
+    assert len(option_rows) == 1, result.stdout
+    assert f"{LoadConfig().get_annual_consumption():,.0f}" in option_rows[0], result.stdout

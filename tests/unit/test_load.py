@@ -367,8 +367,8 @@ class TestHouseholdSizeParameter:
 
         assert config_4.get_annual_consumption() > config_2.get_annual_consumption()
 
-    def test_ofgem_tdcv_values_used(self):
-        """Uses Ofgem TDCV values for standard sizes."""
+    def test_one_to_five_occupants_default_to_their_table_value(self):
+        """Without an annual total, one to five occupants take their OFGEM_TDCV_BY_OCCUPANTS value, the simulator's own default."""
         for occupants in range(1, 6):
             config = LoadConfig(household_occupants=occupants)
             expected = OFGEM_TDCV_BY_OCCUPANTS[occupants]
@@ -400,7 +400,6 @@ class TestHouseholdSizeParameter:
         # Larger household should use more energy
         assert total_large > total_small
 
-        # Ratio should match TDCV ratio
         expected_ratio = OFGEM_TDCV_BY_OCCUPANTS[5] / OFGEM_TDCV_BY_OCCUPANTS[1]
         actual_ratio = total_large / total_small
         assert actual_ratio == pytest.approx(expected_ratio, rel=0.01)
