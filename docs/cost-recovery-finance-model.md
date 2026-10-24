@@ -13,6 +13,7 @@
 **Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
 **Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
 **Unreleased on main** (task 702): `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name. `project_multi_year` also no longer floors a year's `fleet_revenue_gbp` at £0, so a `simulate` whose fleet earns a negative revenue projects, and the solve prices, that loss; the 0.5.0 tag projects it as £0. Its adaptive refinement measures each metric's interpolation error against the magnitude of that metric's age-0 value, so a fleet whose revenue is negative at age 0 and varies with age converges as the fleet earning the mirror revenue does; the 0.5.0 tag divides that fleet's revenue error by 1e-9, so its bisection typically runs to `MAX_NODES` and reports a meaningless `interp_error_estimate`. Fleets `simulate_fleet` builds are unaffected: their own-use, SEG and grid-services income is never negative.
+**Unreleased on main** (task 801): `project_multi_year` prices grid-services income from each simulated age's own fleet, seed and bisection-trial ages alike (§4, §8.1), so capacity-at-events income falls with battery SOH; the 0.5.0 tag books the age-0 event figure at every age. A flat rate prices the batteries of the fleet `simulate` returns, which `simulate_fleet` pairs with the scenario's homes, so the flat figure is unchanged.
 
 ---
 
@@ -319,10 +320,31 @@ seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
                     per-home seg_tariff is already set and its rate differs from
                     the scenario rate, ValueError is raised (fail-fast).
 
-grid_services_income = grid_services_income_per_kw_per_year_gbp
-                       × Σ_homes battery.max_discharge_kw
-                    (field from FinanceConfig; W1 fills the non-zero value)
+grid_services_income(t) = pricing.annual_income_gbp(F_t)
+    pricing = grid_services_model_of(finance), resolved once, before any simulation
+    F_t     = the fleet simulated at age t
+  NoGridServices()    → 0
+  FlatGridServices(r) → r × Σ_{battery homes of F_t} max_discharge_kw
+  grid_services_model = "capacity_at_events", the GridServicesEventsConfig:
+                      → Σ_w avail_w(F_t) × (a × N_w + u × h_w × U / 1000 × N_w) × (1 − s)
+    avail_w = compute_fleet_spare_capacity_kw(F_t, windows)[w], the fleet's firm
+              spare battery capacity in event window w (kW)
+    a = availability rate (£/kW/event), U = utilisation rate (£/MWh): the band's,
+        unless the configuration overrides them
+    u = utilisation_factor, h_w = event_hours, N_w = events_per_year,
+    s = aggregator_share
 ```
+
+**Grid-services income** is priced at each simulated age from that age's own
+fleet, seed and bisection-trial ages alike.  Under the events model it follows
+battery SOH, because each battery's SOC floor scales with its SOH
+(`tests/integration/test_grid_services_events.py::test_c1_each_sampled_age_books_its_own_fleets_event_income`,
+`tests/integration/test_grid_services_events.py::test_c2_bisection_trial_ages_book_their_own_fleets_event_income`).
+With the default event window, utilisation 0.6 and aggregator share 0.25, one kW
+of firm spare capacity earns (1.00 × 12 + 0.6 × 3 h × 0.060 £/kWh × 12) × 0.75 =
+£9.972 ≈ £9.97 a year in the central band, £4.986 in the low band and £19.944 in
+the high band
+(`tests/unit/test_gridservices.py::TestWorkedCapacityAtEventsFigure::test_band_prices_one_kw_of_firm_spare_capacity`).
 
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,
@@ -340,7 +362,8 @@ is annualised once (`a_h`) before the override splits it, as `householder_bill`
 annualises before it bills (§3;
 `tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`).  The
 annualised discharge is the yearly throughput that battery cycle ageing
-integrates.  Grid-services income is already annual.  Full-year windows are
+integrates.  The grid-services term is annual by construction, so `k_h` never
+multiplies it.  Full-year windows are
 unchanged (`k_h = 1`).  A short window is still one season's sample, so board
 figures want `scenario.period` to cover about one full year.
 
@@ -742,10 +765,10 @@ W1 (flexibility-value finance integration, task/52–56) reaches the model two w
 an exogenous CBS revenue term (§8.1) and endogenous physics that moves the energy
 aggregates (§8.2).
 
-### 8.1 Grid-Services Income (Exogenous £/kW/yr)
+### 8.1 Grid-Services Income (Flat £/kW/yr or Capacity at Events)
 
-`FinanceConfig.grid_services_income_per_kw_per_year_gbp` is a W1-filled field.
-At each projection year:
+Under the flat model, `FinanceConfig.grid_services_income_per_kw_per_year_gbp`
+is a W1-filled field.  At each projection year:
 
 ```
 grid_services_income = grid_services_income_per_kw_per_year_gbp
@@ -761,6 +784,10 @@ r*(flex) = r*(no-flex) − grid_services_income / (fleet_billed_own_use / 100)  
 
 This directional property is hard-asserted in
 `tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
+
+Under `grid_services_model = "capacity_at_events"` the income is §4's
+capacity-at-events term, priced at each projection age from that age's simulated
+fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
 
 ### 8.2 TOU Arbitrage / Time-Shift (Endogenous Physics) — Basis C
 

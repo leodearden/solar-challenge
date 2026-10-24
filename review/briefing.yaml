@@ -376,9 +376,10 @@ subprojects:
         why: "Arbitrage-immune CBS revenue; the CBS bears the round-trip loss."
 
     known_gaps:
-      - what: "Capacity-at-events grid-services income is MEMOIZED from the age-0 simulation and reused for all 25 projection years — it does not track battery SOH degradation over the asset life."
-        why: "Documented decision, but a real fidelity limitation specifically for the capacity-at-events path (the flat model also doesn't degrade, but it isn't claiming to model real spare capacity). Surface it. tracking: null"
-        tracking: null
+      # (RESOLVED — no live gap) The former "capacity-at-events grid-services
+      # income is memoized from the age-0 simulation" gap was retired by Task 801,
+      # which prices grid-services income from each simulated age's own fleet in
+      # project_multi_year. /review should NOT re-flag it.
       - what: "BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay (Task 88's F-NAME-1 explicitly left this out-of-scope; the other two sub-claims formerly bundled here — stale doc line numbers and finance.py's docstring count — were fixed by Task 88's F-DOC-4/F-DOC-5 and are dropped from this gap)."
         why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer expecting the name to match what it holds. Intentional back-compat decision to keep the name, but still worth surfacing. tracking: null"
         tracking: null
