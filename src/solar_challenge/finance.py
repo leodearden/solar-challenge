@@ -40,13 +40,18 @@ import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.gridservices import (
+    FlatGridServices,
+    GridServicesEventsConfig,
+    GridServicesModel,
+    NoGridServices,
+)
 from solar_challenge.seg import SEGTariff
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
     from solar_challenge.fleet import FleetConfig, FleetResults
-    from solar_challenge.gridservices import GridServicesEventsConfig
     from solar_challenge.home import SummaryStatistics
 
 
@@ -191,6 +196,36 @@ class FinanceConfig:
                 f"grid_services_model must be one of {sorted(_VALID_GS_MODELS)}, "
                 f"got '{self.grid_services_model}'"
             )
+
+
+def grid_services_model_of(finance: FinanceConfig) -> GridServicesModel:
+    """Return the pricing value that *finance*'s three grid-services fields name.
+
+    The mapping is the α column of docs/prds/grid-services-pricing-model.md §5.2:
+
+    - ``grid_services_model="capacity_at_events"`` with ``grid_services_events``
+      set: that events configuration; the flat rate is ignored.
+    - ``"capacity_at_events"`` with ``grid_services_events=None``: refused.
+    - ``"flat"``, the only other model FinanceConfig accepts:
+      :class:`~solar_challenge.gridservices.NoGridServices` for a zero
+      ``grid_services_income_per_kw_per_year_gbp``, else
+      :class:`~solar_challenge.gridservices.FlatGridServices` at that rate;
+      ``grid_services_events`` is ignored.
+
+    Raises:
+        ConfigurationError: If the model is ``"capacity_at_events"`` and
+            ``grid_services_events`` is None.
+    """
+    if finance.grid_services_model == "capacity_at_events":
+        if finance.grid_services_events is None:
+            raise ConfigurationError(
+                "grid_services_model='capacity_at_events' requires "
+                "grid_services_events to be configured"
+            )
+        return finance.grid_services_events
+    if finance.grid_services_income_per_kw_per_year_gbp == 0.0:
+        return NoGridServices()
+    return FlatGridServices(finance.grid_services_income_per_kw_per_year_gbp)
 
 
 # ---------------------------------------------------------------------------
