@@ -149,6 +149,40 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     )
 
 
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(
+            ("pytest_plugins = []", 'pytest_plugins += ["pytest_rerunfailures"]'),
+            id="extended-with-plus-equals",
+        ),
+        pytest.param(
+            ('pytest_plugins = "pytester"', 'pytest_plugins += ",pytest_rerunfailures"'),
+            id="a-str-extended-after-a-comma",
+        ),
+    ],
+)
+def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_scope_gives(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """A pytest_plugins entry counts as a requirement wherever a statement of the module's own scope gives it.
+
+    pytest reads pytest_plugins as an attribute of the module once the module has run, so an
+    augmented assignment adds its entries to those the assignment before it gave. A str extended
+    after a comma adds the names after the comma, not the empty piece before it.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import contextlib", "import sys", *lines)
+
+    assert undeclared_distributions(tmp_path, [plugin], declared={"pytest"}) == [
+        (plugin, ["pytest-rerunfailures"])
+    ], (
+        "the undeclared-distributions detector missed the pytest_rerunfailures module, which the "
+        "undeclared pytest-rerunfailures provides, among the entries a module gives pytest_plugins "
+        f"with these lines: {lines}"
+    )
+
+
 def test_undeclared_distributions_counts_an_import_inside_an_import_error_guard_outside_the_package_only(
     tmp_path: Path,
 ) -> None:
@@ -578,7 +612,7 @@ def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_pl
     defect: str,
 ) -> None:
     """A pytest_plugins value that is no str, list or tuple, or that holds an entry that is no str,
-    fails the detector, naming the file, the line, the expression and what is wrong with it.
+    fails the detector, naming the file, the line, the statement and what is wrong with its value.
 
     pytest imports each entry as a module name, which it requires to be text, and accepts None,
     a str or a sequence only. An int read as a module name would otherwise fail on its first
@@ -591,12 +625,54 @@ def test_undeclared_distributions_fails_naming_the_file_and_line_whose_pytest_pl
         undeclared_distributions(tmp_path, [plugin], declared={"pytest"})
 
     message = str(failure.value)
-    assert f"{plugin}:2 sets pytest_plugins to {assigned}, which {defect}" in message, (
-        f"the failure does not name line 2 of {plugin}, the pytest_plugins expression `{assigned}` on "
-        f"it and what is wrong with it, `which {defect}`: {message}"
+    assert f"{plugin}:2 has `pytest_plugins = {assigned}`, whose value {defect}" in message, (
+        f"the failure does not name line 2 of {plugin}, the statement `pytest_plugins = {assigned}` on "
+        f"it and what is wrong with its value, `whose value {defect}`: {message}"
     )
     assert "list or tuple of module names" in message, (
         f"the failure does not say how to write pytest_plugins: {message}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("lines", "statement", "defect"),
+    [
+        pytest.param(
+            ("pytest_plugins = []", "pytest_plugins += PLUGINS"),
+            "pytest_plugins += PLUGINS",
+            "is not a literal",
+            id="a-name-added-with-plus-equals",
+        ),
+        pytest.param(
+            ("pytest_plugins = []", "pytest_plugins += [1]"),
+            "pytest_plugins += [1]",
+            "names 1, not a module name",
+            id="an-int-added-with-plus-equals",
+        ),
+    ],
+)
+def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_nested_or_augmented_pytest_plugins_it_cannot_read(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+    statement: str,
+    defect: str,
+) -> None:
+    """A pytest_plugins value the detector cannot read fails it wherever a statement of the module's
+    own scope gives it, and however: an augmented assignment is quoted whole, as written, not
+    described as setting pytest_plugins.
+
+    The failure names the file, the line and the statement, the last of *lines*, and what is wrong
+    with its value, as it does for an assignment in the module body.
+    """
+    plugin = _write_module(tmp_path / "plugin.py", "import sys", 'PLUGINS = ["pytester"]', *lines)
+
+    with pytest.raises(AssertionError) as failure:
+        undeclared_distributions(tmp_path, [plugin], declared={"pytest"})
+
+    message = str(failure.value)
+    assert f"{plugin}:{2 + len(lines)} has `{statement}`, whose value {defect}" in message, (
+        f"the failure does not name line {2 + len(lines)} of {plugin}, the statement `{statement}` on "
+        f"it and what is wrong with its value, `whose value {defect}`: {message}"
     )
 
 
