@@ -9,8 +9,9 @@ from typing import TypeAlias
 import numpy as np
 import pandas as pd
 
+from solar_challenge.timebase import MINUTES_PER_DAY
+
 _MINUTES_PER_HOUR = 60
-_MINUTES_PER_DAY = 24 * _MINUTES_PER_HOUR
 
 _MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
 
@@ -167,7 +168,7 @@ class EVConfig:
 
 def _preferred_minutes(mode: SmartChargingMode) -> _MinuteFlags:
     """One flag for each minute of the day, set where *mode* prefers to charge."""
-    preferred = np.zeros(_MINUTES_PER_DAY, dtype=np.bool_)
+    preferred = np.zeros(MINUTES_PER_DAY, dtype=np.bool_)
     for start, end in _PREFERRED_WINDOWS[mode]:
         preferred[start:end] = True
     return preferred
@@ -186,7 +187,7 @@ def _daily_session(config: EVConfig) -> range:
     stay_minutes = round(config.get_available_charging_hours() * _MINUTES_PER_HOUR)
     hours_needed = config.required_charge_kwh / config.get_charger_power_kw()
     charge_minutes = min(math.ceil(hours_needed * _MINUTES_PER_HOUR), stay_minutes)
-    stay = (arrival + np.arange(stay_minutes)) % _MINUTES_PER_DAY
+    stay = (arrival + np.arange(stay_minutes)) % MINUTES_PER_DAY
     preferred = _preferred_minutes(SmartChargingMode(config.smart_charging_mode))[stay]
     start = arrival + _earliest_best_start(preferred, charge_minutes)
     return range(start, start + charge_minutes)
@@ -234,12 +235,12 @@ def generate_ev_charging_profile(
         freq="D",
         tz=timezone,
     )
-    n_minutes = len(date_range) * _MINUTES_PER_DAY
+    n_minutes = len(date_range) * MINUTES_PER_DAY
     session = _daily_session(config)
 
     # One spare day holds the last day's session whole, until the cut below.
-    power_kw = np.zeros(n_minutes + _MINUTES_PER_DAY, dtype=np.float64)
-    for day_start in range(0, n_minutes, _MINUTES_PER_DAY):
+    power_kw = np.zeros(n_minutes + MINUTES_PER_DAY, dtype=np.float64)
+    for day_start in range(0, n_minutes, MINUTES_PER_DAY):
         power_kw[day_start + session.start : day_start + session.stop] = config.get_charger_power_kw()
 
     time_index = pd.date_range(
