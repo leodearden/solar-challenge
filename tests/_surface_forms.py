@@ -55,8 +55,10 @@ def surface_form(obj: object) -> str:
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name; a
     functools.partial is a routine on every admitted minor, as inspect counts one from
-    3.14. Any other class's or routine's is its signature, a class's being its
-    constructor's without self and a partial's the one it leaves of the callable it wraps.
+    3.14, and any other descriptor whose type defines __get__ and __delete__ but no
+    __set__ is no routine on any, as inspect counts none from 3.13. Any other class's
+    or routine's is its signature, a class's being its constructor's without self and
+    a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -584,8 +586,18 @@ def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]
 
 
 def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
-    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one."""
-    return inspect.isroutine(obj) or isinstance(obj, functools.partial)
+    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one, and before 3.13 it counts each descriptor _is_get_delete_descriptor finds."""
+    return isinstance(obj, functools.partial) or (
+        inspect.isroutine(obj) and not _is_get_delete_descriptor(obj)
+    )
+
+
+def _is_get_delete_descriptor(obj: object) -> bool:
+    """Whether *obj*'s type defines __get__ and __delete__ but no __set__: a data descriptor, as inspect.isdatadescriptor reads one on every admitted minor, that inspect before Python 3.13 also counts as a method descriptor."""
+    kind = type(obj)
+    return (
+        inspect.isdatadescriptor(obj) and hasattr(kind, "__get__") and not hasattr(kind, "__set__")
+    )
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
