@@ -218,6 +218,7 @@ class TestHeatPumpHomeRoundtrip:
             config=config,
             results=results,
             summary=summary,
+            name="Saved Run",
         )
 
         loaded_results = storage.load_run("hp-home-001").results
@@ -255,6 +256,7 @@ class TestHeatPumpFleetRoundtrip:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=home_summaries,
+            name="Saved Run",
         )
 
         loaded_fleet = storage.load_run("hp-fleet-001").fleet_results
@@ -282,6 +284,7 @@ class TestGridChargeCostRoundtrip:
             config=_make_home_config(),
             results=results,
             summary=_make_summary(),
+            name="Saved Run",
         )
 
         loaded_results = storage.load_run("grid-charge-home-001").results
@@ -304,6 +307,7 @@ class TestGridChargeCostRoundtrip:
             ),
             fleet_summary=_make_fleet_summary(n_homes=2),
             per_home_summaries=[_make_summary(), _make_summary()],
+            name="Saved Run",
         )
 
         loaded_fleet = storage.load_run("grid-charge-fleet-001").fleet_results
@@ -322,6 +326,7 @@ class TestGridChargeCostRoundtrip:
             config=_make_home_config(),
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
 
         loaded_results = storage.load_run("no-grid-charge-001").results
@@ -339,6 +344,7 @@ class TestGridChargeKwhRoundtrip:
             config=_make_home_config(),
             results=_make_simulation_results(),
             summary=dataclasses.replace(_make_summary(), total_grid_charge_kwh=2.5),
+            name="Saved Run",
         )
 
         loaded_summary = storage.load_run("grid-charge-kwh-001").summary
@@ -352,6 +358,7 @@ class TestGridChargeKwhRoundtrip:
             config=_make_home_config(),
             results=_make_simulation_results(),
             summary=dataclasses.replace(_make_summary(), total_grid_charge_kwh=2.5),
+            name="Saved Run",
         )
         summary_path = stored_run_dir(storage, "no-grid-charge-kwh-001") / "summary.json"
         stored = _read_json(summary_path)
@@ -381,6 +388,7 @@ class TestCompletedAtTimestamp:
             results=results,
             summary=summary,
             created_at=created_at,
+            name="Saved Run",
         )
 
         run = storage.run_record("ts-test-001")
@@ -552,6 +560,7 @@ class TestTupleFieldRoundtrip:
             config=config,
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
 
         loaded_config = storage.load_run("tou-home-001").config
@@ -579,6 +588,7 @@ class TestTupleFieldRoundtrip:
             fleet_results=fleet_results,
             fleet_summary=_make_fleet_summary(n_homes=2),
             per_home_summaries=[_make_summary() for _ in range(2)],
+            name="Saved Run",
         )
 
         loaded_fleet = storage.load_run("tou-fleet-001").fleet_results
@@ -601,6 +611,7 @@ class TestEveryFieldShapeRoundtrip:
             config=config,
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
 
         loaded_config = storage.load_run("every-shape-home").config
@@ -620,6 +631,7 @@ class TestEveryFieldShapeRoundtrip:
             ),
             fleet_summary=_make_fleet_summary(n_homes=2),
             per_home_summaries=[_make_summary() for _ in range(2)],
+            name="Saved Run",
         )
 
         loaded_fleet = storage.load_run("every-shape-fleet").fleet_results
@@ -647,6 +659,7 @@ class TestPersistedJson:
             config=config,
             results=_make_simulation_results(),
             summary=summary,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, "json-home-001")
@@ -675,6 +688,7 @@ class TestPersistedJson:
             ),
             fleet_summary=fleet_summary,
             per_home_summaries=home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, "json-fleet-001")
@@ -723,6 +737,7 @@ class TestStoredParquetColumns:
             config=_make_home_config(),
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
         index = _make_index()
         stored_frame = pd.DataFrame(
@@ -760,6 +775,7 @@ class TestRunSavedWithRetiredOptionalField:
             config=config,
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
         config_path = stored_run_dir(storage, "retired-null-001") / "config.json"
         stored = _read_json(config_path)
@@ -787,6 +803,7 @@ class TestRunStoredWithModuleSettings:
             config=config,
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
 
         stored = _read_json(stored_run_dir(storage, "module-settings-null-001") / "config.json")
@@ -805,6 +822,7 @@ class TestRunStoredWithModuleSettings:
             config=config,
             results=_make_simulation_results(),
             summary=_make_summary(),
+            name="Saved Run",
         )
         config_path = stored_run_dir(storage, "module-settings-old-001") / "config.json"
         stored = _read_json(config_path)
@@ -853,7 +871,7 @@ def _save_dispatching_home_run(storage: RunStorage, run_id: str, strategy: Any) 
     """Save a home run of _dispatching_home(*strategy*) under *run_id*, and return its config."""
     config = _dispatching_home(strategy)
     storage.save_home_run(
-        run_id=run_id, config=config, results=_make_simulation_results(), summary=_make_summary()
+        run_id=run_id, config=config, results=_make_simulation_results(), summary=_make_summary(), name="Saved Run"
     )
     return config
 
@@ -899,6 +917,7 @@ class TestCorruptedParquet:
             config=config,
             results=results,
             summary=summary,
+            name="Saved Run",
         )
 
         # Overwrite the parquet file with garbage bytes
@@ -925,6 +944,7 @@ class TestMissingRunDirectory:
             config=config,
             results=results,
             summary=summary,
+            name="Saved Run",
         )
 
         # Delete the run directory
@@ -953,6 +973,7 @@ class TestDeleteRun:
             config=config,
             results=results,
             summary=summary,
+            name="Saved Run",
         )
 
         # Verify it exists
@@ -987,6 +1008,7 @@ class TestDeleteRun:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, "delete-fleet-001")

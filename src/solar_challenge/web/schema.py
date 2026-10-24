@@ -4,7 +4,9 @@
 A store's schema version is its database file's PRAGMA user_version. The MigrationStep of
 version N brings a store at version N - 1 to N, and SCHEMA_VERSION, the version this code
 reads and writes, is the last step's. open_database creates a new store at SCHEMA_VERSION and
-refuses a store at any other version with a SchemaVersionMismatch.
+refuses a store at any other version with a SchemaVersionMismatch. migrate_store, which
+`solar-challenge web migrate` runs, brings an older store to SCHEMA_VERSION and reports it in
+a MigrationReport.
 
 Each table's owner states the table's schema and its part of each step: storage.py the runs
 table, presets.py config_presets and database.py chat_messages. This module states only the
@@ -119,13 +121,67 @@ def open_database(path: Path) -> Database:
         sqlite3.Error: The new store cannot be created; the file then holds none of its tables.
     """
     database = Database(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    found = _version_of_existing_or_new_store(database)
+    if found != SCHEMA_VERSION:
+        raise SchemaVersionMismatch(path, found, SCHEMA_VERSION)
+    return database
+
+
+@dataclass(frozen=True)
+class MigrationReport:
+    """What migrate_store did to the store at *path*: the schema version it found it at, the one it left it at, and each step it applied, in order."""
+
+    path: Path
+    from_version: int
+    to_version: int
+    applied_steps: tuple[MigrationStep, ...]
+
+
+def migrate_store(database_path: Path) -> MigrationReport:
+    """Bring the store at *database_path* to SCHEMA_VERSION, applying each step of MIGRATIONS after its version, in order.
+
+    The store's version is read before anything is written. A file that holds no table is
+    created as open_database creates a new store, at SCHEMA_VERSION, so no step is applied to
+    it, and a store at SCHEMA_VERSION is left as it is. Each step is applied in a transaction
+    of its own, which writes the step's database part and records the step's version as the
+    store's user_version together: a step that fails leaves the store at the version before
+    it, as the steps before it left it. Every connection is opened through Database.connect().
+
+    Raises:
+        SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
+            solar-challenge wrote; nothing is written to it.
+        sqlite3.Error: A step's database part fails, or a new store cannot be created.
+    """
+    database = Database(database_path)
+    found = _version_of_existing_or_new_store(database)
+    if found > SCHEMA_VERSION:
+        raise SchemaVersionMismatch(database_path, found, SCHEMA_VERSION)
+    pending = tuple(step for step in MIGRATIONS if step.version > found)
+    for step in pending:
+        _apply_step(database, step)
+    return MigrationReport(database_path, from_version=found, to_version=SCHEMA_VERSION, applied_steps=pending)
+
+
+def _apply_step(database: Database, step: MigrationStep) -> None:
+    """Apply *step* to *database*'s store, which is at the version before it, in one transaction: its database part, then its version as the store's user_version."""
+    with database.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        step.migrate_database(conn)
+        conn.execute(f"PRAGMA user_version = {step.version}")
+
+
+def _version_of_existing_or_new_store(database: Database) -> int:
+    """The schema version of *database*'s store, read before anything is written to it.
+
+    A file that holds no table is first created as a new store at SCHEMA_VERSION, with the
+    directory it is in if need be.
+    """
+    database.path.parent.mkdir(parents=True, exist_ok=True)
     found = _found_version(database)
     if found is None:
         _create_store(database)
-    elif found != SCHEMA_VERSION:
-        raise SchemaVersionMismatch(path, found, SCHEMA_VERSION)
-    return database
+        return SCHEMA_VERSION
+    return found
 
 
 def _found_version(database: Database) -> int | None:

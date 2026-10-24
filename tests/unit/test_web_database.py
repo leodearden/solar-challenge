@@ -185,6 +185,7 @@ class TestHomeRunRoundTrip:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -250,24 +251,26 @@ def sample_fleet_data(sample_home_config, sample_simulation_results, sample_summ
 
 @pytest.fixture
 def saves(storage, sample_home_config, sample_simulation_results, sample_summary, sample_fleet_data):
-    """Each save by the type of run it stores, called with a run id and the save's other row arguments."""
+    """Each save by the type of run it stores, called with a run id, a name, 'Saved Run' by default, and its other row arguments."""
     fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
 
-    def save_home(run_id, **row_arguments):
+    def save_home(run_id, name: str = "Saved Run", **row_arguments):
         storage.save_home_run(
             run_id=run_id,
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name=name,
             **row_arguments,
         )
 
-    def save_fleet(run_id, **row_arguments):
+    def save_fleet(run_id, name: str = "Saved Run", **row_arguments):
         storage.save_fleet_run(
             run_id=run_id,
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name=name,
             **row_arguments,
         )
 
@@ -343,6 +346,7 @@ class TestFleetRunRoundTrip:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -368,6 +372,7 @@ class TestFleetRunRoundTrip:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=[per_home_summaries[0]] * n_summaries,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -547,6 +552,7 @@ class TestDeleteRun:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         assert storage.run_record(run_id) is not None
@@ -566,6 +572,7 @@ class TestDeleteRun:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -587,6 +594,7 @@ class TestDeleteRun:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -735,27 +743,6 @@ class TestRunName:
     def test_run_name_of_an_id_no_run_has_is_none(self, storage):
         """An id no run has answers None."""
         assert storage.run_name("no-such-run") is None
-
-    def test_run_name_of_a_run_whose_name_is_null_is_none(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """A run whose name is NULL answers None, not a default name.
-
-        A database written before every run was named holds such a row, so the test clears
-        the saved name in the database.
-        """
-        run_id = "null-name-home"
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            name="North Roof",
-        )
-        with storage.database.transaction() as conn:
-            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
-
-        assert storage.run_name(run_id) is None
 
 
 class TestLatestRunNamed:
@@ -929,6 +916,7 @@ class TestRunIdValidation:
                 config=sample_home_config,
                 results=sample_simulation_results,
                 summary=sample_summary,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -947,6 +935,7 @@ class TestRunIdValidation:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=per_home_summaries,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -996,6 +985,7 @@ class TestRunIdValidation:
                 config=sample_home_config,
                 results=sample_simulation_results,
                 summary=sample_summary,
+                name="Saved Run",
             )
 
         assert list(outside.iterdir()) == []
@@ -1013,6 +1003,7 @@ class TestRunIdValidation:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=per_home_summaries,
+                name="Saved Run",
             )
 
         assert list(outside.iterdir()) == []
@@ -1047,6 +1038,7 @@ class TestRunIdValidation:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         loaded = storage.load_run(run_id)

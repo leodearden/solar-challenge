@@ -43,7 +43,7 @@ def test_a_runs_row_written_with_a_summary_s_json_reads_back_as_the_summary_s_fi
 ) -> None:
     with storage.database.transaction() as conn:
         conn.execute(
-            "INSERT INTO runs (id, type, status, summary_json) VALUES ('run-1', ?, 'completed', ?)",
+            "INSERT INTO runs (id, name, type, status, summary_json) VALUES ('run-1', 'Run 1', ?, 'completed', ?)",
             (run_type, summary_json(summary)),
         )
 
@@ -53,7 +53,7 @@ def test_a_runs_row_written_with_a_summary_s_json_reads_back_as_the_summary_s_fi
 def test_a_home_summary_s_json_is_the_text_a_home_run_s_save_writes(storage: RunStorage) -> None:
     summary = home_summary(total_generation_kwh=987.65)
 
-    storage.save_home_run("home-1", make_home_config(), make_sim_results(days=1), summary)
+    storage.save_home_run("home-1", make_home_config(), make_sim_results(days=1), summary, name="Saved Run")
 
     assert _stored_summary_json(storage, "home-1") == summary_json(summary)
 
@@ -61,7 +61,9 @@ def test_a_home_summary_s_json_is_the_text_a_home_run_s_save_writes(storage: Run
 def test_a_fleet_summary_s_json_is_the_text_a_fleet_run_s_save_writes(storage: RunStorage) -> None:
     summary = fleet_summary(fleet_self_consumption_ratio=0.25)
 
-    storage.save_fleet_run("fleet-1", make_fleet_results(n_homes=2, days=1), summary, [home_summary(), home_summary()])
+    storage.save_fleet_run(
+        "fleet-1", make_fleet_results(n_homes=2, days=1), summary, [home_summary(), home_summary()], name="Saved Run"
+    )
 
     assert _stored_summary_json(storage, "fleet-1") == summary_json(summary)
 

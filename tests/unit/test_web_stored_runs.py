@@ -225,7 +225,7 @@ def test_loading_a_run_whose_record_has_no_type_raises_file_not_found_naming_its
 def test_the_kind_of_a_record_with_no_type_is_refused_naming_its_run() -> None:
     record = RunRecord(
         id="untyped-1",
-        name=None,
+        name="Untyped Run",
         type=None,
         config_json=None,
         summary_json=None,

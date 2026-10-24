@@ -396,23 +396,6 @@ class TestHomeResultsRoute:
         assert headings(page)[0] == "South Roof"
         assert "Results: South Roof - Solar Challenge" in texts(page)
 
-    def test_home_results_page_of_a_run_with_no_name_is_titled_home_simulation(
-        self, storage: RunStorage, client: FlaskClient
-    ) -> None:
-        """A run with no name still has a title: the page's own, not its home's name.
-
-        A database written before every run was named holds such a row, so the test clears
-        the saved name in the database.
-        """
-        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
-        with storage.database.transaction() as conn:
-            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
-
-        response = client.get(f"/results/{run_id}")
-
-        assert response.status_code == 200
-        assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
-
     def test_home_results_battery_soc_chart_marks_the_saved_batterys_soc_limits(
         self, storage: RunStorage, client: FlaskClient
     ) -> None:

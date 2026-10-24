@@ -52,7 +52,7 @@ def test_a_home_run_saved_from_its_results_loads_back_with_the_summary_calculate
 ) -> None:
     config, results = _a_home()
 
-    storage.save_home_run_from_results("home-1", config, results)
+    storage.save_home_run_from_results("home-1", config, results, name="Saved Run")
 
     loaded = storage.load_run("home-1")
     assert loaded.config == config
@@ -64,7 +64,7 @@ def test_a_fleet_run_saved_from_its_results_loads_back_with_each_homes_summary_a
 ) -> None:
     fleet = _two_unlike_homes()
 
-    storage.save_fleet_run_from_results("fleet-1", fleet)
+    storage.save_fleet_run_from_results("fleet-1", fleet, name="Saved Run")
 
     loaded = storage.load_run("fleet-1")
     assert loaded.fleet_results.home_configs == fleet.home_configs
@@ -105,8 +105,8 @@ def test_a_run_saved_from_its_results_is_recorded_with_the_name_duration_and_cre
 def test_a_run_saved_from_its_results_without_a_status_is_recorded_as_completed(storage: RunStorage) -> None:
     config, results = _a_home()
 
-    storage.save_home_run_from_results("home-1", config, results)
-    storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes())
+    storage.save_home_run_from_results("home-1", config, results, name="Saved Run")
+    storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes(), name="Saved Run")
 
     assert [
         (record.status, record.completed_at is not None) for record in _records_of_the_home_and_fleet_runs(storage)
@@ -116,8 +116,8 @@ def test_a_run_saved_from_its_results_without_a_status_is_recorded_as_completed(
 def test_a_run_saved_from_its_results_with_a_status_is_recorded_with_it(storage: RunStorage) -> None:
     config, results = _a_home()
 
-    storage.save_home_run_from_results("home-1", config, results, status="failed")
-    storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes(), status="running")
+    storage.save_home_run_from_results("home-1", config, results, name="Saved Run", status="failed")
+    storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes(), name="Saved Run", status="running")
 
     assert [(record.status, record.completed_at) for record in _records_of_the_home_and_fleet_runs(storage)] == [
         ("failed", None),
@@ -130,7 +130,7 @@ def test_a_fleet_unpaired_after_construction_is_refused_and_nothing_is_saved(sto
     fleet.home_configs.pop()
 
     with pytest.raises(ValueError, match="got 2 per_home_results and 1 home_configs"):
-        storage.save_fleet_run_from_results("fleet-1", fleet)
+        storage.save_fleet_run_from_results("fleet-1", fleet, name="Saved Run")
 
     assert storage.run_record("fleet-1") is None
     with pytest.raises(FileNotFoundError):

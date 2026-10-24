@@ -80,7 +80,7 @@ def test_deleting_a_run_on_a_dashboard_connection_deletes_the_rows_that_referenc
 ) -> None:
     with open_connection(dashboard_database) as conn:
         _create_a_table_whose_rows_reference_a_run(conn)
-        conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+        conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
         conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'run-1')")
 
         conn.execute("DELETE FROM runs WHERE id = 'run-1'")
@@ -122,7 +122,7 @@ def test_a_run_inserted_in_a_transaction_whose_block_succeeds_is_read_back_on_a_
     dashboard_database: Database,
 ) -> None:
     with dashboard_database.transaction() as conn:
-        conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+        conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
 
     with closing(dashboard_database.connect()) as conn:
         assert [row["id"] for row in conn.execute("SELECT id FROM runs")] == ["run-1"]
@@ -133,7 +133,7 @@ def test_a_transaction_whose_block_raises_reraises_the_exception_and_keeps_none_
 ) -> None:
     with pytest.raises(_BlockFailed):
         with dashboard_database.transaction() as conn:
-            conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+            conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
             _fail()
 
     with closing(dashboard_database.connect()) as conn:
