@@ -103,6 +103,7 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
     )
     builtin_pytest_plugin = _write_module(tmp_path / "builtin_pytest_plugin.py", 'pytest_plugins = ["pytester"]')
     empty_pytest_plugins = _write_module(tmp_path / "empty_pytest_plugins.py", 'pytest_plugins = ""')
+    module_pytest_plugins = _write_module(tmp_path / "module_pytest_plugins.py", "import json as pytest_plugins")
 
     undeclared = undeclared_distributions(
         tmp_path,
@@ -121,6 +122,7 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
             undeclared_pytest_plugin,
             builtin_pytest_plugin,
             empty_pytest_plugins,
+            module_pytest_plugins,
         ],
         declared={"pytest"},
     )
@@ -148,7 +150,9 @@ def test_undeclared_distributions_flags_only_files_requiring_an_undeclared_distr
         "the pytest_rerunfailures plugin module in a comma-separated pytest_plugins string, "
         "beside the built-in pytester. builtin_pytest_plugin names only pytester, which pytest "
         "imports from its own _pytest package. empty_pytest_plugins sets pytest_plugins to an "
-        "empty string, which names no plugin. So neither of the last two may be flagged"
+        "empty string, which names no plugin. module_pytest_plugins binds pytest_plugins to a "
+        "module, json, which pytest reads as naming no plugin. So none of the last three may be "
+        "flagged"
     )
 
 
@@ -252,6 +256,15 @@ def test_undeclared_distributions_reads_every_pytest_plugins_entry_its_module_sc
             id="unpacked-in-a-function-inside-an-if",
         ),
         pytest.param(("pytest_plugins: list[str]",), id="annotated-with-no-value"),
+        pytest.param(
+            ("def configure():", "    try:", "        pass", "    except Exception as pytest_plugins:", "        pass"),
+            id="caught-in-a-function",
+        ),
+        pytest.param(
+            ("def configure():", "    from tests._plugins import PLUGINS as pytest_plugins"),
+            id="imported-as-it-in-a-function",
+        ),
+        pytest.param(("class Plugins:", "    def pytest_plugins(self): pass"), id="a-method"),
     ],
 )
 def test_undeclared_distributions_ignores_a_pytest_plugins_that_binds_no_attribute_of_its_module(
@@ -889,6 +902,158 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="assigned-through-locals",
         ),
+        pytest.param(
+            ("sys.modules[__name__].__dict__['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "sys.modules[__name__].__dict__['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-dict-of-the-module",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "def configure():",
+                "    sys.modules[__name__].__dict__['pytest_plugins'].append('pytest_rerunfailures')",
+            ),
+            "sys.modules[__name__].__dict__['pytest_plugins'].append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-the-dict-of-the-module-in-a-function",
+        ),
+        pytest.param(
+            ("module = sys.modules[__name__]", "module.__dict__['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "module.__dict__['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-dict-of-an-alias-of-the-module",
+        ),
+        pytest.param(
+            ("try:", "    pass", "except Exception as pytest_plugins: pass"),
+            "except Exception as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="an-except-clause-name",
+        ),
+        pytest.param(
+            ("try:", "    pass", "except* Exception as pytest_plugins: pass"),
+            "except* Exception as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="an-except-star-clause-name",
+        ),
+        pytest.param(
+            ("match [['pytest_rerunfailures']]:", "    case [pytest_plugins]: pass"),
+            "case [pytest_plugins]:",
+            _UNREADABLE_USE,
+            id="a-match-capture",
+        ),
+        pytest.param(
+            ("match ['pytest_rerunfailures']:", "    case [*pytest_plugins]: pass"),
+            "case [*pytest_plugins]:",
+            _UNREADABLE_USE,
+            id="a-match-star-capture",
+        ),
+        pytest.param(
+            ("match {'plugin': 'pytest_rerunfailures'}:", "    case {**pytest_plugins}: pass"),
+            "case {**pytest_plugins}:",
+            _UNREADABLE_USE,
+            id="a-match-mapping-rest",
+        ),
+        pytest.param(
+            ("match ['pytest_rerunfailures']:", "    case [str()] as pytest_plugins: pass"),
+            "case [str()] as pytest_plugins:",
+            _UNREADABLE_USE,
+            id="a-match-as-pattern",
+        ),
+        pytest.param(
+            ("match sys.platform:", "    case _ if (pytest_plugins := ['pytest_rerunfailures']): pass"),
+            "case _ if (pytest_plugins := ['pytest_rerunfailures']):",
+            _UNREADABLE_USE,
+            id="a-walrus-in-a-case-guard",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "match sys.platform:",
+                "    case _ if pytest_plugins.append('pytest_rerunfailures'): pass",
+            ),
+            "case _ if pytest_plugins.append('pytest_rerunfailures'):",
+            _UNREADABLE_USE,
+            id="appended-in-a-case-guard",
+        ),
+        pytest.param(
+            ("from tests._plugins import pytest_plugins",),
+            "from tests._plugins import pytest_plugins",
+            _UNREADABLE_USE,
+            id="imported-from-a-module",
+        ),
+        pytest.param(
+            ("from tests._plugins import PLUGINS as pytest_plugins",),
+            "from tests._plugins import PLUGINS as pytest_plugins",
+            _UNREADABLE_USE,
+            id="imported-from-a-module-as-it",
+        ),
+        pytest.param(
+            ("from tests._plugins import *",),
+            "from tests._plugins import *",
+            _UNREADABLE_USE,
+            id="a-star-import",
+        ),
+        pytest.param(("def pytest_plugins(): pass",), "def pytest_plugins():", _UNREADABLE_USE, id="a-def"),
+        pytest.param(
+            ("async def pytest_plugins(): pass",),
+            "async def pytest_plugins():",
+            _UNREADABLE_USE,
+            id="an-async-def",
+        ),
+        pytest.param(("class pytest_plugins: pass",), "class pytest_plugins:", _UNREADABLE_USE, id="a-class"),
+        pytest.param(
+            ('if sys.platform == "linux":', "    def pytest_plugins(): pass"),
+            "def pytest_plugins():",
+            _UNREADABLE_USE,
+            id="a-def-in-an-if",
+        ),
+        pytest.param(
+            ("sys.modules[__name__].pytest_plugins = ['pytest_rerunfailures']",),
+            "sys.modules[__name__].pytest_plugins = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="an-attribute-of-the-module-assigned",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "def configure():",
+                "    sys.modules[__name__].pytest_plugins.append('pytest_rerunfailures')",
+            ),
+            "sys.modules[__name__].pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="an-attribute-of-the-module-appended-in-a-function",
+        ),
+        pytest.param(
+            ("setattr(sys.modules[__name__], 'pytest_plugins', ['pytest_rerunfailures'])",),
+            "setattr(sys.modules[__name__], 'pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-by-setattr",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "getattr(sys.modules[__name__], 'pytest_plugins').append('pytest_rerunfailures')"),
+            "getattr(sys.modules[__name__], 'pytest_plugins').append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-getattr",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "delattr(sys.modules[__name__], 'pytest_plugins')"),
+            "delattr(sys.modules[__name__], 'pytest_plugins')",
+            _UNREADABLE_USE,
+            id="deleted-by-delattr",
+        ),
+        pytest.param(
+            ("from tests._plugins import pytest_plugins as lane_plugins",),
+            "from tests._plugins import pytest_plugins as lane_plugins",
+            _UNREADABLE_USE,
+            id="imported-under-another-name",
+        ),
+        pytest.param(
+            ("def configure():", "    from tests._plugins import pytest_plugins"),
+            "from tests._plugins import pytest_plugins",
+            _UNREADABLE_USE,
+            id="imported-in-a-function",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -899,20 +1064,25 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 ) -> None:
     """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for or a with, or beside another target of a chained
-    assignment, which aliases the list, or declared global in a function. It may also be read or
-    deleted in any scope, function and class bodies included, as a method call such as append, a
-    subscript, an alias or a del does. Or globals(), locals() or vars() may be subscripted with the
-    name, in any position or scope.
+    may be bound by a tuple, a walrus, a for, a with, an except clause, of a try* too, a capture
+    of a match pattern or a from-import, a star import among them; be the name of a def or class;
+    sit beside another target of a chained assignment, which aliases the list; or be declared
+    global in a function. It may also be read or deleted in any scope, function and class bodies
+    included, as a method call such as append, a subscript, an alias or a del does, and a read may
+    sit in a case guard. Or a namespace, the dict that globals(), locals() or vars() returns or the
+    __dict__ of an object such as sys.modules[__name__], may be subscripted with the name, or an
+    attribute pytest_plugins of an object reached directly, through getattr, setattr or delattr, or
+    by a from-import of that name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
     empty str name no plugin, so an empty dict fails like any other value of the wrong type.
 
-    The failure names the file, the line and the statement, the last of *lines*, as written, or by its
-    first line when it is compound, with what is wrong with it. An augmented assignment is quoted
-    whole, not described as setting pytest_plugins. It says how to write pytest_plugins instead: as
-    a literal list or tuple of module names, added to only with += and such a literal.
+    The failure names the file, the line and the statement, or the except or case clause, that starts
+    on the last of *lines*, as written, or by its first line when it is compound, with what is wrong
+    with it. An augmented assignment is quoted whole, not described as setting pytest_plugins, and
+    an except clause of a try* keeps its star. It says how to write pytest_plugins instead: as a
+    literal list or tuple of module names, added to only with += and such a literal.
     """
     prefix = ("import contextlib", "import sys", 'PLUGINS = ["pytester"]')
     plugin = _write_module(tmp_path / "plugin.py", *prefix, *lines)
@@ -944,17 +1114,23 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ("SOURCE = \"pytest_plugins.append('pytest_rerunfailures')\"",),
             id="spelled-in-a-string",
         ),
+        pytest.param(("import sys", "hasattr(sys.modules[__name__], 'pytest_plugins')"), id="tested-by-hasattr"),
+        pytest.param(
+            ("import sys", "sys.modules[__name__].__dict__['other_plugins'] = ['pytest_rerunfailures']"),
+            id="another-key-of-the-dict-of-the-module",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
     tmp_path: Path,
     lines: tuple[str, ...],
 ) -> None:
-    """Only the name pytest_plugins, or its entry in the namespace that globals(), locals() or
-    vars() returns, reaches the attribute of the module.
+    """Only the name pytest_plugins, its entry in a namespace, the dict that globals(), locals() or
+    vars() returns or the __dict__ of an object, or an attribute of that name, reached directly,
+    through getattr, setattr or delattr, or by a from-import, reaches the attribute of the module.
 
-    The same key of another dict, and a string that spells such a statement, require nothing and
-    fail nothing.
+    The same key of another dict, another key of a namespace, a string that spells such a
+    statement, and hasattr, which only tests for the attribute, require nothing and fail nothing.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
