@@ -859,6 +859,30 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="appended-in-a-class-body",
         ),
+        pytest.param(
+            ("globals()['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "globals()['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-globals",
+        ),
+        pytest.param(
+            ("def configure():", "    globals()['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "globals()['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-globals-in-a-function",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "vars()['pytest_plugins'].append('pytest_rerunfailures')"),
+            "vars()['pytest_plugins'].append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-vars",
+        ),
+        pytest.param(
+            ("locals()['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "locals()['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-locals",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -871,7 +895,8 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
     may be bound by a tuple, a walrus, a for or a with, or declared global in a function. It may
     also be read or deleted in any scope, function and class bodies included, as a method call such
-    as append, a subscript, an alias or a del does.
+    as append, a subscript, an alias or a del does. Or globals(), locals() or vars() may be
+    subscripted with the name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -898,6 +923,37 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     assert "list or tuple of module names" in advice and "+=" in advice, (
         "the failure does not say, after the clause, how to write pytest_plugins: a literal list or "
         f"tuple of module names, added to only with +=: {message}"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        pytest.param(
+            ("settings = {}", "settings['pytest_plugins'] = ['pytest_rerunfailures']"),
+            id="a-key-of-another-dict",
+        ),
+        pytest.param(
+            ("SOURCE = \"pytest_plugins.append('pytest_rerunfailures')\"",),
+            id="spelled-in-a-string",
+        ),
+    ],
+)
+def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+) -> None:
+    """Only the name pytest_plugins, or its entry in the namespace that globals(), locals() or
+    vars() returns, reaches the attribute of the module.
+
+    The same key of another dict, and a string that spells such a statement, require nothing and
+    fail nothing.
+    """
+    resembling = _write_module(tmp_path / "resembling.py", *lines)
+
+    assert undeclared_distributions(tmp_path, [resembling], declared={"pytest"}) == [], (
+        "the undeclared-distributions detector found a use of pytest_plugins, or a requirement of "
+        f"pytest-rerunfailures, in a file that only resembles one, with these lines: {lines}"
     )
 
 
