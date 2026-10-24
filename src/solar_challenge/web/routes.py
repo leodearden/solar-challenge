@@ -52,12 +52,17 @@ def index() -> str:
 
 @bp.route("/simulate/home", methods=["GET"])
 def simulate_home_page() -> str:
-    """Render the enhanced home simulation configuration page."""
+    """Render the enhanced home simulation configuration page.
+
+    Its Simulation Name placeholder shows the name a home run given none is created under:
+    the run is named after its home, which is unnamed when the field is blank.
+    """
     return str(render_template(
         "simulate/home.html",
         fleet_components=FLEET_COMPONENTS,
         seg_presets=SEG_PRESETS,
         default_system_losses=PVWATTS_DEFAULT_SYSTEM_LOSSES,
+        default_run_name=RUN_KINDS["home"].default_name(()),
     ))
 
 

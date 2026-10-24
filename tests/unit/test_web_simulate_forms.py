@@ -76,6 +76,18 @@ class TestSimulateHomeRoute:
             if attributes.get("id") == "consumption_kwh"
         ] == [(str(load.step), str(load.fixed_range[0]), str(load.fixed_range[1]))]
 
+    def test_home_page_offers_the_home_run_kinds_default_name_as_its_simulation_name_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """The Simulation Name input's placeholder is the name a home run submitted without one runs under (RunKind.default_name)."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+
+        [name_input] = [
+            attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "sim_name"
+        ]
+
+        assert name_input["placeholder"] == RUN_KINDS["home"].default_name(())
+
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
         """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
         response = client.get("/simulate/home")
