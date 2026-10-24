@@ -1508,7 +1508,9 @@ def project_multi_year(
     to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
     Each sampled age's grid-services income is priced from that age's own
     simulated fleet by ``grid_services_model_of(finance)``, and is annual by
-    construction.
+    construction.  Each distinct warning that pricing raises, such as one
+    naming an event window the simulated period never enters, is shown once
+    per call, however many ages raise it, and is attributed to the caller.
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
@@ -1562,6 +1564,11 @@ def project_multi_year(
     end_ts = scenario.period.get_end_timestamp(tz)
 
     pricing = grid_services_model_of(finance)
+    # Each age's pricing can raise a warning in the same words as every other age's,
+    # e.g. naming an event window the simulated period never enters.  Each distinct
+    # one is kept here and shown once after the march
+    # (docs/prds/grid-services-pricing-model.md §5.4).
+    pricing_warnings: dict[tuple[type[Warning], str], warnings.WarningMessage] = {}
 
     asset_life = finance.asset_life_years
 
@@ -1612,7 +1619,10 @@ def project_multi_year(
         # self_consumption_override and seg scaling.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
-        grid_services = pricing.annual_income_gbp(fleet_results)
+        with warnings.catch_warnings(record=True) as raised_by_pricing:
+            grid_services = pricing.annual_income_gbp(fleet_results)
+        for raised in raised_by_pricing:
+            pricing_warnings.setdefault((raised.category, str(raised.message)), raised)
         fleet_revenue = own_use_revenue + seg_revenue + grid_services
 
         # PV SOH: mean of calculate_degradation_factor over all homes
@@ -1749,6 +1759,10 @@ def project_multi_year(
             UserWarning,
             stacklevel=2,
         )
+
+    # ---- Pricing warnings: each distinct one once per projection ------------
+    for raised in pricing_warnings.values():
+        warnings.warn(raised.message, raised.category, stacklevel=2)
 
     # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())

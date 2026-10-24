@@ -718,7 +718,9 @@ net of the aggregator share, that it prices a simulated fleet at, equal to
 `UserWarning`, once per call, for each event window the fleet's simulated index
 never enters, naming the window's months, weekdays and hours and the index's
 first and last timestamps. That window still contributes £0, and a fleet with
-no battery home does not warn; the 0.5.0 tag prices the window at £0 silently.
+no battery home does not warn. `project_multi_year`, which prices every
+simulated age, shows each such warning once per call, attributed to its own
+caller; the 0.5.0 tag prices the window at £0 silently.
 Consumers need no change when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer

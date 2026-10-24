@@ -13,7 +13,7 @@
 **Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
 **Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
 **Unreleased on main** (task 702): `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name. `project_multi_year` also no longer floors a year's `fleet_revenue_gbp` at £0, so a `simulate` whose fleet earns a negative revenue projects, and the solve prices, that loss; the 0.5.0 tag projects it as £0. Its adaptive refinement measures each metric's interpolation error against the magnitude of that metric's age-0 value, so a fleet whose revenue is negative at age 0 and varies with age converges as the fleet earning the mirror revenue does; the 0.5.0 tag divides that fleet's revenue error by 1e-9, so its bisection typically runs to `MAX_NODES` and reports a meaningless `interp_error_estimate`. Fleets `simulate_fleet` builds are unaffected: their own-use, SEG and grid-services income is never negative.
-**Unreleased on main** (task 801): `project_multi_year` prices grid-services income from each simulated age's own fleet, seed and bisection-trial ages alike (§4, §8.1), so capacity-at-events income falls with battery SOH; the 0.5.0 tag books the age-0 event figure at every age. A flat rate prices the batteries of the fleet `simulate` returns, which `simulate_fleet` pairs with the scenario's homes, so the flat figure is unchanged.
+**Unreleased on main** (task 801): `project_multi_year` prices grid-services income from each simulated age's own fleet, seed and bisection-trial ages alike (§4, §8.1), so capacity-at-events income falls with battery SOH; the 0.5.0 tag books the age-0 event figure at every age. A flat rate prices the batteries of the fleet `simulate` returns, which `simulate_fleet` pairs with the scenario's homes, so the flat figure is unchanged. An event window the simulated period never enters is named in one `UserWarning` per projection (§4); the 0.5.0 tag prices it at £0 silently.
 
 ---
 
@@ -345,6 +345,10 @@ of firm spare capacity earns (1.00 × 12 + 0.6 × 3 h × 0.060 £/kWh × 12) × 
 £9.972 ≈ £9.97 a year in the central band, £4.986 in the low band and £19.944 in
 the high band
 (`tests/unit/test_gridservices.py::TestWorkedCapacityAtEventsFigure::test_band_prices_one_kw_of_firm_spare_capacity`).
+An event window that the simulated period never enters prices at £0, and
+`project_multi_year` names it in one `UserWarning` per projection, however many
+ages it prices
+(`tests/integration/test_grid_services_events.py::test_a_projection_shows_each_unobserved_window_warning_once`).
 
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,

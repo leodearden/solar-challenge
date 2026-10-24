@@ -11,7 +11,8 @@ Covers, after the shared helpers:
 - Guard: capacity_at_events + events=None → ConfigurationError, before any simulation.
 - C1, C2: each simulated age, seed or bisection trial, books its own fleet's
   event income.
-- B4: backward-compat / flat bit-identical regression.
+- An event window the simulated period never enters warns once per projection.
+- B4:backward-compat / flat bit-identical regression.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the capacity-at-events line.
 """
@@ -39,6 +40,8 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetResults
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.gridservices import (
+    DEFAULT_EVENT_WINDOWS,
+    EventWindow,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
@@ -56,39 +59,44 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 # ---------------------------------------------------------------------------
 
 
-def _make_in_window_sim_results(
-    n_steps: int = 8760, battery_soc_kwh: float = 3.0
+_A_YEAR_OF_HOURS_FROM_2024 = pd.date_range(
+    "2024-01-01", periods=8760, freq="1h", tz="Europe/London"
+)
+
+
+def _make_spare_battery_sim_results(
+    hours: pd.DatetimeIndex = _A_YEAR_OF_HOURS_FROM_2024, battery_soc_kwh: float = 3.0
 ) -> SimulationResults:
-    """Build a SimulationResults with constant battery_soc above min_soc_kwh and
-    battery_discharge below max_discharge_kw, on a full-year hourly tz-aware index.
+    """Build a SimulationResults on the hourly index *hours*, with constant
+    battery_soc above min_soc_kwh and battery_discharge below max_discharge_kw.
 
     With the default battery_soc_kwh=3.0 (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
     and battery_discharge=0.5 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
-    (winter-weekday-16-18h) selects real in-window steps and
-    compute_fleet_spare_capacity_kw yields a positive event figure.
+    (winter-weekday-16-18h) selects real in-window steps of the default full-year
+    index, and compute_fleet_spare_capacity_kw yields a positive event figure.
     """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    n_steps = len(hours)
     # NOTE: gen/demand/self-consumption magnitudes are arbitrary.  They cancel
     # in the flat-rate-0 delta isolation and do not feed the grid-services
     # computation (which only reads battery_soc and battery_discharge).  Each
-    # kW row lasts an hour, so the year totals 2,000 kWh of self-consumption,
+    # kW row lasts an hour, so *hours* total 2,000 kWh of self-consumption,
     # 800 kWh of export and 1,400 kWh of import.
     sc_kw = 2000.0 / n_steps
     exp_kw = 800.0 / n_steps
     imp_kw = 1400.0 / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
+    zeros = pd.Series(0.0, index=hours)
 
     return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
+        generation=pd.Series(gen_kw, index=hours),
+        demand=pd.Series(demand_kw, index=hours),
+        self_consumption=pd.Series(sc_kw, index=hours),
         battery_charge=zeros.copy(),
-        battery_discharge=pd.Series(0.5, index=idx),  # below max_discharge_kw=2.5
-        battery_soc=pd.Series(battery_soc_kwh, index=idx),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
+        battery_discharge=pd.Series(0.5, index=hours),  # below max_discharge_kw=2.5
+        battery_soc=pd.Series(battery_soc_kwh, index=hours),
+        grid_import=pd.Series(imp_kw, index=hours),
+        grid_export=pd.Series(exp_kw, index=hours),
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
@@ -98,7 +106,7 @@ def _make_in_window_sim_results(
 
 def _synthetic_fleet_results_in_window(homes: list) -> FleetResults:
     """Build FleetResults with in-window battery_soc/discharge per home."""
-    per_home = [_make_in_window_sim_results() for _ in homes]
+    per_home = [_make_spare_battery_sim_results() for _ in homes]
     return make_fleet_results_of(per_home, homes=homes)
 
 
@@ -253,7 +261,7 @@ def _soh_tracking_simulate(
         homes = fleet_config.homes
         fleet = make_fleet_results_of(
             [
-                _make_in_window_sim_results(
+                _make_spare_battery_sim_results(
                     battery_soc_kwh=0.8
                     * home.battery_config.capacity_kwh
                     * home.battery_config.soh
@@ -343,6 +351,59 @@ def test_c2_bisection_trial_ages_book_their_own_fleets_event_income(
     for age in sorted(set(sampled_ages) - {0, 12, 24}):
         booked, priced = _booked_and_priced_event_income(soh_tracking_projections, age)
         assert booked == pytest.approx(priced, rel=1e-9), f"age {age}"
+
+
+# ---------------------------------------------------------------------------
+# An event window the simulated period never enters warns once per projection
+# ---------------------------------------------------------------------------
+
+
+_JUNE_2024_HOURS = pd.date_range(
+    "2024-06-01 00:00", "2024-06-30 23:00", freq="h", tz="Europe/London"
+)
+
+
+def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
+    """Every simulated age prices a June-only fleet, which neither event window enters.
+
+    Each age's pricing warns of both windows in the same words, and the
+    projection shows each window's warning once, attributed to its caller
+    (docs/prds/grid-services-pricing-model.md §5.4).
+    """
+    march_window = EventWindow(
+        months=(3,),
+        weekdays=(0, 1, 2, 3, 4),
+        hours=(16, 17, 18),
+        events_per_year=12,
+        event_hours=3.0,
+    )
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
+    )
+    finance_events = dataclasses.replace(
+        finance,
+        grid_services_model="capacity_at_events",
+        grid_services_events=GridServicesEventsConfig(
+            event_windows=(DEFAULT_EVENT_WINDOWS[0], march_window)
+        ),
+    )
+
+    def _june_only_simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
+        homes = fleet_config.homes
+        return make_fleet_results_of(
+            [_make_spare_battery_sim_results(hours=_JUNE_2024_HOURS) for _ in homes],
+            homes=homes,
+        )
+
+    with pytest.warns(UserWarning) as record:
+        curve = project_multi_year(scenario, finance_events, simulate=_june_only_simulate)
+
+    # Premise: several ages are priced, so a warning shown per age would repeat.
+    assert len(curve.sampled_ages) >= 3, curve.sampled_ages
+    for names_the_window in ("months=(11, 12, 1, 2)", "months=(3,)"):
+        window_warnings = [w for w in record if names_the_window in str(w.message)]
+        assert len(window_warnings) == 1, [str(w.message) for w in window_warnings]
+        assert window_warnings[0].filename == __file__
 
 
 # ---------------------------------------------------------------------------
