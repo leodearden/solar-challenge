@@ -1364,9 +1364,7 @@ class TestUnobservedEventWindowWarns:
                 pv_only_fleet, GridServicesEventsConfig()
             )
 
-        assert not [
-            text for text in _user_warning_texts(record) if _DEFAULT_WINDOW_FIELDS[0] in text
-        ]
+        assert _user_warning_texts(record) == []
         assert result.annual_income_gbp == 0.0
 
     def test_only_the_unobserved_window_warns(self) -> None:
