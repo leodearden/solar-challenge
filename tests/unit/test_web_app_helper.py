@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, finds the RunStorage it keeps its runs in and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
 
 import subprocess
 import sys
@@ -16,7 +16,7 @@ from flask.testing import FlaskClient
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
 from tests._finance_builders import make_home_config, make_sim_results
-from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
+from tests._web_app import build_test_app, database_of, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
 
 
@@ -51,6 +51,24 @@ def test_the_app_serves_a_run_saved_to_its_run_storage_after_its_store_config_na
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 
     store_home_run(run_storage_of(app), "north-roof", make_home_config(), make_sim_results(days=1), name="North Roof")
+
+    response = app.test_client().get("/api/history/runs/north-roof")
+    assert response.status_code == 200
+    assert response.get_json()["name"] == "North Roof"
+
+
+def test_the_app_serves_a_row_written_to_its_database_after_its_store_config_names_a_missing_directory(
+    tmp_path: Path,
+) -> None:
+    """A Database rebuilt from the app's store config could not open its file, whose directory is missing."""
+    app = build_test_app(tmp_path / "data")
+    point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+    with database_of(app).transaction() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, name, type, status, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("north-roof", "North Roof", "home", "running", "2025-06-02T09:00:00"),
+        )
 
     response = app.test_client().get("/api/history/runs/north-roof")
     assert response.status_code == 200
