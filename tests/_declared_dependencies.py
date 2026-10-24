@@ -330,15 +330,26 @@ def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[ast.stmt, as
             yield statement, value
 
 
-def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[ast.stmt]:
-    """Yield each statement of *tree* that can bind pytest_plugins in a form
+def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* is the name pytest_plugins in a position that does not bind it: a read
+    or a deletion.
+
+    A read is how a method call such as append, a subscript or an alias changes the list the name
+    holds.
+    """
+    return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
+
+
+def _unreadable_pytest_plugins_statements(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield each statement of *tree* that can bind or change pytest_plugins in a form
     _pytest_plugins_assignments does not read.
 
-    One is a statement of the module's scope, as _module_scope_statements finds them, that holds
-    the name as a target other than the bare one of an assignment, an annotation or an
-    augmentation: one of a tuple, a for, a with or a walrus. The other is a global declaration of
-    the name in any scope, since a function or class that declares it global can rebind the
-    attribute of the module.
+    In the module's scope, as _module_scope_statements finds them, one holds the name as a target
+    other than the bare one of an assignment, an annotation or an augmentation: one of a tuple, a
+    for, a with or a walrus. In any scope, one reads or deletes the name, through which a method
+    call such as append, a subscript or an alias can change the list, or declares it global, since
+    a function or class that does can rebind the attribute of the module. A read in a function or
+    class body counts even where the name is a local there, since scopes are not resolved.
     """
     for statement in _module_scope_statements(tree.body):
         read_targets, _ = _assignment_parts(statement)
@@ -347,9 +358,11 @@ def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[ast.stmt]:
             for node in _nodes_outside_nested_statements(statement)
         ):
             yield statement
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Global) and _PYTEST_PLUGINS in node.names:
-            yield node
+    for statement in (node for node in ast.walk(tree) if isinstance(node, ast.stmt)):
+        if (isinstance(statement, ast.Global) and _PYTEST_PLUGINS in statement.names) or any(
+            _reads_or_deletes_pytest_plugins(node) for node in _nodes_outside_nested_statements(statement)
+        ):
+            yield statement
 
 
 def _pytest_plugins_failure(source: Path, statement: ast.stmt, clause: str) -> AssertionError:
@@ -361,8 +374,9 @@ def _pytest_plugins_failure(source: Path, statement: ast.stmt, clause: str) -> A
     quoted = ast.unparse(statement).partition("\n")[0]
     return AssertionError(
         f"{source}:{statement.lineno} has `{quoted}`, {clause}; "
-        "write pytest_plugins as a literal list or tuple of module names, or as a "
-        "comma-separated string, for the declared-dependency contract to follow the plugins it names"
+        "assign pytest_plugins, in the module's own scope, a literal list or tuple of module names "
+        "or a comma-separated string, and add to it only with += and such a literal, "
+        "for the declared-dependency contract to follow the plugins it names"
     )
 
 
@@ -377,16 +391,16 @@ def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Impor
     the module it spells. The entries are read without running *source*, so each value must be a
     literal: a str, whose entries are its pieces between commas, or a list or tuple of str. None
     names no plugin. Any other value fails, naming *source*, the line and the statement, and so
-    does a binding that _unreadable_pytest_plugins_bindings finds.
+    does a statement that _unreadable_pytest_plugins_statements finds.
 
     Each statement's value is read on its own, not added to what the module held before it. That
     is why a str's empty pieces are dropped, such as the one before the comma of `+= ",x"`, and why
     a str added to a list reads as the module it spells, not as the characters list.extend adds.
     """
-    unreadable = next(_unreadable_pytest_plugins_bindings(tree), None)
+    unreadable = next(_unreadable_pytest_plugins_statements(tree), None)
     if unreadable is not None:
         raise _pytest_plugins_failure(
-            source, unreadable, "which can bind pytest_plugins in a form the contract cannot read"
+            source, unreadable, "which can bind or change pytest_plugins in a form the contract cannot read"
         )
     for statement, value in _pytest_plugins_assignments(tree):
         try:
