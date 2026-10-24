@@ -97,13 +97,20 @@ _CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
     """Constant simulate: same FleetResults singleton regardless of config.
 
-    Isolates capex/grid-services coupling from simulation outputs — the finance
-    model computes battery-capex and grid-services income from the SCENARIO's
-    homes (not from the FleetResults), so sweeping those knobs has full effect
-    even under a constant simulate.  The singleton is built once at module
-    import time; args are intentionally ignored.
+    Its five homes have no battery, so it suits tests that need no grid-services
+    income; battery capex still comes from the scenario's homes.  The singleton
+    is built once at module import time; args are intentionally ignored.
     """
     return _CONST_FLEET_RESULTS
+
+
+def _paired_const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
+    """_CONST_FLEET_RESULTS' energy, paired with the config's own homes, as simulate_fleet pairs them.
+
+    Grid-services income is priced from the simulated fleet's homes, so each
+    config's batteries earn it while every config simulates the same energy.
+    """
+    return make_fleet_results_of(_CONST_FLEET_RESULTS.per_home_results, homes=fc.homes)
 
 
 def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-def]
@@ -368,7 +375,7 @@ class TestSensitivityPanelStructure:
 
 
 class TestWH4Coupling:
-    """W-H4: capex/grid-services knobs move the rank under a constant simulate.
+    """W-H4: capex/grid-services knobs move the rank under a constant-energy simulate paired with each config's homes.
 
     Setup: 2-config grid (no-battery A vs with-battery B).  Base finance has
     grid_services_income=100 GBP/kW/yr, which makes B the cheaper config at
@@ -412,7 +419,7 @@ class TestWH4Coupling:
         panel = sensitivity_panel(
             base_configs,
             axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         assert panel.baseline_top == pt_b, (
             f"Expected battery config B as baseline_top, got {panel.baseline_top}"
@@ -424,7 +431,7 @@ class TestWH4Coupling:
         panel = sensitivity_panel(
             base_configs,
             axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         batt_axis = panel.axes[0]
         assert batt_axis.name == "battery_cost_per_kwh_gbp"
@@ -447,7 +454,7 @@ class TestWH4Coupling:
         panel = sensitivity_panel(
             base_configs,
             axes={"grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         gs_axis = panel.axes[0]
         assert gs_axis.name == "grid_services_income_per_kw_per_year_gbp"
@@ -471,7 +478,7 @@ class TestWH4Coupling:
                 "battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH],
                 "grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH],
             },
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         # battery_cost: [stable(B=B), unstable(A≠B)] + grid_services: [unstable(A≠B), stable(B=B)]
         # = 2 stable / 4 total = 0.5
@@ -743,6 +750,7 @@ def test_each_home_a_simulate_stand_in_answers_is_a_year_of_hourly_steps() -> No
     )
     answers = {
         "_const_simulate": _const_simulate(fleet_config, None, None),
+        "_paired_const_simulate": _paired_const_simulate(fleet_config, None, None),
         "_SegPricingSimulate": _SegPricingSimulate()(fleet_config, None, None),
     }
     steps_per_home = {

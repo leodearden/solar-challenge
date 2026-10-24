@@ -8,8 +8,9 @@ the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
 Covers, after the shared helpers:
 - B3: supersede takes effect.
-- Guard: capacity_at_events + events=None → ConfigurationError.
-- Compute-once / reuse-across-ages (PRD decision 7).
+- Guard: capacity_at_events + events=None → ConfigurationError, before any simulation.
+- C1, C2: each simulated age, seed or bisection trial, books its own fleet's
+  event income.
 - B4: backward-compat / flat bit-identical regression.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the capacity-at-events line.
@@ -18,17 +19,18 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import re
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 import pandas as pd
 import pytest
 
-import solar_challenge.gridservices as gs_module
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import load_config, parse_finance_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     FinanceConfig,
+    MultiYearCurve,
     bill_distribution,
     project_economics,
     project_multi_year,
@@ -43,7 +45,7 @@ from solar_challenge.gridservices import (
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._finance_builders import make_fleet_results_of
+from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance
 from tests.integration._helpers import board_econ_scenario
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
@@ -54,11 +56,13 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 # ---------------------------------------------------------------------------
 
 
-def _make_in_window_sim_results(n_steps: int = 8760) -> SimulationResults:
+def _make_in_window_sim_results(
+    n_steps: int = 8760, battery_soc_kwh: float = 3.0
+) -> SimulationResults:
     """Build a SimulationResults with constant battery_soc above min_soc_kwh and
     battery_discharge below max_discharge_kw, on a full-year hourly tz-aware index.
 
-    With battery_soc=3.0 kWh (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
+    With the default battery_soc_kwh=3.0 (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
     and battery_discharge=0.5 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
     (winter-weekday-16-18h) selects real in-window steps and
     compute_fleet_spare_capacity_kw yields a positive event figure.
@@ -82,7 +86,7 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> SimulationResults:
         self_consumption=pd.Series(sc_kw, index=idx),
         battery_charge=zeros.copy(),
         battery_discharge=pd.Series(0.5, index=idx),  # below max_discharge_kw=2.5
-        battery_soc=pd.Series(3.0, index=idx),  # above min_soc_kwh=0.5
+        battery_soc=pd.Series(battery_soc_kwh, index=idx),
         grid_import=pd.Series(imp_kw, index=idx),
         grid_export=pd.Series(exp_kw, index=idx),
         import_cost=zeros.copy(),
@@ -232,157 +236,113 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
 
 
 # ---------------------------------------------------------------------------
-# Compute-once / reuse-across-ages
+# C1, C2 — each simulated age books its own fleet's event income
 # ---------------------------------------------------------------------------
 
 
-def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.MonkeyPatch) -> None:
-    """compute_grid_services_at_events is called exactly ONCE per project_multi_year run.
+def _soh_tracking_simulate(
+    fleets_by_age: dict[int, FleetResults],
+) -> Callable[..., FleetResults]:
+    """A simulate whose battery SOC is 0.8 × capacity × each aged home's SOH; every other flow is the same at every age.
 
-    Monkeypatches a counting wrapper on solar_challenge.gridservices.
-    compute_grid_services_at_events. The lazy `from solar_challenge.gridservices
-    import ...` inside _simulate_age re-resolves the attribute on each call, so the
-    patch is observed.
-
-    With asset_life_years=25 → seed_ages=[0,12,24] (3 ages) + bisection trial
-    nodes → ≥3 _simulate_age calls without memoization.
-
-    First-call memoization keeps the count at 1; a per-age implementation would
-    call the function for every _simulate_age invocation (count ≥ 3).
+    It records each fleet it answers in *fleets_by_age*, keyed by the age
+    project_multi_year aged the homes' PV to.
     """
-    original_fn = gs_module.compute_grid_services_at_events
-    call_count: dict[str, int] = {"n": 0}
 
-    def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
-        call_count["n"] += 1
-        return original_fn(fleet_results, cfg)
-
-    monkeypatch.setattr(gs_module, "compute_grid_services_at_events", counting_wrapper)
-
-    scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
-    fr = _synthetic_fleet_results_in_window(homes)
-    simulate = _constant_simulate(fr)
-
-    events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
-
-    project_multi_year(scenario, finance_events, simulate=simulate)
-
-    assert call_count["n"] == 1, (
-        f"compute_grid_services_at_events must be called exactly once per "
-        f"project_multi_year run; got {call_count['n']}. "
-        f"The figure must be memoized across ages."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Coverage extension: memo reuse on bisection path
-# ---------------------------------------------------------------------------
-
-
-def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-defined]
-    """Return a simulate function whose fleet_revenue decays quadratically with age.
-
-    Parses the age from fleet_config.name (``"proj-age-{age}"``).  The quadratic
-    decay ensures the PCHIP midpoint error between sampled ages exceeds the
-    default ``error_target_pct=1.0 %``, which triggers bisection and adds trial
-    nodes beyond the initial three seed ages.
-
-    ``battery_soc`` and ``battery_discharge`` stay constant across all ages so
-    ``compute_grid_services_at_events`` always returns a positive figure —
-    the test cares only that the event function is called exactly once (memo
-    reuse), not that the figure changes with age.
-    """
-    def _sim(fc: object, start_ts: object, end_ts: object) -> FleetResults:
-        m = re.search(r"proj-age-(\d+)", str(getattr(fc, "name", "")))
-        age = int(m.group(1)) if m else 0
-
-        # Quadratic decay: revenue at age=0 is 4× revenue at age=24 → PCHIP
-        # midpoint error ≈ 4 % between seed ages 0 and 12 → bisection fires.
-        scale = max(0.05, (1.0 - age / 30.0) ** 2)
-        n_steps = 8760
-        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-        zeros = pd.Series(0.0, index=idx)
-        sc_kw = 2.0 * scale
-        exp_kw = 0.5 * scale
-        imp_kw = 0.3 * scale
-
-        sim_r = SimulationResults(
-            generation=pd.Series(sc_kw + exp_kw, index=idx),
-            demand=pd.Series(sc_kw + imp_kw, index=idx),
-            self_consumption=pd.Series(sc_kw, index=idx),
-            battery_charge=zeros.copy(),
-            battery_discharge=pd.Series(0.5, index=idx),   # constant below max_discharge_kw=2.5
-            battery_soc=pd.Series(3.0, index=idx),          # constant above min_soc_kwh=0.5
-            grid_import=pd.Series(imp_kw, index=idx),
-            grid_export=pd.Series(exp_kw, index=idx),
-            import_cost=zeros.copy(),
-            export_revenue=zeros.copy(),
-            tariff_rate=zeros.copy(),
-            grid_charge_cost=None,
+    def _simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
+        homes = fleet_config.homes
+        fleet = make_fleet_results_of(
+            [
+                _make_in_window_sim_results(
+                    battery_soc_kwh=0.8
+                    * home.battery_config.capacity_kwh
+                    * home.battery_config.soh
+                )
+                for home in homes
+            ],
+            homes=homes,
         )
-        fc_homes = getattr(fc, "homes", [])
-        return make_fleet_results_of([sim_r for _ in fc_homes], homes=fc_homes)
+        fleets_by_age[int(homes[0].pv_config.system_age_years)] = fleet
+        return fleet
 
-    return _sim
+    return _simulate
 
 
-def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """compute_grid_services_at_events is called exactly once even when bisection
-    adds trial nodes beyond the initial three seed ages.
+class _SohTrackingProjections(NamedTuple):
+    events: MultiYearCurve
+    no_grid_services: MultiYearCurve
+    events_fleets_by_age: dict[int, FleetResults]
 
-    Uses an age-nonlinear simulate (quadratic revenue decay) so the PCHIP
-    midpoint error between seed ages exceeds error_target_pct → bisection fires
-    and _simulate_age is called for additional mid-point ages.  The memo must
-    still be populated only on the first call (age-0) and reused on all
-    subsequent calls — including every bisection trial node.
 
-    Covers the concern raised in review: the original compute-once test uses
-    _constant_simulate, which never triggers bisection, leaving the bisection
-    code path unexercised.
+@pytest.fixture(scope="module")
+def soh_tracking_projections() -> _SohTrackingProjections:
+    """Two 5 kWh default-fade batteries over 25 years, priced by the events model and by no grid services.
+
+    At a 1 p/kWh own-use rate and no SEG rate, the event income is over a third
+    of the age-0 revenue, so the SOH kink at the 0.5 floor bends the events
+    revenue curve past the 1% bisection target.
     """
-    original_fn = gs_module.compute_grid_services_at_events
-    call_count: dict[str, int] = {"n": 0}
-
-    def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
-        call_count["n"] += 1
-        return original_fn(fleet_results, cfg)
-
-    monkeypatch.setattr(gs_module, "compute_grid_services_at_events", counting_wrapper)
-
-    scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
-
-    events_cfg = GridServicesEventsConfig(band="central")
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
+    )
+    finance_none = dataclasses.replace(finance, own_use_rate_pence_per_kwh=1.0)
     finance_events = dataclasses.replace(
-        finance_base,
+        finance_none,
         grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        grid_services_events=GridServicesEventsConfig(),
+    )
+    events_fleets_by_age: dict[int, FleetResults] = {}
+    return _SohTrackingProjections(
+        events=project_multi_year(
+            scenario, finance_events, simulate=_soh_tracking_simulate(events_fleets_by_age)
+        ),
+        no_grid_services=project_multi_year(
+            scenario, finance_none, simulate=_soh_tracking_simulate({})
+        ),
+        events_fleets_by_age=events_fleets_by_age,
     )
 
-    simulate = _age_nonlinear_simulate(homes)
 
-    curve = project_multi_year(scenario, finance_events, simulate=simulate)
+def _booked_and_priced_event_income(
+    projections: _SohTrackingProjections, age: int
+) -> tuple[float, float]:
+    """The event income the events curve books at *age*, and what that age's simulated fleet prices at."""
+    booked = (
+        projections.events.points[age].fleet_revenue_gbp
+        - projections.no_grid_services.points[age].fleet_revenue_gbp
+    )
+    priced = compute_grid_services_at_events(
+        projections.events_fleets_by_age[age], GridServicesEventsConfig()
+    ).annual_income_gbp
+    return booked, priced
 
-    # Bisection should have fired — more than the initial 3 seed ages sampled.
-    assert len(curve.sampled_ages) > 3, (
-        f"Expected bisection to add trial nodes (sampled_ages={curve.sampled_ages}); "
-        "check that _age_nonlinear_simulate produces sufficient PCHIP deviation."
+
+def test_c1_each_sampled_age_books_its_own_fleets_event_income(
+    soh_tracking_projections: _SohTrackingProjections,
+) -> None:
+    curve = soh_tracking_projections.events
+    booked_by_age = {}
+    for age in curve.sampled_ages:
+        booked, priced = _booked_and_priced_event_income(soh_tracking_projections, age)
+        assert booked == pytest.approx(priced, rel=1e-9), f"age {age}"
+        booked_by_age[age] = booked
+
+    assert booked_by_age[24] < booked_by_age[0]
+    assert booked_by_age[24] == pytest.approx(
+        booked_by_age[0] * curve.points[24].battery_soh / curve.points[0].battery_soh,
+        rel=1e-9,
     )
 
-    # Even with bisection nodes, compute_grid_services_at_events is called once.
-    assert call_count["n"] == 1, (
-        f"compute_grid_services_at_events must be called exactly once per "
-        f"project_multi_year run even when bisection adds trial nodes; "
-        f"got {call_count['n']} calls (sampled_ages={curve.sampled_ages})."
-    )
+
+def test_c2_bisection_trial_ages_book_their_own_fleets_event_income(
+    soh_tracking_projections: _SohTrackingProjections,
+) -> None:
+    sampled_ages = soh_tracking_projections.events.sampled_ages
+    assert len(sampled_ages) > 3, sampled_ages
+
+    for age in sorted(set(sampled_ages) - {0, 12, 24}):
+        booked, priced = _booked_and_priced_event_income(soh_tracking_projections, age)
+        assert booked == pytest.approx(priced, rel=1e-9), f"age {age}"
 
 
 # ---------------------------------------------------------------------------
