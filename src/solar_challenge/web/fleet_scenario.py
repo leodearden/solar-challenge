@@ -35,6 +35,7 @@ from solar_challenge.web.fleet_config import (
     read_fleet_size,
 )
 from solar_challenge.web.request_boundary import refuse_unrecognised_keys, resolve_location
+from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.simulation_params import (
     DATE_RANGE_KEYS,
     parse_date_range,
@@ -59,8 +60,8 @@ class ParsedFleetForm:
     """The fleet a fleet form describes: the run the simulate endpoint submits, and its scenario document.
 
     Attributes:
-        name: The form's name as sent, None when it sends none, so the run submitted
-            takes its kind's default name.
+        name: The form's name, None when it sends none or one that cannot name a run
+            (is_run_name), so the run submitted takes its kind's default name.
         homes: The fleet's homes, each with the form's tariff and SEG and, given a battery,
             its dispatch strategy.
         start_date: The first day simulated, at the fleet's location.
@@ -69,7 +70,7 @@ class ParsedFleetForm:
             homes.
     """
 
-    name: Any
+    name: str | None
     homes: tuple[HomeConfig, ...]
     start_date: pd.Timestamp
     end_date: pd.Timestamp
@@ -82,9 +83,10 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     The form's distributions are the fleet_distribution: block in config.py's grammar, from
     which the homes are generated at the form's location.  Every home gets the form's
     tariff and SEG, and every home with a battery its dispatch strategy.  The document
-    writes the form's name only when it sends one, the tariff: and seg: blocks as given,
-    null when the form sends none, and the dispatch strategy in the battery block, where
-    load_fleet_config gives it to every battery; a form without a battery gives it to none.
+    writes the form's name only when it can name a run, the tariff: and seg: blocks as
+    given, null when the form sends none, and the dispatch strategy in the battery block,
+    where load_fleet_config gives it to every battery; a form without a battery gives it
+    to none.
 
     The form's six blocks, the pv, battery and load distributions and the tariff,
     dispatch_strategy and seg overlays, share one presence rule: absent or null means none,
@@ -109,7 +111,8 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     location = _fleet_form_location(form)
     homes = _with_fleet_overlay(generate_homes_from_distribution(fleet, location), form)
     start, end = parse_date_range(form)
-    name = form.get("name")
+    sent_name = form.get("name")
+    name = sent_name if is_run_name(sent_name) else None
     return ParsedFleetForm(
         name=name,
         homes=tuple(homes),
