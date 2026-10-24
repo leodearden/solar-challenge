@@ -66,6 +66,8 @@ _PYTEST_PLUGINS = "pytest_plugins"
 _NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
 _NAMESPACE_ATTRIBUTES = frozenset({"__dict__", "f_globals", "f_locals", "__globals__"})
 _ATTRIBUTE_FUNCTIONS = frozenset({"getattr", "setattr", "delattr"})
+_CODE_RUNNING_FUNCTIONS = frozenset({"exec", "eval"})
+_NAMESPACE_PARAMETERS = ("globals", "locals")
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
 WEB_SUBPACKAGE = f"{_PACKAGE}.web"
@@ -495,6 +497,70 @@ def _reaches_attribute_pytest_plugins(node: ast.AST) -> bool:
     )
 
 
+def _may_run_in_a_namespace_of_the_module(call: ast.Call, namespace_names: frozenset[str]) -> bool:
+    """Return whether the exec or eval *call* may run its code in the namespace of the module: it is
+    given no globals, or None for them, so the code runs in the caller's; or it is given, for
+    globals or locals, positionally or by keyword, a namespace, as _spells_namespace reads one given
+    *namespace_names*.
+
+    A dict display, a copy of a namespace or a name that holds none is a namespace of the code's
+    own.
+    """
+    given = dict(zip(_NAMESPACE_PARAMETERS, call.args[1:3]))
+    given.update(
+        (keyword.arg, keyword.value) for keyword in call.keywords if keyword.arg in _NAMESPACE_PARAMETERS
+    )
+    globals_argument = given.get("globals")
+    return (
+        globals_argument is None
+        or (isinstance(globals_argument, ast.Constant) and globals_argument.value is None)
+        or any(_spells_namespace(argument, namespace_names) for argument in given.values())
+    )
+
+
+def _code_can_bind_or_change_pytest_plugins(source: str | bytes, namespace_names: frozenset[str]) -> bool:
+    """Return whether the literal *source* of an exec or eval can bind or change pytest_plugins:
+    it does not parse as a module, or it holds a unit that any of the finders of a module's
+    pytest_plugins, _pytest_plugins_assignments, _unreadable_pytest_plugins_bindings and
+    _unreadable_pytest_plugins_uses, finds.
+
+    The code is judged as a module is, wherever it runs, given *namespace_names*, those that hold
+    a namespace where exec runs. So code that names no pytest_plugins does not count, in the
+    module's namespace too, and a literal exec nested in it is judged the same way. Code that
+    does not parse counts, since eval strips leading blanks, which a module does not accept.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return True
+    finders = chain(
+        _pytest_plugins_assignments(tree),
+        _unreadable_pytest_plugins_bindings(tree),
+        _unreadable_pytest_plugins_uses(tree, namespace_names),
+    )
+    return next(finders, None) is not None
+
+
+def _runs_code_that_can_change_pytest_plugins(node: ast.AST, namespace_names: frozenset[str]) -> bool:
+    """Return whether *node* is a call of exec or eval, by its bare name, with code to run, that
+    can change pytest_plugins: a literal str or bytes that _code_can_bind_or_change_pytest_plugins
+    says can, or any other code that _may_run_in_a_namespace_of_the_module says may run in the
+    namespace of the module.
+
+    Only the spelling is read, as _calls_importorskip reads its own: builtins.exec and an alias of
+    exec are not. Code that exec runs in a namespace of its own and cannot be read can still reach
+    the module through sys.modules, like any code the file runs but does not spell.
+    """
+    match node:
+        case ast.Call(
+            func=ast.Name(id=name), args=[ast.Constant(value=str() | bytes() as source), *_]
+        ) if name in _CODE_RUNNING_FUNCTIONS:
+            return _code_can_bind_or_change_pytest_plugins(source, namespace_names)
+        case ast.Call(func=ast.Name(id=name), args=[_, *_]) if name in _CODE_RUNNING_FUNCTIONS:
+            return _may_run_in_a_namespace_of_the_module(node, namespace_names)
+    return False
+
+
 def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_Unit]:
     """Yield each unit of *tree*'s module scope, as _scope_units finds them, that binds
     pytest_plugins in a form _pytest_plugins_assignments does not read: it holds the name as a
@@ -521,8 +587,9 @@ def _namespace_names(units: Iterable[_Unit], enclosing: frozenset[str]) -> froze
 
     Not followed: a target of a tuple, a star or a chained assignment, a for or a with; a
     parameter or its default; an import; a namespace passed into a function and written there
-    through its parameter; a method of a namespace, as `setitem = globals().__setitem__` binds. A
-    parameter named like a name of *enclosing* leaves it held, so that fails rather than escapes.
+    through its parameter, or returned by one; a method of a namespace, as
+    `setitem = globals().__setitem__` binds. A parameter named like a name of *enclosing* leaves it
+    held, so that fails rather than escapes.
     """
     bindings = [
         binding
@@ -560,26 +627,36 @@ def _units_with_their_namespace_names(
             yield from _units_with_their_namespace_names(unit.body, names)
 
 
-def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
+def _unreadable_pytest_plugins_uses(
+    tree: ast.Module, enclosing: frozenset[str] = frozenset()
+) -> Iterator[_Unit]:
     """Yield each unit of *tree*, in any scope, that can change pytest_plugins in a form
     _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
     method call such as append, a subscript or an alias can change the list; subscripts a
     namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; calls a method
     of a namespace, or a function given one, or |= one, with the name, as
-    _calls_on_namespace_with_pytest_plugins reads it; reaches an attribute of that name, as
-    _reaches_attribute_pytest_plugins reads it; or declares it global, since a function or class
-    that does can rebind the attribute of the module.
+    _calls_on_namespace_with_pytest_plugins reads it; runs code that can change it with exec or
+    eval, as _runs_code_that_can_change_pytest_plugins reads it; reaches an attribute of that
+    name, as _reaches_attribute_pytest_plugins reads it; or declares it global, since a function
+    or class that does can rebind the attribute of the module.
 
     A read of the name in a function or class body counts even where the name is a local there,
     since that name is not resolved by scope. So does a read in an except type or a case pattern
     or guard, which belongs to its clause, not to the try or match around it. The names that hold
-    a namespace are resolved by scope, as _units_with_their_namespace_names says.
+    a namespace are resolved by scope, as _units_with_their_namespace_names says, from *enclosing*,
+    those that hold one around *tree*'s code, which matter for the code an exec runs.
+
+    Not read: a key held in a variable, or a mapping that does not spell it; a binding of a
+    namespace in a form _bound_name_and_value does not follow; a namespace passed into a function
+    and written there, or returned by one; a method of one held in a variable; exec or eval
+    reached other than by its bare name.
     """
-    for unit, namespace_names in _units_with_their_namespace_names(tree.body, frozenset()):
+    for unit, namespace_names in _units_with_their_namespace_names(tree.body, enclosing):
         if (isinstance(unit, ast.Global) and _PYTEST_PLUGINS in unit.names) or any(
             _reads_or_deletes_pytest_plugins(node)
             or _subscripts_namespace_with_pytest_plugins(node, namespace_names)
             or _calls_on_namespace_with_pytest_plugins(node, namespace_names)
+            or _runs_code_that_can_change_pytest_plugins(node, namespace_names)
             or _reaches_attribute_pytest_plugins(node)
             for node in _own_nodes(unit)
         ):
