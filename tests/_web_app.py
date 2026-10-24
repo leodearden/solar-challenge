@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The web dashboard's Flask app for tests, its database and run files under one directory, the RunStorage it keeps its runs in, and the release of the store lock it holds.
+"""The web dashboard's Flask app for tests, its database and run files under one directory, the Database it keeps its tables in, the RunStorage it keeps its runs in, and the release of the store lock it holds.
 
-build_test_app, run_storage_of and release_store_lock import the web package when they
-are called, not when this module loads. So importing this module needs no web extra, and
-a call made after a test drops solar_challenge.web.app from sys.modules imports the
-factory anew.
+build_test_app, database_of, run_storage_of and release_store_lock import the web package
+when they are called, not when this module loads. So importing this module needs no web
+extra, and a call made after a test drops solar_challenge.web.app from sys.modules imports
+the factory anew.
 
 Usage::
 
-    from tests._web_app import build_test_app, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
+    from tests._web_app import build_test_app, database_of, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 
     app = build_test_app(tmp_path)
+    database = database_of(app)
     storage = run_storage_of(app)
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from flask import Flask
 
+    from solar_challenge.web.database import Database
     from solar_challenge.web.storage import RunStorage
 
 
@@ -50,6 +52,14 @@ def build_test_app(
             **secret_key_config,
         }
     )
+
+
+def database_of(app: Flask) -> Database:
+    """Return the Database *app* keeps its tables in: the one its views read, through the accessor they read it with."""
+    from solar_challenge.web.shared import get_database
+
+    with app.app_context():
+        return get_database()
 
 
 def run_storage_of(app: Flask) -> RunStorage:

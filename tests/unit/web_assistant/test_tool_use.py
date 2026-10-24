@@ -50,7 +50,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
-from tests._web_app import point_store_config_at_a_missing_directory
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -662,10 +662,9 @@ class TestRunLookupToolSurface:
         tmp_path: Path,
     ) -> None:
         """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
-        db_path = app.config["DATABASE"]
         summary_val = 999.75
         seed_run(
-            db_path,
+            database_of(app).path,
             run_id="e2e-run-001",
             name="e2e-signal-run",
             status="completed",

@@ -13,10 +13,10 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import Database, get_chat_history, init_db, save_chat_message
+from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
-from tests._web_app import point_store_config_at_a_missing_directory
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -120,7 +120,7 @@ class TestAssistantHistory:
 
     def test_history_returns_seeded_messages(self, client: FlaskClient, app: Flask) -> None:
         """Seeding rows under a pinned session_id → GET /history returns them in order."""
-        database = Database(Path(app.config["DATABASE"]))
+        database = database_of(app)
 
         # Pin a session_id in the signed cookie
         with client.session_transaction() as sess:
@@ -151,7 +151,7 @@ class TestAssistantHistory:
 
     def test_history_session_isolation(self, app: Flask) -> None:
         """Two clients with different session_ids see only their own messages."""
-        database = Database(Path(app.config["DATABASE"]))
+        database = database_of(app)
 
         client_a = app.test_client()
         client_b = app.test_client()
@@ -181,7 +181,7 @@ class TestAssistantHistory:
         """GET /history reads the Database create_app built, whatever the app's store config names afterwards."""
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "moved-store-config-sid"
-        save_chat_message(Database(Path(app.config["DATABASE"])), "moved-store-config-sid", "user", "What is SOC?")
+        save_chat_message(database_of(app), "moved-store-config-sid", "user", "What is SOC?")
         point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 
         resp = client.get("/assistant/history")
@@ -292,7 +292,7 @@ class TestChatEndpointHappyPath:
         tmp_path: Path,
     ) -> None:
         """POST /chat stores its turn in the Database create_app built, whatever the app's store config names afterwards."""
-        database = Database(Path(app.config["DATABASE"]))
+        database = database_of(app)
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "moved-store-config-chat-sid"
         anthropic_api.set_chunks(["Hi", " there"])
@@ -652,7 +652,7 @@ class TestEveryTurnStoresAReplyWithText:
         stored_reply: str,
     ) -> None:
         """A reply stored without text, as the old error path stored one, is not replayed."""
-        database = Database(Path(app.config["DATABASE"]))
+        database = database_of(app)
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "replay-skip-sid"
         save_chat_message(database, "replay-skip-sid", "user", "hello")
@@ -837,10 +837,9 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """POST with run_id injects summary into messages[-1]['content'] before API call."""
-        db_path = app.config["DATABASE"]
         summary_marker = 987.65
         seed_run(
-            db_path,
+            database_of(app).path,
             run_id="ctx-run-001",
             name="ctx-signal-run",
             status="completed",
@@ -876,9 +875,8 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """The persisted user row contains only the original user message, not injected context."""
-        db_path = app.config["DATABASE"]
         seed_run(
-            db_path,
+            database_of(app).path,
             run_id="ctx-run-002",
             name="ctx-persist-run",
             status="completed",
@@ -921,7 +919,7 @@ class TestRunContextInjection:
     ) -> None:
         """A turn with run context sends the system block a turn without it sends, so the cached prompt prefix still matches."""
         seed_run(
-            app.config["DATABASE"],
+            database_of(app).path,
             run_id="ctx-run-003",
             name="ctx-cache-run",
             status="completed",
