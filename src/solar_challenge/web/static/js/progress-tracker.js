@@ -22,7 +22,8 @@ document.addEventListener('alpine:init', () => {
             this._stream.addEventListener('progress', (e) => this._onProgress(e.data));
             this._stream.addEventListener('complete', (e) => this._onComplete(e.data));
             onJobProgressStreamErrors(this._stream, {
-                failed: (eventData) => this._onErrorEvent(eventData),
+                failed: (eventData) => this._onFailed(eventData),
+                cancelled: (eventData) => this._onCancelled(eventData),
                 reconnecting: (reconnecting) => { this.reconnecting = reconnecting; },
                 lost: () => this._onLost(),
             });
@@ -56,19 +57,19 @@ document.addEventListener('alpine:init', () => {
             this.message = data.message || 'Simulation completed successfully';
         },
 
-        // An error event ends a job that failed, or one cancelled because its run was deleted, until S20 gives
-        // cancellation its own event
-        _onErrorEvent(eventData) {
+        _onFailed(eventData) {
             this._stop();
             const data = JSON.parse(eventData);
-            if (data.status === 'cancelled') {
-                this.status = 'cancelled';
-                this.step = 'Cancelled';
-                this.message = data.message;
-                return;
-            }
             this.status = 'failed';
             this.error = data.message || data.error || 'An unexpected error occurred';
+        },
+
+        _onCancelled(eventData) {
+            this._stop();
+            const data = JSON.parse(eventData);
+            this.status = 'cancelled';
+            this.step = 'Cancelled';
+            this.message = data.message;
         },
 
         _onLost() {
