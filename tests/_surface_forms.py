@@ -1399,13 +1399,13 @@ def _pinned_by_class_form(cls: type) -> set[str]:
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _fields(cls).keys() & _constructor_parameters(cls)
+        return _dataclass_fields(cls).keys() & _constructor_parameters(cls)
     if _is_named_tuple(cls):
         return set(cls._fields) & _constructor_parameters(cls)
     return set()
 
 
-def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
+def _dataclass_fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     """*cls*'s dataclass fields by name, inherited ones included; none if *cls* is no dataclass."""
     if not dataclasses.is_dataclass(cls):
         return {}
@@ -1426,7 +1426,7 @@ def _defaulted_fields(cls: type) -> set[str]:
     """The names of *cls*'s dataclass fields with a default, which instances read from the class, or a default factory, which the generated __init__ calls."""
     return {
         name
-        for name, field in _fields(cls).items()
+        for name, field in _dataclass_fields(cls).items()
         if field.default is not dataclasses.MISSING
         or field.default_factory is not dataclasses.MISSING
     }
@@ -1446,7 +1446,7 @@ def _init_only_variables(cls: type) -> set[str]:
         for name, annotation in inspect.get_annotations(cls).items()
         if not _is_class_var(annotation, cls)
     }
-    return (annotated & _constructor_parameters(cls)) - _fields(cls).keys()
+    return (annotated & _constructor_parameters(cls)) - _dataclass_fields(cls).keys()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1508,7 +1508,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    class_values = vars(cls).keys() - _fields(cls).keys()
+    class_values = vars(cls).keys() - _dataclass_fields(cls).keys()
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
