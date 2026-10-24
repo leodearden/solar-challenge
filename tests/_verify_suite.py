@@ -6,11 +6,11 @@ variation, such as another interpreter or newer dependency releases.
 
 Usage::
 
-    from tests._command_runner import describe_outcome
+    from tests._command_runner import describe_pytest_outcome
     from tests._verify_suite import run_verify_suite
 
     result = run_verify_suite(project_root, env, variant="on Python 3.13")
-    assert result.returncode == 0, f"the verify suite failed on Python 3.13\n{describe_outcome(result)}"
+    assert result.returncode == 0, f"the verify suite failed on Python 3.13\n{describe_pytest_outcome(result)}"
 """
 
 from collections.abc import Mapping
