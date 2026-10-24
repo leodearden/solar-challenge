@@ -388,19 +388,52 @@ def _spells_namespace(node: ast.expr) -> bool:
     return False
 
 
-def _subscripts_namespace_with_pytest_plugins(node: ast.AST) -> bool:
-    """Return whether *node* subscripts a namespace, as _spells_namespace reads one, with the str
-    pytest_plugins, in any position, as `globals()["pytest_plugins"]` and
-    `sys.modules[__name__].__dict__["pytest_plugins"]` do.
+def _spells_pytest_plugins_key(node: ast.AST) -> bool:
+    """Return whether the str pytest_plugins is anywhere in *node*: as a str constant, or as the
+    name of a keyword argument.
 
-    Only that subscript is read: a method call on the namespace, such as update or setdefault, is
-    not.
+    That finds the key wherever an expression gives it: as a subscript, a positional argument, a
+    keyword, a key of a dict display, a pair of a list, or dict(pytest_plugins=...). A key held in
+    a variable is not read, nor is a mapping that does not spell it, such as `update(SETTINGS)`
+    or `update(**SETTINGS)`.
+    """
+    for part in ast.walk(node):
+        match part:
+            case ast.Constant(value=name) | ast.keyword(arg=name) if name == _PYTEST_PLUGINS:
+                return True
+    return False
+
+
+def _subscripts_namespace_with_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* subscripts a namespace, as _spells_namespace reads one, with the key
+    pytest_plugins, as _spells_pytest_plugins_key reads it, in any position, as
+    `globals()["pytest_plugins"]` and `sys.modules[__name__].__dict__["pytest_plugins"]` do.
     """
     return (
         isinstance(node, ast.Subscript)
         and _spells_namespace(node.value)
-        and isinstance(node.slice, ast.Constant)
-        and node.slice.value == _PYTEST_PLUGINS
+        and _spells_pytest_plugins_key(node.slice)
+    )
+
+
+def _calls_on_namespace_with_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* is a call on a namespace, as _spells_namespace reads one, that is
+    given the key pytest_plugins, as _spells_pytest_plugins_key reads it, in any argument,
+    positional or keyword.
+
+    A call is on a namespace when it is a method of one, as `globals().update(...)` is, or when
+    one of its arguments, positional or a keyword's value, spells one, as `dict.update(globals(),
+    ...)` does. No method is singled out: get or pop hand out the list as surely as update or
+    setdefault write it. A key held in a variable, or a mapping that does not spell the key, is
+    not read, as a variable key of a subscript is not.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    receivers = [node.func.value] if isinstance(node.func, ast.Attribute) else []
+    arguments = [*node.args, *node.keywords]
+    handed_over = [*node.args, *(keyword.value for keyword in node.keywords)]
+    return any(_spells_namespace(part) for part in [*receivers, *handed_over]) and any(
+        _spells_pytest_plugins_key(argument) for argument in arguments
     )
 
 
@@ -446,9 +479,11 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
     """Yield each unit of *tree*, in any scope, that can change pytest_plugins in a form
     _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
     method call such as append, a subscript or an alias can change the list; subscripts a
-    namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; reaches an
-    attribute of that name, as _reaches_attribute_pytest_plugins reads it; or declares it global,
-    since a function or class that does can rebind the attribute of the module.
+    namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; calls a method
+    of a namespace, or a function given one, with the name, as
+    _calls_on_namespace_with_pytest_plugins reads it; reaches an attribute of that name, as
+    _reaches_attribute_pytest_plugins reads it; or declares it global, since a function or class
+    that does can rebind the attribute of the module.
 
     A read in a function or class body counts even where the name is a local there, since scopes
     are not resolved. So does a read in an except type or a case pattern or guard, which belongs to
@@ -458,6 +493,7 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
         if (isinstance(unit, ast.Global) and _PYTEST_PLUGINS in unit.names) or any(
             _reads_or_deletes_pytest_plugins(node)
             or _subscripts_namespace_with_pytest_plugins(node)
+            or _calls_on_namespace_with_pytest_plugins(node)
             or _reaches_attribute_pytest_plugins(node)
             for node in _own_nodes(unit)
         ):
