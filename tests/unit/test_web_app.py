@@ -19,8 +19,10 @@ pytest.importorskip("flask")
 
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import live_managers
+from solar_challenge.web.schema import SCHEMA_VERSION, SchemaVersionMismatch
 from solar_challenge.web.shared import get_database, get_storage
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
+from tests._dashboard_databases import write_pre_548_database
 from tests._web_app import build_test_app, release_store_lock, run_storage_of
 
 
@@ -249,3 +251,16 @@ def test_a_build_that_fails_after_taking_its_store_lock_releases_it(tmp_path: Pa
         build_test_app(tmp_path)
 
     acquire_store_lock(tmp_path).release()
+
+
+def test_an_app_on_a_legacy_store_refuses_to_build_naming_it_and_both_versions_and_releases_the_store(tmp_path: Path) -> None:
+    """B2: the store keeps its bytes, and the refused build has released its lock."""
+    legacy = write_pre_548_database(tmp_path / "test.db")
+    bytes_before = legacy.read_bytes()
+
+    with pytest.raises(SchemaVersionMismatch) as refused:
+        build_test_app(tmp_path)
+
+    assert (refused.value.path, refused.value.found, refused.value.expected) == (legacy, 0, SCHEMA_VERSION)
+    acquire_store_lock(tmp_path).release()
+    assert legacy.read_bytes() == bytes_before

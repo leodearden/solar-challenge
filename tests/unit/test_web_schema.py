@@ -3,11 +3,14 @@
 
 open_database creates a new store at schema.SCHEMA_VERSION, in one transaction, with one runs
 column per RunRecord field (D27 invariant 7) and each table's constraints as its owner states
-them. MIGRATIONS' versions run from 1 without a gap, and SCHEMA_VERSION is the last of them
+them. It refuses a store at any other version, a legacy store with no version being at version
+0, with a SchemaVersionMismatch naming the file and both versions, and writes nothing to it.
+MIGRATIONS' versions run from 1 without a gap, and SCHEMA_VERSION is the last of them
 (contract C5).
 """
 
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import fields
 from pathlib import Path
@@ -16,10 +19,10 @@ import pytest
 
 from solar_challenge.web.database import CHAT_ROLES, Database
 from solar_challenge.web.presets import PRESET_TYPES
-from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
+from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, SchemaVersionMismatch, open_database
 from solar_challenge.web.storage import RUN_STATUSES, RunRecord
 from solar_challenge.web.stored_runs import RUN_TYPES
-from tests._dashboard_databases import schema_of
+from tests._dashboard_databases import schema_of, write_pre_548_database
 
 
 def _user_version(path: Path) -> int:
@@ -98,6 +101,67 @@ def test_open_database_creates_a_store_all_or_nothing_so_a_statement_that_fails_
 
     assert _names_in_sqlite_master(path, "table") == set(), "open_database must create a store in one transaction"
     assert _user_version(path) == 0
+
+
+def _store_a_newer_solar_challenge_wrote(path: Path) -> Path:
+    """A store open_database created at *path*, then recorded at SCHEMA_VERSION + 1, as a newer solar-challenge records it."""
+    open_database(path)
+    with closing(Database(path).connect()) as conn:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    return path
+
+
+def test_open_database_refuses_a_legacy_store_naming_it_both_versions_and_the_migrate_command(tmp_path: Path) -> None:
+    legacy = write_pre_548_database(tmp_path / "legacy.db")
+
+    with pytest.raises(SchemaVersionMismatch) as refused:
+        open_database(legacy)
+
+    assert (refused.value.path, refused.value.found, refused.value.expected) == (legacy, 0, SCHEMA_VERSION)
+    message = str(refused.value)
+    assert str(legacy) in message
+    assert "schema version 0" in message
+    assert f"version {SCHEMA_VERSION}" in message
+    assert "Run `solar-challenge web migrate`" in message
+
+
+def test_open_database_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_versions(tmp_path: Path) -> None:
+    newer = _store_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
+
+    with pytest.raises(SchemaVersionMismatch) as refused:
+        open_database(newer)
+
+    assert (refused.value.path, refused.value.found, refused.value.expected) == (newer, SCHEMA_VERSION + 1, SCHEMA_VERSION)
+    message = str(refused.value)
+    assert f"schema version {SCHEMA_VERSION + 1}" in message
+    assert f"version {SCHEMA_VERSION}." in message
+    assert "This database was written by a newer solar-challenge" in message
+
+
+STORES_AT_ANOTHER_VERSION = [
+    pytest.param(write_pre_548_database, id="legacy-store"),
+    pytest.param(_store_a_newer_solar_challenge_wrote, id="newer-store"),
+]
+
+
+@pytest.mark.parametrize("store_at_another_version", STORES_AT_ANOTHER_VERSION)
+def test_open_database_writes_nothing_to_a_store_it_refuses(
+    store_at_another_version: Callable[[Path], Path], tmp_path: Path
+) -> None:
+    path = store_at_another_version(tmp_path / "store.db")
+    bytes_before, schema_before, version_before = path.read_bytes(), schema_of(path), _user_version(path)
+
+    with pytest.raises(SchemaVersionMismatch):
+        open_database(path)
+
+    assert path.read_bytes() == bytes_before
+    assert schema_of(path) == schema_before
+    assert _user_version(path) == version_before
+
+
+def test_a_schema_version_mismatch_is_not_a_value_error() -> None:
+    """It is a start-up refusal, as StoreLockError is: no request causes it, so no request boundary answers it with a 400."""
+    assert not issubclass(SchemaVersionMismatch, ValueError)
 
 
 def test_the_migration_steps_versions_run_from_1_without_a_gap_and_the_schema_version_is_the_last() -> None:
