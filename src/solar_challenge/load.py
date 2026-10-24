@@ -16,7 +16,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from solar_challenge.timebase import SimulationWindow
+from solar_challenge.timebase import MINUTES_PER_DAY, SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
@@ -118,8 +118,6 @@ class LoadConfig:
 
         return base_consumption
 
-
-_MINUTES_PER_DAY = 1440
 
 # One local calendar day's 1,440 one-minute power values in W, wall clock 00:00 to 23:59, in no time zone.
 DaySimulator: TypeAlias = Callable[[datetime.date], npt.NDArray[np.float64]]
@@ -251,7 +249,7 @@ def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) ->
     electricity = ElectricityProfile(appliances, lights)
 
     # A sinusoidal daylight for the lighting model, in W/m²: 6 am to 8 pm, peak at 1 pm.
-    hour = np.arange(_MINUTES_PER_DAY) / 60.0
+    hour = np.arange(MINUTES_PER_DAY) / 60.0
     daylight_irradiance = np.where(
         (hour >= 6.0) & (hour <= 20.0),
         100.0 * np.maximum(0.0, np.sin((hour - 6.0) * np.pi / 14.0)),
@@ -368,10 +366,10 @@ def _household_day_watts(
         day_watts = []
         for day in days:
             watts = simulate_day(day)
-            if len(watts) != _MINUTES_PER_DAY:
+            if len(watts) != MINUTES_PER_DAY:
                 raise ValueError(
                     f"the household model simulated {len(watts)} minutes for {day}, "
-                    f"not {_MINUTES_PER_DAY}"
+                    f"not {MINUTES_PER_DAY}"
                 )
             day_watts.append(watts)
     return day_watts
@@ -442,7 +440,11 @@ def _try_richardsonpy_profile(
         if len(power_kw) > len(minute_index):
             power_kw = power_kw[: len(minute_index)]
         elif len(power_kw) < len(minute_index):
-            avg = power_kw[-1440:].mean() if len(power_kw) >= 1440 else power_kw.mean()
+            avg = (
+                power_kw[-MINUTES_PER_DAY:].mean()
+                if len(power_kw) >= MINUTES_PER_DAY
+                else power_kw.mean()
+            )
             padding = np.full(len(minute_index) - len(power_kw), avg)
             power_kw = np.concatenate([power_kw, padding])
 
@@ -596,7 +598,11 @@ def _generate_elexon_profile(
         power_values = power_values[: len(minute_index)]
     elif len(power_values) < len(minute_index):
         # Extend with last day's average
-        avg = power_values[-1440:].mean() if len(power_values) >= 1440 else power_values.mean()
+        avg = (
+            power_values[-MINUTES_PER_DAY:].mean()
+            if len(power_values) >= MINUTES_PER_DAY
+            else power_values.mean()
+        )
         padding = np.full(len(minute_index) - len(power_values), avg)
         power_values = np.concatenate([power_values, padding])
 
