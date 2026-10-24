@@ -9,9 +9,7 @@ from typing import TypeAlias
 import numpy as np
 import pandas as pd
 
-from solar_challenge.timebase import MINUTES_PER_DAY
-
-_MINUTES_PER_HOUR = 60
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 _MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
 
@@ -45,8 +43,8 @@ class SmartChargingMode(str, Enum):
 
 _PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
     SmartChargingMode.NONE: (),
-    SmartChargingMode.SOLAR: ((10 * _MINUTES_PER_HOUR, 16 * _MINUTES_PER_HOUR),),
-    SmartChargingMode.OFF_PEAK: ((30, 7 * _MINUTES_PER_HOUR + 30),),
+    SmartChargingMode.SOLAR: ((10 * MINUTES_PER_HOUR, 16 * MINUTES_PER_HOUR),),
+    SmartChargingMode.OFF_PEAK: ((30, 7 * MINUTES_PER_HOUR + 30),),
 }
 """Each mode's preferred charging windows, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times."""
 
@@ -183,10 +181,10 @@ def _earliest_best_start(preferred: _MinuteFlags, charge_minutes: int) -> int:
 
 def _daily_session(config: EVConfig) -> range:
     """The minutes of one day's charging session, counted from the midnight before arrival."""
-    arrival = config.arrival_hour * _MINUTES_PER_HOUR
-    stay_minutes = round(config.get_available_charging_hours() * _MINUTES_PER_HOUR)
+    arrival = config.arrival_hour * MINUTES_PER_HOUR
+    stay_minutes = round(config.get_available_charging_hours() * MINUTES_PER_HOUR)
     hours_needed = config.required_charge_kwh / config.get_charger_power_kw()
-    charge_minutes = min(math.ceil(hours_needed * _MINUTES_PER_HOUR), stay_minutes)
+    charge_minutes = min(math.ceil(hours_needed * MINUTES_PER_HOUR), stay_minutes)
     stay = (arrival + np.arange(stay_minutes)) % MINUTES_PER_DAY
     preferred = _preferred_minutes(SmartChargingMode(config.smart_charging_mode))[stay]
     start = arrival + _earliest_best_start(preferred, charge_minutes)
