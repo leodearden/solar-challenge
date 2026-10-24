@@ -410,6 +410,16 @@ def test_a_callable_descriptor_member_is_spelled_by_the_signature_inspect_reads_
     assert member_forms(Meter) == {"read": "(self, at: int) -> float", "signed": "(rate: int)"}
 
 
+def test_a_function_member_that_wraps_a_callable_descriptor_but_carries_a_signature_of_none_is_spelled_by_its_own_signature() -> None:
+    class Meter:
+        def half(self, rate: int) -> None: ...
+
+        half.__wrapped__ = CallableGetter()
+        half.__signature__ = None
+
+    assert member_forms(Meter) == {"half": "(self, rate: int) -> None"}
+
+
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
 def test_a_member_that_is_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_the_class_the_member_and_its_kind(
     routine: object, kind: str

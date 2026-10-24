@@ -49,6 +49,15 @@ class CallableGetter:
     def __call__(self, rate: int) -> str: ...
 
 
+class NoneSignedCallableGetter(CallableGetter):
+    """A CallableGetter that records the function it wraps as __wrapped__ but carries a __signature__ of None, at which inspect stops unwrapping and reads it as itself."""
+
+    __signature__ = None
+
+    def __init__(self, function: Callable[..., object]) -> None:
+        self.__wrapped__ = function
+
+
 def _settle(self: object, rate: int) -> None: ...
 
 
@@ -66,6 +75,11 @@ UNREADABLE_ROUTINES = (
         CallableGetter(),
         "tests.unit.surface_forms_helper._fixtures.CallableGetter",
         id="callable-getter",
+    ),
+    pytest.param(
+        NoneSignedCallableGetter(_settle),
+        "tests.unit.surface_forms_helper._fixtures.NoneSignedCallableGetter",
+        id="none-signed-callable-getter",
     ),
 )
 

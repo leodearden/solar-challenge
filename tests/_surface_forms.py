@@ -89,9 +89,11 @@ def surface_form(obj: object) -> str:
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
-    functools.singledispatchmethod is; a descriptor defined in Python that neither
-    wraps a callable, as functools.wraps records one, nor carries a signature; or a
-    routine that wraps such a descriptor, which the TypeError names too, with its kind.
+    functools.singledispatchmethod is; a descriptor defined in Python whose
+    __signature__ is None, or that lacks a __signature__ and records no __wrapped__,
+    as functools.wraps records one, since inspect then reads it as itself; or a
+    routine that inspect reads through such a descriptor, which the TypeError names
+    too, with its kind.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
