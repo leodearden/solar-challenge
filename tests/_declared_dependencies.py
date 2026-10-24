@@ -64,7 +64,7 @@ from tests._pyproject import core_requirements, extra_requirements
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PYTEST_PLUGINS = "pytest_plugins"
 _NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
-_NAMESPACE_ATTRIBUTE = "__dict__"
+_NAMESPACE_ATTRIBUTES = frozenset({"__dict__", "f_globals", "f_locals", "__globals__"})
 _ATTRIBUTE_FUNCTIONS = frozenset({"getattr", "setattr", "delattr"})
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
@@ -373,18 +373,22 @@ def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
 
 
 def _spells_namespace(node: ast.expr) -> bool:
-    """Return whether *node* is spelled as a namespace dict: a call of globals(), locals() or
-    vars(), or the __dict__ attribute of an object.
+    """Return whether *node* is spelled as a namespace dict that may be a module's: a call of
+    globals(), locals() or vars(); the __dict__ of an object, a frame's f_globals or f_locals, or
+    a function's __globals__; or getattr given the str of one of those attributes.
 
     Whatever the call is given counts, so vars(module) does. The object is not resolved, so the
-    __dict__ of any object counts, since the object may be a module whose namespace pytest reads,
-    such as sys.modules[__name__].
+    attribute of any object counts, since the object may be a module whose namespace pytest reads,
+    such as sys.modules[__name__], or that module's frame or function. A frame's f_builtins holds
+    the builtins, which pytest never consults, so it is not one.
     """
     match node:
+        case ast.Call(func=ast.Name(id="getattr"), args=[_, ast.Constant(value=attribute), *_]):
+            return attribute in _NAMESPACE_ATTRIBUTES
         case ast.Call(func=ast.Name(id=name)):
             return name in _NAMESPACE_FUNCTIONS
         case ast.Attribute(attr=attr):
-            return attr == _NAMESPACE_ATTRIBUTE
+            return attr in _NAMESPACE_ATTRIBUTES
     return False
 
 
