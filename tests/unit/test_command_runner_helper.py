@@ -508,3 +508,25 @@ def test_a_pytest_outcome_with_no_failure_section_is_described_as_any_outcome(st
     )
 
     assert describe_pytest_outcome(outcome) == describe_outcome(outcome)
+
+
+def test_a_pytest_outcome_keeps_the_head_of_each_long_failure_section_and_says_how_long_it_was() -> None:
+    """Each section has its own bound, so a long ERRORS section cannot crowd FAILURES out, as each stream keeps its own tail."""
+    errors_section = _report_separator("ERRORS") + "ERRORS-HEAD" + "x" * 1_000_000 + "ERRORS-END\n"
+    stdout = (
+        _report_separator("test session starts")
+        + errors_section
+        + _report_separator("FAILURES")
+        + "FAILURES-MARKER\n"
+        + _report_separator("warnings summary")
+        + "a warning\n" * 10_000
+        + _report_separator("1 failed, 1 error in 0.01s")
+    )
+    outcome = subprocess.CompletedProcess("a command", 1, stdout, "")
+
+    description = describe_pytest_outcome(outcome)
+
+    assert "ERRORS-HEAD" in description
+    assert "ERRORS-END" not in description
+    assert str(len(errors_section)) in description
+    assert "FAILURES-MARKER" in description
