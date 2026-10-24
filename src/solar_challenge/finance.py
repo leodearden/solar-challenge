@@ -1041,7 +1041,8 @@ class YearPoint:
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
     + SEG export income (Σ seg_export_income_gbp per home)
-    + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw).
+    + grid-services income (that age's ``pricing.annual_income_gbp`` of its
+    simulated fleet, ``pricing = grid_services_model_of(finance)``).
     """
 
     year: int
@@ -1505,6 +1506,9 @@ def project_multi_year(
     resulting per-year curves with PCHIP.  Each sampled age is simulated with
     every home's battery SOH counting its battery throughput from installation
     to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
+    Each sampled age's grid-services income is priced from that age's own
+    simulated fleet by ``grid_services_model_of(finance)``, and is annual by
+    construction.
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
@@ -1533,6 +1537,9 @@ def project_multi_year(
             import or revenue, its mean PV or battery state of health, or a
             home's battery discharge or cumulative battery throughput.  The
             message names the age and each such aggregate with its value.
+        ConfigurationError: If ``grid_services_model`` is
+            ``"capacity_at_events"`` and ``grid_services_events`` is None,
+            raised before any simulation.
     """
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
@@ -1554,25 +1561,12 @@ def project_multi_year(
     start_ts = scenario.period.get_start_timestamp(tz)
     end_ts = scenario.period.get_end_timestamp(tz)
 
-    # ---- Fail-fast: validate grid_services_model prerequisites ---------------
-    # Guard here so misconfiguration is caught before any simulation work is
-    # done (the inner guard in _simulate_age would only fire after the first
-    # full fleet simulation, which wastes a full age-0 run for a 100-home fleet).
-    if finance.grid_services_model == "capacity_at_events" and finance.grid_services_events is None:
-        raise ConfigurationError(
-            "grid_services_model='capacity_at_events' requires "
-            "grid_services_events to be configured"
-        )
+    pricing = grid_services_model_of(finance)
 
     asset_life = finance.asset_life_years
 
     # ---- Seed nodes ---------------------------------------------------------
     seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
-
-    # Memo dict for the capacity_at_events grid-services figure.
-    # Computed once from the representative (age-0) simulation, reused for all ages
-    # and all bisection trial nodes.  Captured by the _simulate_age closure.
-    _event_gs_memo: dict[str, float] = {}
 
     def _simulate_age(
         age: int,
@@ -1610,7 +1604,7 @@ def project_multi_year(
         # CBS fleet revenue (model doc §4), every term per 365-day year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
-        #   grid_services   = model-dependent (flat or capacity_at_events), already annual
+        #   grid_services   = pricing.annual_income_gbp(fleet_results), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
@@ -1618,22 +1612,7 @@ def project_multi_year(
         # self_consumption_override and seg scaling.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
-        if finance.grid_services_model == "capacity_at_events":
-            # None is already excluded by the top-of-function guard; this assert
-            # only narrows Optional[GridServicesEventsConfig] for mypy strict.
-            assert finance.grid_services_events is not None
-            if "value" not in _event_gs_memo:
-                from solar_challenge.gridservices import compute_grid_services_at_events
-                _event_gs_memo["value"] = compute_grid_services_at_events(
-                    fleet_results, finance.grid_services_events
-                ).annual_income_gbp
-            grid_services = _event_gs_memo["value"]
-        else:
-            grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
-                h.battery_config.max_discharge_kw
-                for h in homes
-                if h.battery_config is not None
-            )
+        grid_services = pricing.annual_income_gbp(fleet_results)
         fleet_revenue = own_use_revenue + seg_revenue + grid_services
 
         # PV SOH: mean of calculate_degradation_factor over all homes
