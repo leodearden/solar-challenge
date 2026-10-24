@@ -64,6 +64,7 @@ from tests._pyproject import core_requirements, extra_requirements
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
 _PYTEST_PLUGINS = "pytest_plugins"
 _NAMESPACE_FUNCTIONS = frozenset({"globals", "locals", "vars"})
+_NAMESPACE_ATTRIBUTE = "__dict__"
 _ATTRIBUTE_FUNCTIONS = frozenset({"getattr", "setattr", "delattr"})
 _PACKAGE = "solar_challenge"
 _FIRST_PARTY = frozenset({_PACKAGE, "tests"})
@@ -371,18 +372,33 @@ def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
 
 
-def _subscripts_namespace_call_with_pytest_plugins(node: ast.AST) -> bool:
-    """Return whether *node* subscripts a call of globals(), locals() or vars() with the str
-    pytest_plugins, in any position, as `globals()["pytest_plugins"]` does.
+def _spells_namespace(node: ast.expr) -> bool:
+    """Return whether *node* is spelled as a namespace dict: a call of globals(), locals() or
+    vars(), or the __dict__ attribute of an object.
 
-    Whatever the call is given counts, so vars(module) does. Only that subscript is read: a method
-    call on the namespace, such as update or setdefault, is not.
+    Whatever the call is given counts, so vars(module) does. The object is not resolved, so the
+    __dict__ of any object counts, since the object may be a module whose namespace pytest reads,
+    such as sys.modules[__name__].
+    """
+    match node:
+        case ast.Call(func=ast.Name(id=name)):
+            return name in _NAMESPACE_FUNCTIONS
+        case ast.Attribute(attr=attr):
+            return attr == _NAMESPACE_ATTRIBUTE
+    return False
+
+
+def _subscripts_namespace_with_pytest_plugins(node: ast.AST) -> bool:
+    """Return whether *node* subscripts a namespace, as _spells_namespace reads one, with the str
+    pytest_plugins, in any position, as `globals()["pytest_plugins"]` and
+    `sys.modules[__name__].__dict__["pytest_plugins"]` do.
+
+    Only that subscript is read: a method call on the namespace, such as update or setdefault, is
+    not.
     """
     return (
         isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-        and node.value.func.id in _NAMESPACE_FUNCTIONS
+        and _spells_namespace(node.value)
         and isinstance(node.slice, ast.Constant)
         and node.slice.value == _PYTEST_PLUGINS
     )
@@ -429,10 +445,10 @@ def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_Unit]:
 def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
     """Yield each unit of *tree*, in any scope, that can change pytest_plugins in a form
     _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
-    method call such as append, a subscript or an alias can change the list; subscripts globals(),
-    locals() or vars() with the name; reaches an attribute of that name, as
-    _reaches_attribute_pytest_plugins reads it; or declares it global, since a function or class
-    that does can rebind the attribute of the module.
+    method call such as append, a subscript or an alias can change the list; subscripts a
+    namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; reaches an
+    attribute of that name, as _reaches_attribute_pytest_plugins reads it; or declares it global,
+    since a function or class that does can rebind the attribute of the module.
 
     A read in a function or class body counts even where the name is a local there, since scopes
     are not resolved. So does a read in an except type or a case pattern or guard, which belongs to
@@ -441,7 +457,7 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
     for unit in (node for node in ast.walk(tree) if isinstance(node, _Unit)):
         if (isinstance(unit, ast.Global) and _PYTEST_PLUGINS in unit.names) or any(
             _reads_or_deletes_pytest_plugins(node)
-            or _subscripts_namespace_call_with_pytest_plugins(node)
+            or _subscripts_namespace_with_pytest_plugins(node)
             or _reaches_attribute_pytest_plugins(node)
             for node in _own_nodes(unit)
         ):

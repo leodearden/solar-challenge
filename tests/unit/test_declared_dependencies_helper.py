@@ -903,6 +903,28 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             id="assigned-through-locals",
         ),
         pytest.param(
+            ("sys.modules[__name__].__dict__['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "sys.modules[__name__].__dict__['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-dict-of-the-module",
+        ),
+        pytest.param(
+            (
+                _ASSIGNS_PYTESTER,
+                "def configure():",
+                "    sys.modules[__name__].__dict__['pytest_plugins'].append('pytest_rerunfailures')",
+            ),
+            "sys.modules[__name__].__dict__['pytest_plugins'].append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-the-dict-of-the-module-in-a-function",
+        ),
+        pytest.param(
+            ("module = sys.modules[__name__]", "module.__dict__['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "module.__dict__['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-dict-of-an-alias-of-the-module",
+        ),
+        pytest.param(
             ("try:", "    pass", "except Exception as pytest_plugins: pass"),
             "except Exception as pytest_plugins:",
             _UNREADABLE_USE,
@@ -1041,9 +1063,10 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     another target of a chained assignment, which aliases the list; or be declared global in a
     function. It may also be read or deleted in any scope, function and class bodies included, as a
     method call such as append, a subscript, an alias or a del does, and a read may sit in a case
-    guard. Or globals(), locals() or vars() may be subscripted with the name, or an attribute
-    pytest_plugins of an object, such as sys.modules[__name__], reached directly, through getattr,
-    setattr or delattr, or by a from-import of that name, in any position or scope.
+    guard. Or a namespace, the dict that globals(), locals() or vars() returns or the __dict__ of
+    an object such as sys.modules[__name__], may be subscripted with the name, or an attribute
+    pytest_plugins of an object reached directly, through getattr, setattr or delattr, or by a
+    from-import of that name, in any position or scope.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1086,18 +1109,22 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             id="spelled-in-a-string",
         ),
         pytest.param(("import sys", "hasattr(sys.modules[__name__], 'pytest_plugins')"), id="tested-by-hasattr"),
+        pytest.param(
+            ("import sys", "sys.modules[__name__].__dict__['other_plugins'] = ['pytest_rerunfailures']"),
+            id="another-key-of-the-dict-of-the-module",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
     tmp_path: Path,
     lines: tuple[str, ...],
 ) -> None:
-    """Only the name pytest_plugins, its entry in the namespace that globals(), locals() or vars()
-    returns, or an attribute of that name, reached directly, through getattr, setattr or delattr,
-    or by a from-import, reaches the attribute of the module.
+    """Only the name pytest_plugins, its entry in a namespace, the dict that globals(), locals() or
+    vars() returns or the __dict__ of an object, or an attribute of that name, reached directly,
+    through getattr, setattr or delattr, or by a from-import, reaches the attribute of the module.
 
-    The same key of another dict, a string that spells such a statement, and hasattr, which only
-    tests for the attribute, require nothing and fail nothing.
+    The same key of another dict, another key of a namespace, a string that spells such a
+    statement, and hasattr, which only tests for the attribute, require nothing and fail nothing.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
