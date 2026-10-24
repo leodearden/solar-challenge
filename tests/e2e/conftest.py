@@ -3,10 +3,10 @@
 Provides a live Flask server running in a background thread,
 configures Playwright's base_url so tests can use relative paths, and
 gives tests the server's dashboard macros, to compare a page with
-what a macro draws. The live server's jobs simulate on a synthetic
-TMY at each location preset the dashboard offers; a test module
-chooses other weather by overriding live_server_weather_in_place,
-which the app is built after.
+what a macro draws. The live server's jobs simulate on the cache
+live_server_weather returns, synthetic_tmy() at each location preset
+the dashboard offers; a test module chooses other weather by
+overriding live_server_weather to return a WeatherCache of its own.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
@@ -86,26 +86,30 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def live_server_weather_in_place(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Put in place the weather the live server's jobs simulate on: synthetic_tmy() at each location preset, in a weather cache that CACHE_DIR_VARIABLE names while _e2e_app builds the app.
+def live_server_weather(tmp_path_factory: pytest.TempPathFactory) -> WeatherCache:
+    """The weather cache the live server's jobs simulate on: synthetic_tmy() at each location preset.
 
-    create_app binds that cache when it builds the app, so the jobs read it all session, whatever each test's
-    offline window later sets the variable to. The TMY is a whole year, which a heat pump's job needs. A test
-    module overrides this fixture to install its own weather.
+    The TMY is a whole year, which a heat pump's job needs. A test module overrides this fixture to return a
+    WeatherCache of its own.
     """
     cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("e2e-weather"))
     tmy = synthetic_tmy()
     for location in LOCATION_PRESETS.values():
         cache.put(tmy, "tmy", location)
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv(CACHE_DIR_VARIABLE, str(cache.cache_dir))
-        yield
+    return cache
 
 
 @pytest.fixture(scope="session")
-def _e2e_app(tmp_path_factory: pytest.TempPathFactory, live_server_weather_in_place: None) -> Flask:
-    """The Flask app the live server serves, built once the live server's weather is in place."""
-    return build_test_app(tmp_path_factory.mktemp("e2e"))
+def _e2e_app(tmp_path_factory: pytest.TempPathFactory, live_server_weather: WeatherCache) -> Flask:
+    """The Flask app the live server serves, its jobs simulating on live_server_weather.
+
+    create_app binds default_weather() as it builds the app, so CACHE_DIR_VARIABLE names that cache for the build
+    alone, and each test's offline window keeps its own.
+    """
+    data_dir = tmp_path_factory.mktemp("e2e")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(CACHE_DIR_VARIABLE, str(live_server_weather.cache_dir))
+        return build_test_app(data_dir)
 
 
 @pytest.fixture(scope="session")
