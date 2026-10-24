@@ -8,6 +8,7 @@ import pytest
 
 from solar_challenge.timebase import (
     HOURS_PER_MINUTE,
+    MINUTES_PER_DAY,
     SimulationWindow,
     covered_days,
 )
@@ -105,6 +106,12 @@ def test_a_one_minute_cadence_lasts_exactly_hours_per_minute() -> None:
     window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), _MINUTE)
 
     assert window.step_hours == HOURS_PER_MINUTE
+
+
+def test_minutes_per_day_is_the_whole_minutes_in_24_hours() -> None:
+    """An int, since its readers use it as an array length, a range and slice bound, and a modulus whose remainder is formatted :02d."""
+    assert MINUTES_PER_DAY == timedelta(hours=24) // _MINUTE
+    assert isinstance(MINUTES_PER_DAY, int)
 
 
 def test_row_energy_kwh_is_each_rows_kw_times_the_hours_it_lasts_and_energy_kwh_their_sum() -> None:
