@@ -18,7 +18,7 @@ Usage::
         seed_run,
     )
 
-    seed_run(db_path, run_id="run-1", name="my-run",
+    seed_run(database, run_id="run-1", name="my-run",
              created_at="2026-01-01T00:00:00+00:00", summary=home_summary(total_generation_kwh=987.65))
     anthropic_api = install_fake_anthropic(monkeypatch)
     anthropic_api.set_streams([
@@ -31,7 +31,6 @@ Usage::
 """
 
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -40,7 +39,7 @@ import pytest
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import Database
 from tests._run_summaries import summary_json
 
 
@@ -266,7 +265,7 @@ def _stream_manager(text_chunks: list[str], final_message: SimpleNamespace) -> M
 
 
 def seed_run(
-    db_path: str | Path,
+    database: Database,
     *,
     run_id: str,
     name: str,
@@ -277,11 +276,10 @@ def seed_run(
 ) -> None:
     """Insert a row into the runs table for testing read-only handlers.
 
-    Calls init_db (idempotent) to ensure the schema exists, then inserts a minimal
-    runs row whose summary_json is the text a save writes for *summary*.
+    Inserts a minimal runs row, into *database*'s initialised schema, whose summary_json
+    is the text a save writes for *summary*.
     """
-    init_db(db_path)
-    with Database(Path(db_path)).transaction() as conn:
+    with database.transaction() as conn:
         conn.execute(
             """
             INSERT INTO runs (id, name, type, status, created_at, summary_json)
