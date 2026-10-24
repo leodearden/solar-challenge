@@ -113,8 +113,13 @@ def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_
 
 
 def test_home_quick_help_names_the_consumption_it_defaults_to() -> None:
-    """`home quick --help` gives --consumption-kwh's default as a figure: the annual consumption a LoadConfig with no total simulates."""
-    result = runner.invoke(app, ["home", "quick", "--help"])
+    """`home quick --help` gives --consumption-kwh's default as a figure in that option's row: the annual consumption a LoadConfig with no total simulates.
+
+    COLUMNS keeps Rich from wrapping the row at 80 columns, so the row is the one line of the help that names the option.
+    """
+    result = runner.invoke(app, ["home", "quick", "--help"], env={"COLUMNS": "200"})
 
     assert result.exit_code == 0, result.output
-    assert f"{LoadConfig().get_annual_consumption():,.0f}" in result.stdout
+    option_rows = [line for line in result.stdout.splitlines() if "--consumption-kwh" in line]
+    assert len(option_rows) == 1, result.stdout
+    assert f"{LoadConfig().get_annual_consumption():,.0f}" in option_rows[0], result.stdout
