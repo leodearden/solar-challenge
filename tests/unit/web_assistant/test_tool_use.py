@@ -45,7 +45,6 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database, init_db
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import home_summary
@@ -60,6 +59,7 @@ from tests.unit.web_assistant._fakes import (
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
+    run_storage_over,
     seed_run,
     text_block,
     thinking_block,
@@ -80,7 +80,7 @@ def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
     *overrides* replace individual fields for those that do.
     """
     defaults = ToolContext(
-        storage=RunStorage(Database(tmp_path / "assistant.db"), tmp_path),
+        storage=run_storage_over(Database(tmp_path / "assistant.db")),
         job_manager=autospecced_job_manager(),
         results_url=_results_url_for_test,
     )
@@ -604,7 +604,7 @@ class TestRunLookupToolSurface:
             created_at="2026-04-01T10:00:00+00:00",
             summary=home_summary(total_generation_kwh=500.0),
         )
-        storage = RunStorage(database, tmp_path)
+        storage = run_storage_over(database)
 
         result = dispatch_tool(
             "get_run_results",
@@ -626,7 +626,7 @@ class TestRunLookupToolSurface:
             created_at="2026-04-01T11:00:00+00:00",
             summary=home_summary(self_consumption_ratio=0.55),
         )
-        storage = RunStorage(database, tmp_path)
+        storage = run_storage_over(database)
 
         result = dispatch_tool("list_recent_runs", {"limit": 5}, tool_context(tmp_path, storage=storage))
         expected = list_recent_runs(5, storage)
@@ -647,7 +647,7 @@ class TestRunLookupToolSurface:
             created_at="2026-04-01T12:00:00+00:00",
             summary=home_summary(self_consumption_ratio=0.5),
         )
-        storage = RunStorage(database, tmp_path)
+        storage = run_storage_over(database)
 
         result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=storage))
 

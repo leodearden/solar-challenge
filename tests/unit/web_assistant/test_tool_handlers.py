@@ -35,7 +35,7 @@ from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run
-from tests.unit.web_assistant._fakes import seed_run
+from tests.unit.web_assistant._fakes import run_storage_over, seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
 
 
@@ -218,11 +218,6 @@ class TestSuggestConfig:
         )
 
 
-def _storage(database: Database) -> RunStorage:
-    """The RunStorage over *database*, its run files beside the database file."""
-    return RunStorage(database, database.path.parent)
-
-
 class TestGetRunResults:
     """Tests for get_run_results(run_id_or_name, storage) -> dict."""
 
@@ -243,7 +238,7 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result = get_run_results("run-abc-123", _storage(database))
+        result = get_run_results("run-abc-123", run_storage_over(database))
 
         assert result == {
             "run_id": "run-abc-123",
@@ -278,8 +273,8 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result_by_id = get_run_results("run-xyz-456", _storage(database))
-        result_by_name = get_run_results("my-named-run", _storage(database))
+        result_by_id = get_run_results("run-xyz-456", run_storage_over(database))
+        result_by_name = get_run_results("my-named-run", run_storage_over(database))
 
         # Both should resolve to the same row
         assert result_by_id.get("run_id") == "run-xyz-456"
@@ -303,7 +298,7 @@ class TestGetRunResults:
         )
 
         try:
-            result = get_run_results("totally-unknown-id-xyz", _storage(database))
+            result = get_run_results("totally-unknown-id-xyz", run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for unknown id; got: {exc!r}"
@@ -338,7 +333,7 @@ class TestGetRunResults:
             summary=home_summary(total_generation_kwh=200.0),
         )
 
-        result = get_run_results("shared-run-name", _storage(database))
+        result = get_run_results("shared-run-name", run_storage_over(database))
 
         assert result.get("run_id") == "run-new-collision", (
             f"Name tie-break should return newest run (run-new-collision); "
@@ -357,7 +352,7 @@ class TestGetRunResults:
             )
 
         try:
-            result = get_run_results("run-null-summary", _storage(database))
+            result = get_run_results("run-null-summary", run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
@@ -375,7 +370,7 @@ class TestGetRunResults:
         seed_run(database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
         with database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
-        storage = _storage(database)
+        storage = run_storage_over(database)
         record = storage.run_record("garbled-run")
         assert record is not None
         with pytest.raises(ValueError) as refusal:
@@ -388,7 +383,7 @@ class TestGetRunResults:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", RunStorage(Database(bad_path), tmp_path))
+            result = get_run_results("any-run-id", run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -417,7 +412,7 @@ class TestListRecentRuns:
                 summary=home_summary(total_generation_kwh=float(i * 100)),
             )
 
-        result = list_recent_runs(3, _storage(database))
+        result = list_recent_runs(3, run_storage_over(database))
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -446,7 +441,7 @@ class TestListRecentRuns:
             summary=fleet_summary(fleet_self_consumption_ratio=0.70),
         )
 
-        result = list_recent_runs(10, _storage(database))
+        result = list_recent_runs(10, run_storage_over(database))
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -464,7 +459,7 @@ class TestListRecentRuns:
         database = init_db(tmp_path / "lrr_empty_test.db")
 
         try:
-            result = list_recent_runs(10, _storage(database))
+            result = list_recent_runs(10, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -490,7 +485,7 @@ class TestListRecentRuns:
                 summary=home_summary(),
             )
 
-        result = list_recent_runs(9999, _storage(database))
+        result = list_recent_runs(9999, run_storage_over(database))
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -510,7 +505,7 @@ class TestListRecentRuns:
         )
 
         try:
-            result = list_recent_runs(0, _storage(database))
+            result = list_recent_runs(0, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -535,7 +530,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, _storage(database))
+            result = list_recent_runs(5, run_storage_over(database))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -554,7 +549,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, _storage(Database(bad_path)))
+            result = list_recent_runs(5, run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
@@ -606,7 +601,7 @@ class TestListRecentRuns:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
-        result = list_recent_runs(10, _storage(database))
+        result = list_recent_runs(10, run_storage_over(database))
 
         assert "error" not in result, result
         assert [
