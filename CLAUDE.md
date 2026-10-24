@@ -169,7 +169,12 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
   files names the interpreter in its failing node-id, e.g.
   `tests/interpreter_matrix/test_verify_suite.py::test_verify_suite_passes_on_python[3.14]`;
-  reproduce it by running that node-id. Its outage probe asks PyPI
+  reproduce it by running that node-id. A red case's failure message, in the
+  pass's `detect.log` under the main checkout's
+  `data/orchestrator/offline-lane/interpreter-matrix/`, carries the inner verify
+  run's ERRORS and FAILURES sections, each failing test's traceback and captured
+  output, ahead of the tail of its output: read it before re-running the case.
+  Its outage probe asks PyPI
   (`scripts/outage_probe.py pypi`), whose files a case's locked sync downloads
   whenever `uv.lock` changes. If uv could not download from PyPI, retry later
   before changing code.
@@ -237,8 +242,11 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `tests/newest_releases/test_verify_suite_on_newest_releases.py::test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit`,
   or `newest-releases::nonzero-exit` when the red run printed no failing
   node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its
-  failure message lists the releases `uv lock --upgrade` moved, then the
-  failing tests. If it moved none, the message says so: the red then comes
+  failure message, in the pass's `detect.log` under the main checkout's
+  `data/orchestrator/offline-lane/newest-releases/`, lists the releases
+  `uv lock --upgrade` moved, then the inner run's ERRORS and FAILURES sections,
+  then the tail of its output, which names the failing tests. If it moved none,
+  the message says so: the red then comes
   from the tree, not from an upstream release. Make the code or the test work
   on both the locked and the new release; bound that dependency's range in
   `pyproject.toml`, committing the `uv lock` re-lock with it, only when the
