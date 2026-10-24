@@ -18,7 +18,8 @@ from tests._declared_dependencies import (
 
 _UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
 _ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
-_UNREADABLE_BINDING = "which can bind pytest_plugins in a form the contract cannot read"
+_ASSIGNS_PYTESTER = 'pytest_plugins = ["pytester"]'
+_UNREADABLE_USE = "which can bind or change pytest_plugins in a form the contract cannot read"
 
 
 def _write_module(path: Path, *lines: str) -> Path:
@@ -675,26 +676,49 @@ def test_each_source_scope_selects_only_its_own_files(
     )
 
 
-def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_literal(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("lines", "quoted"),
+    [
+        pytest.param(
+            ("from tests._network import BASE_PLUGINS", 'pytest_plugins = [*BASE_PLUGINS, "tests._plugin"]'),
+            "[*BASE_PLUGINS, 'tests._plugin']",
+            id="a-starred-list",
+        ),
+        pytest.param(
+            (
+                "import sys",
+                _ASSIGNS_PYTESTER,
+                'if sys.platform == "linux":',
+                '    pytest_plugins.append("tests._plugin")',
+            ),
+            "pytest_plugins.append('tests._plugin')",
+            id="appended-in-an-if",
+        ),
+    ],
+)
+def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_read(
+    tmp_path: Path,
+    lines: tuple[str, ...],
+    quoted: str,
+) -> None:
     """A scope that follows pytest_plugins entries fails, naming the file, the line and the
-    expression, on a value it cannot read without running the file.
+    statement, on one it cannot read without running the file. The conftest is written from
+    *lines*, and the failure is on the last of them.
 
     pytest accepts any expression, such as a starred list or a name imported from another
-    module. A bare ValueError from reading it would name no file.
+    module. A bare ValueError from reading it would name no file. The tests-dev-only-lanes scope
+    also fails on a statement that changes pytest_plugins in another form, such as appending to
+    it in an if.
     """
     _write_project_of_every_scope(tmp_path)
-    conftest = _write_module(
-        tmp_path / "tests" / "conftest.py",
-        "from tests._network import BASE_PLUGINS",
-        'pytest_plugins = [*BASE_PLUGINS, "tests._plugin"]',
-    )
+    conftest = _write_module(tmp_path / "tests" / "conftest.py", *lines)
 
     with pytest.raises(AssertionError) as failure:
         _scope_named("tests-dev-only-lanes").select(tmp_path)
 
     message = str(failure.value)
-    assert f"{conftest}:2" in message and "[*BASE_PLUGINS, 'tests._plugin']" in message, (
-        f"the failure does not name line 2 of {conftest}, nor the pytest_plugins expression "
+    assert f"{conftest}:{len(lines)}" in message and quoted in message, (
+        f"the failure does not name line {len(lines)} of {conftest}, nor the statement `{quoted}` "
         f"on it that the scope cannot read: {message}"
     )
     assert "literal" in message, f"the failure does not say that pytest_plugins must be a literal: {message}"
@@ -754,32 +778,86 @@ def test_a_scope_fails_naming_the_file_and_line_whose_pytest_plugins_is_no_liter
         pytest.param(
             ("pytest_plugins, count = ['pytest_rerunfailures'], 1",),
             "pytest_plugins, count = (['pytest_rerunfailures'], 1)",
-            _UNREADABLE_BINDING,
+            _UNREADABLE_USE,
             id="a-tuple-target",
         ),
         pytest.param(
             ("if (pytest_plugins := ['pytest_rerunfailures']): pass",),
             "if (pytest_plugins := ['pytest_rerunfailures']):",
-            _UNREADABLE_BINDING,
+            _UNREADABLE_USE,
             id="a-walrus-in-an-if-test",
         ),
         pytest.param(
             ("for pytest_plugins in [['pytest_rerunfailures']]: pass",),
             "for pytest_plugins in [['pytest_rerunfailures']]:",
-            _UNREADABLE_BINDING,
+            _UNREADABLE_USE,
             id="a-for-target",
         ),
         pytest.param(
             ("with contextlib.nullcontext(['pytest_rerunfailures']) as pytest_plugins: pass",),
             "with contextlib.nullcontext(['pytest_rerunfailures']) as pytest_plugins:",
-            _UNREADABLE_BINDING,
+            _UNREADABLE_USE,
             id="a-with-target",
         ),
         pytest.param(
             ("def configure():", "    global pytest_plugins"),
             "global pytest_plugins",
-            _UNREADABLE_BINDING,
+            _UNREADABLE_USE,
             id="a-global-declaration-in-a-function",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "pytest_plugins.append('pytest_rerunfailures')"),
+            "pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "pytest_plugins.extend(['pytest_rerunfailures'])"),
+            "pytest_plugins.extend(['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="extended-by-a-method",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "pytest_plugins.insert(0, 'pytest_rerunfailures')"),
+            "pytest_plugins.insert(0, 'pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="inserted",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, 'if sys.platform == "linux":', "    pytest_plugins.append('pytest_rerunfailures')"),
+            "pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-in-an-if",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "pytest_plugins[:0] = ['pytest_rerunfailures']"),
+            "pytest_plugins[:0] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="a-slice-assigned",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "plugins = pytest_plugins"),
+            "plugins = pytest_plugins",
+            _UNREADABLE_USE,
+            id="aliased",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "del pytest_plugins"),
+            "del pytest_plugins",
+            _UNREADABLE_USE,
+            id="deleted",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "def configure():", "    pytest_plugins.append('pytest_rerunfailures')"),
+            "pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-in-a-function",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "class Plugins:", "    pytest_plugins.append('pytest_rerunfailures')"),
+            "pytest_plugins.append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-in-a-class-body",
         ),
     ],
 )
@@ -791,7 +869,9 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 ) -> None:
     """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
     scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for or a with, or declared global in a function.
+    may be bound by a tuple, a walrus, a for or a with, or declared global in a function. It may
+    also be read or deleted in any scope, function and class bodies included, as a method call such
+    as append, a subscript, an alias or a del does.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -799,7 +879,8 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
 
     The failure names the file, the line and the statement, the last of *lines*, as written, or by its
     first line when it is compound, with what is wrong with it. An augmented assignment is quoted
-    whole, not described as setting pytest_plugins. It says how to write pytest_plugins instead.
+    whole, not described as setting pytest_plugins. It says how to write pytest_plugins instead: as
+    a literal list or tuple of module names, added to only with += and such a literal.
     """
     prefix = ("import contextlib", "import sys", 'PLUGINS = ["pytester"]')
     plugin = _write_module(tmp_path / "plugin.py", *prefix, *lines)
@@ -813,8 +894,10 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
         f"the failure does not name line {line} of {plugin}, the statement `{statement}` on it and "
         f"what is wrong with it, `{clause}`: {message}"
     )
-    assert "list or tuple of module names" in message, (
-        f"the failure does not say how to write pytest_plugins: {message}"
+    advice = message.partition(clause)[2]
+    assert "list or tuple of module names" in advice and "+=" in advice, (
+        "the failure does not say, after the clause, how to write pytest_plugins: a literal list or "
+        f"tuple of module names, added to only with +=: {message}"
     )
 
 
