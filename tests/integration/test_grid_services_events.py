@@ -210,17 +210,16 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 
 
 def test_guard_capacity_at_events_with_events_none_raises_configuration_error() -> None:
-    """capacity_at_events + grid_services_events=None must raise ConfigurationError.
+    """capacity_at_events + grid_services_events=None is refused before any simulation.
 
-    α permits grid_services_events=None even when model='capacity_at_events'
-    (α only validates the selector field; δ is the consumer that must guard this).
-
-    An explicit ConfigurationError guard, not a bare assert, rejects the missing events.
+    FinanceConfig still constructs the pair; project_multi_year refuses it with
+    ConfigurationError before it simulates a fleet, so the injected simulate
+    fails the test if it is called.
     """
     scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
-    fr = _synthetic_fleet_results_in_window(homes)
-    simulate = _constant_simulate(fr)
+
+    def _simulate_must_not_run(fc, s, e):
+        pytest.fail("project_multi_year simulated a fleet before refusing the configuration")
 
     finance_none = dataclasses.replace(
         finance_base,
@@ -228,8 +227,8 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
         grid_services_events=None,
     )
 
-    with pytest.raises(ConfigurationError):
-        project_multi_year(scenario, finance_none, simulate=simulate)
+    with pytest.raises(ConfigurationError, match="grid_services_events"):
+        project_multi_year(scenario, finance_none, simulate=_simulate_must_not_run)
 
 
 # ---------------------------------------------------------------------------
