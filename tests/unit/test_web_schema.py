@@ -5,23 +5,34 @@ open_database creates a new store at schema.SCHEMA_VERSION, in one transaction, 
 column per RunRecord field (D27 invariant 7) and each table's constraints as its owner states
 them. It refuses a store at any other version, a legacy store with no version being at version
 0, with a SchemaVersionMismatch naming the file and both versions, and writes nothing to it.
-MIGRATIONS' versions run from 1 without a gap, and SCHEMA_VERSION is the last of them
+migrate_store brings an older store to SCHEMA_VERSION, whose tables are then a new store's,
+keeping its rows and naming each run that had no name after its kind (D27 invariant 7, part
+2). MIGRATIONS' versions run from 1 without a gap, and SCHEMA_VERSION is the last of them
 (contract C5).
 """
 
+import logging
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import fields
+from dataclasses import asdict, fields
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from solar_challenge.web.database import CHAT_ROLES, Database
-from solar_challenge.web.presets import PRESET_TYPES
-from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, SchemaVersionMismatch, open_database
-from solar_challenge.web.storage import RUN_STATUSES, RunRecord
-from solar_challenge.web.stored_runs import RUN_TYPES
+from solar_challenge.web.database import CHAT_ROLES, Database, get_chat_history
+from solar_challenge.web.presets import PRESET_TYPES, home_presets
+from solar_challenge.web.schema import (
+    MIGRATIONS,
+    SCHEMA_VERSION,
+    MigrationReport,
+    SchemaVersionMismatch,
+    migrate_store,
+    open_database,
+)
+from solar_challenge.web.storage import RUN_STATUSES, RunRecord, RunStorage
+from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunType
 from tests._dashboard_databases import schema_of, write_pre_548_database
 
 
@@ -35,6 +46,12 @@ def _names_in_sqlite_master(path: Path, object_type: str) -> set[str]:
     """The name of each *object_type* object, e.g. each table, the database file at *path* holds."""
     with closing(Database(path).connect()) as conn:
         return {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = ?", (object_type,))}
+
+
+def _runs_column_names(path: Path) -> list[str]:
+    """The name of each column of the runs table of the database file at *path*, in order."""
+    with closing(Database(path).connect()) as conn:
+        return [row["name"] for row in conn.execute("PRAGMA table_info(runs)")]
 
 
 @pytest.fixture
@@ -54,9 +71,7 @@ def test_open_database_creates_a_new_store_at_the_schema_version_with_one_runs_c
     assert path.parent.is_dir() and path.is_file()
     assert database == Database(path)
     assert _user_version(path) == SCHEMA_VERSION
-    with closing(database.connect()) as conn:
-        runs_columns = [row["name"] for row in conn.execute("PRAGMA table_info(runs)")]
-    assert runs_columns == [field.name for field in fields(RunRecord)]
+    assert _runs_column_names(path) == [field.name for field in fields(RunRecord)]
 
 
 def test_a_new_store_holds_the_runs_chat_messages_and_config_presets_tables_and_their_indexes_in_wal_mode(
@@ -171,6 +186,144 @@ def test_the_migration_steps_versions_run_from_1_without_a_gap_and_the_schema_ve
     assert all(step.description.strip() for step in MIGRATIONS)
 
 
+@pytest.fixture
+def legacy_store(tmp_path: Path) -> Path:
+    """The pre-548 store, as an older solar-challenge left it: at version 0, with the jobs table and runs with no name."""
+    return write_pre_548_database(tmp_path / "legacy.db")
+
+
+def _runs_rows(path: Path) -> dict[str, dict[str, Any]]:
+    """Each row of the runs table of the database file at *path*, as its columns by name, keyed by its id."""
+    with closing(Database(path).connect()) as conn:
+        return {row["id"]: dict(row) for row in conn.execute("SELECT * FROM runs")}
+
+
+def _insert_run(path: Path, columns: dict[str, object]) -> None:
+    """Insert into the runs table of the database file at *path* the row *columns* gives by column name."""
+    names = ", ".join(columns)
+    placeholders = ", ".join(f":{name}" for name in columns)
+    with Database(path).transaction() as conn:
+        conn.execute(f"INSERT INTO runs ({names}) VALUES ({placeholders})", columns)
+
+
+def test_migrate_store_brings_a_legacy_store_to_the_schema_version_with_the_tables_of_a_new_store(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """D27 invariant 7, part 2: the migrated store holds one runs column per RunRecord field, and no jobs table."""
+    report = migrate_store(legacy_store)
+
+    assert report == MigrationReport(
+        path=legacy_store, from_version=0, to_version=SCHEMA_VERSION, applied_steps=MIGRATIONS
+    )
+    assert _user_version(legacy_store) == SCHEMA_VERSION
+    assert _runs_column_names(legacy_store) == [field.name for field in fields(RunRecord)]
+    assert schema_of(legacy_store) == schema_of(open_database(tmp_path / "fresh.db").path)
+    assert "jobs" not in _names_in_sqlite_master(legacy_store, "table")
+    assert open_database(legacy_store) == Database(legacy_store)
+
+
+@pytest.mark.parametrize(
+    ("run_id", "name"),
+    [
+        pytest.param("legacy-named-home", "South Roof", id="a-named-run-keeps-its-name"),
+        pytest.param("legacy-nameless-home", "North Roof", id="a-nameless-home-run-is-named-after-its-home"),
+        pytest.param("legacy-blank-home", "Web Simulation", id="a-blank-named-run-of-a-nameless-home"),
+        pytest.param("legacy-nameless-fleet", "Fleet Simulation", id="a-nameless-fleet-run"),
+    ],
+)
+def test_migrate_store_names_each_run_with_no_name_as_a_job_given_none_names_it_and_keeps_its_other_columns(
+    legacy_store: Path, tmp_path: Path, run_id: str, name: str
+) -> None:
+    """Contract C7: a migrated run's name is never NULL or blank; its kind's default_name names it after its homes."""
+    row_before = _runs_rows(legacy_store)[run_id]
+
+    migrate_store(legacy_store)
+
+    record = RunStorage(open_database(legacy_store), tmp_path).run_record(run_id)
+    assert record is not None
+    assert asdict(record) == {**row_before, "name": name}
+
+
+def test_migrate_store_keeps_every_run_chat_message_and_saved_preset(legacy_store: Path) -> None:
+    run_ids_before = set(_runs_rows(legacy_store))
+
+    migrate_store(legacy_store)
+
+    database = open_database(legacy_store)
+    assert set(_runs_rows(legacy_store)) == run_ids_before
+    assert get_chat_history(database, "legacy-session") == [
+        {
+            "role": "user",
+            "content": "How much did South Roof generate?",
+            "created_at": "2025-06-01T09:05:00+00:00",
+            "metadata": None,
+        }
+    ]
+    assert [preset for preset in home_presets(database) if preset["source"] == "saved"] == [
+        {
+            "pv_kw": 3.5,
+            "battery_kwh": 0,
+            "consumption_kwh": 3000,
+            "name": "Legacy Preset",
+            "created_at": "2025-06-01T08:00:00+00:00",
+            "source": "saved",
+        }
+    ]
+
+
+@pytest.mark.parametrize("run_type", RUN_TYPES)
+def test_migrate_store_names_a_nameless_run_whose_config_does_not_decode_as_its_kind_names_a_run_of_no_homes(
+    legacy_store: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture, run_type: RunType
+) -> None:
+    """A damaged config does not strand the store: its run is named, and a warning names the run."""
+    _insert_run(legacy_store, {"id": "legacy-damaged", "name": None, "type": run_type, "config_json": "{not json"})
+    caplog.set_level(logging.WARNING)
+
+    migrate_store(legacy_store)
+
+    assert RunStorage(open_database(legacy_store), tmp_path).run_name("legacy-damaged") == RUN_KINDS[
+        run_type
+    ].default_name(())
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("legacy-damaged" in warning for warning in warnings), warnings
+
+
+def test_migrate_store_applies_no_step_to_a_store_at_the_schema_version_and_writes_nothing_to_it(
+    new_store: Database,
+) -> None:
+    bytes_before, schema_before = new_store.path.read_bytes(), schema_of(new_store.path)
+
+    report = migrate_store(new_store.path)
+
+    assert report == MigrationReport(
+        path=new_store.path, from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION, applied_steps=()
+    )
+    assert new_store.path.read_bytes() == bytes_before
+    assert schema_of(new_store.path) == schema_before
+
+
+def test_migrate_store_refuses_a_store_a_newer_solar_challenge_wrote_and_writes_nothing_to_it(tmp_path: Path) -> None:
+    newer = _store_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
+    bytes_before = newer.read_bytes()
+
+    with pytest.raises(SchemaVersionMismatch) as refused:
+        migrate_store(newer)
+
+    assert (refused.value.path, refused.value.found, refused.value.expected) == (newer, SCHEMA_VERSION + 1, SCHEMA_VERSION)
+    assert "This database was written by a newer solar-challenge" in str(refused.value)
+    assert newer.read_bytes() == bytes_before
+
+
+def test_migrate_store_creates_a_new_store_at_the_schema_version_where_there_is_no_database(tmp_path: Path) -> None:
+    path = tmp_path / "store.db"
+
+    report = migrate_store(path)
+
+    assert report == MigrationReport(path=path, from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION, applied_steps=())
+    assert _user_version(path) == SCHEMA_VERSION
+    assert schema_of(path) == schema_of(open_database(tmp_path / "fresh.db").path)
+
+
 RUNS_COLUMN_VALUES = [
     *(pytest.param("type", run_type, id=f"type-{run_type}") for run_type in RUN_TYPES),
     pytest.param("type", None, id="type-null"),
@@ -232,6 +385,13 @@ def test_a_new_store_gives_a_run_inserted_without_a_status_the_status_running(ne
         status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
 
     assert status == "running"
+
+
+def test_a_new_stores_runs_table_refuses_a_run_with_no_name(new_store: Database) -> None:
+    """Contract C7: a run's name is never NULL."""
+    with new_store.transaction() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="NOT NULL constraint failed: runs.name"):
+            conn.execute("INSERT INTO runs (id) VALUES ('r')")
 
 
 @pytest.mark.parametrize(("table", "column", "value"), CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)

@@ -415,12 +415,17 @@ class TestSavedRunRow:
             notes=None,
         )
 
+    @pytest.mark.parametrize("name", ["", " \t"])
     @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_given_no_name_gives_its_run_no_default_name(self, storage, saves, kind):
-        """A run a save records for the first time with no name has none."""
-        saves[kind]("new-run")
+    def test_a_first_save_given_a_blank_name_raises_value_error_naming_it_and_writes_nothing(
+        self, storage, saves, kind, name
+    ):
+        """Contract C7: a run's name is never blank, so a save refuses one before it writes a file or a runs row."""
+        with pytest.raises(ValueError, match="name is"):
+            saves[kind]("blank-name", name=name)
 
-        assert storage.run_name("new-run") is None
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
