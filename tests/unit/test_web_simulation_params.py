@@ -79,7 +79,7 @@ FORM_PAYLOAD_BATTERY_OFF: dict = {
     "occupants": 3,
     "stochastic": False,
     "location": "bristol",
-    "name": "Web Simulation",
+    "name": "",
     "start": "2024-03-01",
     "end": "2024-03-05",
 }
@@ -427,6 +427,23 @@ class TestParseHomeConfigKeys:
         """Bodies shaped like the home form's buildPayload() output parse."""
         _home_config, _start, _end, name = parse_home_config(payload)
         assert name == payload["name"]
+
+
+class TestParseHomeConfigName:
+    """The name parse_home_config reads: the body's, and none of its own."""
+
+    def test_a_body_that_sends_a_name_names_the_home_and_the_run_with_it(self) -> None:
+        home_config, _start, _end, name = parse_home_config(VALID_HOME_PAYLOAD)
+
+        assert (home_config.name, name) == ("Test Home", "Test Home")
+
+    def test_a_body_that_sends_no_name_gives_an_unnamed_home_and_no_name(self) -> None:
+        """The JobManager then names the run (RunKind.default_name)."""
+        nameless_body = {key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "name"}
+
+        home_config, _start, _end, name = parse_home_config(nameless_body)
+
+        assert (home_config.name, name) == ("", None)
 
 
 class TestParseSegTariff:

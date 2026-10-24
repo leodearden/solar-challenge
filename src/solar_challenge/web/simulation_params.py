@@ -313,7 +313,8 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         data: The home config, a parsed JSON value that must be an object.
 
     Returns:
-        Tuple of (HomeConfig, start_date, end_date, name).
+        Tuple of (HomeConfig, start_date, end_date, name). The name is the body's, None
+        when it sends none; the HomeConfig takes it, and is unnamed ("") when there is none.
 
     Raises:
         ValueError: If *data* is not a JSON object (the error names the type
@@ -411,7 +412,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         tariff_config=tariff_config,
         seg_tariff=seg_tariff,
         location=loc,
-        name=name or "Web Simulation",
+        name=name or "",
     )
 
     start_date = pd.Timestamp(start, tz=loc.timezone)

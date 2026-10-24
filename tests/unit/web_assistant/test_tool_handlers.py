@@ -895,6 +895,14 @@ class TestRunFleetSimulation:
             f"Expected n_homes clamped to <= 100; got {len(configs)}"
         )
 
+    def test_submits_no_name_of_its_own(self) -> None:
+        """The tool gives the run no name: the JobManager names it (RunKind.default_name)."""
+        jm = self._make_jm()
+
+        run_fleet_simulation(2, {"pv_kw": 4.0}, jm, _results_url_for_test)
+
+        assert jm.submit_fleet_job.call_args.kwargs["name"] is None
+
     def test_n_homes_zero_clamped_to_at_least_1(self) -> None:
         """n_homes=0 is clamped to at least 1 (no empty fleet)."""
         jm = self._make_jm()

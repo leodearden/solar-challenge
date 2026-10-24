@@ -54,6 +54,8 @@ _FLEET_FORM_BODY: dict = {
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
 }
 
+_NAMELESS_FLEET_FORM_BODY: dict = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
+
 
 class TestExportFleetYAML:
     """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
@@ -134,20 +136,25 @@ class TestExportFleetYAML:
         homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
         assert load_fleet_config(path).homes == homes
 
-    def test_export_names_a_nameless_fleet_as_simulate_runs_it(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(_NAMELESS_FLEET_FORM_BODY, id="no-name"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": None}, id="null"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": ""}, id="empty"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": " \t"}, id="blank"),
+        ],
+    )
+    def test_a_nameless_fleet_is_exported_without_a_name_and_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, body: dict
     ) -> None:
-        """A form without a name is exported under the name its simulation runs as."""
-        body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
-
+        """A form whose name cannot name a run, the empty one the fleet page sends for a blank Simulation Name included, is exported with no name and submitted with none, so its run takes its kind's default name (RunKind.default_name)."""
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
         assert (export.status_code, simulate.status_code) == (200, 201)
-        assert (
-            yaml.safe_load(export.get_data(as_text=True))["name"]
-            == mock_job_manager.submit_fleet_job.call_args.kwargs["name"]
-        )
+        assert "name" not in yaml.safe_load(export.get_data(as_text=True))
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
     @pytest.mark.parametrize(
         ("patch", "reason"),

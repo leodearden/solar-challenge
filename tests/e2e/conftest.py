@@ -266,12 +266,12 @@ def new_context(
 def _save_seeded_home_run(
     storage: RunStorage, run_id: str, run_name: str, results: SimulationResults
 ) -> tuple[str, str]:
-    """Save *results* as a completed run of a 5 kWh battery home named *run_name*, as a finished home job saves its run.
+    """Save *results* as a completed run named *run_name*, of a 5 kWh battery home of that name, as a finished home job saves its run.
 
     The battery gives the run's results page its battery stat cards. Returns (run_id, run_name).
     """
     home = replace(make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), name=run_name)
-    store_home_run(storage, run_id, home, results)
+    store_home_run(storage, run_id, home, results, name=run_name)
     return run_id, run_name
 
 

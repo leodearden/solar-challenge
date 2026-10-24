@@ -12,7 +12,7 @@ StoredHomeRun and StoredFleetRun are the runs as their directories store them: e
 writes its documents and answers its run's CSV export. RUN_KINDS is the run type to
 behaviour table, one RunKind per RunType; a kind also decodes the summary and the
 HomeConfigs a run's record holds, and builds from the HomeConfigs the scenario its YAML
-export answers with. Where a
+export answers with. A kind also names the run created without a name. Where a
 run's directory lives, and the runs table that records each run's type, are RunStorage's:
 nothing here reads SQL or Flask.
 """
@@ -31,6 +31,7 @@ from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.database import RunType
+from solar_challenge.web.run_names import is_run_name
 
 T = TypeVar("T")
 
@@ -215,6 +216,17 @@ def _fleet_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[s
         ValueError: The scenario grammar cannot express the homes, as fleet_scenario refuses them.
     """
     return fleet_scenario(home_configs, name=name)
+
+
+def _home_run_default_name(home_configs: Sequence[HomeConfig]) -> str:
+    """The name a home run of *home_configs* given none is created under: its first home's name when that can name a run, else "Web Simulation"."""
+    first_home_name = home_configs[0].name if home_configs else None
+    return first_home_name if is_run_name(first_home_name) else "Web Simulation"
+
+
+def _fleet_run_default_name(home_configs: Sequence[HomeConfig]) -> str:
+    """The name a fleet run given none is created under, whatever its *home_configs*: "Fleet Simulation"."""
+    return "Fleet Simulation"
 
 
 @dataclass(frozen=True)
@@ -446,12 +458,15 @@ class RunKind:
         scenario_document: The scenario, under a name, that a run of the type with those
             HomeConfigs exports as YAML; it raises ValueError when the scenario grammar cannot
             express them.
+        default_name: The name a run of the type with those HomeConfigs is created under
+            when it is given none; is_run_name holds for it.
     """
 
     summary_type: type[SummaryStatistics] | type[FleetSummary]
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
     scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
+    default_name: Callable[[Sequence[HomeConfig]], str]
 
     def summary(self, summary_document: Mapping[str, Any]) -> SummaryStatistics | FleetSummary:
         """The summary *summary_document* holds: the field tree of a summary_type, rebuilt as one.
@@ -470,12 +485,14 @@ RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(
             read=_read_home_run,
             home_configs=_home_run_configs,
             scenario_document=_home_run_scenario,
+            default_name=_home_run_default_name,
         ),
         "fleet": RunKind(
             summary_type=FleetSummary,
             read=_read_fleet_run,
             home_configs=_fleet_run_configs,
             scenario_document=_fleet_run_scenario,
+            default_name=_fleet_run_default_name,
         ),
     }
 )

@@ -27,7 +27,9 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.database import RunType
+from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.storage import RunRecord, RunStorage
+from solar_challenge.web.stored_runs import RUN_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +217,8 @@ class JobManager:
             config: Home configuration for the simulation.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            name: Optional name for the simulation run; config.name, or "Web Simulation", when omitted.
+            name: The run's name; when None or blank, its run kind's default name of the
+                job's homes (RunKind.default_name).
 
         Returns:
             Tuple of (job_id, run_id).
@@ -227,9 +230,9 @@ class JobManager:
             A refused job leaves no record.
         """
         return self._submit_job(
-            run_name=name or config.name or "Web Simulation",
+            name=name,
             run_type="home",
-            n_homes=1,
+            home_configs=(config,),
             run_simulation=lambda new_job: self._run_home_simulation(
                 new_job.job_id, new_job.run, config, start_date, end_date
             ),
@@ -251,7 +254,8 @@ class JobManager:
             configs: List of home configurations for the fleet.
             start_date: Start date for the simulation period.
             end_date: End date for the simulation period.
-            name: Optional name for the fleet simulation run; "Fleet Simulation" when omitted.
+            name: The run's name; when None or blank, its run kind's default name of the
+                job's homes (RunKind.default_name).
 
         Returns:
             Tuple of (job_id, run_id).
@@ -263,9 +267,9 @@ class JobManager:
             A refused job leaves no record.
         """
         return self._submit_job(
-            run_name=name or "Fleet Simulation",
+            name=name,
             run_type="fleet",
-            n_homes=len(configs),
+            home_configs=tuple(configs),
             run_simulation=lambda new_job: self._run_fleet_simulation(
                 new_job.job_id, new_job.run, configs, start_date, end_date
             ),
@@ -330,20 +334,22 @@ class JobManager:
     def _submit_job(
         self,
         *,
-        run_name: str,
+        name: str | None,
         run_type: RunType,
-        n_homes: int,
+        home_configs: tuple[HomeConfig, ...],
         run_simulation: Callable[[_NewJob], None],
     ) -> tuple[str, str]:
         """Record a new job, queue run_simulation(new_job) on the thread pool, and return (job_id, run_id)."""
         self._stop_tracking_jobs_finished_long_ago()
-        new_job = self._record_new_job(run_name=run_name, run_type=run_type, n_homes=n_homes)
+        new_job = self._record_new_job(name=name, run_type=run_type, home_configs=home_configs)
         self._schedule(new_job.job_id, new_job.run.id, functools.partial(run_simulation, new_job))
         return new_job.job_id, new_job.run.id
 
-    def _record_new_job(self, run_name: str, run_type: RunType, n_homes: int) -> _NewJob:
-        """Create a new queued job's run, running, through the RunStorage, then track the job in memory.
+    def _record_new_job(self, name: str | None, run_type: RunType, home_configs: tuple[HomeConfig, ...]) -> _NewJob:
+        """Create a new queued job's run of *home_configs*, running, through the RunStorage, then track the job in memory.
 
+        This is the one place a run's name is decided (contract C7, docs/prds/run-store-one-owner.md
+        §3.6): *name* when it can name a run, else its run kind's default name of *home_configs*.
         The job is tracked only once its run is created, so a store that refuses the run leaves no record of it.
         The job's created_at is its run's.
         """
@@ -351,7 +357,11 @@ class JobManager:
         run_id = self._new_id()
         created_at = datetime.now(timezone.utc).isoformat()
         run = self._storage.create_run(
-            run_id, run_type=run_type, name=run_name, n_homes=n_homes, created_at=created_at
+            run_id,
+            run_type=run_type,
+            name=name if is_run_name(name) else RUN_KINDS[run_type].default_name(home_configs),
+            n_homes=len(home_configs),
+            created_at=created_at,
         )
         queued = JobState(
             job_id=job_id,

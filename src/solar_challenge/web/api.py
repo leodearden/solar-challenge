@@ -136,7 +136,6 @@ def simulate_fleet_api() -> tuple[Response, int]:
             configs.append(config)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    fleet_name = data.get("name", "Fleet Simulation")
 
     job_manager = get_job_manager()
 
@@ -144,7 +143,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         configs=configs,
         start_date=start_date,
         end_date=end_date,
-        name=fleet_name,
+        name=data.get("name"),
     )
 
     return _submitted_job_answer(job_id, run_id)
@@ -769,7 +768,8 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with updated run data, or 404 if not found.
+        JSON response with updated run data, or 404 if not found. 400 with the refusal as
+        ``error``, naming ``name``, for a null or blank name, which update_run_labels refuses.
     """
     data = request_json_object()
     storage = get_storage()
@@ -781,7 +781,10 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     if not labels:
         return jsonify({"error": "No fields to update"}), 400
 
-    updated = storage.update_run_labels(run_id, labels)
+    try:
+        updated = storage.update_run_labels(run_id, labels)
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal)}), 400
     if updated is None:
         return jsonify({"error": "Run not found"}), 404
 

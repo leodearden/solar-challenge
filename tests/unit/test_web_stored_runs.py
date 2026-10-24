@@ -5,8 +5,10 @@ RUN_KINDS holds one RunKind for each RunType. A run's record names its kind, and
 reads the run's files back as a StoredHomeRun or a StoredFleetRun, the variant whose
 export_frame the run's CSV export answers with. The kind also reads the HomeConfigs the
 run's record holds, and builds from them the scenario the run's YAML export answers with.
+A kind also names a run created without a name.
 """
 
+import dataclasses
 import json
 import re
 from typing import Any, get_args
@@ -28,6 +30,11 @@ from tests._web_runs import store_fleet_run, store_home_run
 
 _HOME_RUN_ID = "home-1"
 _FLEET_RUN_ID = "fleet-1"
+
+
+def _a_home_named(name: str) -> HomeConfig:
+    """make_home_config's home under *name*."""
+    return dataclasses.replace(make_home_config(), name=name)
 
 
 def _a_home() -> tuple[HomeConfig, SimulationResults]:
@@ -159,6 +166,29 @@ def test_the_fleet_kinds_scenario_of_the_configs_a_fleet_run_records_is_its_flee
     scenario = kind.scenario_document(kind.home_configs(_recorded_config(storage, _FLEET_RUN_ID)), "Community Fleet")
 
     assert scenario == fleet_scenario(fleet.home_configs, name="Community Fleet")
+
+
+def test_the_home_kinds_default_name_of_a_named_home_is_its_name() -> None:
+    assert RUN_KINDS["home"].default_name((_a_home_named("North Roof"),)) == "North Roof"
+
+
+@pytest.mark.parametrize("home_name", ["", "   ", "\t\n"], ids=["empty", "spaces", "tab-and-newline"])
+def test_the_home_kinds_default_name_of_a_home_whose_name_cannot_name_a_run_is_web_simulation(home_name: str) -> None:
+    assert RUN_KINDS["home"].default_name((_a_home_named(home_name),)) == "Web Simulation"
+
+
+def test_the_home_kinds_default_name_of_no_home_is_web_simulation() -> None:
+    """A run's record may hold no config, as one whose job failed before its save does, and its kind still names it."""
+    assert RUN_KINDS["home"].default_name(()) == "Web Simulation"
+
+
+@pytest.mark.parametrize(
+    "homes",
+    [(_a_home_named("Home 1"), _a_home_named("Home 2")), ()],
+    ids=["two-named-homes", "no-home"],
+)
+def test_the_fleet_kinds_default_name_is_fleet_simulation_whatever_its_homes(homes: tuple[HomeConfig, ...]) -> None:
+    assert RUN_KINDS["fleet"].default_name(homes) == "Fleet Simulation"
 
 
 @pytest.mark.parametrize("run_id", ["no-such-run", "../escape"], ids=["no-run-has-it", "the-store-refuses-it"])

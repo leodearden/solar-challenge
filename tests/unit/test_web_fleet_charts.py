@@ -290,11 +290,16 @@ class TestFleetResultsRoute:
     def test_fleet_results_page_of_a_run_with_no_name_is_titled_fleet_simulation(
         self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """A run with no name still has a title: the page's own."""
+        """A run with no name still has a title: the page's own.
+
+        A database written before every run was named holds such a row, so the test clears
+        the saved name in the database.
+        """
         run_id = _save_fleet_run(
             storage, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
         )
-        storage.update_run_labels(run_id, {"name": None})
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
 
         response = client.get(f"/results/{run_id}")
 

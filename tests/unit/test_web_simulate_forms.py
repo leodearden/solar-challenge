@@ -14,6 +14,7 @@ from flask.testing import FlaskClient
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
     counts_of,
     doctype,
@@ -210,6 +211,18 @@ class TestFleetConfigRoute:
         assert page_texts.count("Export YAML") == 1
         assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
         assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
+
+    def test_fleet_page_offers_the_fleet_run_kinds_default_name_as_its_simulation_name_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """The Simulation Name input's placeholder is the name a fleet run submitted without one runs under (RunKind.default_name)."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+
+        [name_input] = [
+            attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "fleet_sim_name"
+        ]
+
+        assert name_input["placeholder"] == RUN_KINDS["fleet"].default_name(())
 
 
 class TestFleetFormRender:

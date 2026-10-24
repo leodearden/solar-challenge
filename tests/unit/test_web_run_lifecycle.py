@@ -104,6 +104,16 @@ class TestCreateRun:
 
         assert storage.page_runs(RunQuery()).total == 0
 
+    @pytest.mark.parametrize("name", ["", "   ", None], ids=["empty", "spaces", "none"])
+    def test_create_run_of_a_name_that_cannot_name_a_run_raises_value_error_naming_it_and_writes_nothing(
+        self, storage: RunStorage, name: str | None
+    ) -> None:
+        """A run's name is never NULL or blank: it holds a character other than whitespace."""
+        with pytest.raises(ValueError, match=re.escape(f"name is {name!r}")):
+            storage.create_run("run-1", run_type="home", name=name, n_homes=1, created_at=_CREATED_AT)
+
+        assert storage.page_runs(RunQuery()).total == 0
+
     def test_create_run_of_the_id_of_a_stored_run_raises_integrity_error_and_leaves_that_run_as_it_was(
         self, storage: RunStorage
     ) -> None:

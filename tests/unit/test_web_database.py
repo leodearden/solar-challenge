@@ -585,31 +585,12 @@ class TestSavedRunRow:
             notes=None,
         )
 
-    def test_a_home_save_given_no_name_names_its_run_after_its_home_or_else_unnamed_run(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """A home run saved with no name takes its home's name, or 'Unnamed Run' when its home has none."""
-        for run_id, config in (
-            ("named-home", sample_home_config),
-            ("unnamed-home", dataclasses.replace(sample_home_config, name="")),
-        ):
-            storage.save_home_run(
-                run_id=run_id,
-                config=config,
-                results=sample_simulation_results,
-                summary=sample_summary,
-            )
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_given_no_name_gives_its_run_no_default_name(self, storage, saves, kind):
+        """A run a save records for the first time with no name has none."""
+        saves[kind]("new-run")
 
-        assert [storage.run_name("named-home"), storage.run_name("unnamed-home")] == [
-            "Test Home",
-            "Unnamed Run",
-        ]
-
-    def test_a_fleet_save_given_no_name_names_its_run_unnamed_fleet_run(self, storage, saves):
-        """A fleet run saved with no name is named 'Unnamed Fleet Run'."""
-        saves["fleet"]("fleet-run")
-
-        assert storage.run_name("fleet-run") == "Unnamed Fleet Run"
+        assert storage.run_name("new-run") is None
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
@@ -925,7 +906,8 @@ class TestRunName:
     ):
         """A run whose name is NULL answers None, not a default name.
 
-        Every save writes a name, so the test clears the saved one in the database.
+        A database written before every run was named holds such a row, so the test clears
+        the saved name in the database.
         """
         run_id = "null-name-home"
         storage.save_home_run(
@@ -1053,6 +1035,27 @@ class TestUpdateRunLabels:
             ValueError, match=r"Not run labels: \['status'\]; the run labels are \['name', 'notes'\]"
         ):
             storage.update_run_labels(north_roof_run_id, {"status": "failed", "notes": "Checked"})
+
+        assert storage.run_record(north_roof_run_id) == before
+
+    @pytest.mark.parametrize("name", [None, "", " \t"], ids=["none", "empty", "space-and-tab"])
+    def test_update_run_labels_refuses_a_name_that_cannot_name_a_run_naming_it_and_writes_nothing(
+        self, storage, north_roof_run_id, name
+    ):
+        """A run's name is never NULL or blank: such a name raises ValueError naming the field, and the run keeps its name."""
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(ValueError, match=re.escape(f"name is {name!r}")):
+            storage.update_run_labels(north_roof_run_id, {"name": name})
+
+        assert storage.run_record(north_roof_run_id) == before
+
+    def test_update_run_labels_refusing_a_name_writes_no_label_given_beside_it(self, storage, north_roof_run_id):
+        """The notes given beside a refused name are not written either."""
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(ValueError, match=re.escape("name is ''")):
+            storage.update_run_labels(north_roof_run_id, {"name": "", "notes": "Checked"})
 
         assert storage.run_record(north_roof_run_id) == before
 

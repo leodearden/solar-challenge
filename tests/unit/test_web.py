@@ -400,9 +400,14 @@ class TestHomeResultsRoute:
     def test_home_results_page_of_a_run_with_no_name_is_titled_home_simulation(
         self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """A run with no name still has a title: the page's own, not its home's name."""
+        """A run with no name still has a title: the page's own, not its home's name.
+
+        A database written before every run was named holds such a row, so the test clears
+        the saved name in the database.
+        """
         run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
-        storage.update_run_labels(run_id, {"name": None})
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
 
         response = client.get(f"/results/{run_id}")
 

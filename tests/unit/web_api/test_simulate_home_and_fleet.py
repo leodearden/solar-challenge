@@ -229,7 +229,7 @@ class TestSimulateHomeAPI:
             "occupants": 3,
             "stochastic": False,
             "location": "bristol",
-            "name": "Web Simulation",
+            "name": "",
             "days": 30,
         }
         resp = client.post("/api/simulate/home", json=payload)
@@ -401,6 +401,17 @@ class TestSimulateFleetAPI:
         call_kwargs = mock_job_manager.submit_fleet_job.call_args
         configs = call_kwargs.kwargs.get("configs") or call_kwargs[0][0]
         assert len(configs) == 2
+
+    def test_a_fleet_posted_without_a_name_is_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The endpoint gives the run no name of its own: the JobManager names it (RunKind.default_name)."""
+        nameless_home = {key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "name"}
+
+        resp = client.post("/api/simulate/fleet", json={"homes": [nameless_home]})
+
+        assert resp.status_code == 201
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
 
 class TestParseHomeConfigErrorPaths:
