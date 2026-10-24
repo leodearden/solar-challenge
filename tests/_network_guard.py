@@ -7,15 +7,19 @@ Unix-domain destinations still go through.
 
 A child process is reached through the standard proxy variables, which uv, curl,
 and Python's requests and urllib honour. While ``refusing_network`` is open, they
-name a proxy on this machine, which forwards nothing: it records each request's
-destination as "host:port", like the socket refusals, and refuses it.
-NO_PROXY names only this machine, so a child's loopback traffic stays direct.
+name a proxy on this machine, which forwards nothing: it records the destination
+of each request sent through it as "host:port", like the socket refusals, and
+refuses it. NO_PROXY names only this machine, so a child's loopback traffic stays
+direct. A request whose target is a bare path (origin-form) or "*" (asterisk-form)
+names no host, because its client sent it straight to the proxy, taking it for a
+server. Nothing was routed off this machine, so the proxy refuses it without
+recording it.
 
 The first ``refusing_network`` starts the proxy, which then serves until the
-process ends, and the innermost one open records what the proxy is sent. So a
-client that read the proxy variables in an earlier one, as urllib's process-wide
-urlopen opener does, is still named, but a request sent while none is open is
-refused without being named.
+process ends, and the innermost one open records the destinations the proxy is
+asked to reach. So a client that read the proxy variables in an earlier one, as
+urllib's process-wide urlopen opener does, is still named, but a request sent
+while none is open is refused without being named.
 
 A test that expects its child processes to ask a live service calls
 ``send_child_processes_to_a_dead_proxy`` with its monkeypatch. The proxy
@@ -63,6 +67,7 @@ _PROXY_HOST = "127.0.0.1"
 _DEAD_PROXY = "http://127.0.0.1:9"
 """A proxy on this machine that nothing listens on: an unprivileged process cannot bind port 9."""
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+_REASON_FOR_REFUSING_A_REQUEST_TO_THE_PROXY_ITSELF = "this is a proxy, which serves nothing itself"
 
 
 @contextmanager
@@ -135,7 +140,7 @@ def _refusing_proxy() -> "_RefusingProxy":
 
 
 class _RefusingProxy(socketserver.ThreadingTCPServer):
-    """An HTTP proxy on this machine that refuses every request, recording its destination with the recorder of the window open.
+    """An HTTP proxy on this machine that refuses every request, recording the destination of each one sent through it with the recorder of the window open.
 
     Not an http.server.HTTPServer, whose bind looks up this machine's name.
     Its handlers run in daemon threads, so a client that never sends keeps no one waiting.
@@ -166,18 +171,27 @@ class _RefusingHandler(BaseHTTPRequestHandler):
     server: _RefusingProxy
 
     def __getattr__(self, name: str) -> Callable[[], None]:
-        """Answer the lookup of every method's do_<METHOD> with _refuse, so a request of any method is recorded and refused."""
+        """Answer the lookup of every method's do_<METHOD> with _refuse, so a request of any method is refused."""
         if name.startswith("do_"):
             return self._refuse
         raise AttributeError(name)
 
     def _refuse(self) -> None:
-        destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
-        self.server.record(destination)
-        self.send_error(HTTPStatus.FORBIDDEN, _reason_for_refusing(destination))
+        if _is_addressed_to_the_proxy_itself(self.path):
+            reason = _REASON_FOR_REFUSING_A_REQUEST_TO_THE_PROXY_ITSELF
+        else:
+            destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
+            self.server.record(destination)
+            reason = _reason_for_refusing(destination)
+        self.send_error(HTTPStatus.FORBIDDEN, reason)
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
+
+
+def _is_addressed_to_the_proxy_itself(request_target: str) -> bool:
+    """Whether *request_target* is origin-form, a bare path, or asterisk-form, "*" (RFC 9112, section 3.2): neither names a host, and a client sends one to the server it addresses, never through a proxy."""
+    return request_target.startswith("/") or request_target == "*"
 
 
 def _destination_of(request_target: str) -> str:
