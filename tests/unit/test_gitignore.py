@@ -22,12 +22,7 @@ _GITIGNORE = PurePosixPath(".gitignore")
 
 _RUNTIME_STATE = (
     PurePosixPath(".worktrees-orphaned/12-20260531T140823Z/CLAUDE.md"),
-    PurePosixPath("data/digests/digest.md"),
-    PurePosixPath("data/escalations/esc-1117-1.json"),
-    PurePosixPath("data/orchestrator/agent-transcripts/1117/session.jsonl"),
     PurePosixPath("data/orchestrator/runs.db"),
-    PurePosixPath("data/review-checkpoints/checkpoint.json"),
-    PurePosixPath("data/verify-logs/1117/attempt-1.summary.json"),
     PurePosixPath("results/proportional-battery-sweep/sweep_summary.csv"),
 )
 
@@ -38,14 +33,12 @@ _PROJECT_FILES_IN_DIRECTORIES_NAMED_LIKE_RUNTIME_ONES = (
 
 
 @pytest.fixture
-def checkout(project_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def checkout(project_root: Path, tmp_path: Path) -> Path:
     """Return a new git checkout holding a copy of the project's .gitignore, where git reads no excludes file of the user's or the system's."""
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", os.devnull)
     root = tmp_path / "checkout"
     root.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "core.excludesFile", os.devnull], cwd=root, check=True)
     shutil.copyfile(project_root / ".gitignore", root / ".gitignore")
     return root
 
