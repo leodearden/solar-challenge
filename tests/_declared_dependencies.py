@@ -279,11 +279,13 @@ def _unguarded_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Im
 # A unit is what the pytest_plugins reader judges and names a failure by: a statement, or an except or
 # case clause, which has a header of its own that evaluates expressions and binds names.
 _Unit = ast.stmt | ast.excepthandler | ast.match_case
+# A def or a class, whose body runs in a scope of its own.
+_ScopeOwner = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 
 
-def _module_scope_units(nodes: Iterable[ast.AST]) -> Iterator[_Unit]:
-    """Yield the units under *nodes* that run in their module's own scope: those in a block of a
-    compound statement such as an if, a try or a with too, however deep.
+def _scope_units(nodes: Iterable[ast.AST]) -> Iterator[_Unit]:
+    """Yield the units under *nodes* that run in the scope *nodes* belong to: those in a block of
+    a compound statement such as an if, a try or a with too, however deep.
 
     Not those in the body of a function or class, which runs in a scope of its own. The def or
     class itself is yielded.
@@ -291,8 +293,8 @@ def _module_scope_units(nodes: Iterable[ast.AST]) -> Iterator[_Unit]:
     for node in nodes:
         if isinstance(node, _Unit):
             yield node
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            yield from _module_scope_units(ast.iter_child_nodes(node))
+        if not isinstance(node, _ScopeOwner):
+            yield from _scope_units(ast.iter_child_nodes(node))
 
 
 def _own_nodes(node: ast.AST) -> Iterator[ast.AST]:
@@ -322,6 +324,24 @@ def _assignment_parts(unit: _Unit) -> tuple[ast.expr | None, ast.expr | None]:
     return None, None
 
 
+def _bound_name_and_value(node: ast.AST) -> tuple[str, ast.expr] | None:
+    """Return (name, value) when *node* binds one bare name to a value: an assignment to that one
+    name, an annotated assignment of it with a value, or a walrus. Otherwise return None.
+
+    An augmented assignment binds the result of its operation, not its value, so it is no binding
+    here. Nor is a chained assignment, whose targets alias one another, or one to a target of
+    another form, such as a tuple, a star, an attribute or a subscript.
+    """
+    match node:
+        case ast.Assign(targets=[ast.Name(id=name)], value=value):
+            return name, value
+        case ast.AnnAssign(target=ast.Name(id=name), value=ast.expr() as value):
+            return name, value
+        case ast.NamedExpr(target=ast.Name(id=name), value=value):
+            return name, value
+    return None
+
+
 def _binds_pytest_plugins(node: ast.AST) -> bool:
     """Return whether *node* binds the name pytest_plugins: as a target, the position of a Name
     that binds it; as the name of a def, a class or an except clause; as a capture of a match
@@ -349,14 +369,14 @@ def _binds_pytest_plugins(node: ast.AST) -> bool:
 
 
 def _pytest_plugins_assignments(tree: ast.Module) -> Iterator[tuple[_Unit, ast.expr]]:
-    """Yield (unit, value) for each unit of *tree*'s module scope, as _module_scope_units finds
-    them, that assigns pytest_plugins as its one target, annotated or not, or augments it. *value*
-    is what the unit assigns or adds.
+    """Yield (unit, value) for each unit of *tree*'s module scope, as _scope_units finds them,
+    that assigns pytest_plugins as its one target, annotated or not, or augments it. *value* is
+    what the unit assigns or adds.
 
     pytest reads pytest_plugins as an attribute of the module once the module has run, so each
     such unit can give it entries. An annotation with no value assigns nothing.
     """
-    for unit in _module_scope_units(tree.body):
+    for unit in _scope_units(tree.body):
         target, value = _assignment_parts(unit)
         if value is not None and target is not None and _binds_pytest_plugins(target):
             yield unit, value
@@ -372,10 +392,11 @@ def _reads_or_deletes_pytest_plugins(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == _PYTEST_PLUGINS and not isinstance(node.ctx, ast.Store)
 
 
-def _spells_namespace(node: ast.expr) -> bool:
+def _spells_namespace(node: ast.expr, namespace_names: frozenset[str]) -> bool:
     """Return whether *node* is spelled as a namespace dict that may be a module's: a call of
     globals(), locals() or vars(); the __dict__ of an object, a frame's f_globals or f_locals, or
-    a function's __globals__; or getattr given the str of one of those attributes.
+    a function's __globals__; getattr given the str of one of those attributes; a name in
+    *namespace_names*, those that hold a namespace where *node* runs; or a walrus of any of these.
 
     Whatever the call is given counts, so vars(module) does. The object is not resolved, so the
     attribute of any object counts, since the object may be a module whose namespace pytest reads,
@@ -389,6 +410,10 @@ def _spells_namespace(node: ast.expr) -> bool:
             return name in _NAMESPACE_FUNCTIONS
         case ast.Attribute(attr=attr):
             return attr in _NAMESPACE_ATTRIBUTES
+        case ast.Name(id=name):
+            return name in namespace_names
+        case ast.NamedExpr(value=value):
+            return _spells_namespace(value, namespace_names)
     return False
 
 
@@ -408,37 +433,42 @@ def _spells_pytest_plugins_key(node: ast.AST) -> bool:
     return False
 
 
-def _subscripts_namespace_with_pytest_plugins(node: ast.AST) -> bool:
-    """Return whether *node* subscripts a namespace, as _spells_namespace reads one, with the key
-    pytest_plugins, as _spells_pytest_plugins_key reads it, in any position, as
-    `globals()["pytest_plugins"]` and `sys.modules[__name__].__dict__["pytest_plugins"]` do.
+def _subscripts_namespace_with_pytest_plugins(node: ast.AST, namespace_names: frozenset[str]) -> bool:
+    """Return whether *node* subscripts a namespace, as _spells_namespace reads one given
+    *namespace_names*, with the key pytest_plugins, as _spells_pytest_plugins_key reads it, in any
+    position, as `globals()["pytest_plugins"]` and
+    `sys.modules[__name__].__dict__["pytest_plugins"]` do.
     """
     return (
         isinstance(node, ast.Subscript)
-        and _spells_namespace(node.value)
+        and _spells_namespace(node.value, namespace_names)
         and _spells_pytest_plugins_key(node.slice)
     )
 
 
-def _calls_on_namespace_with_pytest_plugins(node: ast.AST) -> bool:
-    """Return whether *node* is a call on a namespace, as _spells_namespace reads one, that is
-    given the key pytest_plugins, as _spells_pytest_plugins_key reads it, in any argument,
-    positional or keyword.
+def _calls_on_namespace_with_pytest_plugins(node: ast.AST, namespace_names: frozenset[str]) -> bool:
+    """Return whether *node* is a call on a namespace, as _spells_namespace reads one given
+    *namespace_names*, that is given the key pytest_plugins, as _spells_pytest_plugins_key reads
+    it, in any argument, positional or keyword; or a |= of a namespace with that key.
 
     A call is on a namespace when it is a method of one, as `globals().update(...)` is, or when
     one of its arguments, positional or a keyword's value, spells one, as `dict.update(globals(),
     ...)` does. No method is singled out: get or pop hand out the list as surely as update or
-    setdefault write it. A key held in a variable, or a mapping that does not spell the key, is
-    not read, as a variable key of a subscript is not.
+    setdefault write it. The |= of a namespace calls its __ior__, which updates it in place as
+    update does. A key held in a variable, or a mapping that does not spell the key, is not read,
+    as a variable key of a subscript is not.
     """
-    if not isinstance(node, ast.Call):
-        return False
-    receivers = [node.func.value] if isinstance(node.func, ast.Attribute) else []
-    arguments = [*node.args, *node.keywords]
-    handed_over = [*node.args, *(keyword.value for keyword in node.keywords)]
-    return any(_spells_namespace(part) for part in [*receivers, *handed_over]) and any(
-        _spells_pytest_plugins_key(argument) for argument in arguments
-    )
+    match node:
+        case ast.AugAssign(target=target, op=ast.BitOr(), value=value):
+            return _spells_namespace(target, namespace_names) and _spells_pytest_plugins_key(value)
+        case ast.Call(func=function, args=args, keywords=keywords):
+            operands = [*args, *(keyword.value for keyword in keywords)]
+            if isinstance(function, ast.Attribute):
+                operands.append(function.value)
+            return any(_spells_namespace(operand, namespace_names) for operand in operands) and any(
+                _spells_pytest_plugins_key(argument) for argument in [*args, *keywords]
+            )
+    return False
 
 
 def _reaches_attribute_pytest_plugins(node: ast.AST) -> bool:
@@ -466,17 +496,68 @@ def _reaches_attribute_pytest_plugins(node: ast.AST) -> bool:
 
 
 def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_Unit]:
-    """Yield each unit of *tree*'s module scope, as _module_scope_units finds them, that binds
+    """Yield each unit of *tree*'s module scope, as _scope_units finds them, that binds
     pytest_plugins in a form _pytest_plugins_assignments does not read: it holds the name as a
     target other than the sole target of an assignment, an annotation or an augmentation, such as
     one of a tuple, a for, a with or a walrus, or beside another target of a chained assignment;
     as the name of a def, a class or an except clause; as a capture of a match pattern; or as a
     name a from-import binds.
     """
-    for unit in _module_scope_units(tree.body):
+    for unit in _scope_units(tree.body):
         read_target, _ = _assignment_parts(unit)
         if any(_binds_pytest_plugins(node) and node is not read_target for node in _own_nodes(unit)):
             yield unit
+
+
+def _namespace_names(units: Iterable[_Unit], enclosing: frozenset[str]) -> frozenset[str]:
+    """Return the names that hold a namespace in the scope whose units are *units*, given those of
+    the scope around it, *enclosing*: each name a binding in the units binds to a namespace,
+    directly or through another such name, and each of *enclosing* that no binding in the units
+    rebinds.
+
+    A binding is one that _bound_name_and_value reads in a unit's own nodes, a walrus among them.
+    The names are the same for every unit of the scope, wherever in it the binding is. A name the
+    scope binds to anything else shadows the one around it.
+
+    Not followed: a target of a tuple, a star or a chained assignment, a for or a with; a
+    parameter or its default; an import; a namespace passed into a function and written there
+    through its parameter; a method of a namespace, as `setitem = globals().__setitem__` binds. A
+    parameter named like a name of *enclosing* leaves it held, so that fails rather than escapes.
+    """
+    bindings = [
+        binding
+        for unit in units
+        for node in _own_nodes(unit)
+        if (binding := _bound_name_and_value(node)) is not None
+    ]
+    names = enclosing - {name for name, _ in bindings}
+    while True:
+        holding = names | {name for name, value in bindings if _spells_namespace(value, names)}
+        if holding == names:
+            return names
+        names = holding
+
+
+def _units_with_their_namespace_names(
+    nodes: Iterable[ast.AST], enclosing: frozenset[str]
+) -> Iterator[tuple[_Unit, frozenset[str]]]:
+    """Yield (unit, names) for each unit of the scope *nodes* belong to, as _scope_units finds
+    them, followed by those of the body of each def or class among them, in document order.
+    *names* are the names that hold a namespace where the unit runs, as _namespace_names finds
+    them, given *enclosing*, those of the scope around *nodes*.
+
+    Unlike the name pytest_plugins, whose reads count in any scope, the names that hold a
+    namespace are resolved by scope. A file may bind one name to a namespace in one function and
+    to a copy of it in another, as tests/_surface_forms.py binds `namespace`, handing the copy to
+    exec and eval. A def's decorators and defaults are its own nodes, so they run, and a walrus in
+    them binds, in the scope around it, where Python evaluates them.
+    """
+    units = list(_scope_units(nodes))
+    names = _namespace_names(units, enclosing)
+    for unit in units:
+        yield unit, names
+        if isinstance(unit, _ScopeOwner):
+            yield from _units_with_their_namespace_names(unit.body, names)
 
 
 def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
@@ -484,20 +565,21 @@ def _unreadable_pytest_plugins_uses(tree: ast.Module) -> Iterator[_Unit]:
     _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
     method call such as append, a subscript or an alias can change the list; subscripts a
     namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; calls a method
-    of a namespace, or a function given one, with the name, as
+    of a namespace, or a function given one, or |= one, with the name, as
     _calls_on_namespace_with_pytest_plugins reads it; reaches an attribute of that name, as
     _reaches_attribute_pytest_plugins reads it; or declares it global, since a function or class
     that does can rebind the attribute of the module.
 
-    A read in a function or class body counts even where the name is a local there, since scopes
-    are not resolved. So does a read in an except type or a case pattern or guard, which belongs to
-    its clause, not to the try or match around it.
+    A read of the name in a function or class body counts even where the name is a local there,
+    since that name is not resolved by scope. So does a read in an except type or a case pattern
+    or guard, which belongs to its clause, not to the try or match around it. The names that hold
+    a namespace are resolved by scope, as _units_with_their_namespace_names says.
     """
-    for unit in (node for node in ast.walk(tree) if isinstance(node, _Unit)):
+    for unit, namespace_names in _units_with_their_namespace_names(tree.body, frozenset()):
         if (isinstance(unit, ast.Global) and _PYTEST_PLUGINS in unit.names) or any(
             _reads_or_deletes_pytest_plugins(node)
-            or _subscripts_namespace_with_pytest_plugins(node)
-            or _calls_on_namespace_with_pytest_plugins(node)
+            or _subscripts_namespace_with_pytest_plugins(node, namespace_names)
+            or _calls_on_namespace_with_pytest_plugins(node, namespace_names)
             or _reaches_attribute_pytest_plugins(node)
             for node in _own_nodes(unit)
         ):
