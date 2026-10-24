@@ -126,7 +126,9 @@ def member_forms(cls: type) -> dict[str, str]:
     TypeError, and a module another of the same name has replaced in sys.modules raises
     LookupError. A public member that no member rule spells and that is a routine whose
     signature inspect cannot read, as surface_form describes one, raises TypeError naming
-    *cls*, the member and its kind.
+    *cls*, the member and its kind; one that is a functools.partial, which Python 3.14
+    binds to the instance as a method and earlier minors call without it, raises
+    TypeError naming *cls*, the member and that binding.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -865,15 +867,20 @@ def _wrapped_c_callable(
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
+_PARTIAL_BOUND_BY_MINOR = (
+    "a functools.partial, which Python 3.14 binds to the instance as a method and earlier "
+    "minors call without it"
+)
+
+
 def _refuse_partial_bound_as_method(
     cls: type, owner: type, name: str, constructor: object
 ) -> None:
     """Raise TypeError naming *cls* and *owner*'s *name* if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial: Python 3.14 binds one to the instance as a method, and earlier minors call it without one."""
     if isinstance(constructor, functools.partial):
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(owner)}.{name}, a "
-            "functools.partial, which Python 3.14 binds to the instance as a method and "
-            f"earlier minors call without it: define {name} with def"
+            f"{_label(cls)} is constructed through {_label(owner)}.{name}, "
+            f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
         )
 
 
@@ -1443,9 +1450,8 @@ class _AnnotatedAttribute:
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
-    A member that _spelled_function has no rule for and whose signature inspect cannot
-    read, as _unreadable_link finds one, raises the TypeError _unreadable_routine_error
-    gives for it, naming *cls* and the member.
+    A member that _spelled_function has no rule for raises the TypeError
+    _refuse_unspellable_member raises for it, if any, naming *cls* and the member.
     """
     pinned = _pinned_by_class_form(cls)
     members = {
@@ -1454,10 +1460,21 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
-        link = _unreadable_link(member)
-        if link is not None and _spelled_function(member) is None:
-            raise _unreadable_routine_error(f"{_label(cls)}.{name}", member, link)
+        if _spelled_function(member) is None:
+            _refuse_unspellable_member(f"{_label(cls)}.{name}", member)
     return members
+
+
+def _refuse_unspellable_member(label: str, member: object) -> None:
+    """Raise TypeError for *member*, which *label* names and no member rule spells, if it is a routine whose signature inspect cannot read, as _unreadable_link finds one, or a functools.partial, which Python 3.14 binds to the instance and earlier minors do not."""
+    link = _unreadable_link(member)
+    if link is not None:
+        raise _unreadable_routine_error(label, member, link)
+    if isinstance(member, functools.partial):
+        raise TypeError(
+            f"{label} is {_PARTIAL_BOUND_BY_MINOR}: make the name private, wrap it in "
+            "staticmethod, or define it with def"
+        )
 
 
 def _own_members(cls: type) -> dict[str, object]:
