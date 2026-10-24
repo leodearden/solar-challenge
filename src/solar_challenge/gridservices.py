@@ -43,7 +43,7 @@ Key public symbols:
 import math
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias
+from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import pandas as pd
 
@@ -52,6 +52,7 @@ from solar_challenge.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import SimulationResults
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +342,29 @@ class GridServicesEventsConfig:
 
 
 # ---------------------------------------------------------------------------
+# The fleet's battery homes
+# ---------------------------------------------------------------------------
+
+
+def _battery_homes(
+    fleet_results: "FleetResults",
+) -> list[tuple["SimulationResults", BatteryConfig]]:
+    """Each home of *fleet_results* with a battery: its simulated results and its battery configuration, in fleet order.
+
+    A PV-only home (``battery_config is None``) has no battery to price.  A
+    length mismatch between ``per_home_results`` and ``home_configs`` raises
+    ValueError rather than truncating the fleet to the shorter list.
+    """
+    return [
+        (sim, home.battery_config)
+        for sim, home in zip(
+            fleet_results.per_home_results, fleet_results.home_configs, strict=True
+        )
+        if home.battery_config is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
 # NoGridServices + FlatGridServices + GridServicesModel
 # ---------------------------------------------------------------------------
 
@@ -381,9 +405,8 @@ class FlatGridServices:
         homes of *fleet_results* that have a battery.
         """
         return self.income_per_kw_per_year_gbp * sum(
-            home.battery_config.max_discharge_kw
-            for home in fleet_results.home_configs
-            if home.battery_config is not None
+            battery_config.max_discharge_kw
+            for _, battery_config in _battery_homes(fleet_results)
         )
 
 
@@ -393,6 +416,57 @@ GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesE
 # ---------------------------------------------------------------------------
 # compute_fleet_spare_capacity_kw
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _WindowSpareCapacity:
+    """One event window's firm spare capacity over a fleet's battery homes.
+
+    Attributes:
+        window: The event window.
+        observed: Whether some battery home's simulated index enters the window.
+        avail_kw: Firm spare dispatchable capacity (kW), summed over the battery
+            homes whose index enters the window; 0.0 when none does.
+    """
+
+    window: EventWindow
+    observed: bool
+    avail_kw: float
+
+
+def _spare_capacity_per_window(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    windows: tuple[EventWindow, ...],
+) -> tuple[_WindowSpareCapacity, ...]:
+    """Each of *windows*' firm spare capacity over *battery_homes*, in window order.
+
+    The formula is :func:`compute_fleet_spare_capacity_kw`'s.
+    """
+    # A battery's SOC floor depends on its configuration alone: computed once, not per window.
+    floors = [
+        (sim, battery_config, Battery(battery_config).min_soc_kwh)
+        for sim, battery_config in battery_homes
+    ]
+    capacities: list[_WindowSpareCapacity] = []
+    for window in windows:
+        total = 0.0
+        observed = False
+        for sim, battery_config, min_soc_kwh in floors:
+            mask = window.mask(sim.battery_soc.index)
+            # A home whose index the window never enters adds nothing; reducing its
+            # empty in-window Series would give NaN.
+            if not bool(mask.any()):
+                continue
+            observed = True
+            soc_w = sim.battery_soc[mask]
+            dis_w = sim.battery_discharge[mask]
+            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
+            e_spare = float((soc_w - min_soc_kwh).min())
+            total += max(0.0, min(p_spare, e_spare / window.event_hours))
+        capacities.append(
+            _WindowSpareCapacity(window=window, observed=observed, avail_kw=float(total))
+        )
+    return tuple(capacities)
 
 
 def compute_fleet_spare_capacity_kw(
@@ -441,40 +515,10 @@ def compute_fleet_spare_capacity_kw(
         order).  Each value is the total firm spare dispatchable capacity in kW
         across the fleet for that window.
     """
-    # Pre-compute the SOC floor for each battery home once.  Battery construction
-    # is window-independent (min_soc_kwh depends only on the config), so computing
-    # it inside the window loop would redundantly allocate N_windows Battery objects
-    # per home.  We also collect (sim, battery_config) so the inner loop no longer
-    # needs to touch home_configs at all.
-    #
-    # strict=True (Python 3.10+): a length mismatch between per_home_results and
-    # home_configs raises ValueError immediately rather than silently truncating to
-    # the shorter list and under-counting spare capacity.
-    home_floors: list[Any] = []
-    for sim, home_cfg in zip(
-        fleet_results.per_home_results, fleet_results.home_configs, strict=True
-    ):
-        battery_config: Optional[BatteryConfig] = home_cfg.battery_config
-        if battery_config is None:
-            continue  # PV-only home: no battery to dispatch
-        home_floors.append((sim, battery_config, Battery(battery_config).min_soc_kwh))
-
-    avails: list[float] = []
-    for window in windows:
-        total = 0.0
-        for sim, battery_config, min_soc_kwh in home_floors:
-            mask = window.mask(sim.battery_soc.index)
-            # Guard: skip if window is entirely absent from this home's index
-            # (avoids NaN from reducing an empty Series)
-            if not bool(mask.any()):
-                continue
-            soc_w = sim.battery_soc[mask]
-            dis_w = sim.battery_discharge[mask]
-            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
-            e_spare = float((soc_w - min_soc_kwh).min())
-            total += max(0.0, min(p_spare, e_spare / window.event_hours))
-        avails.append(float(total))
-    return tuple(avails)
+    return tuple(
+        capacity.avail_kw
+        for capacity in _spare_capacity_per_window(_battery_homes(fleet_results), windows)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +539,8 @@ class GridServicesAtEvents:
             windows (£/year).  Equals ``sum(per_window_income_gbp)``.
         per_window_avail_kw: Per-window firm spare dispatchable capacity (kW),
             in the same order as the :attr:`GridServicesEventsConfig.event_windows`
-            tuple.  Sourced directly from
-            :func:`compute_fleet_spare_capacity_kw`.
+            tuple: the figures :func:`compute_fleet_spare_capacity_kw` gives
+            for the same fleet and windows.
         per_window_income_gbp: Per-window net income (£), in window order.
             Each entry is the net (post-aggregator-share) availability +
             utilisation income for that window.
@@ -519,32 +563,21 @@ class GridServicesAtEvents:
 
 
 def _warn_unobserved_windows(
-    fleet_results: "FleetResults",
-    windows: tuple[EventWindow, ...],
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    capacities: tuple[_WindowSpareCapacity, ...],
 ) -> None:
-    """Issue one UserWarning for each window that no battery home's simulated index enters.
+    """Issue one UserWarning for each window of *capacities* that no battery home's simulated index enters.
 
     Such a window contributes £0.  A fleet without a battery home has nothing to
     observe and does not warn.  The warning is attributed to the caller of
     :func:`compute_grid_services_at_events`, and its text names only the window
-    and the indices' span.
+    and the span of the battery homes' indices.
     """
-    indices = [
-        sim.battery_soc.index
-        for sim, home_cfg in zip(
-            fleet_results.per_home_results, fleet_results.home_configs, strict=True
-        )
-        if home_cfg.battery_config is not None
-    ]
-    unobserved = [
-        window
-        for window in windows
-        if not any(bool(window.mask(index).any()) for index in indices)
-    ]
-    if not indices or not unobserved:
+    unobserved = [capacity.window for capacity in capacities if not capacity.observed]
+    if not battery_homes or not unobserved:
         return
-    first = min(index.min() for index in indices)
-    last = max(index.max() for index in indices)
+    first = min(sim.battery_soc.index.min() for sim, _ in battery_homes)
+    last = max(sim.battery_soc.index.max() for sim, _ in battery_homes)
     for window in unobserved:
         warnings.warn(
             f"Event window months={window.months}, weekdays={window.weekdays}, "
@@ -606,8 +639,9 @@ def compute_grid_services_at_events(
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
     """
-    _warn_unobserved_windows(fleet_results, cfg.event_windows)
-    avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
+    battery_homes = _battery_homes(fleet_results)
+    capacities = _spare_capacity_per_window(battery_homes, cfg.event_windows)
+    _warn_unobserved_windows(battery_homes, capacities)
     band = resolve_grid_services_rate_band(cfg.band)
 
     # Override precedence: use cfg field if explicitly set, else fall back to band.
@@ -623,7 +657,8 @@ def compute_grid_services_at_events(
     )
 
     per_window_net: list[float] = []
-    for window, avail in zip(cfg.event_windows, avails):
+    for capacity in capacities:
+        window, avail = capacity.window, capacity.avail_kw
         avail_income = avail * avail_rate * window.events_per_year
         util_income = (
             avail
@@ -637,6 +672,6 @@ def compute_grid_services_at_events(
 
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
-        per_window_avail_kw=tuple(float(a) for a in avails),
+        per_window_avail_kw=tuple(capacity.avail_kw for capacity in capacities),
         per_window_income_gbp=tuple(per_window_net),
     )
