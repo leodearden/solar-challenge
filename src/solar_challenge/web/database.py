@@ -15,7 +15,7 @@ new store at the current version and refuses a store at any other, and
 
 import json
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -114,32 +114,22 @@ _TABLES_REFERENCING = (
 """The other tables whose foreign keys reference the table :table; SQLite names a table in any ASCII case."""
 
 
-def rebuild_table(conn: sqlite3.Connection, table: TableSchema, select: Mapping[str, str] | None = None) -> None:
-    """Rebuild the table named *table*.name on *conn* to *table*'s schema, keeping each of its rows.
+def rebuild_table(conn: sqlite3.Connection, table: TableSchema) -> None:
+    """Rebuild the table named *table*.name on *conn* to *table*'s schema, keeping each of its rows, each column as it is.
 
-    Each column of a row is copied through the SQL expression *select* gives for it, which reads
-    the old row, and every other column as itself. The old table is renamed away, *table* is
-    created under its name, the rows are copied, the old table is dropped, and then *table*'s
-    indexes are created. An index follows its table on a rename, so the indexes can only be
-    created once the old table is dropped; the file then holds the schema a new database
-    created from *table* holds. It runs inside its caller's transaction: it neither begins nor
-    commits one.
+    The old table is renamed away, *table* is created under its name, the rows are copied, the
+    old table is dropped, and then *table*'s indexes are created. An index follows its table on
+    a rename, so the indexes can only be created once the old table is dropped; the file then
+    holds the schema a new database created from *table* holds. It runs inside its caller's
+    transaction: it neither begins nor commits one.
 
     Raises:
-        ValueError: Before anything is renamed, when a key of *select* is not one of *table*'s
-            columns, or when another table's foreign key references the table: the rename would
-            point that reference at the renamed table, whose drop would then delete the rows that
-            reference it. The message names the keys and the columns, or the referencing tables
+        ValueError: Before anything is renamed, when another table's foreign key references the
+            table: the rename would point that reference at the renamed table, whose drop would
+            then delete the rows that reference it. The message names the referencing tables
             and the table.
         sqlite3.Error: When the database refuses a statement, e.g. for a row *table* refuses.
     """
-    expressions = {} if select is None else select
-    unknown = sorted(set(expressions) - set(table.column_names))
-    if unknown:
-        raise ValueError(
-            f"Cannot rebuild table {table.name!r}: select names {unknown}, "
-            f"which are not among its columns {list(table.column_names)}"
-        )
     referencing = [row[0] for row in conn.execute(_TABLES_REFERENCING, {"table": table.name})]
     if referencing:
         raise ValueError(
@@ -148,10 +138,9 @@ def rebuild_table(conn: sqlite3.Connection, table: TableSchema, select: Mapping[
         )
     old_table = f"_{table.name}_before_rebuild"
     columns = ", ".join(table.column_names)
-    values = ", ".join(expressions.get(column, column) for column in table.column_names)
     conn.execute(f"ALTER TABLE {table.name} RENAME TO {old_table}")
     conn.execute(table.create)
-    conn.execute(f"INSERT INTO {table.name} ({columns}) SELECT {values} FROM {old_table}")
+    conn.execute(f"INSERT INTO {table.name} ({columns}) SELECT {columns} FROM {old_table}")
     conn.execute(f"DROP TABLE {old_table}")
     for index in table.indexes:
         conn.execute(index)

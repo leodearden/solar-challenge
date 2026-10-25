@@ -4,9 +4,8 @@
 A TableSchema renders the CREATE TABLE statement a new database stores for it, and create_table
 creates the table and its indexes. rebuild_table rebuilds a table to a schema inside its caller's
 transaction, keeping every row, so the file then holds the schema a new file created from that
-schema holds. It refuses, before it renames anything, a select naming a column the schema lacks
-and a table another table's foreign key references. RowRefused names the row a migration cannot
-keep, the table and the column.
+schema holds. It refuses, before it renames anything, a table another table's foreign key
+references. RowRefused names the row a migration cannot keep, the table and the column.
 """
 
 from collections.abc import Sequence
@@ -53,11 +52,11 @@ def _created_from(schema: TableSchema, path: Path, items: Sequence[Item] = ()) -
     return path
 
 
-def _rebuilt(path: Path, schema: TableSchema, select: dict[str, str] | None = None) -> None:
-    """Rebuild the items table of the database at *path* to *schema*, as rebuild_table does with *select*, in a transaction this commits."""
+def _rebuilt(path: Path, schema: TableSchema) -> None:
+    """Rebuild the items table of the database at *path* to *schema*, as rebuild_table does, in a transaction this commits."""
     with closing(Database(path).connect()) as conn:
         conn.execute("BEGIN")
-        rebuild_table(conn, schema, select)
+        rebuild_table(conn, schema)
         conn.commit()
 
 
@@ -102,33 +101,6 @@ def test_rebuild_table_keeps_every_row_and_leaves_the_schema_a_new_file_created_
 
     assert _items(rebuilt) == items
     assert schema_of(rebuilt) == schema_of(fresh)
-
-
-def test_rebuild_table_copies_a_column_select_gives_through_its_expression_and_every_other_as_itself(
-    tmp_path: Path,
-) -> None:
-    rebuilt = _created_from(OLD_ITEMS, tmp_path / "t.db", [("r-1", None, "small"), ("r-2", "named", "large")])
-
-    _rebuilt(rebuilt, ITEMS, select={"label": "COALESCE(label, 'unnamed')"})
-
-    assert _items(rebuilt) == [("r-1", "unnamed", "small"), ("r-2", "named", "large")]
-
-
-def test_rebuild_table_refuses_a_select_naming_no_column_of_the_schema_before_it_renames_anything(
-    tmp_path: Path,
-) -> None:
-    items: list[Item] = [("r-1", None, "medium")]
-    database = _created_from(OLD_ITEMS, tmp_path / "t.db", items)
-    schema_before = schema_of(database)
-
-    with closing(Database(database).connect()) as conn:
-        conn.execute("BEGIN")
-        with pytest.raises(ValueError, match=r"'title'.*\['id', 'label', 'kind'\]"):
-            rebuild_table(conn, ITEMS, select={"title": "label"})
-        conn.commit()
-
-    assert schema_of(database) == schema_before
-    assert _items(database) == items
 
 
 @pytest.mark.parametrize("referenced_as", ["items", "ITEMS"])
