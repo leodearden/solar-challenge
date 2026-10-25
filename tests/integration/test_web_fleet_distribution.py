@@ -1,19 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Slow end-to-end integration test for POST /api/simulate/fleet-from-distribution.
+"""End-to-end integration test for POST /api/simulate/fleet-from-distribution.
 
 Uses a real JobManager (no mocks) to run a tiny 3-home, 1-day Bristol fleet
 through the endpoint, polls the job to completion, and asserts the run lands
 in history with n_homes == 3.
-
-Network guard
--------------
-This test contacts the PVGIS REST API (re.jrc.ec.europa.eu) to fetch weather
-data.  In offline or sandboxed CI environments the test is skipped
-automatically via the ``_pvgis_reachable()`` probe below.  You can also force
-a skip by setting the environment variable ``SOLAR_OFFLINE=1``.
 """
-import os
-import socket
 import time
 from pathlib import Path
 
@@ -22,30 +13,6 @@ import pytest
 pytest.importorskip("flask")
 
 from tests._web_app import build_test_app
-
-
-# ---------------------------------------------------------------------------
-# Network availability probe
-# ---------------------------------------------------------------------------
-
-
-def _pvgis_reachable() -> bool:
-    """Return True if the PVGIS REST API host is reachable within 3 s."""
-    if os.getenv("SOLAR_OFFLINE", "").lower() in ("1", "true", "yes"):
-        return False
-    try:
-        socket.setdefaulttimeout(3)
-        socket.getaddrinfo("re.jrc.ec.europa.eu", 443)
-        return True
-    except OSError:
-        return False
-
-
-_SKIP_OFFLINE = not _pvgis_reachable()
-_SKIP_REASON = (
-    "PVGIS endpoint not reachable (offline / sandboxed CI). "
-    "Set SOLAR_OFFLINE=0 or ensure network access to run this test."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +48,8 @@ _DIST_PAYLOAD = {
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(_SKIP_OFFLINE, reason=_SKIP_REASON)
 class TestFleetFromDistributionE2E:
-    """End-to-end slow test: real 3-home distribution fleet runs to completion."""
+    """End-to-end: a real 3-home distribution fleet runs to completion."""
 
     def test_distribution_fleet_completes_and_lands_in_history(
         self, tmp_path: Path
