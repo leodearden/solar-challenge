@@ -3,16 +3,13 @@
 templates, its standalone scripts, the stylesheets base.html links, its Python modules,
 the JavaScript files at the package root, and the theme token file
 static/src/theme-tokens.json, the one home of the dashboard's colours: tailwind.config.js
-reads its tailwind section and charts.py its chart section. Of the JavaScript files at the
-root, tailwind.config.js builds the Tailwind theme and names the files Tailwind scans, and
-build-favicon.js draws the favicon in that theme.
+reads its tailwind section and charts.py its chart section.
 
-Each template, script, stylesheet and Python module is keyed by its POSIX path relative
-to the package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``,
-``static/style.css`` or ``charts.py``. tailwind.config.js, build-favicon.js and the token
-file are keyed the same way, as ``tailwind.config.js``, ``build-favicon.js`` and
-``static/src/theme-tokens.json``. The
-templates and scripts are the ``.html`` and ``.js`` files the ``content`` globs of
+Each template, script, stylesheet, Python module, JavaScript file at the package root
+and the token file is keyed by its POSIX path relative to the package directory, such as
+``templates/base.html``, ``static/js/chart-renderer.js``, ``static/style.css``,
+``charts.py``, ``tailwind.config.js`` or ``static/src/theme-tokens.json``. The templates
+and scripts are the ``.html`` and ``.js`` files the ``content`` globs of
 tailwind.config.js select, the files Tailwind scans for the classes the dashboard applies.
 dashboard_applied_classes_by_source reads those classes from the same files, under the
 same keys. pathlib expands each glob relative to the package directory, and it has no
