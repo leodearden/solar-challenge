@@ -79,7 +79,8 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
     """A hex colour is six hex digits after a hash, in any case, anywhere in a source, comments
     included; an eight-digit colour counts through its first six digits.
 
-    The compiled dist/style.css, static/vendor and favicon.svg are not sources.
+    static/dist, whose style.css and favicon.svg npm builds from these sources, and static/vendor
+    are not sources.
     """
     python_sources = dashboard_python_sources()
     assert {"charts.py", "theme_tokens.py"} <= python_sources.keys(), (
