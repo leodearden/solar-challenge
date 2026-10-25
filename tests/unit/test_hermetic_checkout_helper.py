@@ -52,6 +52,16 @@ def _config_naming_an_excludes_file(outside: Path, name: str) -> Path:
     return config
 
 
+def _config_naming_a_template(outside: Path, name: str) -> Path:
+    """Write the git config file *name* in *outside*, its init.templateDir a template whose info/exclude excludes
+    _EXCLUDED; return it."""
+    config = outside / name
+    template = outside / f"{name}.template"
+    _write_exclude_pattern(template / "info" / "exclude")
+    subprocess.run(["git", "config", "--file", str(config), "init.templateDir", str(template)], check=True)
+    return config
+
+
 def _plant_in_the_user_ignore_file(outside: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_exclude_pattern(outside / "user-config" / "git" / "ignore")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(outside / "user-config"))
@@ -70,6 +80,10 @@ def _plant_in_the_template_info_exclude(outside: Path, monkeypatch: pytest.Monke
     monkeypatch.setenv("GIT_TEMPLATE_DIR", str(outside / "template"))
 
 
+def _plant_in_a_template_the_user_config_names(outside: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_config_naming_a_template(outside, "user.gitconfig")))
+
+
 @pytest.mark.parametrize(
     "plant",
     [
@@ -77,6 +91,7 @@ def _plant_in_the_template_info_exclude(outside: Path, monkeypatch: pytest.Monke
         pytest.param(_plant_in_an_excludes_file_the_user_config_names, id="user-config-excludes-file"),
         pytest.param(_plant_in_an_excludes_file_the_system_config_names, id="system-config-excludes-file"),
         pytest.param(_plant_in_the_template_info_exclude, id="template-info-exclude"),
+        pytest.param(_plant_in_a_template_the_user_config_names, id="user-config-template-info-exclude"),
     ],
 )
 def test_git_reads_no_exclude_pattern_from_outside_the_checkout(
@@ -110,7 +125,7 @@ def test_makes_a_missing_directory_and_its_parents_the_top_level_of_a_new_checko
     assert Path(toplevel.strip()) == directory.resolve()
 
 
-def test_keeps_and_lists_the_files_an_existing_directory_holds(tmp_path: Path) -> None:
+def test_keeps_the_files_an_existing_directory_holds_and_lists_them_as_untracked(tmp_path: Path) -> None:
     project = tmp_path / "project"
     kept = project / "nested" / "kept.txt"
     kept.parent.mkdir(parents=True)
@@ -119,4 +134,8 @@ def test_keeps_and_lists_the_files_an_existing_directory_holds(tmp_path: Path) -
     init_hermetic_checkout(project)
 
     assert working_tree_files(project) == [PurePosixPath("nested/kept.txt")]
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached"], cwd=project, capture_output=True, text=True, check=True
+    ).stdout
+    assert tracked == ""
     assert kept.read_text(encoding="utf-8") == "kept"
