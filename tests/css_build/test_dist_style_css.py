@@ -61,29 +61,36 @@ _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
 _RECOLOURED_ACCENT = "blue"
 _RECOLOURED_ACCENT_500 = "#3b82f6"
 
-# Only so a hung npm fails the tests by name: every npm run this module makes, npm ci and each build, is
-# bounded by this timeout, and together they fit inside the css-build lane job's `timeout -k 60 600`
-# (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
-_NPM_TIMEOUT_SECS = 80
+# Only so a hung npm fails the tests by name. npm ci downloads every package the lock records, while a run,
+# such as a build, only runs installed ones, so each has its own bound. npm ci's bound and every run's together
+# fit inside the css-build lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml), whose kill would
+# file css-build::nonzero-exit.
+_NPM_CI_TIMEOUT_SECS = 240
+_RUN_TIMEOUT_SECS = 40
 
 # The most lines of a diff a failure shows.
 _DIFF_LINES = 40
 
 
-def _npm_run(args: list[str], cwd: Path, cache: Path) -> subprocess.CompletedProcess[str]:
-    """Run npm with *args* in *cwd*, with *cache* as its cache, and return the finished run, its output as text."""
+def _npm_run(
+    args: list[str], cwd: Path, cache: Path, *, timeout_secs: float = _RUN_TIMEOUT_SECS
+) -> subprocess.CompletedProcess[str]:
+    """Run npm with *args* in *cwd*, with *cache* as its cache, for at most *timeout_secs*.
+
+    Return the finished run, its output as text.
+    """
     return subprocess.run(
         ["npm", *args],
         cwd=cwd,
         env={**os.environ, "npm_config_cache": str(cache)},
         capture_output=True,
         text=True,
-        timeout=_NPM_TIMEOUT_SECS,
+        timeout=timeout_secs,
     )
 
 
-def _npm(args: list[str], cwd: Path, cache: Path) -> None:
-    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds.
+def _npm(args: list[str], cwd: Path, cache: Path, *, timeout_secs: float = _RUN_TIMEOUT_SECS) -> None:
+    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds within *timeout_secs*.
 
     npm_config_cache reaches every npm call and the npx that build:css runs, so
     nothing writes ~/.npm, which a sandboxed agent cannot write. A missing npm
@@ -91,7 +98,7 @@ def _npm(args: list[str], cwd: Path, cache: Path) -> None:
     green with static/dist unchecked.
     """
     command = shlex.join(["npm", *args])
-    result = _npm_run(args, cwd, cache)
+    result = _npm_run(args, cwd, cache, timeout_secs=timeout_secs)
     assert result.returncode == 0, (
         f"`{command}` exited {result.returncode} in a scratch copy of the web package; "
         f"npm's stderr:\n{result.stderr}\nnpm's stdout:\n{result.stdout}"
@@ -152,7 +159,7 @@ def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     scratch = tmp_path_factory.mktemp("css-build")
     web_package = _copy_web_package(scratch)
-    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache")
+    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache", timeout_secs=_NPM_CI_TIMEOUT_SECS)
     return web_package
 
 
