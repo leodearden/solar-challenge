@@ -9,9 +9,8 @@ A kind also names a run created without a name.
 """
 
 import dataclasses
-import json
 import re
-from typing import Any, get_args
+from typing import get_args
 
 import pandas as pd
 import pytest
@@ -23,7 +22,7 @@ from solar_challenge.fleet import FleetResults, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.storage import RunRecord, RunStorage
-from solar_challenge.web.stored_runs import RUN_KINDS, RunType, StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import RUN_KINDS, RunType, StoredDocument, StoredFleetRun, StoredHomeRun
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -62,11 +61,11 @@ def _record(storage: RunStorage, run_id: str) -> RunRecord:
     return record
 
 
-def _recorded_config(storage: RunStorage, run_id: str) -> Any:
-    """The config run *run_id*'s record holds, decoded from its config_json."""
+def _recorded_config(storage: RunStorage, run_id: str) -> StoredDocument:
+    """The config document run *run_id*'s record holds, decoded from its config_json."""
     config_json = _record(storage, run_id).config_json
     assert config_json is not None, f"the record of run {run_id!r} holds no config"
-    return json.loads(config_json)
+    return StoredDocument.decoded(run_id, "runs.config_json", config_json)
 
 
 def test_there_is_one_run_kind_for_each_run_type() -> None:

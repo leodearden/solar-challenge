@@ -3,15 +3,26 @@
 
 A home run's directory holds config.json, its HomeConfig; summary.json, its
 SummaryStatistics; and data.parquet, the time series of its SimulationResults. A fleet
-run's holds config.json, each home's HomeConfig in the fleet's order with their count;
-summary.json, its FleetSummary; and homes/, each home's time series and summary as
-home_{i}.parquet and home_{i}_summary.json. Each config and summary is its dataclass's
-field tree in JSON.
+run's holds config.json, its FleetRunConfig: each home's HomeConfig in the fleet's order
+with their count; summary.json, its FleetSummary; and homes/, each home's time series and
+summary as home_{i}.parquet and home_{i}_summary.json. Each config and summary is its
+dataclass's field tree in JSON.
+
+A document is read strictly, as StoredDocument.read reads it: each JSON value must be one
+its field's annotation can be, and the dataclass built from them must accept them. A key
+no field has, a missing field that has no default, a value of a JSON type its annotation
+cannot be (an object for a dataclass, an array for a sequence, a number but no bool for a
+number, null only for an Optional field, one of a Literal's values), an unknown union tag,
+or a dataclass that refuses its values is refused with a StoredRunUnreadable naming the
+run, the document, the field's dotted path and the reason. A missing field that has a
+default takes it. Non-JSON text, a missing document and a time series that cannot be read
+are refused the same way. StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the
+boundary answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
 StoredHomeRun and StoredFleetRun are the runs as their directories store them: each
 writes its documents and answers its run's CSV export. RunType names the types of run,
 RUN_TYPES in order, and RUN_KINDS is the run type to behaviour table, one RunKind per
-RunType; a kind also decodes the summary and the HomeConfigs a run's record holds, and
+RunType; a kind also reads the summary and the HomeConfigs a run's record holds, and
 builds from the HomeConfigs the scenario its YAML export answers with. A kind also names
 the run created without a name. Where a run's directory lives, and the runs table that
 records each run's type, are RunStorage's: nothing here reads SQL or Flask.
@@ -20,10 +31,10 @@ records each run's type, are RunStorage's: nothing here reads SQL or Flask.
 import functools
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -76,31 +87,251 @@ def _serialize_value(value: Any) -> Any:
     return value
 
 
-def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
-    """Recursively deserialize a dict to a dataclass instance.
+class StoredRunUnreadable(Exception):
+    """A stored run that cannot be rebuilt from its documents; the message names the run, the document, the field and the reason.
 
-    Each field its constructor takes that the dict holds is rebuilt as its annotation
-    declares: nested dataclasses, lists and tuples of them, pd.Timestamp values and
-    optional members. Any other key, a field no constructor takes or one the class does
-    not have, is skipped.
-
-    Args:
-        cls: The dataclass type to instantiate
-        data: Dictionary with serialized data
-
-    Returns:
-        Instance of cls with deserialized data
+    document is a file of the run's directory, e.g. "summary.json", "homes/home_0_summary.json"
+    or "data.parquet", or the runs column holding a copy, e.g. "runs.summary_json". field is
+    the dotted path of the refused value in the document, with [i] for an item; None means the
+    document as a whole. It is not a ValueError: a request's bad value is a ValueError the
+    boundary answers 400, while a stored run that cannot be read is answered 409 or flashed
+    (docs/prds/run-store-one-owner.md §3.10).
     """
-    if not is_dataclass(cls):
-        raise TypeError(f"Expected dataclass type, got {cls}")
 
+    def __init__(self, run_id: str, document: str, field: str | None, reason: str) -> None:
+        subject = document if field is None else f"{document}'s {field}"
+        super().__init__(f"The stored run {run_id!r} cannot be read: {subject} {reason}")
+        self.run_id = run_id
+        self.document = document
+        self.field = field
+        self.reason = reason
+
+
+class _Refused(Exception):
+    """A value the strict reader refuses within one document: its dotted path, None for the document's root, and the reason."""
+
+    def __init__(self, path: str | None, reason: str) -> None:
+        super().__init__(reason)
+        self.path = path
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class StoredDocument:
+    """One document of a stored run: the run's id, the document's name and its decoded JSON content.
+
+    The name is a file of the run's directory, e.g. "summary.json", or the runs column
+    holding a copy, e.g. "runs.summary_json"; StoredRunUnreadable names it.
+    """
+
+    run_id: str
+    name: str
+    content: Any
+
+    @classmethod
+    def decoded(cls, run_id: str, name: str, text: str | bytes) -> "StoredDocument":
+        """The document *name* of run *run_id* whose JSON text is *text*.
+
+        Raises:
+            StoredRunUnreadable: *text* is not JSON; its field is None.
+        """
+        try:
+            return cls(run_id, name, json.loads(text))
+        except ValueError as refusal:
+            raise StoredRunUnreadable(run_id, name, None, f"is not JSON: {refusal}") from refusal
+
+    def read(self, cls: type[T]) -> T:
+        """The *cls*, a dataclass, whose field tree the document holds, each value read as its field's annotation declares.
+
+        Raises:
+            StoredRunUnreadable: The document holds a key no field has, lacks a field that has
+                no default, holds a value of a JSON type its annotation cannot be or an unknown
+                union tag, or a dataclass refuses its values, whose refusal is then the cause.
+        """
+        try:
+            value = _read_value(self.content, cls, None)
+        except _Refused as refused:
+            raise StoredRunUnreadable(self.run_id, self.name, refused.path, refused.reason) from refused.__cause__
+        assert isinstance(value, cls)
+        return value
+
+
+def _read_value(value: Any, annotation: Any, path: str | None) -> Any:
+    """*value*, decoded JSON at *path* in its document, read as *annotation* declares.
+
+    A union is read by _read_union. A dataclass is read from an object by _read_dataclass, a
+    list or tuple from an array by _read_sequence, a dict's values from an object, a
+    pd.Timestamp from its ISO text. A Literal, bool, int, float and str admit only values of
+    their JSON type; an int or a float is any number but a bool, kept as decoded. Any admits
+    anything as it is.
+
+    Raises:
+        _Refused: *value* cannot be *annotation*, or *annotation* has no stored form.
+    """
+    origin = get_origin(annotation)
+    if annotation is Any:
+        return value
+    if origin in (Union, UnionType):
+        return _read_union(value, annotation, path)
+    if value is None:
+        raise _Refused(path, f"is null, not {_stored_form(annotation)}")
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        return _read_dataclass(value, annotation, path)
+    if origin in (list, tuple):
+        return _read_sequence(value, annotation, path)
+    if origin is dict:
+        if not isinstance(value, dict):
+            raise _Refused(path, f"is {_json_value(value)}, not an object")
+        value_annotation = get_args(annotation)[1] if get_args(annotation) else Any
+        return {key: _read_value(item, value_annotation, _child(path, key)) for key, item in value.items()}
+    if origin is Literal:
+        if any(type(value) is type(option) and value == option for option in get_args(annotation)):
+            return value
+    elif annotation is bool:
+        if isinstance(value, bool):
+            return value
+    elif annotation in (int, float):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    elif annotation is str:
+        if isinstance(value, str):
+            return value
+    elif isinstance(annotation, type) and issubclass(annotation, pd.Timestamp):
+        if isinstance(value, str):
+            try:
+                return pd.Timestamp(value)
+            except ValueError as refusal:
+                raise _Refused(path, f"is {_json_value(value)}, not a timestamp: {refusal}") from refusal
+    else:
+        raise _Refused(path, f"has no stored form: the stored-run format reads no {annotation!r}")
+    raise _Refused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
+
+
+def _read_union(value: Any, annotation: Any, path: str | None) -> Any:
+    """*value* read as union *annotation*: null only when None is a member, else as the member _union_member picks.
+
+    Raises:
+        _Refused: *value* is null and None is no member; its members tag themselves and it is
+            no object, or its tag names no member, refused at the tag's path; or the member
+            refuses it.
+    """
+    if value is None:
+        if type(None) in get_args(annotation):
+            return None
+        raise _Refused(path, f"is null, not {_stored_form(annotation)}")
+    members = [arg for arg in get_args(annotation) if arg is not type(None)]
+    tag_field = _shared_tag_field(members)
+    if tag_field is None:
+        return _read_value(value, _union_member(annotation, value), path)
+    if not isinstance(value, dict):
+        raise _Refused(path, f"is {_json_value(value)}, not an object")
+    try:
+        member = _union_member(annotation, value)
+    except ValueError as unknown_tag:
+        tags = [_tags(each)[tag_field] for each in members]
+        stored = "missing" if tag_field not in value else repr(value[tag_field])
+        raise _Refused(_child(path, tag_field), f"is {stored}, not one of {tags}") from unknown_tag
+    return _read_value(value, member, path)
+
+
+def _read_dataclass(value: Any, cls: type, path: str | None) -> Any:
+    """The *cls* the object *value* holds, each field read as its annotation declares.
+
+    A field with a default that *value* lacks takes it. A field no constructor takes, a
+    union's tag, is read as its annotation but not passed to *cls*.
+
+    Raises:
+        _Refused: *value* is no object; it holds a key no field has, the first such key's path;
+            it lacks a field with no default; a field's value is refused; or *cls* refuses the
+            values with a ValueError or TypeError, the cause, at *path*.
+    """
+    if not isinstance(value, dict):
+        raise _Refused(path, f"is {_json_value(value)}, not an object, as a {cls.__name__} is stored")
+    cls_fields = fields(cls)
+    names = {each.name for each in cls_fields}
+    for key in value:
+        if key not in names:
+            raise _Refused(_child(path, key), f"is not a field of {cls.__name__}")
     field_types = _field_types(cls)
-    kwargs = {
-        each.name: None if data[each.name] is None else _deserialize_value(data[each.name], field_types[each.name])
-        for each in fields(cls)
-        if each.init and each.name in data
-    }
-    return cls(**kwargs)
+    kwargs: dict[str, Any] = {}
+    for each in cls_fields:
+        if each.name not in value:
+            if each.init and each.default is MISSING and each.default_factory is MISSING:
+                raise _Refused(_child(path, each.name), f"is missing, and {cls.__name__} has no default for it")
+            continue
+        item = _read_value(value[each.name], field_types[each.name], _child(path, each.name))
+        if each.init:
+            kwargs[each.name] = item
+    try:
+        return cls(**kwargs)
+    except (ValueError, TypeError) as refusal:
+        raise _Refused(path, f"is refused by {cls.__name__}: {refusal}") from refusal
+
+
+def _read_sequence(value: Any, annotation: Any, path: str | None) -> Any:
+    """The list or tuple *annotation* declares, read from the array *value*.
+
+    A fixed tuple, as tuple[int, int], reads an array of exactly its arity, each item by
+    position; list[X] and tuple[X, ...] read each item as X.
+
+    Raises:
+        _Refused: *value* is no array, a fixed tuple's array has another length, or an item is refused.
+    """
+    if not isinstance(value, list):
+        raise _Refused(path, f"is {_json_value(value)}, not an array")
+    args = get_args(annotation)
+    origin = get_origin(annotation)
+    if origin is tuple and args and args[-1] is not Ellipsis:
+        if len(value) != len(args):
+            raise _Refused(path, f"holds {len(value)} items, not the {len(args)} of a {annotation!r}")
+        items = [_read_value(item, arg, _item(path, index)) for index, (item, arg) in enumerate(zip(value, args))]
+    else:
+        item_annotation = _item_annotation(annotation)
+        items = [_read_value(item, item_annotation, _item(path, index)) for index, item in enumerate(value)]
+    return tuple(items) if origin is tuple else items
+
+
+def _child(path: str | None, name: str) -> str:
+    """The dotted path of field or key *name* of the object at *path*, None being the document's root."""
+    return name if path is None else f"{path}.{name}"
+
+
+def _item(path: str | None, index: int) -> str:
+    """The path of item *index* of the array at *path*, None being the document's root."""
+    return f"{'' if path is None else path}[{index}]"
+
+
+def _json_value(value: Any) -> str:
+    """*value*, decoded JSON, as a refusal names it: its JSON type, and a scalar's value."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return f"the number {value!r}"
+    if isinstance(value, str):
+        return f"the string {value!r}"
+    return "an array" if isinstance(value, list) else "an object"
+
+
+def _stored_form(annotation: Any) -> str:
+    """What JSON value *annotation* is stored as, as a refusal names it."""
+    origin = get_origin(annotation)
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        return f"an object, as a {annotation.__name__} is stored"
+    if origin in (list, tuple):
+        return "an array"
+    if origin is dict:
+        return "an object"
+    if origin is Literal:
+        return f"one of {list(get_args(annotation))}"
+    if origin in (Union, UnionType):
+        return " or ".join(_stored_form(arg) for arg in get_args(annotation))
+    if annotation is bool:
+        return "true or false"
+    if annotation in (int, float):
+        return "a number"
+    return "a string"
 
 
 @functools.cache
@@ -113,27 +344,6 @@ def _field_types(cls: type) -> Mapping[str, Any]:
         NameError: An annotation names a type cls's module does not bind.
     """
     return MappingProxyType(get_type_hints(cls))
-
-
-def _deserialize_value(value: Any, annotation: Any) -> Any:
-    """Rebuild one JSON-decoded value as its annotation declares.
-
-    A union is read as the member _union_member picks. A dict becomes a dataclass.
-    An array becomes a list or a tuple, with every item rebuilt the same way.
-    An ISO string becomes a pd.Timestamp. Anything else is returned unchanged.
-    """
-    origin = get_origin(annotation)
-    if origin in (Union, UnionType):
-        return _deserialize_value(value, _union_member(annotation, value))
-    if isinstance(value, dict) and isinstance(annotation, type) and is_dataclass(annotation):
-        return _deserialize_dataclass(annotation, value)
-    if isinstance(value, list) and origin in (list, tuple):
-        item_annotation = _item_annotation(annotation)
-        items = [_deserialize_value(item, item_annotation) for item in value]
-        return tuple(items) if origin is tuple else items
-    if isinstance(value, str) and isinstance(annotation, type) and issubclass(annotation, pd.Timestamp):
-        return pd.Timestamp(value)
-    return value
 
 
 def _union_member(annotation: Any, value: Any) -> Any:
@@ -190,14 +400,38 @@ def _item_annotation(sequence_annotation: Any) -> Any:
     return item_annotations.pop() if len(item_annotations) == 1 else Any
 
 
-def _home_run_configs(config_document: Mapping[str, Any]) -> tuple[HomeConfig, ...]:
-    """The one HomeConfig a home run's config document holds, as StoredHomeRun.config_document wrote it."""
-    return (_deserialize_dataclass(HomeConfig, dict(config_document)),)
+@dataclass(frozen=True)
+class FleetRunConfig:
+    """A fleet run's config document: each home's HomeConfig, in the fleet's order, and their count.
+
+    Raises:
+        ValueError: n_homes is not the count of homes; the message names both.
+    """
+
+    homes: tuple[HomeConfig, ...]
+    n_homes: int
+
+    def __post_init__(self) -> None:
+        if self.n_homes != len(self.homes):
+            raise ValueError(f"FleetRunConfig's n_homes is {self.n_homes!r}, not its {len(self.homes)} homes")
 
 
-def _fleet_run_configs(config_document: Mapping[str, Any]) -> tuple[HomeConfig, ...]:
-    """Each HomeConfig a fleet run's config document holds, in the fleet's order, as StoredFleetRun.config_document wrote it."""
-    return tuple(_deserialize_dataclass(HomeConfig, dict(home)) for home in config_document["homes"])
+def _home_run_configs(config_document: StoredDocument) -> tuple[HomeConfig, ...]:
+    """The one HomeConfig a home run's config document holds, as StoredHomeRun.config_document wrote it.
+
+    Raises:
+        StoredRunUnreadable: The document is not a HomeConfig's field tree, as StoredDocument.read refuses it.
+    """
+    return (config_document.read(HomeConfig),)
+
+
+def _fleet_run_configs(config_document: StoredDocument) -> tuple[HomeConfig, ...]:
+    """Each HomeConfig a fleet run's config document holds, in the fleet's order, as StoredFleetRun.config_document wrote it.
+
+    Raises:
+        StoredRunUnreadable: The document is not a FleetRunConfig's field tree, as StoredDocument.read refuses it.
+    """
+    return config_document.read(FleetRunConfig).homes
 
 
 def _home_run_scenario(home_configs: Sequence[HomeConfig], name: str) -> dict[str, Any]:
@@ -297,10 +531,8 @@ class StoredFleetRun:
 
     def config_document(self) -> dict[str, Any]:
         """The run's config.json document: each home's HomeConfig field tree, in the fleet's order, and their count."""
-        return {
-            "homes": [_serialize_dataclass(home) for home in self.fleet_results.home_configs],
-            "n_homes": len(self.fleet_results.home_configs),
-        }
+        homes = tuple(self.fleet_results.home_configs)
+        return _serialize_dataclass(FleetRunConfig(homes=homes, n_homes=len(homes)))
 
     def summary_document(self) -> dict[str, Any]:
         """The run's summary.json document: its FleetSummary's field tree."""
@@ -314,8 +546,7 @@ class StoredFleetRun:
         """
         # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
-        homes_dir = run_dir / "homes"
-        homes_dir.mkdir(exist_ok=True)
+        (run_dir / _HOMES_DIR).mkdir(exist_ok=True)
 
         # Save fleet config (list of HomeConfigs) to JSON
         config_path = run_dir / "config.json"
@@ -331,12 +562,12 @@ class StoredFleetRun:
         for i, (home_result, home_summary) in enumerate(zip(self.fleet_results.per_home_results, self.home_summaries, strict=True)):
             # Save time series data
             df = home_result.to_dataframe()
-            parquet_path = homes_dir / f"home_{i}.parquet"
+            parquet_path = run_dir / _home_time_series(i)
             df.to_parquet(parquet_path, engine="pyarrow")
 
             # Save per-home summary
             home_summary_dict = _serialize_dataclass(home_summary)
-            home_summary_path = homes_dir / f"home_{i}_summary.json"
+            home_summary_path = run_dir / _home_summary(i)
             with home_summary_path.open("w") as f:
                 json.dump(home_summary_dict, f, indent=2)
 
@@ -348,36 +579,57 @@ class StoredFleetRun:
 StoredRun = StoredHomeRun | StoredFleetRun
 
 
+_HOMES_DIR = "homes"
+
+
+def _home_time_series(index: int) -> str:
+    """The name, in a fleet run's directory, of the time series of the home at *index* in the fleet's order."""
+    return f"{_HOMES_DIR}/home_{index}.parquet"
+
+
+def _home_summary(index: int) -> str:
+    """The name, in a fleet run's directory, of the summary of the home at *index* in the fleet's order."""
+    return f"{_HOMES_DIR}/home_{index}_summary.json"
+
+
+def _json_document(run_dir: Path, run_id: str, name: str) -> StoredDocument:
+    """The JSON document *name* of run *run_id*, read from its file in *run_dir*.
+
+    Raises:
+        StoredRunUnreadable: The file is missing, or its text is not JSON; the field is None.
+    """
+    try:
+        text = (run_dir / name).read_bytes()
+    except FileNotFoundError as missing:
+        raise StoredRunUnreadable(run_id, name, None, "is missing") from missing
+    return StoredDocument.decoded(run_id, name, text)
+
+
+def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
+    """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
+
+    Raises:
+        StoredRunUnreadable: The file is missing, or is not a parquet of a SimulationResults'
+            columns, the reader's refusal being the cause; the field is None.
+    """
+    path = run_dir / name
+    if not path.is_file():
+        raise StoredRunUnreadable(run_id, name, None, "is missing")
+    try:
+        return SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+    except ValueError as refusal:
+        raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
+
+
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
     """The home run *run_id* that *run_dir* holds, read from the documents StoredHomeRun.write writes.
 
     Raises:
-        FileNotFoundError: A document the run needs is missing; the message names its path.
-        ValueError: A document is corrupted or incomplete.
+        StoredRunUnreadable: A document is missing or cannot be read, naming it.
     """
-    # Load config from JSON
-    config_path = run_dir / "config.json"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with config_path.open("r") as f:
-        config_dict = json.load(f)
-    (config,) = _home_run_configs(config_dict)
-
-    # Load summary from JSON
-    summary_path = run_dir / "summary.json"
-    if not summary_path.exists():
-        raise FileNotFoundError(f"Summary file not found: {summary_path}")
-    with summary_path.open("r") as f:
-        summary_dict = json.load(f)
-    summary = _deserialize_dataclass(SummaryStatistics, summary_dict)
-
-    # Load time series from parquet
-    parquet_path = run_dir / "data.parquet"
-    if not parquet_path.exists():
-        raise FileNotFoundError(f"Data file not found: {parquet_path}")
-    df = pd.read_parquet(parquet_path, engine="pyarrow")
-    results = SimulationResults.from_dataframe(df, strategy_name=summary.strategy_name)
-
+    config = _json_document(run_dir, run_id, "config.json").read(HomeConfig)
+    summary = _json_document(run_dir, run_id, "summary.json").read(SummaryStatistics)
+    results = _time_series(run_dir, run_id, "data.parquet", summary.strategy_name)
     return StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
 
 
@@ -385,65 +637,22 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
     """The fleet run *run_id* that *run_dir* holds, read from the documents StoredFleetRun.write writes.
 
     Raises:
-        FileNotFoundError: A document the run needs is missing; the message names its path.
-        ValueError: A document is corrupted or incomplete.
+        StoredRunUnreadable: A document is missing or cannot be read, naming it.
     """
-    homes_dir = run_dir / "homes"
-    if not homes_dir.exists():
-        raise FileNotFoundError(f"Homes directory not found: {homes_dir}")
-
-    # Load fleet config from JSON
-    config_path = run_dir / "config.json"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with config_path.open("r") as f:
-        fleet_config_dict = json.load(f)
-
-    home_configs = list(_fleet_run_configs(fleet_config_dict))
-
-    # Load fleet summary from JSON
-    summary_path = run_dir / "summary.json"
-    if not summary_path.exists():
-        raise FileNotFoundError(f"Summary file not found: {summary_path}")
-    with summary_path.open("r") as f:
-        summary_dict = json.load(f)
-    fleet_summary = _deserialize_dataclass(FleetSummary, summary_dict)
-
-    # Load per-home results from homes/ subdirectory
-    n_homes = len(home_configs)
-    per_home_results: list[SimulationResults] = []
-    per_home_summaries: list[SummaryStatistics] = []
-
-    for i in range(n_homes):
-        # Load time series data
-        parquet_path = homes_dir / f"home_{i}.parquet"
-        if not parquet_path.exists():
-            raise FileNotFoundError(f"Home {i} data file not found: {parquet_path}")
-        df = pd.read_parquet(parquet_path, engine="pyarrow")
-
-        # Load per-home summary
-        home_summary_path = homes_dir / f"home_{i}_summary.json"
-        if not home_summary_path.exists():
-            raise FileNotFoundError(f"Home {i} summary not found: {home_summary_path}")
-        with home_summary_path.open("r") as f:
-            home_summary_dict = json.load(f)
-        home_summary = _deserialize_dataclass(SummaryStatistics, home_summary_dict)
-        per_home_summaries.append(home_summary)
-        per_home_results.append(
-            SimulationResults.from_dataframe(df, strategy_name=home_summary.strategy_name)
-        )
-
-    # Construct FleetResults
-    fleet_results = FleetResults(
-        per_home_results=per_home_results,
-        home_configs=home_configs,
+    config = _json_document(run_dir, run_id, "config.json").read(FleetRunConfig)
+    summary = _json_document(run_dir, run_id, "summary.json").read(FleetSummary)
+    home_summaries = tuple(
+        _json_document(run_dir, run_id, _home_summary(index)).read(SummaryStatistics) for index in range(config.n_homes)
     )
-
+    per_home_results = [
+        _time_series(run_dir, run_id, _home_time_series(index), home_summary.strategy_name)
+        for index, home_summary in enumerate(home_summaries)
+    ]
     return StoredFleetRun(
         run_id=run_id,
-        fleet_results=fleet_results,
-        summary=fleet_summary,
-        home_summaries=tuple(per_home_summaries),
+        fleet_results=FleetResults(per_home_results=per_home_results, home_configs=list(config.homes)),
+        summary=summary,
+        home_summaries=home_summaries,
     )
 
 
@@ -454,9 +663,10 @@ class RunKind:
     Attributes:
         summary_type: The class of the summary a run of the type has.
         read: The run stored in a directory under an id, read from its documents; it raises
-            FileNotFoundError when a document it needs is missing.
-        home_configs: Each home's HomeConfig, in order, decoded from the config document
-            the run's record holds.
+            StoredRunUnreadable naming a document that is missing or cannot be read.
+        home_configs: Each home's HomeConfig, in order, read from a config document of the
+            run, e.g. the copy its record holds; it raises StoredRunUnreadable when the
+            document cannot be read.
         scenario_document: The scenario, under a name, that a run of the type with those
             HomeConfigs exports as YAML; it raises ValueError when the scenario grammar cannot
             express them.
@@ -466,18 +676,19 @@ class RunKind:
 
     summary_type: type[SummaryStatistics] | type[FleetSummary]
     read: Callable[[Path, str], StoredRun]
-    home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
+    home_configs: Callable[[StoredDocument], tuple[HomeConfig, ...]]
     scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
     default_name: Callable[[Sequence[HomeConfig]], str]
 
-    def summary(self, summary_document: Mapping[str, Any]) -> SummaryStatistics | FleetSummary:
-        """The summary *summary_document* holds: the field tree of a summary_type, rebuilt as one.
+    def summary(self, summary_document: StoredDocument) -> SummaryStatistics | FleetSummary:
+        """The summary *summary_document* holds: the field tree of a summary_type, read as one.
 
         Raises:
-            TypeError, ValueError: The document is not a summary_type's field tree, e.g. lacks
-                a field summary_type requires, or summary_type refuses the figures it holds.
+            StoredRunUnreadable: The document is not a summary_type's field tree, as
+                StoredDocument.read refuses it, e.g. it lacks a field summary_type requires, or
+                summary_type refuses the figures it holds.
         """
-        return _deserialize_dataclass(self.summary_type, dict(summary_document))
+        return summary_document.read(self.summary_type)
 
 
 RUN_KINDS: Mapping[RunType, RunKind] = MappingProxyType(

@@ -25,7 +25,17 @@ from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_sum
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.run_names import is_run_name, require_run_name
-from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunKind, RunType, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.stored_runs import (
+    RUN_KINDS,
+    RUN_TYPES,
+    RunKind,
+    RunType,
+    StoredDocument,
+    StoredFleetRun,
+    StoredHomeRun,
+    StoredRun,
+    StoredRunUnreadable,
+)
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
@@ -137,17 +147,17 @@ _Decoded = TypeVar("_Decoded")
 
 
 def _decoded_document(
-    run_id: str, column: _DocumentColumn, text: str, decode: Callable[[Mapping[str, Any]], _Decoded]
+    run_id: str, column: _DocumentColumn, text: str, decode: Callable[[StoredDocument], _Decoded]
 ) -> _Decoded:
     """What *decode* reads from the document JSON *text* holds, run *run_id*'s runs.*column*.
 
     Raises:
         ValueError: *text* is not JSON, or *decode* refuses the document it holds; the message
-            names the run and the column, and the refusal is the cause.
+            names the run and the column, and the refusal, a StoredRunUnreadable, is the cause.
     """
     try:
-        return decode(json.loads(text))
-    except (ValueError, TypeError, KeyError, AttributeError) as refusal:
+        return decode(StoredDocument.decoded(run_id, f"runs.{column}", text))
+    except StoredRunUnreadable as refusal:
         raise ValueError(
             f"The runs.{column} of run {run_id!r} is not a document its kind decodes: {type(refusal).__name__}: {refusal}"
         ) from refusal
@@ -836,10 +846,11 @@ class RunStorage:
 
         Raises:
             FileNotFoundError: No run is stored under *run_id*: the store refuses the id (the
-                refusal is the cause), no directory holds it, no run is recorded under it, its
-                record names no run kind (RunRecord.kind's refusal is the cause), or a document
-                its kind reads is missing. The message names the id.
-            ValueError: A stored document is corrupted or incomplete.
+                refusal is the cause), no directory holds it, no run is recorded under it, or its
+                record names no run kind (RunRecord.kind's refusal is the cause). The message
+                names the id.
+            StoredRunUnreadable: A document its kind reads is missing or cannot be read, as
+                the kind's read refuses it, naming the run, the document and the field.
         """
         run_dir = self._stored_run_dir(run_id)
         record = self.run_record(run_id)
