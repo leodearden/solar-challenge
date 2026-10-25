@@ -26,23 +26,23 @@ REWRITE_THE_COMMITTED_BRISTOL_TMY = (
 )
 
 
-def committed_bristol_tmy() -> pd.DataFrame:
-    """Bristol's TMY as the committed weather cache holds it, read afresh on every call.
+def committed_bristol_tmy(*, cache_dir: Path = COMMITTED_WEATHER_CACHE_DIR) -> pd.DataFrame:
+    """Bristol's TMY as the weather cache in *cache_dir*, by default the committed one, holds it, read afresh on every call.
 
-    Fails the calling test, naming the fix, when the cache's directory or its Bristol entry is missing. The
-    directory is checked before any WeatherCache is built, because WeatherCache creates the directory it is given.
+    Fails the calling test, naming the fix, when the directory or its Bristol entry is missing. The directory is
+    checked before any WeatherCache is built, because WeatherCache creates the directory it is given.
     """
-    if not COMMITTED_WEATHER_CACHE_DIR.is_dir():
+    if not cache_dir.is_dir():
         pytest.fail(
-            f"No directory is at {COMMITTED_WEATHER_CACHE_DIR}, where the weather cache holding Bristol's TMY "
-            "is committed: restore it from git, or, if it moved, point tests/_committed_weather_cache.py's "
+            f"No directory is at {cache_dir}, where the weather cache holding Bristol's TMY is committed: "
+            "restore it from git, or, if it moved, point tests/_committed_weather_cache.py's "
             "COMMITTED_WEATHER_CACHE_DIR at it"
         )
-    tmy = WeatherCache(cache_dir=COMMITTED_WEATHER_CACHE_DIR).get("tmy", Location.bristol())
+    tmy = WeatherCache(cache_dir=cache_dir).get("tmy", Location.bristol())
     if tmy is None:
         pytest.fail(
-            f"WeatherCache reads no Bristol TMY entry in {COMMITTED_WEATHER_CACHE_DIR}, as after a change to "
-            f"WeatherCache's keys. {REWRITE_THE_COMMITTED_BRISTOL_TMY}, delete the old entry's two files, "
-            "and re-measure as docs/pv-cell-temperature.md §3 records"
+            f"WeatherCache reads no Bristol TMY entry in {cache_dir}, as after a change to WeatherCache's keys. "
+            f"{REWRITE_THE_COMMITTED_BRISTOL_TMY}, delete the old entry's two files, and re-measure as "
+            "docs/pv-cell-temperature.md §3 records"
         )
     return tmy
