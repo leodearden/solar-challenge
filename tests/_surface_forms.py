@@ -345,6 +345,27 @@ class _MayBeCopied(_Unspelled):
         )
 
 
+_ENUM_SIGNATURE_BY_MINOR = (
+    "whose signature inspect reads from EnumType.__call__ on Python 3.11, from "
+    "Enum.__signature__ on 3.12 and 3.13, and from EnumType.__signature__ on 3.14"
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class _EnumReadByMinor(_Unspelled):
+    """*enum_class*, an Enum, is what the signature is carried over, and inspect reads that Enum's own signature, which the carried one may copy, from a different place on each minor."""
+
+    enum_class: type
+
+    def refusal(self, source: str) -> TypeError:
+        return TypeError(
+            f"A signature carried over {_label(self.enum_class)}, an {_label(enum.Enum)} "
+            f"{_ENUM_SIGNATURE_BY_MINOR}, holds the string annotation {source!r}, which no "
+            "module is known to spell, since the signature may be a copy of that Enum's: "
+            "make the name private, or annotate with the class, not a string"
+        )
+
+
 _ModuleOrUnspelled: typing.TypeAlias = types.ModuleType | _Unspelled
 
 
@@ -795,10 +816,9 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
     """
     if inspect.isclass(end) and issubclass(end, enum.Enum):
         raise TypeError(
-            f"{_label(obj)} wraps {_label(end)}, an {_label(enum.Enum)}, whose signature "
-            "inspect reads from EnumType.__call__ on Python 3.11, from Enum.__signature__ "
-            "on 3.12 and 3.13, and from EnumType.__signature__ on 3.14: make the name "
-            "private, or wrap a function defined with def"
+            f"{_label(obj)} wraps {_label(end)}, an {_label(enum.Enum)}, "
+            f"{_ENUM_SIGNATURE_BY_MINOR}: make the name private, or wrap a function "
+            "defined with def"
         )
 
 
@@ -1079,24 +1099,28 @@ def _constructor_spelling_modules(
 ) -> Mapping[str, _ModuleOrUnspelled] | None:
     """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled; None if _chain_spelling_modules finds none on that constructor's chain.
 
-    That constructor is the __call__ *cls*'s metaclass resolves, if
-    _metaclass_call_as_read gives one, which inspect reads before any __new__ or
-    __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
-    MRO that holds one, which may be a base defined in another module. It is spelled
-    where _chain_spelling_modules spells the end of its chain, so a function the class
-    body assigns from another module, or that wraps one there as functools.wraps records
-    one, is spelled in that other module. If the function whose annotations that end
-    holds, as _annotations_author gives it, was compiled outside the class body and
-    renamed into it, as the dataclass decorator generates an __init__ and
-    collections.namedtuple a __new__, the constructor is spelled as
-    _generated_constructor_modules spells it; if that function was renamed into another
-    class and assigned here, TypeError names *cls* and the function. A constructor
-    defined in C, or one that wraps a callable defined in C, spells no annotation, so
-    the class's is that of the class _signature_holder gives if *cls* carries a
-    signature, else where _chain_spelling_modules finds the link given the signature
-    a link of that constructor's chain carries, if any does; _signature_holder checks
-    every class that carries a signature before the constructor is read.
+    An Enum's signature is spelled in no module known, as _EnumReadByMinor says, since
+    inspect reads it from a different place on each minor. Any other class's constructor
+    is the __call__ *cls*'s metaclass resolves, if _metaclass_call_as_read gives one,
+    which inspect reads before any __new__ or __init__; else the one
+    _constructor_as_read gives for the nearest class in *cls*'s MRO that holds one, which
+    may be a base defined in another module. It is spelled where
+    _chain_spelling_modules spells the end of its chain, so a function the class body
+    assigns from another module, or that wraps one there as functools.wraps records one,
+    is spelled in that other module. If the function whose annotations that end holds,
+    as _annotations_author gives it, was compiled outside the class body and renamed
+    into it, as the dataclass decorator generates an __init__ and collections.namedtuple
+    a __new__, the constructor is spelled as _generated_constructor_modules spells it;
+    if that function was renamed into another class and assigned here, TypeError names
+    *cls* and the function. A constructor defined in C, or one that wraps a callable
+    defined in C, spells no annotation, so the class's is that of the class
+    _signature_holder gives if *cls* carries a signature, else where
+    _chain_spelling_modules finds the link given the signature a link of that
+    constructor's chain carries, if any does; _signature_holder checks every other class
+    that carries a signature before the constructor is read.
     """
+    if issubclass(cls, enum.Enum):
+        return dict.fromkeys(names, _EnumReadByMinor(cls))
     signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
     if call is not None:
