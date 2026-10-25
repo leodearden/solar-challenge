@@ -23,7 +23,7 @@ from solar_challenge.web.schema import SCHEMA_VERSION, SchemaVersionMismatch, St
 from solar_challenge.web.shared import get_database, get_storage
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
 from tests._dashboard_databases import write_pre_548_database
-from tests._web_app import build_test_app, release_store_lock, run_storage_of
+from tests._web_app import build_test_app, database_path_in, release_store_lock, run_storage_of
 
 
 def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
@@ -246,7 +246,7 @@ def test_an_app_refused_its_store_opens_no_database(tmp_path: Path) -> None:
 
 def test_a_build_that_fails_after_taking_its_store_lock_releases_it(tmp_path: Path) -> None:
     """A directory where the database file belongs fails the build when it opens the database."""
-    (tmp_path / "test.db").mkdir()
+    database_path_in(tmp_path).mkdir()
 
     with pytest.raises(StoreUnreadable) as refused:
         build_test_app(tmp_path)
@@ -257,7 +257,7 @@ def test_a_build_that_fails_after_taking_its_store_lock_releases_it(tmp_path: Pa
 
 def test_an_app_on_a_legacy_store_refuses_to_build_naming_it_and_both_versions_and_releases_the_store(tmp_path: Path) -> None:
     """B2: the store keeps its bytes, and the refused build has released its lock."""
-    legacy = write_pre_548_database(tmp_path / "test.db")
+    legacy = write_pre_548_database(database_path_in(tmp_path))
     bytes_before = legacy.read_bytes()
 
     with pytest.raises(SchemaVersionMismatch) as refused:
