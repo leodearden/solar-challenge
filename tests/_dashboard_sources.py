@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Read access to the source files of the solar_challenge.web dashboard: its Jinja
 templates, its standalone scripts, the stylesheets base.html links, its Python modules,
-tailwind.config.js, which builds its Tailwind theme and names the files Tailwind scans,
-and the theme token file static/src/theme-tokens.json, the one home of the dashboard's
-colours: tailwind.config.js reads its tailwind section and charts.py its chart section.
+the JavaScript files at the package root, and the theme token file
+static/src/theme-tokens.json, the one home of the dashboard's colours: tailwind.config.js
+reads its tailwind section and charts.py its chart section. Of the JavaScript files at the
+root, tailwind.config.js builds the Tailwind theme and names the files Tailwind scans, and
+build-favicon.js draws the favicon in that theme.
 
 Each template, script, stylesheet and Python module is keyed by its POSIX path relative
 to the package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``,
-``static/style.css`` or ``charts.py``. tailwind.config.js and the token file are keyed
-the same way, as ``tailwind.config.js`` and ``static/src/theme-tokens.json``. The
+``static/style.css`` or ``charts.py``. tailwind.config.js, build-favicon.js and the token
+file are keyed the same way, as ``tailwind.config.js``, ``build-favicon.js`` and
+``static/src/theme-tokens.json``. The
 templates and scripts are the ``.html`` and ``.js`` files the ``content`` globs of
 tailwind.config.js select, the files Tailwind scans for the classes the dashboard applies.
 dashboard_applied_classes_by_source reads those classes from the same files, under the
@@ -46,6 +49,7 @@ BASE_TEMPLATE_KEY = "templates/base.html"
 _BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
 HAND_WRITTEN_STYLESHEET_KEY = "static/style.css"
 TAILWIND_CONFIG_KEY = "tailwind.config.js"
+FAVICON_BUILDER_KEY = "build-favicon.js"
 THEME_TOKENS_KEY = "static/src/theme-tokens.json"
 _NPM_PACKAGES_DIR = "node_modules"
 _QUOTED_STRING = r"""(?:'[^']*'|"[^"]*")"""
@@ -113,6 +117,15 @@ def hand_written_stylesheet_source() -> str:
 def tailwind_config_source() -> str:
     """Source of tailwind.config.js, which builds the dashboard's Tailwind theme from the token file's tailwind section."""
     return (_WEB_DIR / TAILWIND_CONFIG_KEY).read_text(encoding="utf-8")
+
+
+def package_root_javascript_sources() -> dict[str, str]:
+    """Source of every JavaScript file directly in the package directory, such as tailwind.config.js
+    and build-favicon.js, in path order.
+
+    These are the files Node runs when npm builds static/dist. Flask serves none of them, and
+    Tailwind scans none."""
+    return _sources(sorted(path for path in _WEB_DIR.glob("*.js") if path.is_file()))
 
 
 def theme_tokens_source() -> str:

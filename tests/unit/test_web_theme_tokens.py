@@ -5,7 +5,8 @@ chart hues, each written #rrggbb, and the chart roles, each naming a hue; charts
 them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_palette.
 
 * No web source but the token file writes a hex colour: no template, script, hand-written
-  stylesheet, Python module or tailwind.config.js.
+  stylesheet, Python module or JavaScript file at the package root, such as
+  tailwind.config.js and build-favicon.js.
 * The committed file loads to the colours the charts draw, each role in its hue's colour.
 * A token file that is not a JSON object, or whose chart section, or the chart section's
   hues or roles, is missing or not a JSON object, is refused, naming the file and the section.
@@ -29,6 +30,7 @@ from solar_challenge.home import calculate_summary
 from solar_challenge.web import charts
 from solar_challenge.web.theme_tokens import chart_colour_palette
 from tests._dashboard_sources import (
+    FAVICON_BUILDER_KEY,
     HAND_WRITTEN_STYLESHEET_KEY,
     TAILWIND_CONFIG_KEY,
     THEME_TOKENS_KEY,
@@ -36,7 +38,7 @@ from tests._dashboard_sources import (
     dashboard_script_sources,
     dashboard_template_sources,
     hand_written_stylesheet_source,
-    tailwind_config_source,
+    package_root_javascript_sources,
     theme_tokens,
     theme_tokens_source,
 )
@@ -91,9 +93,17 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
         "script that colours every chart, so this scan would pass without reading it: fix "
         "tests/_dashboard_sources.py's dashboard_script_sources"
     )
+    root_javascript = package_root_javascript_sources()
+    assert {TAILWIND_CONFIG_KEY, FAVICON_BUILDER_KEY} <= root_javascript.keys(), (
+        f"read the JavaScript files {sorted(root_javascript)} at the package root, without "
+        f"{TAILWIND_CONFIG_KEY} or {FAVICON_BUILDER_KEY}, the files that build the Tailwind theme "
+        "and draw the favicon in it, so this scan would pass without reading them: fix "
+        "tests/_dashboard_sources.py's package_root_javascript_sources, or its key constant if "
+        "the file was renamed"
+    )
     sources = {
         THEME_TOKENS_KEY: theme_tokens_source(),
-        TAILWIND_CONFIG_KEY: tailwind_config_source(),
+        **root_javascript,
         HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
         **dashboard_template_sources(),
         **script_sources,
@@ -119,7 +129,11 @@ def test_no_web_source_but_the_token_file_writes_a_hex_colour() -> None:
         "static/dist/style.css. A chart colour is reached through a role of the token file's "
         "chart section, read through charts.py's COLOUR_PALETTE. A chart's chrome colour, its "
         "text and grid, is named by the classes of components/macros.html's chart_panel "
-        "container, and chart-renderer.js reads it from the container's computed style."
+        "container, and chart-renderer.js reads it from the container's computed style. The "
+        "favicon is drawn in the theme's primary-500, which build-favicon.js reads through "
+        "tailwindcss/resolveConfig; rebuild it with "
+        "`cd src/solar_challenge/web && npm ci && npm run build:favicon` and commit "
+        "static/dist/favicon.svg."
     )
 
 
