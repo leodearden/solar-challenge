@@ -612,17 +612,31 @@ def _is_get_delete_descriptor(obj: object) -> bool:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once each refusal below has passed the end of the chain inspect follows from it."""
-    link = _unreadable_link(obj)
-    if link is not None:
-        raise _unreadable_routine_error(_label(obj), obj, link)
-    end = _chain_end(obj, stop=_has_non_none_signature)
-    _refuse_wrapped_enum(obj, end)
-    _refuse_wrapped_get_delete_descriptor(obj, end)
-    _refuse_minor_dependent_signature(obj, end)
-    if inspect.isclass(end) and not _carries_inspect_signature(end):
-        _refuse_minor_dependent_constructor(end)
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_chain_without_a_portable_form has passed the chain inspect follows from it."""
+    _refuse_chain_without_a_portable_form(obj, obj)
     return inspect.signature(obj)
+
+
+def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None:
+    """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject* ends."""
+    unreadable = _unreadable_link(link)
+    if unreadable is not None:
+        raise _unreadable_routine_error(_label(subject), subject, unreadable)
+    end = _chain_end(link, stop=_has_non_none_signature)
+    _refuse_wrapped_enum(subject, end)
+    _refuse_wrapped_get_delete_descriptor(subject, end)
+    _refuse_minor_dependent_signature(subject, end)
+    if _carries_inspect_signature(end):
+        return
+    if inspect.isclass(end):
+        _refuse_minor_dependent_constructor(end)
+    elif callable(end) and not _is_routine(end):
+        _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
+
+
+def _call_as_read(obj: object) -> object:
+    """The __call__ inspect reads for *obj*, an object its class makes callable: the one its type resolves, as inspect.getattr_static finds it, bound to *obj* as _bound_to binds it."""
+    return _bound_to(inspect.getattr_static(type(obj), "__call__"), obj)
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -1101,7 +1115,7 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
