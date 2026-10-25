@@ -258,43 +258,26 @@ def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_
 
 
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
-    """Ctrl+C drops the jobs still waiting for a worker, so they never run."""
+    """Ctrl+C drops the jobs still waiting for a worker, so they never run, even when the server's launcher left SIGINT ignored."""
     started_dir = tmp_path / "started"
     started_dir.mkdir()
 
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0") as server:
+    with _server(
+        tmp_path, RUNS_A_SCRIPT_WITH_SIGINT_IGNORED, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0"
+    ) as server:
         port = _serving_port(server)
         for pv_kw in (1.0, 2.0, 3.0):
             _submit_home_job(port, pv_kw)
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
         server.process.send_signal(signal.SIGINT)
-        server.process.wait(timeout=_PATIENCE_SECS)
-        assert started() == ["1.0", "2.0"]
-
-
-def test_the_server_with_blocking_simulations_takes_ctrl_c_though_it_was_started_with_sigint_ignored(
-    tmp_path: Path,
-) -> None:
-    """A non-interactive shell starts a background command with SIGINT ignored, and every child inherits that, so the script takes Ctrl+C back itself for the Ctrl+C test above to hold however pytest was launched.
-
-    A negative return code means SIGINT killed the server outright, skipping the shutdown that test pins.
-    """
-    started_dir = tmp_path / "started"
-    started_dir.mkdir()
-
-    with _server(
-        tmp_path, RUNS_A_SCRIPT_WITH_SIGINT_IGNORED, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0"
-    ) as server:
-        _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
-
-        server.process.send_signal(signal.SIGINT)
         returncode = server.process.wait(timeout=_PATIENCE_SECS)
 
         assert returncode >= 0, f"SIGINT killed the server (return code {returncode}) instead of raising KeyboardInterrupt in it"
+        assert started() == ["1.0", "2.0"]
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
