@@ -3,8 +3,7 @@
 
 plugin_imports follows a literal assigned to the name, or added to it with +=, in the
 module's own scope. It fails, naming the file, the line and the statement, on any other
-form that can bind or change pytest_plugins. The declared-dependency contract,
-tests/_declared_dependencies.py, counts each import it yields as one the module requires.
+form that can bind or change pytest_plugins.
 
 Usage::
 
@@ -101,7 +100,7 @@ def _binds_pytest_plugins(node: ast.AST) -> bool:
     name a from-import binds, which `from m import *` does for every public name of m.
 
     An import statement binds a module, which pytest reads as naming no plugin, so it binds
-    nothing the contract follows.
+    nothing this reader follows.
     """
     match node:
         case (
@@ -433,7 +432,7 @@ def _pytest_plugins_units(
     tree: ast.Module, enclosing: frozenset[str] = frozenset()
 ) -> Iterator[tuple[_Unit, ast.expr | None]]:
     """Yield (unit, value) for each unit of *tree* that can give or change its pytest_plugins: first
-    those that bind or change it in a form the contract cannot read, as
+    those that bind or change it in a form this reader cannot read, as
     _unreadable_pytest_plugins_bindings and _unreadable_pytest_plugins_uses find them, with None
     for *value*; then those _pytest_plugins_assignments reads, with the value each assigns or adds.
 
@@ -465,7 +464,7 @@ def _first_unparsed_line(tree: ast.Module, unit: _Unit) -> str:
 
 def _pytest_plugins_failure(source: Path, tree: ast.Module, unit: _Unit, fault: str) -> AssertionError:
     """Return the failure for the pytest_plugins *unit* in *source*, whose syntax tree is *tree*,
-    that the contract cannot follow. It names *source*, the line and the unit, quoted by its first
+    that this reader cannot follow. It names *source*, the line and the unit, quoted by its first
     line when it is compound; *fault* says what is wrong with it, such as "whose value is not a
     literal". It also says how to write pytest_plugins instead.
 
@@ -477,7 +476,7 @@ def _pytest_plugins_failure(source: Path, tree: ast.Module, unit: _Unit, fault: 
         f"{source}:{line} has `{quoted}`, {fault}; "
         "assign pytest_plugins, in the module's own scope, a literal list or tuple of module names "
         "or a comma-separated string, and add to it only with += and such a literal, "
-        "for the declared-dependency contract to follow the plugins it names"
+        "for the plugins it names to be read without running the module"
     )
 
 
@@ -504,7 +503,7 @@ def plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Import]:
                 source,
                 tree,
                 unit,
-                "which can bind or change pytest_plugins in a form the contract cannot read",
+                "which can bind or change pytest_plugins in a form plugin_imports cannot read",
             )
         try:
             plugins = ast.literal_eval(value)

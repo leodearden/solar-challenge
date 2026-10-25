@@ -12,7 +12,7 @@ _PLUGIN = Path("plugin.py")
 _ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
 _SOURCE_ASSIGNING_RERUNFAILURES = 'SOURCE = "pytest_plugins = [\'pytest_rerunfailures\']"'
 _ASSIGNS_PYTESTER = 'pytest_plugins = ["pytester"]'
-_UNREADABLE_USE = "which can bind or change pytest_plugins in a form the contract cannot read"
+_UNREADABLE_USE = "which can bind or change pytest_plugins in a form plugin_imports cannot read"
 
 
 def _plugin_modules(*lines: str) -> list[str]:
@@ -772,7 +772,7 @@ def test_plugin_imports_fails_naming_the_file_line_and_statement_of_a_pytest_plu
 ) -> None:
     """plugin_imports fails on a pytest_plugins it cannot read, wherever the module's code gives,
     binds or changes it: a value that is no literal str, list or tuple of str; a binding of the name
-    in a form the contract does not follow; a read of the name, which can change the list it holds;
+    in a form it does not follow; a read of the name, which can change the list it holds;
     an entry of the module's namespace, or an attribute of the module, reached under the name,
     directly, through a name that holds the namespace, or through exec or eval of code that does.
 
