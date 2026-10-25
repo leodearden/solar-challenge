@@ -12,15 +12,16 @@ Tests cover:
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
 - A home run with each dispatch strategy loads equal to the one saved, with an
-  equal hash, and one stored before the strategies were variants of one union
-  loads its strategy as the variant its strategy_type names
+  equal hash, and one stored before the strategies were variants of one union is
+  refused naming the null key of another variant it holds, until migrated
 - Every saved config and summary is written as its dataclass field tree in JSON
 - Each column of a stored data.parquet, under the names runs on disk use, loads
   into its field
-- A stored config holding a retired field's key set to null still loads
+- A stored config holding a retired field's key set to null is refused naming
+  it, until migrated
 - An unset module_efficiency or temperature_coefficient is stored as null, and a run
   stored with the 0.5.0 tag's 0.2 and -0.004 loads them as set
-- Corrupted parquet graceful error handling
+- A corrupted parquet is refused naming its file
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
 """
@@ -52,6 +53,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 from tests._run_storage_layout import stored_run_dir
 
@@ -760,13 +762,14 @@ class TestStoredParquetColumns:
 
 
 class TestRunSavedWithRetiredOptionalField:
-    """A run saved before an Optional field was retired still loads.
+    """A run saved before an Optional field was retired is refused naming the field's key.
 
     Every Optional field left at its default is stored as null, so the retired
-    field's key is on disk with a null value.
+    field's key is on disk with a null value. The strict reader refuses a key no field
+    has, null or not; `solar-challenge web migrate` drops it.
     """
 
-    def test_stored_non_field_key_set_to_null_is_skipped(
+    def test_stored_non_field_key_set_to_null_is_refused_naming_it(
         self, storage: RunStorage
     ) -> None:
         config = _make_home_config()
@@ -782,9 +785,10 @@ class TestRunSavedWithRetiredOptionalField:
         stored["pv_config"]["retired_optional_field"] = None
         config_path.write_text(json.dumps(stored, indent=2))
 
-        loaded_config = storage.load_run("retired-null-001").config
+        with pytest.raises(StoredRunUnreadable) as refused:
+            storage.load_run("retired-null-001")
 
-        assert loaded_config == config
+        assert (refused.value.document, refused.value.field) == ("config.json", "pv_config.retired_optional_field")
 
 
 class TestRunStoredWithModuleSettings:
@@ -888,26 +892,35 @@ class TestRunWithEachDispatchStrategy:
         assert loaded_config == config
         assert hash(loaded_config) == hash(config)
 
-    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-    def test_a_run_stored_before_the_union_loads_its_strategy_as_its_variant(
-        self, storage: RunStorage, strategy: Any
+    @pytest.mark.parametrize(
+        ("strategy", "other_variants_key"),
+        zip(_STRATEGIES, ("peak_hours", "import_limit_kw", "peak_hours"), strict=True),
+        ids=lambda value: getattr(value, "strategy_type", value),
+    )
+    def test_a_run_stored_before_the_union_is_refused_naming_the_first_key_of_another_variant(
+        self, storage: RunStorage, strategy: Any, other_variants_key: str
     ) -> None:
+        """The three-key shape holds the keys the other variants read, null; `web migrate` drops them."""
         tag = strategy.strategy_type
         _save_dispatching_home_run(storage, "pre-union-001", strategy)
         config_path = stored_run_dir(storage, "pre-union-001") / "config.json"
         config_path.write_text(json.dumps(_read_json(_PRE_DISPATCH_UNION_HOME_CONFIGS)[tag], indent=2))
 
-        loaded_config = storage.load_run("pre-union-001").config
+        with pytest.raises(StoredRunUnreadable) as refused:
+            storage.load_run("pre-union-001")
 
-        assert loaded_config == _dispatching_home(strategy, name=f"Stored before the dispatch union: {tag}")
+        assert (refused.value.document, refused.value.field) == (
+            "config.json",
+            f"battery_config.dispatch_strategy.{other_variants_key}",
+        )
 
 
 class TestCorruptedParquet:
-    """Write a corrupt file where the parquet should be, verify load returns
-    a graceful error (not crash)."""
+    """Write a corrupt file where the parquet should be, verify load refuses
+    the run naming the file (not crash)."""
 
     def test_corrupted_parquet(self, storage: RunStorage) -> None:
-        """Corrupted parquet file should raise a readable error, not a raw crash."""
+        """Corrupted parquet file is refused as StoredRunUnreadable naming data.parquet, not a raw crash."""
         config = _make_home_config()
         results = _make_simulation_results()
         summary = _make_summary()
@@ -925,9 +938,15 @@ class TestCorruptedParquet:
         parquet_path = run_dir / "data.parquet"
         parquet_path.write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
 
-        # Loading should raise an error, but not an unhandled crash
-        with pytest.raises(ValueError):
+        # Loading refuses the run naming its time series, not an unhandled crash
+        with pytest.raises(StoredRunUnreadable) as refused:
             storage.load_run("corrupt-001")
+
+        assert (refused.value.run_id, refused.value.document, refused.value.field) == (
+            "corrupt-001",
+            "data.parquet",
+            None,
+        )
 
 
 class TestMissingRunDirectory:

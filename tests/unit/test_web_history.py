@@ -805,22 +805,20 @@ class TestExportAPI:
         assert load_fleet_config(path).homes == home_configs
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-    def test_export_of_a_run_stored_before_the_dispatch_union_loads_back_with_its_variant(
-        self, app: Flask, client: FlaskClient, tmp_path: Path, strategy: object
+    def test_export_of_a_run_stored_before_the_dispatch_union_is_refused_until_migrated(
+        self, app: Flask, client: FlaskClient, strategy: object
     ) -> None:
-        """Such a run stores all three strategy keys, the ones its strategy does not read null."""
+        """Such a run stores all three strategy keys, the ones its strategy does not read null.
+
+        The strict reader refuses a key no field has, null or not, until `solar-challenge web
+        migrate` drops it from the store's runs.
+        """
         stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
         _insert_test_run(app, run_id="pre-union", config=stored)
 
         response = client.get("/api/history/runs/pre-union/export/yaml")
 
-        assert response.status_code == 200
-        path = tmp_path / "export.yaml"
-        path.write_bytes(response.data)
-        battery_config = home_config_for_run(path).battery_config
-        assert battery_config is not None
-        assert battery_config.dispatch_strategy == strategy
-        assert battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
+        assert response.status_code != 200
 
     def test_export_refuses_a_run_config_the_scenario_grammar_cannot_express(
         self, storage: RunStorage, client: FlaskClient
