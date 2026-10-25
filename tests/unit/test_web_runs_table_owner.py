@@ -14,11 +14,15 @@ shared.get_database() and shared.get_storage(). docs/prds/run-store-one-owner.md
 out the modules and §3.12 states the invariant.
 
 The scan reads the text of each module that tests/_dashboard_sources.py's
-dashboard_python_sources returns, comments and docstrings included. An SQL keyword matches
-in any case and with any whitespace, line breaks included, before the table name, so prose
-that reads as runs SQL is reworded. The Python patterns are literal. The tests on synthetic
-sources show that a planted use is reported, so the real-tree tests cannot pass by finding
-nothing.
+dashboard_python_sources returns, comments and docstrings included. A statement is runs SQL
+when it names the table after one of: FROM or JOIN; INSERT INTO, REPLACE INTO or UPDATE, with
+or without a conflict clause such as OR REPLACE; CREATE, ALTER or DROP TABLE; or the ON of an
+index, a trigger or a join. An SQL keyword matches in any case and with any whitespace, line
+breaks included, before the table name, so prose that reads as runs SQL is reworded. A text
+scan cannot see a table named only at run time: database.py's rebuild_table builds its
+statements from the TableSchema it is given. The Python patterns are literal. The tests on
+synthetic sources show that a planted use is reported, so the real-tree tests cannot pass by
+finding nothing.
 """
 
 import itertools
@@ -42,19 +46,36 @@ class _Seam:
     owner: str
 
 
+_OR_CONFLICT = r"(?:\s+OR\s+(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE))?"
+"""SQLite's optional conflict clause of an INSERT or UPDATE, such as ``OR REPLACE``."""
+
 _SEAMS: tuple[_Seam, ...] = (
     _Seam("opens a SQLite connection", re.compile(r"\bsqlite3\.connect\b"), "database.py"),
     _Seam(
         "reads or deletes rows of the runs table",
-        re.compile(r"\bFROM\s+runs\b", re.IGNORECASE),
+        re.compile(r"\b(?:FROM|JOIN)\s+runs\b", re.IGNORECASE),
         "storage.py",
     ),
     _Seam(
         "inserts into the runs table",
-        re.compile(r"\bINSERT\s+INTO\s+runs\b", re.IGNORECASE),
+        re.compile(rf"\b(?:INSERT{_OR_CONFLICT}|REPLACE)\s+INTO\s+runs\b", re.IGNORECASE),
         "storage.py",
     ),
-    _Seam("updates the runs table", re.compile(r"\bUPDATE\s+runs\b", re.IGNORECASE), "storage.py"),
+    _Seam(
+        "updates the runs table",
+        re.compile(rf"\bUPDATE{_OR_CONFLICT}\s+runs\b", re.IGNORECASE),
+        "storage.py",
+    ),
+    _Seam(
+        "creates, alters or drops the runs table",
+        re.compile(r"\b(?:CREATE|ALTER|DROP)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?runs\b", re.IGNORECASE),
+        "storage.py",
+    ),
+    _Seam(
+        "creates an index or trigger on the runs table, or joins on it",
+        re.compile(r"\bON\s+runs\b", re.IGNORECASE),
+        "storage.py",
+    ),
     _Seam("builds a RunStorage", re.compile(r"\bRunStorage\("), "app.py"),
     _Seam("reads the Flask config by key", re.compile(r"\bcurrent_app\.config\["), "app.py"),
     _Seam(
@@ -151,16 +172,62 @@ def test_the_scan_reads_each_seams_owner_and_schema(web_sources: Mapping[str, st
             id="select",
         ),
         pytest.param(
+            "chat_messages.py",
+            'conn.execute("SELECT r.name FROM chat_messages m JOIN runs r ON r.id = m.run_id")\n',
+            [("chat_messages.py", 1, "reads or deletes rows of the runs table")],
+            id="join",
+        ),
+        pytest.param(
             "jobs.py",
             "\n\nconn.execute(\n    'insert into runs (id) values (?)', (run_id,)\n)\n",
             [("jobs.py", 4, "inserts into the runs table")],
             id="insert-in-lower-case",
         ),
         pytest.param(
+            "jobs.py",
+            'conn.execute("INSERT OR REPLACE INTO runs (id) VALUES (?)", (run_id,))\n',
+            [("jobs.py", 1, "inserts into the runs table")],
+            id="insert-or-replace",
+        ),
+        pytest.param(
+            "jobs.py",
+            'conn.execute("REPLACE INTO runs (id) VALUES (?)", (run_id,))\n',
+            [("jobs.py", 1, "inserts into the runs table")],
+            id="replace-into",
+        ),
+        pytest.param(
             "assistant.py",
             'SQL = """UPDATE\n    runs SET name = ?"""\n',
             [("assistant.py", 1, "updates the runs table")],
             id="update-across-lines",
+        ),
+        pytest.param(
+            "api.py",
+            'conn.execute("update or ignore runs set notes = ?", (notes,))\n',
+            [("api.py", 1, "updates the runs table")],
+            id="update-or-ignore",
+        ),
+        pytest.param(
+            "schema.py",
+            'conn.execute("ALTER TABLE runs ADD COLUMN x")\n',
+            [("schema.py", 1, "creates, alters or drops the runs table")],
+            id="alter-table-in-schema",
+        ),
+        pytest.param(
+            "schema.py",
+            'conn.execute("DROP TABLE IF EXISTS runs")\n'
+            'conn.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT)")\n',
+            [
+                ("schema.py", 1, "creates, alters or drops the runs table"),
+                ("schema.py", 2, "creates, alters or drops the runs table"),
+            ],
+            id="drop-and-create-table",
+        ),
+        pytest.param(
+            "schema.py",
+            'conn.execute("CREATE INDEX idx_runs_name ON runs(name)")\n',
+            [("schema.py", 1, "creates an index or trigger on the runs table, or joins on it")],
+            id="create-index",
         ),
         pytest.param(
             "schema.py",
@@ -198,9 +265,17 @@ def test_the_scan_reads_each_seams_owner_and_schema(web_sources: Mapping[str, st
         pytest.param(
             "api.py",
             'conn.execute("SELECT * FROM runs_archive")\n'
+            'conn.execute("SELECT * FROM jobs JOIN runs_archive USING (id)")\n'
+            'conn.execute("INSERT OR REPLACE INTO runs_archive (id) VALUES (?)")\n'
+            'conn.execute("REPLACE INTO runs_archive (id) VALUES (?)")\n'
+            'conn.execute("UPDATE OR IGNORE runs_archive SET notes = ?")\n'
+            'conn.execute("ALTER TABLE runs_archive ADD COLUMN x")\n'
+            'conn.execute("DROP TABLE IF EXISTS runs_archive")\n'
+            'conn.execute("CREATE INDEX idx_runs_archive_name ON runs_archive(name)")\n'
             'RunStorageError("x")\n'
             "my_sqlite3.connect()\n"
-            "writes nothing to the RunStorage (contract C8)\n",
+            "writes nothing to the RunStorage (contract C8)\n"
+            "the routes that update or delete runs take the app's RunStorage\n",
             [],
             id="near-misses",
         ),
