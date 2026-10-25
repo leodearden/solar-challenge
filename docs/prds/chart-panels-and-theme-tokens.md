@@ -230,7 +230,7 @@ Invariants and where each is enforced:
 
 | invariant | construction | use |
 |---|---|---|
-| Every colour the dashboard writes lives in `theme-tokens.json`. | the file; `charts.py` load refusal; `tailwind.config.js` throw | a test scanning every web source (`.py`, `.html`, `.js`, hand-written `.css`, `tailwind.config.js`) for `#rrggbb` finds only the token file (γ) |
+| Every colour the dashboard writes lives in `theme-tokens.json`. | the file; `charts.py` load refusal; `tailwind.config.js` throw; `build-favicon.js`'s refusal of a theme without primary-500 | a test scanning every web source (`.py`, `.html`, `.js`, hand-written `.css`, and the package root's `tailwind.config.js` and `build-favicon.js`) for `#rrggbb` finds only the token file (γ); `static/dist`'s `style.css` and `favicon.svg` (task 993) are build outputs, which the css-build lane compares with a fresh build |
 | The accent is the only use of the accent's palette. | `tailwind.primary` names it | a test: no template or script applies a class naming the palette `tailwind.primary` names (β) |
 | Every token role is drawn. | — | every `tailwind` role palette is applied by some template (β); every chart role is drawn by some figure (`test_web_chart_colours`, α) |
 | A chart that applies is drawn or says why not. | `ChartPanel.__post_init__` | assemblers list only applicable charts; `chart_panel` renders the figure or the reason (δ) |
