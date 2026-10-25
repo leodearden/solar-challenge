@@ -103,7 +103,7 @@ def surface_form(obj: object) -> str:
     routine that inspect reads through such a descriptor, which the TypeError names
     too, with its kind.
     """
-    if inspect.isclass(obj) and issubclass(obj, enum.Enum):
+    if _is_enum(obj):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
     if not _is_class_or_routine(obj):
         return type(obj).__qualname__
@@ -607,7 +607,7 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
 
 def _form_classes(obj: object) -> set[type]:
     """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
-    if inspect.isclass(obj) and issubclass(obj, enum.Enum):
+    if _is_enum(obj):
         return set()
     if not _is_class_or_routine(obj):
         return {type(obj)}
@@ -621,6 +621,11 @@ def _form_classes(obj: object) -> set[type]:
             for name, annotation in annotations.items()
         )
     )
+
+
+def _is_enum(obj: object) -> typing.TypeGuard[type[enum.Enum]]:
+    """Whether *obj* is an Enum class: surface_form spells it by its members, and inspect reads its own signature from a different place on each minor."""
+    return inspect.isclass(obj) and issubclass(obj, enum.Enum)
 
 
 def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
@@ -817,7 +822,7 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
     An Enum is spelled by its members and never reaches here as *obj*; a routine that
     wraps one does.
     """
-    if inspect.isclass(end) and issubclass(end, enum.Enum):
+    if _is_enum(end):
         raise TypeError(
             f"{_label(obj)} wraps {_label(end)}, an {_label(enum.Enum)}, "
             f"{_ENUM_SIGNATURE_BY_MINOR}: make the name private, or wrap a function "
@@ -1122,7 +1127,7 @@ def _constructor_spelling_modules(
     constructor's chain carries, if any does; _signature_holder checks every other class
     that carries a signature before the constructor is read.
     """
-    if issubclass(cls, enum.Enum):
+    if _is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
     signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
@@ -1484,7 +1489,7 @@ def _has_source(module: types.ModuleType) -> bool:
 
 def _pinned_by_class_form(cls: type) -> set[str]:
     """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes, or each named tuple field it takes that instances read from the tuple."""
-    if issubclass(cls, enum.Enum):
+    if _is_enum(cls):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
         return _dataclass_fields(cls).keys() & _constructor_parameters(cls)
