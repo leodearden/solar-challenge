@@ -9,6 +9,7 @@ import pytest
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
+    PHYSICS_COLUMN_DAYS,
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
@@ -57,6 +58,16 @@ def test_physics_column_homes_are_the_golden_fin_install_on_their_own_load() -> 
 
     for home in make_physics_column_scenario().homes:
         assert dataclasses.replace(home, load_config=install.load_config) == install
+
+
+def test_physics_column_runs_over_every_one_of_physics_column_days() -> None:
+    first_day, last_day = PHYSICS_COLUMN_DAYS.window(PHYSICS_COLUMN_DAYS.count)
+    period = make_physics_column_scenario().period
+
+    assert (period.get_start_timestamp().date(), period.get_end_timestamp().date()) == (
+        first_day.date(),
+        last_day.date(),
+    )
 
 
 def test_fin_golden_cells_cannot_be_reassigned() -> None:

@@ -6,19 +6,18 @@ H6 integration gate: verifies the no-flex calibration anchor, structural invaria
 and flex-lowers-rate directionality for solve_cost_recovery_rate.
 
 Layout:
-  - Fast (no-network) classes:
-      TestNoFlexAnchorReconciliation — [FIN] no-flex structural anchor
-      TestOverrideOwnUseCappedAtDemand — under the 0.70 override the solve's rate base is the capped own-use the bills charge
-      TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
-      TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
-      TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
-      TestPhysicsColumnPremises — fast no-debt guard for the one fixture both slow physics columns (θ's and CR6's) simulate
-  - @pytest.mark.slow class:
-      TestPhysicsReconciliationColumn — real-PVGIS physics column (reported, not asserted ==)
+  - TestNoFlexAnchorReconciliation — [FIN] no-flex structural anchor
+  - TestOverrideOwnUseCappedAtDemand — under the 0.70 override the solve's rate base is the capped own-use the bills charge
+  - TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
+  - TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
+  - TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
+  - TestPhysicsColumnPremises — the no-debt guard for the one fixture both physics columns (θ's and CR6's) simulate
+  - TestPhysicsReconciliationColumn — the physics column on a simulated fleet (reported, not asserted ==)
 """
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import pytest
 
@@ -34,7 +33,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetResults, simulate_fleet
 from solar_challenge.home import SimulationResults, calculate_summary
 from tests._fin_calibration import (
     FIN_GOLDEN,
@@ -1076,12 +1075,12 @@ class TestCbsOwnUseKwhHelper:
 
 
 class TestPhysicsColumnPremises:
-    """Fast guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
+    """Guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
 
     θ's TestCalibrationPhysicsColumn and CR6's TestPhysicsReconciliationColumn both
-    simulate make_physics_column_scenario's fixture, and both are slow, excluded from
-    -m 'not slow' runs.  So the premise (the [FIN] grant covers the fixture's capex, so
-    it carries no debt) is enforced here.
+    simulate make_physics_column_scenario's fixture, and both assert only their
+    solution's structure.  So the premise (the [FIN] grant covers the fixture's capex,
+    so it carries no debt) is asserted here.
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
@@ -1097,16 +1096,16 @@ class TestPhysicsColumnPremises:
         assert econ.debt_gbp == 0.0, f"physics fleet carries £{econ.debt_gbp:,.2f} debt"
 
 
-@pytest.mark.slow
 class TestPhysicsReconciliationColumn:
-    """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).
+    """Physics column — REPORTED, not asserted == spreadsheet.
 
     Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
-    real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
-    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation); see
-    docs/cost-recovery-finance-model.md §7.6.
+    real-physics path returns a structurally valid CostRecoverySolution.  It runs
+    simulate_fleet in this process, because a worker pool would fork the test
+    process, which tests/conftest.py's offline guard makes multi-threaded.  Its
+    numbers are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation);
+    see docs/cost-recovery-finance-model.md §7.6.
     θ's TestCalibrationPhysicsColumn simulates the same fixture, make_physics_column_scenario's.
-    Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
 
     def test_physics_path_reported(self) -> None:
@@ -1122,8 +1121,10 @@ class TestPhysicsReconciliationColumn:
         scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
 
-        # Real physics simulation (simulate=None → real simulate_fleet)
-        sol = solve_cost_recovery_rate(scenario, finance)
+        # Real physics simulation
+        sol = solve_cost_recovery_rate(
+            scenario, finance, simulate=functools.partial(simulate_fleet, parallel=False)
+        )
 
         # STRUCTURAL assertions only
         assert isinstance(sol, CostRecoverySolution)
