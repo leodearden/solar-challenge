@@ -50,6 +50,7 @@ from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
+    NoneSignedCallableGetter,
     Outer,
     Preset,
     imported_module,
@@ -86,6 +87,12 @@ class CallableGetterDeleter(GetterDeleter):
     """A callable GetterDeleter."""
 
     def __call__(self, rate: int) -> str: ...
+
+
+class DeletableCallableGetter(CallableGetter):
+    """A CallableGetter whose type also defines __delete__, so that inspect counts it a method descriptor before Python 3.13 alone."""
+
+    def __delete__(self, instance: object) -> None: ...
 
 
 class Tariff(enum.Enum):
@@ -1054,6 +1061,102 @@ def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by
     assert named_classes(Keyed) == {int}
     assert surface_form(Built) == "(rate: int) -> None"
     assert surface_form(Created) == "(rate: int) -> None"
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "reading"),
+    [
+        pytest.param(CallableGetter(), r"\bevery admitted minor\b", id="get-only"),
+        pytest.param(
+            NoneSignedCallableGetter(lambda rate: None),
+            r"\bevery admitted minor\b",
+            id="get-only-signature-of-none",
+        ),
+        pytest.param(DeletableCallableGetter(), r"\b__delete__\b.*\b3\.13\b", id="get-delete"),
+    ],
+)
+def test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type(
+    descriptor: object, reading: str
+) -> None:
+    class Built:
+        __init__ = descriptor
+
+    class Rebuilt(Built):
+        pass
+
+    class Made:
+        __new__ = descriptor
+
+    class Calling(type):
+        __call__ = descriptor
+
+    class Called(metaclass=Calling):
+        pass
+
+    class Wrapped:
+        @functools.wraps(descriptor)
+        def __init__(self, rate: int) -> None: ...
+
+    kind = rf"\.{type(descriptor).__qualname__}\b"
+    for cls, constructor in (
+        (Built, "Built.__init__"),
+        (Rebuilt, "Built.__init__"),
+        (Made, "Made.__new__"),
+        (Called, "Calling.__call__"),
+        (Wrapped, "Wrapped.__init__"),
+    ):
+        naming_it = rf"\.{cls.__name__}\b.*\.{re.escape(constructor)}\b.*{kind}.*{reading}"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(cls)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(cls)
+    with pytest.raises(TypeError, match=rf"\.Built\b.*\.Built\.__init__\b.*{kind}"):
+        surface_form(functools.partial(Built))
+
+
+def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:
+    def build(rate: int) -> str: ...
+
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Giving:
+        def __get__(self, instance: object, owner: type) -> Callable[..., object]:
+            return build
+
+    class Signed(CallableGetter):
+        __signature__ = signature
+
+    class SignedDeletable(DeletableCallableGetter):
+        __signature__ = signature
+
+    class Given:
+        __init__ = Giving()
+
+    class Rated:
+        __init__ = Signed()
+
+    class Rerated:
+        __init__ = SignedDeletable()
+
+    class Calling(type):
+        __call__ = Giving()
+
+    class Called(metaclass=Calling):
+        pass
+
+    class SignedCalling(type):
+        __call__ = Signed()
+
+    class SignedCalled(metaclass=SignedCalling):
+        pass
+
+    assert surface_form(Given) == "(rate: int) -> str"
+    assert surface_form(Rated) == "(rate: int)"
+    assert surface_form(Rerated) == "(rate: int)"
+    assert surface_form(Called) == "(rate: int) -> str"
+    assert surface_form(SignedCalled) == "(rate: int)"
 
 
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
