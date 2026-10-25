@@ -11,6 +11,6 @@ from tests._web_job_days import web_job_days
 
 @pytest.mark.parametrize("count", [1, 3])
 def test_a_job_sent_days_runs_over_exactly_the_web_job_days_of_that_count(count: int) -> None:
-    first_day, last_day = web_job_days(count=count).window(count)
+    first_day, last_day = web_job_days(count=count).window()
 
     assert parse_date_range({"days": count}) == (first_day.date().isoformat(), last_day.date().isoformat())

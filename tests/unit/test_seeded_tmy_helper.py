@@ -66,6 +66,20 @@ def test_a_window_runs_from_the_first_day_over_whole_days_in_the_first_days_time
     assert {day.tz for day in june_days.window(3)} == {first_day.tz}
 
 
+@pytest.mark.parametrize(
+    "first_day",
+    [pd.Timestamp("2024-06-21"), pd.Timestamp("2024-06-21", tz="Europe/London")],
+    ids=["naive", "in-london"],
+)
+def test_a_window_of_no_stated_days_spans_every_day_in_the_first_days_timezone(
+    first_day: pd.Timestamp,
+) -> None:
+    june_days = ClearJuneDays(first_day=first_day, count=3)
+
+    assert june_days.window() == (first_day, first_day + pd.Timedelta(days=2))
+    assert {day.tz for day in june_days.window()} == {first_day.tz}
+
+
 @pytest.mark.parametrize("days", [0, 4])
 def test_a_window_of_no_days_or_of_more_days_than_were_seeded_is_refused_naming_both(days: int) -> None:
     with pytest.raises(

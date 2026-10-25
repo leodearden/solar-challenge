@@ -7,7 +7,7 @@ Usage::
 
     june_days = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
     june_days.seed_as_bristol_tmy(weather_cache)
-    start, end = june_days.window(2)
+    start, end = june_days.window(2)  # the first two days; window() spans all three
     results = simulate_fleet(config, start, end)
 
 A module whose tests run on its days binds a fixture of them once, under the name its tests apply::
@@ -73,8 +73,10 @@ class ClearJuneDays:
 
         return seeded_bristol_tmy
 
-    def window(self, days: int) -> tuple[pd.Timestamp, pd.Timestamp]:
-        """The start and end dates of a simulation over the first *days* of these days."""
+    def window(self, days: int | None = None) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """The start and end dates of a simulation over the first *days* of these days, or over all of them."""
+        if days is None:
+            days = self.count
         assert 1 <= days <= self.count, (
             f"a window takes 1 to {self.count} of the clear June days from {self.first_day.date()}, not {days}; "
             "a day the seeded TMY lacks gets no sun"
