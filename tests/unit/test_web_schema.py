@@ -75,6 +75,7 @@ from tests._dashboard_databases import (
 )
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_home_run
@@ -933,15 +934,14 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
 @_NEEDS_PYARROW
 def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_its_runs_files(tmp_path: Path) -> None:
     """Every run of a store at SCHEMA_VERSION is in the current format, so no run-document step is pending."""
-    database = open_database(tmp_path / "store.db")
-    storage = RunStorage(database, tmp_path)
+    storage = empty_run_storage(tmp_path)
     store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1))
-    files_before, bytes_before = _files_of(stored_run_dir(storage, "home-1")), database.path.read_bytes()
+    files_before, bytes_before = _files_of(stored_run_dir(storage, "home-1")), storage.database.path.read_bytes()
 
-    report = migrate_store(database.path, tmp_path)
+    report = migrate_store(storage.database.path, storage.data_dir)
 
     assert report.applied_steps == ()
-    assert database.path.read_bytes() == bytes_before
+    assert storage.database.path.read_bytes() == bytes_before
     assert _files_of(stored_run_dir(storage, "home-1")) == files_before
 
 

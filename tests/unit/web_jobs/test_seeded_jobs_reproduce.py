@@ -15,8 +15,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.schema import open_database
-from solar_challenge.web.storage import RunStorage
+from tests._run_stores import empty_run_storage
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -40,7 +39,7 @@ def test_two_seeded_home_jobs_run_together_store_the_demand_a_serial_run_gives(
         "seeds 42 and 43 gave one demand, so neither home's load is stochastic"
     )
 
-    storage = RunStorage(open_database(tmp_path / "jobs.db"), tmp_path / "data")
+    storage = empty_run_storage(tmp_path)
     manager = JobManager(
         storage, max_workers=2, simulate_home=functools.partial(simulate_home, weather=default_weather())
     )
