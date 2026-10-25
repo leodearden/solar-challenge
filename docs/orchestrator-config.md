@@ -45,7 +45,9 @@ per-worktree `.venv`.
   forgot `uv lock` pass verify and merge its stale lock. `tests/unit/test_stale_uv_lock.py`
   guards this.
 - **`-m 'not slow'`.** Slow tests need a live service (PVGIS, PyPI, npm), which does not belong
-  in a per-task verify loop.
+  in a per-task verify loop. They run in the offline lane instead (§8), and
+  `tests/unit/test_offline_lane_contracts.py` checks that each does, unless it lists the test
+  as needing a service no lane job runs it against.
 - **`--ignore=tests/e2e`.** The Playwright suite is likewise out of the per-task verify; the
   offline lane's `e2e` job runs it after every merge. The `--ignore` also keeps it out of
   collection on a task tree whose `collect_ignore` predates e2e, because dark-factory runs
