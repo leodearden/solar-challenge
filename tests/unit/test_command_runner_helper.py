@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_command_runner.py, the one runner through which the orchestrator contract tests start a command.
 
-Each test runs a throwaway command, plain sh, with no uv and no mocks.
+Each test runs a throwaway command, plain sh or pytest on a throwaway probe module, with no uv and no mocks.
 test_no_process_a_hung_probe_started_outlives_it covers every probe built on
 run_command, not only run_command itself: collect, from tests/_collect_only.py,
 and run_verify_suite, from tests/_verify_suite.py, are its cases, so this module
@@ -23,7 +23,14 @@ import pytest
 import yaml
 
 from tests._collect_only import collect
-from tests._command_runner import CommandTimedOut, ShellCommand, VerifyRole, describe_outcome, run_command
+from tests._command_runner import (
+    CommandTimedOut,
+    ShellCommand,
+    VerifyRole,
+    describe_outcome,
+    describe_pytest_outcome,
+    run_command,
+)
 from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
 from tests._verify_suite import run_verify_suite
 
@@ -58,6 +65,31 @@ part.write_text(str(os.getpid()))
 part.rename(pid_file)
 time.sleep(lifetime_secs)
 released_file.touch()
+"""
+
+_PYTEST_PROBE_MODULE = """\
+import warnings
+
+import pytest
+
+
+@pytest.fixture
+def broken_at_setup() -> None:
+    raise RuntimeError("SETUP-" + "MARKER")
+
+
+def test_errors_at_setup(broken_at_setup: None) -> None:
+    pass
+
+
+def test_fails_after_printing() -> None:
+    print("CAPTURED-" + "OUTPUT")
+    assert False, "TRACEBACK-" + "MARKER"
+
+
+def test_warns_two_hundred_times() -> None:
+    for index in range(200):
+        warnings.warn(f"WARNING-{index:03d} " + "w" * 100, UserWarning)
 """
 
 
@@ -197,6 +229,35 @@ def _not_gone_within(pids: Iterable[int], seconds: float) -> list[int]:
         time.sleep(0.01)
         existing = [pid for pid in existing if _process_exists(pid)]
     return existing
+
+
+def _run_failing_pytest(directory: Path) -> subprocess.CompletedProcess[str]:
+    """Run pytest on _PYTEST_PROBE_MODULE, written to test_probe.py in *directory*, and return how it ended.
+
+    Its report has an ERRORS section, a FAILURES section with captured output, and
+    a warnings summary far longer than a stream's tail. Each marker the probe
+    prints or raises is joined as it runs, so only pytest's report, never a source
+    line it quotes, holds one whole. A pytest.ini of its own makes *directory* its
+    rootdir, so this project's addopts and filterwarnings stay out of it, and
+    PYTEST_ADDOPTS, which the newest-releases lane sets for the suite this test
+    runs in, is dropped. -rN drops the short test summary, which pytest fills with
+    a failure's message whenever its node id leaves room, so a marker can reach a
+    description only through the report's sections, as the verify suite's long
+    node ids force.
+    """
+    (directory / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (directory / "test_probe.py").write_text(_PYTEST_PROBE_MODULE, encoding="utf-8")
+    command = shlex.join(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "--color=no", "--tb=short", "-rN", "test_probe.py"]
+    )
+    env = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+    return run_command(ShellCommand(command, directory), env, timeout_secs=120)
+
+
+def _report_separator(title: str) -> str:
+    """Return the line with which pytest's report opens its section *title*: '=' runs either side of it."""
+    fill = "=" * 30
+    return f"{fill} {title} {fill}\n"
 
 
 def test_runs_the_command_verbatim_through_sh_in_its_directory_and_the_given_environment(tmp_path: Path) -> None:
@@ -400,3 +461,90 @@ def test_an_outcome_whose_streams_are_short_is_described_with_both_whole() -> No
     assert description.startswith("exit 0\n"), description
     assert "a short stdout\n" in description
     assert "a short stderr\n" in description
+
+
+def test_a_pytest_outcome_carries_its_reports_errors_and_failures_ahead_of_a_tail_its_warnings_summary_fills(
+    tmp_path: Path,
+) -> None:
+    """pytest prints its ERRORS and FAILURES sections before its warnings summary, so a long summary fills the tail."""
+    result = _run_failing_pytest(tmp_path)
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, describe_outcome(result)
+    assert "TRACEBACK-MARKER" not in describe_outcome(result), (
+        "the probe's warnings summary no longer fills the tail of its stdout, so even describe_outcome keeps the "
+        "probe's traceback and this test proves nothing"
+    )
+
+    description = describe_pytest_outcome(result)
+
+    assert description.startswith("exit 1\n"), description[:200]
+    assert "SETUP-MARKER" in description, description
+    assert "TRACEBACK-MARKER" in description, description
+    assert "CAPTURED-OUTPUT" in description, description
+    assert description.index("TRACEBACK-MARKER") < description.index("WARNING-199 "), (
+        f"the failure sections do not come ahead of the tail of stdout:\n{description}"
+    )
+    assert "WARNING-000 " not in description, (
+        "the description holds the head of the warnings summary, which lies in neither a failure section nor the "
+        "tail of stdout, so a failure section ran on past the next section's header"
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        pytest.param("", id="uv-refused-before-pytest"),
+        pytest.param(
+            _report_separator("test session starts")
+            + "test_probe.py::test_passes PASSED [100%]\n"
+            + _report_separator("1 passed in 0.01s"),
+            id="green-report",
+        ),
+    ],
+)
+def test_a_pytest_outcome_with_no_failure_section_is_described_as_any_outcome(stdout: str) -> None:
+    """With no ERRORS or FAILURES section in stdout, there is nothing to put ahead of the tails."""
+    outcome = subprocess.CompletedProcess(
+        "a command", 2, stdout, "error: The lockfile at `uv.lock` needs to be updated\n"
+    )
+
+    assert describe_pytest_outcome(outcome) == describe_outcome(outcome)
+
+
+def test_a_pytest_outcome_keeps_the_head_of_each_long_failure_section_and_says_how_long_it_was() -> None:
+    """Each section has its own bound, so a long ERRORS section cannot crowd FAILURES out, as each stream keeps its own tail."""
+    errors_section = _report_separator("ERRORS") + "ERRORS-HEAD" + "x" * 1_000_000 + "ERRORS-END\n"
+    stdout = (
+        _report_separator("test session starts")
+        + errors_section
+        + _report_separator("FAILURES")
+        + "FAILURES-MARKER\n"
+        + _report_separator("warnings summary")
+        + "a warning\n" * 10_000
+        + _report_separator("1 failed, 1 error in 0.01s")
+    )
+    outcome = subprocess.CompletedProcess("a command", 1, stdout, "")
+
+    description = describe_pytest_outcome(outcome)
+
+    assert "ERRORS-HEAD" in description
+    assert "ERRORS-END" not in description
+    assert str(len(errors_section)) in description
+    assert "FAILURES-MARKER" in description
+
+
+def test_a_pytest_outcome_quotes_no_failure_section_that_its_stdout_tail_already_holds() -> None:
+    """Quoting such a section ahead of the tails too would print each of its failures twice."""
+    errors_section = _report_separator("ERRORS") + "ERRORS-MARKER\n" + "x" * 10_000 + "\n"
+    stdout = (
+        _report_separator("test session starts")
+        + errors_section
+        + _report_separator("FAILURES")
+        + "FAILURES-MARKER\n"
+        + _report_separator("1 failed, 1 error in 0.01s")
+    )
+    outcome = subprocess.CompletedProcess("a command", 1, stdout, "")
+
+    description = describe_pytest_outcome(outcome)
+
+    assert description.count("ERRORS-MARKER") == 1, description
+    assert description.count("FAILURES-MARKER") == 1, description

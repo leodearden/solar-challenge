@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._command_runner import describe_outcome
+from tests._command_runner import describe_pytest_outcome
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
 from tests._working_tree import copy_working_tree
@@ -111,5 +111,5 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
 
     assert result.returncode == 0, (
         "the verify suite failed on the newest releases pyproject.toml's dependency ranges admit, "
-        f"the releases a consumer that re-locks installs; {upgrade_description}\n{describe_outcome(result)}"
+        f"the releases a consumer that re-locks installs; {upgrade_description}\n{describe_pytest_outcome(result)}"
     )

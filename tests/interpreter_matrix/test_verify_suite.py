@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._command_runner import describe_outcome
+from tests._command_runner import describe_pytest_outcome
 from tests._interpreters import off_pin_minor_versions
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
@@ -96,7 +96,7 @@ def test_verify_suite_passes_on_python(version: tuple[int, int]) -> None:
 
     result = run_verify_suite(PROJECT_ROOT, env, variant=f"on Python {python}")
 
-    assert result.returncode == 0, f"the verify suite failed on Python {python}\n{describe_outcome(result)}"
+    assert result.returncode == 0, f"the verify suite failed on Python {python}\n{describe_pytest_outcome(result)}"
     identity = _interpreter_identity(env, python)
     assert identity == {"version": [major, minor], "gil_disabled": False}, (
         f"the verify suite passed, but the interpreter uv ran it with reports {identity}, not a "

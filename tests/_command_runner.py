@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The one runner through which the orchestrator contract tests start a command, and the one description of how it ended.
+"""The one runner through which the orchestrator contract tests start a command, and the descriptions of how it ended.
 
 run_command starts a command as the orchestrator does: verbatim through `sh -c`,
 in the command's directory, and, for a command with a role, such as an
@@ -7,14 +7,22 @@ OrchestratorCommand, with DF_VERIFY_ROLE set to that role. The command runs in a
 session of its own, and no process in that session outlives a hang: at its
 timeout, every one of them is killed.
 
+describe_outcome describes how any run ended: its exit code, then the tail of
+each stream. describe_pytest_outcome describes a pytest run, such as the verify
+suite's, with each ERRORS and FAILURES section of its report that stdout's tail
+lacks ahead of those tails.
+
 Usage::
 
-    from tests._command_runner import CommandTimedOut, ShellCommand, describe_outcome, run_command
+    from tests._command_runner import (
+        CommandTimedOut, ShellCommand, describe_outcome, describe_pytest_outcome, run_command,
+    )
     from tests._orchestrator_config import verify_command
 
     result = run_command(verify_command(project_root, "test_command"), env, timeout_secs=600)
-    assert result.returncode == 0, describe_outcome(result)
+    assert result.returncode == 0, describe_pytest_outcome(result)
     version = run_command(ShellCommand("uv --version", project_root), timeout_secs=60)
+    assert version.returncode == 0, describe_outcome(version)
 """
 
 import contextlib
@@ -26,7 +34,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from tests._pytest_report import failure_sections
+
 _STREAM_TAIL_CHARS = 5000
+
+_FAILURE_SECTION_HEAD_CHARS = 20_000
 
 _DRAIN_AFTER_KILL_SECS = 5
 
@@ -79,14 +91,53 @@ class Outcome(Protocol):
     def stderr(self) -> str: ...
 
 
+def _tail(stream: str) -> str:
+    """Return the end of *stream* that a description shows: its last _STREAM_TAIL_CHARS chars."""
+    return stream[-_STREAM_TAIL_CHARS:]
+
+
 def _tails(stdout: str, stderr: str) -> str:
     """Return the tail of each stream, so a long stderr, such as uv's log, cannot crowd out the end of stdout."""
-    return f"stdout tail:\n{stdout[-_STREAM_TAIL_CHARS:]}\nstderr tail:\n{stderr[-_STREAM_TAIL_CHARS:]}"
+    return f"stdout tail:\n{_tail(stdout)}\nstderr tail:\n{_tail(stderr)}"
 
 
 def describe_outcome(outcome: Outcome) -> str:
     """Describe how *outcome*'s run ended, for an assertion message: its exit code, then the tail of each stream."""
     return f"exit {outcome.returncode}\n{_tails(outcome.stdout, outcome.stderr)}"
+
+
+def describe_pytest_outcome(outcome: Outcome) -> str:
+    """Describe how *outcome*'s pytest run ended, as describe_outcome does, with the failure sections stdout's tail lacks first.
+
+    Those are the ERRORS and FAILURES sections of the pytest report in its stdout,
+    which hold each failing test's traceback and captured output. pytest prints
+    them before its warnings summary, so a long summary pushes them out of
+    stdout's tail. Each keeps at most its first _FAILURE_SECTION_HEAD_CHARS chars.
+    A stdout with neither, as when uv refused to start pytest or the run passed,
+    or whose tail holds each whole, is described exactly as describe_outcome
+    describes it.
+    """
+    stdout_tail = _tail(outcome.stdout)
+    excerpts = "".join(
+        _excerpt(section) for section in failure_sections(outcome.stdout) if section not in stdout_tail
+    )
+    return f"exit {outcome.returncode}\n{excerpts}{_tails(outcome.stdout, outcome.stderr)}"
+
+
+def _excerpt(section: str) -> str:
+    """Return *section* as a description quotes it, ending a line, so whatever follows starts a line of its own.
+
+    A section longer than _FAILURE_SECTION_HEAD_CHARS keeps only that many of its
+    first chars, then a line saying it was cut there and how long it was. So a
+    section that holds hundreds of failures can neither crowd out the section
+    after it nor put megabytes into a lane's log.
+    """
+    if len(section) > _FAILURE_SECTION_HEAD_CHARS:
+        return (
+            f"{section[:_FAILURE_SECTION_HEAD_CHARS]}\n"
+            f"... this section is cut here, after the first {_FAILURE_SECTION_HEAD_CHARS} of its {len(section)} chars\n"
+        )
+    return section if section.endswith("\n") else f"{section}\n"
 
 
 class CommandTimedOut(Exception):
