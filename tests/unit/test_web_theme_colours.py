@@ -71,12 +71,6 @@ def _amber_role(name: str, classes: str, *sources: str) -> _AmberRole:
 
 _AMBER_ROLES = (
     _amber_role(
-        "the 'AI assistant not configured' warning banner",
-        "border-amber-300 bg-amber-50 text-amber-800 "
-        "dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300",
-        "templates/assistant/chat.html",
-    ),
-    _amber_role(
         "the progress bar of a run that has not completed",
         "bg-amber-500",
         "templates/simulate/partials/progress-tracker.html",
