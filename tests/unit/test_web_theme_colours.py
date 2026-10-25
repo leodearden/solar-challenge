@@ -84,11 +84,6 @@ _AMBER_ROLES = (
         "group-hover:text-amber-600 dark:group-hover:text-amber-400",
         "templates/dashboard.html",
     ),
-    _amber_role(
-        "the PV distribution card",
-        "bg-amber-50 dark:bg-amber-900/20 bg-amber-500",
-        "templates/simulate/fleet.html",
-    ),
 )
 
 
