@@ -145,21 +145,35 @@ def tailwind_role_palettes(section: Mapping[str, Any]) -> dict[str, str]:
     palette name the role's classes write, in section order.
 
     A JSON object value is a group of roles, each keyed by the group's key and its own joined by
-    a hyphen, at any depth, as Tailwind names a nested colour: the ``running`` role of the
-    ``status`` group is ``status-running``, applied as ``bg-status-running-100``. A value that is
-    neither a palette's name nor a group raises ValueError naming its dotted path, such as
-    ``tailwind.status.running``, as tailwind.config.js's refusal does. Only the build knows which
-    names are built-in Tailwind palettes."""
-    return dict(_role_palettes(section, ()))
+    a hyphen, at any depth, as tailwind.config.js names it: the ``running`` role of the
+    ``status`` group is ``status-running``, applied as ``bg-status-running-100``. Raises
+    ValueError naming dotted paths, such as ``tailwind.status.running``, as tailwind.config.js's
+    refusals do: for a value that is neither a palette's name nor a group, and for two roles
+    keyed alike, such as a ``status-running`` role beside the ``status`` group's ``running``.
+    Only the build knows which names are built-in Tailwind palettes."""
+    palettes: dict[str, str] = {}
+    paths: dict[str, str] = {}
+    for role, palette in _role_palettes(section, ()):
+        name, path = "-".join(role), ".".join(role)
+        if name in paths:
+            raise ValueError(
+                f"{THEME_TOKENS_KEY}: tailwind.{paths[name]} and tailwind.{path} both define the "
+                f"Tailwind colour {name}, so one of their palettes would silently replace the other"
+            )
+        palettes[name] = palette
+        paths[name] = path
+    return palettes
 
 
-def _role_palettes(section: Mapping[str, Any], group: tuple[str, ...]) -> Iterator[tuple[str, str]]:
+def _role_palettes(
+    section: Mapping[str, Any], group: tuple[str, ...]
+) -> Iterator[tuple[tuple[str, ...], str]]:
     for key, value in section.items():
         role = (*group, key)
         if isinstance(value, Mapping):
             yield from _role_palettes(value, role)
         elif isinstance(value, str):
-            yield "-".join(role), value
+            yield role, value
         else:
             raise ValueError(
                 f"{THEME_TOKENS_KEY}: tailwind.{'.'.join(role)} names {json.dumps(value)}, which is "

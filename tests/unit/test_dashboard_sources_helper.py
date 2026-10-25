@@ -6,7 +6,8 @@ dashboard_applied_classes_by_source, so a source it skips or misreads goes unche
 every guard. tests/_dashboard_sources.py's templates and scripts are the files the content
 globs of tailwind.config.js select, so a glob it misreads or cannot expand leaves files
 Tailwind scans unchecked by every guard. The palettes guard reads the token file's tailwind
-roles through tailwind_role_palettes, so a role it skips or misnames goes unchecked.
+roles through tailwind_role_palettes, so a role it skips, misnames or lets another overwrite
+goes unchecked.
 """
 
 import json
@@ -175,3 +176,13 @@ def test_tailwind_role_palettes_refuse_a_value_neither_a_palette_name_nor_a_grou
 
     assert "tailwind.status.running" in str(refusal.value)
     assert json.dumps(value) in str(refusal.value)
+
+
+def test_tailwind_role_palettes_refuse_two_roles_keyed_alike_naming_both_dotted_paths() -> None:
+    """A status-running role beside the status group's running role: Tailwind would name both
+    colours status-running, so one palette would silently replace the other."""
+    with pytest.raises(ValueError) as refusal:
+        tailwind_role_palettes({"status-running": "green", "status": {"running": "amber"}})
+
+    assert "tailwind.status-running" in str(refusal.value)
+    assert "tailwind.status.running" in str(refusal.value)

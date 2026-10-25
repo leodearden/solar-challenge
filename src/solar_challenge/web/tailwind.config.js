@@ -12,15 +12,30 @@ function builtIn(role, name) {
   return palette;
 }
 
-// Each role's palette by key; an object value is a group, whose roles Tailwind names like bg-status-running-100.
+// Each role's key path and palette, in section order; an object value is a group, whose roles' paths start with its key.
 function roles(section, group) {
-  return Object.fromEntries(
-    Object.entries(section).map(([key, value]) => {
-      const role = group ? `${group}.${key}` : key;
-      const isGroup = typeof value === 'object' && value !== null && !Array.isArray(value);
-      return [key, isGroup ? roles(value, role) : builtIn(role, value)];
-    }),
-  );
+  return Object.entries(section).flatMap(([key, value]) => {
+    const path = [...group, key];
+    const isGroup = typeof value === 'object' && value !== null && !Array.isArray(value);
+    return isGroup ? roles(value, path) : [[path, builtIn(path.join('.'), value)]];
+  });
+}
+
+// Each role's palette under the name its classes write, its path joined by hyphens (bg-status-running-100); two roles of one name fail the build.
+function palettesByName(section) {
+  const paths = new Map();
+  const palettes = new Map();
+  for (const [path, palette] of roles(section, [])) {
+    const name = path.join('-');
+    if (paths.has(name)) {
+      throw new Error(
+        `static/src/theme-tokens.json: tailwind.${paths.get(name)} and tailwind.${path.join('.')} both define the Tailwind colour ${name}, so one of their palettes would silently replace the other`,
+      );
+    }
+    paths.set(name, path.join('.'));
+    palettes.set(name, palette);
+  }
+  return Object.fromEntries(palettes);
 }
 
 /** @type {import('tailwindcss').Config} */
@@ -32,7 +47,7 @@ module.exports = {
   ],
   theme: {
     extend: {
-      colors: roles(tokens.tailwind, ''),
+      colors: palettesByName(tokens.tailwind),
     },
   },
   plugins: [
