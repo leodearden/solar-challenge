@@ -11,9 +11,13 @@ dashboard then builds on the store. It refuses, exiting 1 with the refusal on st
 changing nothing, a store a newer solar-challenge wrote, a store holding a row version 1
 cannot keep, naming the row, a store whose tables version 1 cannot rebuild, naming the fault,
 and a store another dashboard holds, naming its lock file. Both commands refuse a database
-file that is not a database, naming it, and leave it as it is.
+file that is not a database, naming it, and leave it as it is. migrate brings the runs of a store
+at version 1 to the stored-run format too, reporting each value it drops that is not null and
+each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
+format version (B5).
 """
 
+import json
 import socket
 from pathlib import Path
 from typing import Any
@@ -28,7 +32,16 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
 from solar_challenge.web.storage import RunQuery, RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
-from tests._dashboard_databases import schema_of, write_database_a_newer_solar_challenge_wrote, write_pre_548_database
+from solar_challenge.web.stored_runs import StoredHomeRun
+from tests._dashboard_databases import (
+    schema_of,
+    write_database_a_newer_solar_challenge_wrote,
+    write_database_at_schema_version_1,
+    write_pre_548_database,
+)
+from tests._html_page import headings
+from tests._run_storage_layout import stored_run_dir
+from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_app import release_store_lock, run_storage_of
 
 
@@ -233,3 +246,69 @@ def test_web_migrate_releases_the_store_lock_once_it_has_migrated_the_store(lega
     assert _web(tmp_path, "migrate").exit_code == 0
 
     acquire_store_lock(legacy_store.parent).release()
+
+
+@pytest.fixture
+def legacy_run_ids(tmp_path: Path) -> dict[str, str]:
+    """The run id of each legacy stored-run fixture, by name, each installed in the store under tmp_path/.solar-challenge, which a solar-challenge at schema version 1 left."""
+    database = write_database_at_schema_version_1(_store_database(tmp_path))
+    return {
+        name: install_stored_run_fixture(name, Database(database), database.parent) for name in STORED_RUN_FIXTURES
+    }
+
+
+def _install_a_copy_editing_its_summary(tmp_path: Path, run_id: str, edit_summary: Any) -> str:
+    """Install a copy of the pre_469_home fixture as run *run_id* in the store under tmp_path/.solar-challenge, its summary.json edited by *edit_summary*; return *run_id*."""
+    database = _store_database(tmp_path)
+    install_stored_run_fixture("pre_469_home", Database(database), database.parent, run_id=run_id)
+    summary_path = stored_run_dir(RunStorage(Database(database), database.parent), run_id) / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    edit_summary(summary)
+    summary_path.write_text(json.dumps(summary, indent=2))
+    return run_id
+
+
+def _a_line_naming(text: str, *parts: str) -> bool:
+    """Whether a line of *text* names each of *parts*."""
+    return any(all(part in line for part in parts) for line in text.splitlines())
+
+
+def test_web_migrate_brings_the_runs_of_a_store_at_version_1_forward_reporting_each_value_dropped_and_each_run_left(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """The report names the versions and version 2's step, each value it drops that is not null, and each run it cannot migrate."""
+    retired = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    lacking = _install_a_copy_editing_its_summary(
+        tmp_path, "lacking-generation", lambda summary: summary.pop("total_generation_kwh")
+    )
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for named in [str(_store_database(tmp_path)), "schema version 1", str(SCHEMA_VERSION), MIGRATIONS[1].description]:
+        assert named in result.stdout, (named, result.stdout)
+    assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
+    assert _a_line_naming(result.stdout, lacking, "summary.json", "total_generation_kwh"), result.stdout
+
+
+def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads_it_with_no_grid_charge(
+    legacy_run_ids: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B5's second half: before `web migrate` its page flashes format_version; after, it answers 200."""
+    run_id = legacy_run_ids["pre_469_home"]
+    assert _web(tmp_path, "migrate").exit_code == 0
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    dashboard = create_app()
+    try:
+        response = dashboard.test_client().get(f"/results/{run_id}")
+        loaded = run_storage_of(dashboard).load_run(run_id)
+    finally:
+        release_store_lock(dashboard)
+
+    assert response.status_code == 200
+    assert headings(response.get_data(as_text=True))[0] == "Elm Street"
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.summary.total_grid_charge_kwh == 0.0

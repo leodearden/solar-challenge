@@ -13,7 +13,8 @@ Tests cover:
   charging included, loads equal to the one saved
 - A home run with each dispatch strategy loads equal to the one saved, with an
   equal hash; one stored before the strategies were variants of one union migrates,
-  then loads (tests/unit/test_web_run_document_steps.py)
+  then loads (tests/unit/test_web_run_document_steps.py), and once its store is
+  migrated its YAML export holds its variant (tests/unit/test_web_history.py)
 - Every saved config and summary is written as its dataclass field tree in JSON
 - Each column of a stored data.parquet, under the names runs on disk use, loads
   into its field

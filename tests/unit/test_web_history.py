@@ -33,16 +33,25 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
+from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
+from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
 
+from tests._dashboard_databases import write_database_at_schema_version_1
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import database_of, point_store_config_at_a_missing_directory
+from tests._web_app import (
+    build_test_app,
+    database_of,
+    database_path_in,
+    point_store_config_at_a_missing_directory,
+    release_store_lock,
+)
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -837,20 +846,37 @@ class TestExportAPI:
         assert load_fleet_config(path).homes == home_configs
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-    def test_export_of_a_run_stored_before_the_dispatch_union_is_refused_until_migrated(
-        self, app: Flask, client: FlaskClient, strategy: object
+    def test_export_of_a_run_stored_before_the_dispatch_union_answers_its_variant_once_migrated(
+        self, tmp_path: Path, strategy: object
     ) -> None:
         """Such a run stores all three strategy keys, the ones its strategy does not read null.
 
-        The strict reader refuses a key no field has, null or not, until `solar-challenge web
-        migrate` drops it from the store's runs.
+        The strict reader refuses a key no field has, null or not, so the run's row is migrated
+        first, as `solar-challenge web migrate` migrates a store at schema version 1, which drops
+        those keys.
         """
+        store = tmp_path / "store"
+        database = write_database_at_schema_version_1(database_path_in(store))
         stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
-        _insert_test_run(app, run_id="pre-union", config=stored)
+        with Database(database).transaction() as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status) VALUES (?, ?, ?, ?, ?, ?)",
+                ("pre-union", "Pre-union Run", "home", json.dumps(stored), summary_json(home_summary()), "completed"),
+            )
+        migrate_store(database, store)
 
-        response = client.get("/api/history/runs/pre-union/export/yaml")
+        app = build_test_app(store)
+        try:
+            response = app.test_client().get("/api/history/runs/pre-union/export/yaml")
+        finally:
+            release_store_lock(app)
 
-        assert response.status_code != 200
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        battery = home_config_for_run(path).battery_config
+        assert battery is not None
+        assert battery.dispatch_strategy == strategy
 
     def test_export_refuses_a_run_config_the_scenario_grammar_cannot_express(
         self, storage: RunStorage, client: FlaskClient

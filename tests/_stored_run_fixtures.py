@@ -29,8 +29,9 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": null}.
 
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
-and a copy of its run/ as that run's directory. The functions import the web package only when
-they are called, so importing this module needs no web extra.
+and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
+store can hold a copy of a fixture beside the fixture itself. The functions import the web
+package only when they are called, so importing this module needs no web extra.
 
 Usage::
 
@@ -38,6 +39,7 @@ Usage::
 
     for name in STORED_RUN_FIXTURES:
         run_id = install_stored_run_fixture(name, database, data_dir)
+    copy_id = install_stored_run_fixture("pre_469_home", database, data_dir, run_id="pre-469-copy")
 """
 
 from __future__ import annotations
@@ -78,12 +80,13 @@ def fixture_run_type(name: str) -> RunType:
     return one_of(_runs_row(name)["type"], RUN_TYPES, f"the type in {name}'s runs_row.json")
 
 
-def install_stored_run_fixture(name: str, database: Database, data_dir: Path) -> str:
-    """Put fixture *name* into the store of *database* and *data_dir*; return the id of its run.
+def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *, run_id: str | None = None) -> str:
+    """Put fixture *name* into the store of *database* and *data_dir* as the run *run_id*, the fixture's own id when None; return the run's id.
 
     The fixture's row is inserted into the store's runs table with SQL, as the old save wrote
-    it, and its run directory is copied to that run's directory under *data_dir*. Nothing is
-    migrated or checked: the store holds the run as the old solar-challenge left it.
+    it but for its id, and its run directory is copied to that run's directory under
+    *data_dir*. Nothing is migrated or checked: the store holds the run as the old
+    solar-challenge left it.
 
     Raises:
         ValueError: *name* is not one of STORED_RUN_FIXTURES.
@@ -94,13 +97,15 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path) ->
     from tests._run_storage_layout import stored_run_dir
 
     row = _runs_row(name)
+    if run_id is not None:
+        row["id"] = run_id
     columns = ", ".join(row)
     placeholders = ", ".join(f":{column}" for column in row)
     with database.transaction() as conn:
         conn.execute(f"INSERT INTO runs ({columns}) VALUES ({placeholders})", row)
-    run_id: str = row["id"]
-    shutil.copytree(stored_run_fixture_dir(name), stored_run_dir(RunStorage(database, data_dir), run_id))
-    return run_id
+    installed_id: str = row["id"]
+    shutil.copytree(stored_run_fixture_dir(name), stored_run_dir(RunStorage(database, data_dir), installed_id))
+    return installed_id
 
 
 def _fixture_dir(name: str) -> Path:
