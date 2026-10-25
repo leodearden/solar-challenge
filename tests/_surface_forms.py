@@ -881,7 +881,7 @@ _PARTIAL_BOUND_BY_MINOR = (
 def _refuse_partial_bound_as_method(
     cls: type, owner: type, name: str, constructor: object
 ) -> None:
-    """Raise TypeError naming *cls* and *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds as _bound_to binds it, is a functools.partial."""
+    """Raise TypeError naming *cls* and *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds through its type's __get__, is a functools.partial."""
     if isinstance(constructor, functools.partial):
         raise TypeError(
             f"{_label(cls)} is constructed through {_label(owner)}.{name}, "
@@ -1101,9 +1101,9 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
     get = getattr(type(descriptor), "__get__", None)
-    if get is None:
+    if get is None or isinstance(descriptor, functools.partial):
         return descriptor
     bound: object = get(descriptor, owner, type(owner))
     return bound
