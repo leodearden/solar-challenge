@@ -1,6 +1,7 @@
 """Contract tests of PVGIS's TMY for Bristol, as PvgisTmy returns it.
 
-Each test checks PVGIS's live response, fetched once for the module.
+Each test checks PVGIS's live response, fetched once for the module, and one also checks
+that the TMY committed under tests/fixtures/weather_cache is still that response.
 """
 
 import pytest
@@ -10,6 +11,7 @@ from pvlib.solarposition import get_solarposition
 
 from solar_challenge.location import Location
 from solar_challenge.weather import PvgisTmy
+from tests._committed_weather_cache import REWRITE_THE_COMMITTED_BRISTOL_TMY, committed_bristol_tmy
 
 
 BRISTOL = Location.bristol()
@@ -73,3 +75,16 @@ class TestPVGISTMY:
     def test_tmy_annual_ghi_matches_the_2005_2020_mean(self, bristol_tmy):
         """Bristol's TMY sums to PVGIS's 2005-2020 mean GHI; docs/tmy-irradiation-scaling.md has the figure."""
         assert bristol_tmy["ghi"].sum() / 1000 == pytest.approx(1069.5, rel=0.01)
+
+    def test_the_committed_bristol_tmy_equals_the_live_one(self, bristol_tmy):
+        """The TMY committed under tests/fixtures/weather_cache is PVGIS's live one, exactly, so the year the yield guard measures is the year PvgisTmy gives users."""
+        committed = committed_bristol_tmy()
+        try:
+            pd.testing.assert_frame_equal(bristol_tmy, committed, check_exact=True)
+        except AssertionError as difference:
+            raise AssertionError(
+                "the Bristol TMY committed under tests/fixtures/weather_cache is no longer PVGIS's live one, so the "
+                f"yield guard measures a year PvgisTmy no longer gives users. {REWRITE_THE_COMMITTED_BRISTOL_TMY}, "
+                "then run tests/integration/test_pv_performance_ratio.py, whose yield test names what moves with a "
+                f"new year, and amend the entry's provenance in docs/pv-cell-temperature.md §3\n{difference}"
+            ) from None
