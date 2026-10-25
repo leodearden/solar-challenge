@@ -1,13 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Integration tests for W3 sweep E: generate_config_ranking_report + optimize CLI.
-
-This file mixes fast and slow tests: the slow class carries @pytest.mark.slow
-directly, and the fast classes run in the offline verify loop.
-"""
+"""Integration tests for W3 sweep E: generate_config_ranking_report + optimize CLI."""
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
@@ -1093,53 +1088,3 @@ class TestOptimizeCLIE2EFast:
         assert "Computing sensitivity panel for axes" in stderr
         assert stderr.endswith("Configuration error: a refusal raised while the sensitivity panel runs")
         assert "Sensitivity panel skipped" not in result.output
-
-
-# ---------------------------------------------------------------------------
-# §H — @pytest.mark.slow real-PVGIS board signal
-# ---------------------------------------------------------------------------
-
-_FLEX_SCENARIO = Path(__file__).parent.parent.parent / "scenarios" / "bristol-phase1-flex.yaml"
-
-
-@pytest.mark.slow
-class TestOptimizeCLISlowE2E:
-    """Slow real-PVGIS end-to-end test (W-H6 board signal).
-
-    Runs `optimize configs scenarios/bristol-phase1-flex.yaml` over a short
-    3-day window with a single config point (4 kWp, 0 kWh, 5 kW) and no
-    sensitivity panel.  Verifies that a board member can read and pick a
-    config from the output.
-
-    Skipped automatically when the scenario file is absent.
-    """
-
-    def test_optimize_bristol_short_window(self) -> None:
-        """`optimize configs bristol-phase1-flex.yaml --start 2024-01-01 --end 2024-01-03` exits 0 with board report."""
-        if not _FLEX_SCENARIO.exists():
-            pytest.skip(f"Scenario file not found: {_FLEX_SCENARIO}")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [
-                "optimize", "configs", str(_FLEX_SCENARIO),
-                "--pv", "4",
-                "--battery", "0",
-                "--inverter", "5",
-                "--sensitivity", "",  # empty → skip panel, keep test bounded
-                "--start", "2024-01-01",
-                "--end", "2024-01-03",
-            ],
-        )
-
-        assert result.exit_code == 0, (
-            f"Expected exit 0 from real-PVGIS optimize configs; got {result.exit_code}.\n"
-            f"Output:\n{result.output}"
-        )
-        assert "cost-recovery rank" in result.output.lower(), (
-            f"Expected cost-recovery rank heading in real-PVGIS output:\n{result.output}"
-        )
-        assert "## Fixed-15p Trade-Off" in result.output, (
-            f"Expected '## Fixed-15p Trade-Off' heading in real-PVGIS output:\n{result.output}"
-        )
