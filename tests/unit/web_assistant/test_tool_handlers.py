@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import NonCallableMagicMock
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -29,11 +30,13 @@ from solar_challenge.web.assistant import (
 from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.schema import open_database
+from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import fleet_summary, home_summary
+from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run
 from tests.unit.web_assistant._fakes import run_storage_over, seed_run
@@ -1021,8 +1024,16 @@ class TestRunFleetSimulation:
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
+_REAL_JOB_DAYS = ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1)
+bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestRunHomeSimulationWithRealJobManager:
-    """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it."""
+    """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it.
+
+    Its one day is the clear June day on DAYS_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
+    """
 
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
         """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
@@ -1035,7 +1046,7 @@ class TestRunHomeSimulationWithRealJobManager:
                 "battery_kwh": 0,
                 "occupants": 3,
                 "location": "bristol",
-                "days": 1,
+                "days": _REAL_JOB_DAYS.count,
             },
             job_manager,
             _results_url_for_test,
