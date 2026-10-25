@@ -7,6 +7,8 @@ Provides RunStorage class for saving and loading simulation results with:
 
 Storage structure:
   {data_dir}/runs/{run_id}/   # the run's documents, as stored_runs lays them out for its kind
+
+A save writes the run's documents, then its format.json, then its runs row.
 """
 
 import json

@@ -6,7 +6,10 @@ SummaryStatistics; and data.parquet, the time series of its SimulationResults. A
 run's holds config.json, its FleetRunConfig: each home's HomeConfig in the fleet's order
 with their count; summary.json, its FleetSummary; and homes/, each home's time series and
 summary as home_{i}.parquet and home_{i}_summary.json. Each config and summary is its
-dataclass's field tree in JSON.
+dataclass's field tree in JSON. Every save writes the documents, each to a temporary file then
+moved into place, and last format.json, {"format_version": RUN_FORMAT_VERSION}, so a directory
+without it holds a run saved before runs carried a format version, or a save that did not
+finish. A run is read only after its format.json names RUN_FORMAT_VERSION.
 
 A document is read strictly, as StoredDocument.read reads it: each JSON value must be one
 its field's annotation can be, and the dataclass built from them must accept them. A key
@@ -47,6 +50,7 @@ retired field's old key must keep v2 from dropping it.
 
 import functools
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from pathlib import Path
@@ -567,28 +571,18 @@ class StoredHomeRun:
         return _serialize_dataclass(self.summary)
 
     def write(self, run_dir: Path, config_document: dict[str, Any], summary_document: dict[str, Any]) -> None:
-        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, and data.parquet.
+        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, data.parquet, and last format.json.
 
         The two documents are the run's config_document() and summary_document(), which its
-        save builds once for these files and its runs row alike.
+        save builds once for these files and its runs row alike. An earlier save's format.json
+        is removed first, so the directory holds one only once this save has finished.
         """
-        # Create run directory
         run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write config to JSON
-        config_path = run_dir / "config.json"
-        with config_path.open("w") as f:
-            json.dump(config_document, f, indent=2)
-
-        # Write summary to JSON
-        summary_path = run_dir / "summary.json"
-        with summary_path.open("w") as f:
-            json.dump(summary_document, f, indent=2)
-
-        # Save time series DataFrame to parquet
-        df = self.results.to_dataframe()
-        parquet_path = run_dir / "data.parquet"
-        df.to_parquet(parquet_path, engine="pyarrow")
+        (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
+        _write_json(run_dir / _CONFIG_DOCUMENT, config_document)
+        _write_json(run_dir / _SUMMARY_DOCUMENT, summary_document)
+        self.results.to_dataframe().to_parquet(run_dir / "data.parquet", engine="pyarrow")
+        _write_format_marker(run_dir, RUN_FORMAT_VERSION)
 
     def export_frame(self) -> pd.DataFrame:
         """The run's time series, as its CSV export holds them: one column per series of its results."""
@@ -623,37 +617,23 @@ class StoredFleetRun:
         return _serialize_dataclass(self.summary)
 
     def write(self, run_dir: Path, config_document: dict[str, Any], summary_document: dict[str, Any]) -> None:
-        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, and in homes/ each home's time series and summary.
+        """Write the run into *run_dir*, creating it if need be: *config_document* as config.json, *summary_document* as summary.json, in homes/ each home's time series and summary, and last format.json.
 
         The two documents are the run's config_document() and summary_document(), which its
-        save builds once for these files and its runs row alike.
+        save builds once for these files and its runs row alike. An earlier save's format.json
+        is removed first, so the directory holds one only once this save has finished.
         """
-        # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
         (run_dir / _HOMES_DIR).mkdir(exist_ok=True)
-
-        # Save fleet config (list of HomeConfigs) to JSON
-        config_path = run_dir / "config.json"
-        with config_path.open("w") as f:
-            json.dump(config_document, f, indent=2)
-
-        # Save fleet summary to JSON
-        summary_path = run_dir / "summary.json"
-        with summary_path.open("w") as f:
-            json.dump(summary_document, f, indent=2)
-
-        # Save per-home results to parquet files in homes/ subdirectory
-        for i, (home_result, home_summary) in enumerate(zip(self.fleet_results.per_home_results, self.home_summaries, strict=True)):
-            # Save time series data
-            df = home_result.to_dataframe()
-            parquet_path = run_dir / _home_time_series(i)
-            df.to_parquet(parquet_path, engine="pyarrow")
-
-            # Save per-home summary
-            home_summary_dict = _serialize_dataclass(home_summary)
-            home_summary_path = run_dir / _home_summary(i)
-            with home_summary_path.open("w") as f:
-                json.dump(home_summary_dict, f, indent=2)
+        _write_json(run_dir / _CONFIG_DOCUMENT, config_document)
+        _write_json(run_dir / _SUMMARY_DOCUMENT, summary_document)
+        for index, (home_result, home_summary) in enumerate(
+            zip(self.fleet_results.per_home_results, self.home_summaries, strict=True)
+        ):
+            home_result.to_dataframe().to_parquet(run_dir / _home_time_series(index), engine="pyarrow")
+            _write_json(run_dir / _home_summary(index), _serialize_dataclass(home_summary))
+        _write_format_marker(run_dir, RUN_FORMAT_VERSION)
 
     def export_frame(self) -> pd.DataFrame:
         """The fleet's total time series, as its CSV export holds them: FleetResults.to_aggregate_dataframe, the sum across its homes."""
@@ -678,6 +658,54 @@ def _home_summary(index: int) -> str:
 
 _CONFIG_DOCUMENT = "config.json"
 _SUMMARY_DOCUMENT = "summary.json"
+_FORMAT_DOCUMENT = "format.json"
+
+
+@dataclass(frozen=True)
+class _FormatMarker:
+    """A run's format.json: the version of the format its other documents are in."""
+
+    format_version: int
+
+
+_FORMAT_VERSION_FIELD = fields(_FormatMarker)[0].name
+
+_NO_FORMAT_VERSION = (
+    "is missing: the run was saved before stored runs carried a format version, or its save did not finish. "
+    "`solar-challenge web migrate` migrates a store's runs, and reports each it cannot"
+)
+
+
+def _check_format_version(run_dir: Path, run_id: str) -> None:
+    """Check that the format.json of run *run_id* in *run_dir* names RUN_FORMAT_VERSION, the format this code reads.
+
+    Raises:
+        StoredRunUnreadable: format.json is missing, is not JSON, is not a _FormatMarker's field
+            tree as StoredDocument.read refuses it, or names another version, naming both.
+    """
+    if not (run_dir / _FORMAT_DOCUMENT).is_file():
+        raise StoredRunUnreadable(run_id, _FORMAT_DOCUMENT, _FORMAT_VERSION_FIELD, _NO_FORMAT_VERSION)
+    found = _json_document(run_dir, run_id, _FORMAT_DOCUMENT).read(_FormatMarker).format_version
+    if found != RUN_FORMAT_VERSION:
+        remedy = "run `solar-challenge web migrate`" if found < RUN_FORMAT_VERSION else "a newer solar-challenge saved it"
+        raise StoredRunUnreadable(
+            run_id,
+            _FORMAT_DOCUMENT,
+            _FORMAT_VERSION_FIELD,
+            f"is {found!r}, not {RUN_FORMAT_VERSION}, the format version this solar-challenge reads: {remedy}",
+        )
+
+
+def _write_json(path: Path, content: Any) -> None:
+    """Write *content* to *path* as JSON indented by 2, whole or not at all: to a temporary file beside it, then moved over it."""
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(json.dumps(content, indent=2))
+    os.replace(temporary, path)
+
+
+def _write_format_marker(run_dir: Path, format_version: int) -> None:
+    """Write *run_dir*'s format.json naming *format_version*, the format its other documents are in, which are written first."""
+    _write_json(run_dir / _FORMAT_DOCUMENT, _serialize_dataclass(_FormatMarker(format_version)))
 
 
 @dataclass(frozen=True)
@@ -783,11 +811,13 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
-    """The home run *run_id* that *run_dir* holds, read from the documents StoredHomeRun.write writes.
+    """The home run *run_id* that *run_dir* holds, read from the documents StoredHomeRun.write writes, its format.json first.
 
     Raises:
-        StoredRunUnreadable: A document is missing or cannot be read, naming it.
+        StoredRunUnreadable: Its format.json does not name RUN_FORMAT_VERSION, or a document is
+            missing or cannot be read, naming it.
     """
+    _check_format_version(run_dir, run_id)
     documents = _home_run_documents(run_dir, run_id)
     config = documents.config.read(HomeConfig)
     summary = documents.summary.read(SummaryStatistics)
@@ -796,11 +826,13 @@ def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
 
 
 def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
-    """The fleet run *run_id* that *run_dir* holds, read from the documents StoredFleetRun.write writes.
+    """The fleet run *run_id* that *run_dir* holds, read from the documents StoredFleetRun.write writes, its format.json first.
 
     Raises:
-        StoredRunUnreadable: A document is missing or cannot be read, naming it.
+        StoredRunUnreadable: Its format.json does not name RUN_FORMAT_VERSION, or a document is
+            missing or cannot be read, naming it.
     """
+    _check_format_version(run_dir, run_id)
     documents = _fleet_run_documents(run_dir, run_id)
     config = documents.config.read(FleetRunConfig)
     summary = documents.summary.read(FleetSummary)
