@@ -22,8 +22,10 @@ A step may also carry a run-document step of the stored-run format (stored_runs.
 the step of the same version, as version 2 carries the first: migrate_store brings every stored
 run's files forward by it before the step's transaction, and the runs rows' copies inside it.
 Each run-document step is carried by the step of its version, so the format version is never
-past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs in the current
-format or runs its migration reported it could not migrate.
+past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs whose documents
+are in the current format or runs its migration reported it could not migrate. A run's time
+series have no format version, and migration reads none of them, as migrate_stored_run_files
+says.
 """
 
 import sqlite3
@@ -102,12 +104,12 @@ class MigrationStep:
 
 
 class MigrationRefused(Exception):
-    """A migration step that cannot run on a store, as a constraint it adds refuses a row or a table is not one it can rebuild; the message names the store, the step's version, the version the store stays at, and the fault.
+    """A migration step that cannot run on a store, as a constraint it adds refuses a row, a table is not one it can rebuild, or a stored run's file cannot be written; the message names the store, the step's version, the version the store stays at, and the fault.
 
     It is not a ValueError: no request causes it, as SchemaVersionMismatch is not one.
     """
 
-    def __init__(self, path: Path, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error) -> None:
+    def __init__(self, path: Path, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error | OSError) -> None:
         super().__init__(
             f"{path} cannot be migrated to schema version {step.version}, so it stays at version "
             f"{step.version - 1}, and the step has changed nothing in it: {fault}"
@@ -262,23 +264,24 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     The store's version is read before anything is written. A file that holds no table is
     created as open_database creates a new store, at SCHEMA_VERSION, so no step is applied to
     it, and a store at SCHEMA_VERSION is left as it is. A step carrying a run-document step
-    first brings each stored run's files forward by it, as migrate_stored_run_files does, which
-    can be run again should the step then fail. Each step is then applied in a transaction of
-    its own, which writes the step's database part, brings each runs row's documents forward
-    by its run-document step, and records the step's version as the store's user_version
-    together: a step that fails leaves the store at the version before it, as the steps before
-    it left it. A run whose documents a run-document step cannot bring forward is left as it
-    was and reported, and the migration goes on. Every connection is opened through
-    Database.connect().
+    first brings each stored run's files forward by it, as migrate_stored_run_files does. Each
+    step is then applied in a transaction of its own, which writes the step's database part,
+    brings each runs row's documents forward by its run-document step, and records the step's
+    version as the store's user_version together: a step that fails leaves the store at the
+    version before it, as the steps before it left it. The run files it brought forward before
+    it failed stay so: a migration run again brings them forward again, which changes nothing
+    in them, and so reports none of the values the failed step dropped from them. A run whose
+    documents a run-document step cannot bring forward is left as it was and reported, and the
+    migration goes on. Every connection is opened through Database.connect().
 
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
             solar-challenge wrote; nothing is written to it.
         StoreUnreadable: The file cannot be read as a database; nothing is written to it.
-        MigrationRefused: A step's database part fails, the cause: a constraint the step adds
-            refuses a row (RowRefused), or a table is not one it can rebuild (ValueError or
-            sqlite3.Error). The step has changed nothing, so the store stays at the version
-            before it.
+        MigrationRefused: A step fails, the cause: a constraint the step adds refuses a row
+            (RowRefused), a table is not one it can rebuild (ValueError or sqlite3.Error), or
+            a stored run's file cannot be written (OSError). The step's transaction has changed
+            nothing, so the store stays at the version before it.
         sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
@@ -290,7 +293,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     for step in pending:
         try:
             outcome += _apply_step(database, data_dir, step)
-        except (RowRefused, ValueError, sqlite3.Error) as fault:
+        except (RowRefused, ValueError, sqlite3.Error, OSError) as fault:
             raise MigrationRefused(database_path, step, fault) from fault
     return MigrationReport(
         database_path,

@@ -18,9 +18,10 @@ cannot be (an object for a dataclass, an array for a sequence, a number but no b
 number, null only for an Optional field, one of a Literal's values), an unknown union tag,
 or a dataclass that refuses its values is refused with a StoredRunUnreadable naming the
 run, the document, the field's dotted path and the reason. A missing field that has a
-default takes it. Non-JSON text, a missing document and a time series that cannot be read
-are refused the same way. StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the
-boundary answers 400, while a stored run that cannot be read is answered 409 or flashed.
+default takes it. Non-JSON text, a document that is missing or cannot be read, and a time
+series that cannot be read are refused the same way. StoredRunUnreadable is not a ValueError:
+a request's bad value is a ValueError the boundary answers 400, while a stored run that
+cannot be read is answered 409 or flashed.
 
 StoredHomeRun and StoredFleetRun are the runs as their directories store them: each
 writes its documents and answers its run's CSV export. RunType names the types of run,
@@ -705,10 +706,19 @@ def _check_format_version(run_dir: Path, run_id: str) -> None:
 
 
 def _write_json(path: Path, content: Any) -> None:
-    """Write *content* to *path* as JSON indented by 2, whole or not at all: to a temporary file beside it, then moved over it."""
+    """Write *content* to *path* as JSON indented by 2, whole or not at all: to a temporary file beside it, then moved over it.
+
+    A write that fails leaves *path* as it was and no temporary file.
+
+    Raises:
+        OSError: The file cannot be written, e.g. on a full disk.
+    """
     temporary = path.with_name(f"{path.name}.tmp")
-    temporary.write_text(json.dumps(content, indent=2))
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(json.dumps(content, indent=2))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_format_marker(run_dir: Path, format_version: int) -> None:
@@ -799,12 +809,15 @@ def _json_document(run_dir: Path, run_id: str, name: str) -> StoredDocument:
     """The JSON document *name* of run *run_id*, read from its file in *run_dir*.
 
     Raises:
-        StoredRunUnreadable: The file is missing, or its text is not JSON; the field is None.
+        StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions, the
+            error being the cause, or its text is not JSON; the field is None.
     """
     try:
         text = (run_dir / name).read_bytes()
     except FileNotFoundError as missing:
         raise StoredRunUnreadable(run_id, name, None, "is missing") from missing
+    except OSError as unreadable:
+        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
     return StoredDocument.decoded(run_id, name, text)
 
 
@@ -812,8 +825,9 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
     """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
 
     Raises:
-        StoredRunUnreadable: The file is missing, or is not a parquet of a SimulationResults'
-            columns, the reader's refusal being the cause; the field is None.
+        StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions or a
+            damaged page, or is not a parquet of a SimulationResults' columns, the error being the
+            cause; the field is None.
     """
     path = run_dir / name
     if not path.is_file():
@@ -822,6 +836,8 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
         return SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
     except ValueError as refusal:
         raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
+    except OSError as unreadable:
+        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
@@ -1105,6 +1121,10 @@ def write_run_documents(run_dir: Path, documents: Sequence[StoredDocument], form
 
     Each document's name is its file's path in *run_dir*, as read_run_documents names it, and
     each file is written whole or not at all, to a temporary file then moved over it.
+
+    Raises:
+        OSError: A file cannot be written, e.g. on a full disk; each document before it has
+            been written, and format.json has not.
     """
     for document in documents:
         _write_json(run_dir / document.name, document.content)

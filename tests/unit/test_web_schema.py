@@ -22,9 +22,11 @@ migrate_store brings each run of a store at version 1, the legacy fixtures of
 tests/_stored_run_fixtures among them, to the stored-run format, in its files and its runs row
 alike, so each then loads (D-S19-5). It rewrites only the documents the step changes, then
 writes the run's format.json, and reports each value it drops that is not null. A run whose
-documents it cannot migrate is left as it was and reported by id, document and field, and the
-rest of the store migrates. Version 1 names a legacy run after its home as the format reads the
-run's config once migrated.
+documents it cannot migrate, or cannot read, is left as it was and reported by id, document and
+field, and the rest of the store migrates. A step that cannot write a run's file, or whose
+transaction fails once it has brought the run files forward, is refused, leaving the database
+at the version before it, and the migration run again once the fault is gone completes it.
+Version 1 names a legacy run after its home as the format reads the run's config once migrated.
 """
 
 import importlib.util
@@ -814,6 +816,118 @@ def test_migrate_store_reports_a_run_of_no_type_once_as_unmigrated_naming_its_ty
     assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [(run_id, "runs.type", None)]
     assert _files_of(_run_dir(store_at_version_1, run_id)) == files_before
     assert _runs_rows(store_at_version_1)[run_id] == row_before
+
+
+def _put_a_directory_in_place_of(path: Path) -> None:
+    """Put a directory where the file at *path* is, or is to be written: no user can read or write it as a file, whereas a file's permissions do not bind a root user."""
+    path.unlink(missing_ok=True)
+    path.mkdir()
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_reports_a_run_whose_document_cannot_be_read_as_unmigrated_and_migrates_every_other_run(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of a run's summary.json stands in for a document that cannot be read, e.g. for its permissions."""
+    unreadable = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-summary"
+    )
+    run_dir = _run_dir(store_at_version_1, unreadable)
+    _put_a_directory_in_place_of(run_dir / "summary.json")
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [
+        (unreadable, "summary.json", None)
+    ]
+    assert "is unreadable" in report.unmigrated_runs[0].reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_again_once_it_can_migrates_the_store(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of the legacy fleet run's format.json stands in for a file a step cannot write, e.g. on a full disk.
+
+    The step stops there, leaving the database at version 1 and no temporary file in the run's
+    directory; the runs it brought forward before the fault are brought forward again.
+    """
+    fleet_dir = _run_dir(store_at_version_1, legacy_run_ids["legacy_fleet"])
+    _put_a_directory_in_place_of(fleet_dir / "format.json")
+    fleet_files_before, rows_before = _files_of(fleet_dir), _runs_rows(store_at_version_1)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[1])
+    assert isinstance(refused.value.__cause__, OSError)
+    message = str(refused.value)
+    for named in [str(store_at_version_1), "schema version 2", "stays at version 1", str(fleet_dir / "format.json")]:
+        assert named in message, (named, message)
+    assert _user_version(store_at_version_1) == 1
+    assert _runs_rows(store_at_version_1) == rows_before
+    assert _files_of(fleet_dir) == fleet_files_before
+
+    (fleet_dir / "format.json").rmdir()
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1, from_version=1, to_version=SCHEMA_VERSION, applied_steps=MIGRATIONS[1:]
+    )
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+@_NEEDS_PYARROW
+def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_forward_migrates_the_store_when_run_again(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A trigger refusing each update of a runs row fails version 2's transaction, once its run-file part has given every run its format.json.
+
+    Run again once the trigger is dropped, the migration brings those files forward again,
+    changing nothing in them, and brings the runs rows forward.
+    """
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute(
+            "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
+        )
+    rows_before = _runs_rows(store_at_version_1)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "no run may be updated" in str(refused.value)
+    assert _user_version(store_at_version_1) == 1
+    assert _runs_rows(store_at_version_1) == rows_before
+    files_brought_forward = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
+    markers = [json.loads(files["format.json"]) for files in files_brought_forward.values()]
+    assert markers == [{"format_version": RUN_FORMAT_VERSION}] * len(legacy_run_ids)
+
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("DROP TRIGGER refuse_run_updates")
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1, from_version=1, to_version=SCHEMA_VERSION, applied_steps=MIGRATIONS[1:]
+    )
+    assert {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()} == (
+        files_brought_forward
+    )
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+    record = storage.run_record(legacy_run_ids["pre_786_dispatch_home"])
+    assert record is not None
+    [config] = record.home_configs() or ()
+    assert config.battery_config is not None
+    assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
 @_NEEDS_PYARROW

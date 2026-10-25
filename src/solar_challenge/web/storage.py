@@ -320,14 +320,19 @@ def migrate_stored_run_files(database: Database, data_dir: Path, step: RunDocume
     """Bring the files of each run the runs table of *database* records forward by *step*, the run-file part of the schema step carrying it.
 
     A run with no directory under *data_dir* is skipped, and so is a directory no row records.
-    Each run's documents are read as its kind lays them out and brought forward as
+    Each run's JSON documents are read as its kind lays them out and brought forward as
     step_run_documents brings them; then only the documents the step changed are rewritten, and
-    format.json naming step.version last. A run whose documents cannot be brought forward, or
-    whose row has no type, is left as it was and reported as unmigrated. Its writes are
-    idempotent, so a migration stopped part way through runs again from the start.
+    format.json naming step.version last. A run whose documents cannot be read or brought
+    forward, or whose row has no type, is left as it was and reported as unmigrated. A run's
+    time series are not read: they have no format version, so a run whose time series is
+    damaged is brought forward as any other is, and refused naming it when it is loaded. The
+    writes are idempotent, so a migration stopped part way through runs again from the start.
 
     Raises:
         sqlite3.Error: The runs table cannot be read; nothing has been written.
+        OSError: A run's file cannot be written, e.g. on a full disk, or its directory cannot
+            be looked for; the runs before it have been brought forward, and so may some of its
+            documents have been, each whole.
     """
     with database.transaction() as conn:
         rows = conn.execute("SELECT id, type FROM runs ORDER BY id").fetchall()

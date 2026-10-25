@@ -14,7 +14,8 @@ and a store another dashboard holds, naming its lock file. Both commands refuse 
 file that is not a database, naming it, and leave it as it is. migrate brings the runs of a store
 at version 1 to the stored-run format too, reporting each value it drops that is not null and
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
-format version (B5).
+format version (B5). It refuses a step that cannot write a run's file, exiting 1 with the
+refusal naming the step and the fault.
 """
 
 import json
@@ -291,6 +292,23 @@ def test_web_migrate_brings_the_runs_of_a_store_at_version_1_forward_reporting_e
         assert named in result.stdout, (named, result.stdout)
     assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
     assert _a_line_naming(result.stdout, lacking, "summary.json", "total_generation_kwh"), result.stdout
+
+
+def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_step_and_the_fault(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """A directory in the place of a run's format.json stands in for a file the step cannot write, e.g. on a full disk."""
+    database = _store_database(tmp_path)
+    marker = stored_run_dir(RunStorage(Database(database), database.parent), legacy_run_ids["legacy_fleet"]) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database), "schema version 2", "stays at version 1", str(marker)]:
+        assert named in result.stderr, (named, result.stderr)
 
 
 def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads_it_with_no_grid_charge(

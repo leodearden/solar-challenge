@@ -272,6 +272,28 @@ def test_a_time_series_that_is_not_parquet_is_refused_naming_its_file(storage: R
     _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
 
 
+def test_a_time_series_whose_pages_are_damaged_is_refused_naming_its_file(storage: RunStorage) -> None:
+    """Its parquet magic and footer are intact, so the reader opens it and fails on its first page."""
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    stored = path.read_bytes()
+    path.write_bytes(stored[:4] + b"\xab" * 60 + stored[64:])
+
+    _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+
+def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
+    """A directory in the place of its summary.json stands in for a file its permissions keep from being read, which they do not for a root user."""
+    _store_home_run_of_every_shape(storage)
+    summary_path = stored_run_dir(storage, _HOME_RUN_ID) / "summary.json"
+    summary_path.unlink()
+    summary_path.mkdir()
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "summary.json", None)
+
+    assert isinstance(refusal.__cause__, OSError)
+
+
 def test_a_fleet_homes_config_value_of_a_wrong_type_is_refused_naming_the_home(storage: RunStorage) -> None:
     _store_fleet_run_of_two_homes(storage)
     _edit_document(
