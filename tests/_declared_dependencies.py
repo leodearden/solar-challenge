@@ -456,8 +456,7 @@ def _calls_on_namespace_with_pytest_plugins(node: ast.AST, namespace_names: froz
     one of its arguments, positional or a keyword's value, spells one, as `dict.update(globals(),
     ...)` does. No method is singled out: get or pop hand out the list as surely as update or
     setdefault write it. The |= of a namespace calls its __ior__, which updates it in place as
-    update does. A key held in a variable, or a mapping that does not spell the key, is not read,
-    as a variable key of a subscript is not.
+    update does.
     """
     match node:
         case ast.AugAssign(target=target, op=ast.BitOr(), value=value):
@@ -606,14 +605,14 @@ def _namespace_names(units: Sequence[_Unit], enclosing: frozenset[str]) -> froze
     The names are the same for every unit of the scope, wherever in it the binding is. A name the
     scope binds to anything else shadows the one around it. A name a def or class nested in the
     scope declares global or nonlocal and binds to a namespace holds one here too, and shadows
-    nothing.
+    nothing. What it leaves unread is listed in _unreadable_pytest_plugins_uses.
     """
     bindings = list(_bindings_in(units))
-    set_in_nested_scopes = list(_declared_name_bindings_in_nested_scopes(units))
+    declared_name_bindings = list(_declared_name_bindings_in_nested_scopes(units))
     names = enclosing - {name for name, _ in bindings}
     while True:
         holding = names | {
-            name for name, value in [*bindings, *set_in_nested_scopes] if _spells_namespace(value, names)
+            name for name, value in [*bindings, *declared_name_bindings] if _spells_namespace(value, names)
         }
         if holding == names:
             return names
@@ -648,10 +647,10 @@ def _units_with_their_namespace_names(
 
 def _unreadable_pytest_plugins_uses(tree: ast.Module, enclosing: frozenset[str]) -> Iterator[_Unit]:
     """Yield each unit of *tree*, in any scope, that can change pytest_plugins in a form
-    _pytest_plugins_assignments does not read: one that declares the name global, since a function
-    or class that does can rebind the attribute of the module, or one that holds a node that
+    _pytest_plugins_assignments does not read: one that declares the name global, since a def or
+    class that does can rebind the attribute of the module, and one with a node that any of
     _reads_or_deletes_pytest_plugins, _subscripts_namespace_with_pytest_plugins,
-    _calls_on_namespace_with_pytest_plugins, _runs_code_that_can_change_pytest_plugins or
+    _calls_on_namespace_with_pytest_plugins, _runs_code_that_can_change_pytest_plugins and
     _reaches_attribute_pytest_plugins reads.
 
     A read of the name in a function or class body counts even where the name is a local there,

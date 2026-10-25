@@ -1328,27 +1328,11 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     statement: str,
     clause: str,
 ) -> None:
-    """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
-    scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for, a with, an except clause, of a try* too, a capture
-    of a match pattern or a from-import, a star import among them; be the name of a def or class;
-    sit beside another target of a chained assignment, which aliases the list; or be declared
-    global in a function. It may also be read or deleted in any scope, function and class bodies
-    included, as a method call such as append, a subscript, an alias or a del does, and a read may
-    sit in a case guard. Or a namespace may be subscripted with the name, |='d with it, or be given
-    it in a call: of a method of the namespace such as update, __setitem__, setdefault or get,
-    which hands out the list as surely as the others write it, or of a function given the
-    namespace, such as dict.update. A namespace is the dict that globals(), locals() or vars()
-    returns, the __dict__ of an object such as sys.modules[__name__], also when reached through
-    getattr, the f_globals or f_locals of a frame, or the __globals__ of a function. It may also be
-    held in a name that an assignment, an annotated assignment or a walrus binds to one, directly
-    or through an alias; such a name counts in that scope, and in a scope nested there that does
-    not rebind it. Or an attribute pytest_plugins of an object may be reached directly, through
-    getattr, setattr or delattr, or by a from-import of that name, in any position or scope.
-
-    exec or eval may run a literal whose code binds or uses the name, as a module would, or does
-    not parse as one. They may also run other code in a namespace that may be the module's: the
-    caller's, when given no globals or None for them, or a namespace given for globals or locals.
+    """A pytest_plugins the detector cannot read fails it, wherever the module's code gives, binds
+    or changes it: a value that is no literal str, list or tuple of str; a binding of the name in a
+    form the contract does not follow; a read of the name, which can change the list it holds; an
+    entry of the module's namespace, or an attribute of the module, reached under the name,
+    directly, through a name that holds the namespace, or through exec or eval of code that does.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1481,18 +1465,14 @@ def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_pl
     tmp_path: Path,
     lines: tuple[str, ...],
 ) -> None:
-    """Only the name pytest_plugins, its entry in a namespace, the dict that globals(), locals() or
-    vars() returns, the __dict__ of an object, the f_globals or f_locals of a frame or the
-    __globals__ of a function, or an attribute of that name, reached directly, through getattr,
-    setattr or delattr, or by a from-import, reaches the attribute of the module. So does the name
-    given in a call on a namespace.
+    """What only resembles a use of pytest_plugins requires nothing and fails nothing: the same key
+    of another dict, another key of a namespace, a string that spells a use, hasattr, which only
+    tests for the attribute, and a key of something pytest never consults for the module's
+    attribute, such as a frame's f_builtins or a copy of a namespace.
 
-    The same key of another dict, or given to another dict's method, another key of a namespace,
-    or another key given to a namespace's method, a string that spells such a statement, and
-    hasattr, which only tests for the attribute, require nothing and fail nothing. Nor does a key
-    of a frame's f_builtins, which pytest, reading an attribute of the module, never consults, nor
-    one of a copy of a namespace, nor one of a name bound to a namespace only in another function
-    or rebound in this one.
+    A name holds a namespace only where Python resolves it to a binding that gives it one: a name
+    so bound in another scope, rebound in this one, bound in a class whose methods cannot see it,
+    or bound in a function without a global declaration does not.
 
     Code that names no pytest_plugins does not fail when exec runs it, wherever it runs. Nor does
     code it cannot read that exec runs in a namespace of its own, such as a copy of the module's,
