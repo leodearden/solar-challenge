@@ -1241,6 +1241,23 @@ def test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_call
                 named_classes(routine)
 
 
+def test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text() -> None:
+    class TextedCall:
+        __text_signature__ = "(rate)"
+
+        def __call__(self, rate: int) -> None: ...
+
+    class UnsignedTextedCall(TextedCall):
+        __signature__ = None
+
+    for called in (TextedCall(), UnsignedTextedCall()):
+        naming_it_that_object_and_that_text = rf"\bfunctools\.partial\(.*{re.escape(repr(called))}.*\b__text_signature__ '\(rate\)'"
+        with pytest.raises(TypeError, match=naming_it_that_object_and_that_text):
+            surface_form(functools.partial(called))
+        with pytest.raises(TypeError, match=naming_it_that_object_and_that_text):
+            named_classes(functools.partial(called))
+
+
 def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
     class Deleting(functools.partial):
         def __delete__(self, instance: object) -> None: ...
