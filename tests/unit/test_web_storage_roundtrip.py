@@ -12,8 +12,8 @@ Tests cover:
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
 - A home run with each dispatch strategy loads equal to the one saved, with an
-  equal hash, and one stored before the strategies were variants of one union is
-  refused naming the null key of another variant it holds, until migrated
+  equal hash; one stored before the strategies were variants of one union migrates,
+  then loads (tests/unit/test_web_run_document_steps.py)
 - Every saved config and summary is written as its dataclass field tree in JSON
 - Each column of a stored data.parquet, under the names runs on disk use, loads
   into its field
@@ -842,22 +842,16 @@ class TestRunStoredWithModuleSettings:
         assert loaded_config.pv_config != config.pv_config
 
 
-_PRE_DISPATCH_UNION_HOME_CONFIGS = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "stored_runs" / "pre_dispatch_union_home_configs.json"
-)
-"""A home run's stored config per dispatch strategy, as runs stored it before the strategies were
-variants of one union: all three strategy keys, the ones the strategy does not read null."""
-
 _STRATEGIES = (
     SelfConsumptionStrategyConfig(),
     TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
     PeakShavingStrategyConfig(import_limit_kw=3.0),
 )
-"""One example of each dispatch strategy, those of the stored configs above."""
+"""One example of each dispatch strategy."""
 
 
 def _dispatching_home(strategy: Any, name: str = "Dispatching home") -> HomeConfig:
-    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges to 0.8, as the stored configs above."""
+    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges to 0.8."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0),
@@ -891,28 +885,6 @@ class TestRunWithEachDispatchStrategy:
 
         assert loaded_config == config
         assert hash(loaded_config) == hash(config)
-
-    @pytest.mark.parametrize(
-        ("strategy", "other_variants_key"),
-        zip(_STRATEGIES, ("peak_hours", "import_limit_kw", "peak_hours"), strict=True),
-        ids=lambda value: getattr(value, "strategy_type", value),
-    )
-    def test_a_run_stored_before_the_union_is_refused_naming_the_first_key_of_another_variant(
-        self, storage: RunStorage, strategy: Any, other_variants_key: str
-    ) -> None:
-        """The three-key shape holds the keys the other variants read, null; `web migrate` drops them."""
-        tag = strategy.strategy_type
-        _save_dispatching_home_run(storage, "pre-union-001", strategy)
-        config_path = stored_run_dir(storage, "pre-union-001") / "config.json"
-        config_path.write_text(json.dumps(_read_json(_PRE_DISPATCH_UNION_HOME_CONFIGS)[tag], indent=2))
-
-        with pytest.raises(StoredRunUnreadable) as refused:
-            storage.load_run("pre-union-001")
-
-        assert (refused.value.document, refused.value.field) == (
-            "config.json",
-            f"battery_config.dispatch_strategy.{other_variants_key}",
-        )
 
 
 class TestCorruptedParquet:
