@@ -20,6 +20,7 @@ pytest.importorskip("flask")
 
 SERVER_WITH_BLOCKING_SIMULATIONS = """
 import functools
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -49,6 +50,7 @@ def submit_to_blocking_jobs(dashboard, **extra):
 
 
 request_started.connect(submit_to_blocking_jobs)
+signal.signal(signal.SIGINT, signal.default_int_handler)
 try:
     app(["web", "start", "--port", port])
 finally:
@@ -80,6 +82,15 @@ import time
 print("a line on stdout", flush=True)
 print("a line on stderr", file=sys.stderr, flush=True)
 time.sleep(600)
+"""
+
+RUNS_A_SCRIPT_WITH_SIGINT_IGNORED = """
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+os.execv(sys.executable, [sys.executable, "-c", *sys.argv[1:]])
 """
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -247,21 +258,25 @@ def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_
 
 
 def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
-    """Ctrl+C drops the jobs still waiting for a worker, so they never run."""
+    """Ctrl+C drops the jobs still waiting for a worker, so they never run, even when the server's launcher left SIGINT ignored."""
     started_dir = tmp_path / "started"
     started_dir.mkdir()
 
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0") as server:
+    with _server(
+        tmp_path, RUNS_A_SCRIPT_WITH_SIGINT_IGNORED, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0"
+    ) as server:
         port = _serving_port(server)
         for pv_kw in (1.0, 2.0, 3.0):
             _submit_home_job(port, pv_kw)
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
         server.process.send_signal(signal.SIGINT)
-        server.process.wait(timeout=_PATIENCE_SECS)
+        returncode = server.process.wait(timeout=_PATIENCE_SECS)
+
+        assert returncode >= 0, f"SIGINT killed the server (return code {returncode}) instead of raising KeyboardInterrupt in it"
         assert started() == ["1.0", "2.0"]
 
 
