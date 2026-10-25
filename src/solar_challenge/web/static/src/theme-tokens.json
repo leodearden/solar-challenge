@@ -1,6 +1,7 @@
 {
   "tailwind": {
     "primary": "amber",
+    "warning": "amber",
     "status": {
       "running": "amber",
       "completed": "green",
