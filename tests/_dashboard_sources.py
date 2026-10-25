@@ -5,7 +5,8 @@ the JavaScript files at the package root, and the theme token file
 static/src/theme-tokens.json, the one home of the dashboard's colours: tailwind.config.js
 reads its tailwind section and charts.py its chart section. tailwind_role_palettes reads
 the tailwind section's roles under the palette names their classes write, such as
-``status-running`` for the ``running`` role of the ``status`` group.
+``status-running`` for the ``running`` role of the ``status`` group, and
+tailwind_role_named_by tells which of those roles a class names.
 
 Each template, script, stylesheet, Python module, JavaScript file at the package root
 and the token file is keyed by its POSIX path relative to the package directory, such as
@@ -40,6 +41,7 @@ from tests._css_classes import (
     applied_classes_in_script,
     applied_classes_in_template,
     linked_stylesheets,
+    names_palette,
 )
 
 _WEB_DIR = Path(solar_challenge.web.__file__).parent
@@ -179,6 +181,15 @@ def _role_palettes(
                 f"{THEME_TOKENS_KEY}: tailwind.{'.'.join(role)} names {json.dumps(value)}, which is "
                 "neither a built-in Tailwind palette's name nor a group of roles"
             )
+
+
+def tailwind_role_named_by(css_class: str, roles: Iterable[str]) -> str | None:
+    """The role of *roles*, keyed as tailwind_role_palettes keys them, one of whose shades
+    *css_class* names, as tests/_css_classes.py's names_palette reads it; None if it names none.
+
+    A class that names shades of two roles, one name ending the other, names the longer:
+    ``bg-component-pv-50`` names component-pv, never a pv role."""
+    return max((role for role in roles if names_palette(css_class, role)), key=len, default=None)
 
 
 def tailwind_content_globs(config_source: str) -> list[str]:

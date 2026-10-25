@@ -7,7 +7,8 @@ every guard. tests/_dashboard_sources.py's templates and scripts are the files t
 globs of tailwind.config.js select, so a glob it misreads or cannot expand leaves files
 Tailwind scans unchecked by every guard. The palettes guard reads the token file's tailwind
 roles through tailwind_role_palettes, so a role it skips, misnames or lets another overwrite
-goes unchecked.
+goes unchecked, and the role each class applies through tailwind_role_named_by, so a role it
+credits with another's class passes unapplied.
 """
 
 import json
@@ -23,6 +24,7 @@ from tests._dashboard_sources import (
     dashboard_template_sources,
     files_by_content_glob,
     tailwind_content_globs,
+    tailwind_role_named_by,
     tailwind_role_palettes,
 )
 
@@ -186,3 +188,17 @@ def test_tailwind_role_palettes_refuse_two_roles_keyed_alike_naming_both_dotted_
 
     assert "tailwind.status-running" in str(refusal.value)
     assert "tailwind.status.running" in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("css_class", "role"),
+    [
+        pytest.param("bg-component-pv-50", "component-pv", id="the longer of two roles its name ends with"),
+        pytest.param("dark:text-pv-400", "pv", id="a role under a variant"),
+        pytest.param("bg-sky-500", None, id="no role"),
+    ],
+)
+def test_tailwind_role_named_by_reads_the_longest_role_a_class_names_a_shade_of(
+    css_class: str, role: str | None
+) -> None:
+    assert tailwind_role_named_by(css_class, ["pv", "component-pv"]) == role
