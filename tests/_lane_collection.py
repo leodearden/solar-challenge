@@ -121,16 +121,13 @@ def every_test_matching(
 ) -> tuple[CollectedTest, ...]:
     """Return every test under *project_root*'s tests/ that `-m` *mark_expression* selects, in collection order.
 
-    The lane-only suites' tests are among them. *pytest_invocation* starts
-    pytest, e.g. ("uv", "run", "--locked", "--all-extras", "pytest"), and names
-    each directory directly under tests/ and each test module there by its
-    explicit path, so tests/conftest.py's collect_ignore hides none of them.
-    tests/ itself is never named beside them: pytest drops a path argument that
-    an ancestor argument's ignore rules exclude, so it would collect each ignored
-    suite not at all. env_for is given the very command that runs, as
-    collect_lane_job's is, so an environment keyed on it, as
-    SharedUvEnvironments.for_command keys one, fits what runs. It asserts that
-    the collection ran; an expression that selects no test is no failure.
+    The lane-only suites' tests are among them. The command is
+    *pytest_invocation*, e.g. ("uv", "run", "--locked", "--all-extras", "pytest"),
+    followed by each directory directly under tests/ and each test module there;
+    tests/unit/test_lane_collection_helper.py::test_every_test_matching_reaches_each_directory_and_test_module_under_tests_a_collect_ignored_suite_included
+    says why it names them and never tests/. env_for is given that command, as
+    collect_lane_job's is. It asserts that the collection ran; an expression
+    that selects no test is no failure.
     """
     command = shlex.join(
         [*pytest_invocation, "-p", "no:cacheprovider", *_children_of_tests_that_may_hold_tests(project_root)]
