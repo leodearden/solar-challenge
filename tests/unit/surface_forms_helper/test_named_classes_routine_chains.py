@@ -293,6 +293,10 @@ def test_a_signature_a_link_carries_over_the_call_of_a_callable_object_that_wrap
     assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
 
 
+def test_a_signature_a_link_carries_over_an_object_that_is_neither_callable_nor_a_routine_names_the_classes_it_names_read_where_the_link_given_it_is_spelled() -> None:
+    assert named_classes(_typed(property(len))) == {decimal.Decimal}
+
+
 @pytest.mark.parametrize(
     "wrapped",
     [
@@ -444,3 +448,38 @@ def test_a_method_bound_to_a_callable_object_names_the_classes_its_call_method_n
     classes = named_classes(types.MethodType(recalling.Subcaller(), object()))
 
     assert classes == {fractions.Fraction}
+
+
+def test_a_routine_that_wraps_a_callable_object_whose_class_resolves_a_descriptor_as_call_names_the_classes_the_callable_that_descriptor_gives_the_object_names_read_where_that_callable_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "binding",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Rebinding:\n"
+        "    def __init__(self, rebound):\n"
+        "        self.rebound = rebound\n"
+        "\n"
+        "    def __get__(self, instance, owner):\n"
+        "        return self if instance is None else self.rebound\n"
+        "\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n",
+    )
+    rebinding = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rebinding",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from binding import Rebinding\n"
+        "\n"
+        "def rebound(share: 'Share') -> None: ...\n"
+        "\n"
+        "class Caller:\n"
+        "    __call__ = Rebinding(rebound)\n",
+    )
+
+    assert named_classes(functools.partial(rebinding.Caller())) == {decimal.Decimal}

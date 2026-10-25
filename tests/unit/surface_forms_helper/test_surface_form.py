@@ -1,19 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form, one per test.
 
-Wrapper, Ledger, GetterDeleter and CallableGetterDeleter are defined at module level,
-where their qualified names carry no '<locals>'.
+The classes above the first test are defined at module level, where their qualified
+names carry no '<locals>' and a parametrize decorator can reach them.
 """
 
 import collections.abc
+import contextlib
 import datetime
 import decimal
 import enum
 import fractions
 import functools
 import inspect
+import operator
 import pathlib
 import re
+import sqlite3
 import sys
 import types
 import typing
@@ -83,6 +86,47 @@ class CallableGetterDeleter(GetterDeleter):
     """A callable GetterDeleter."""
 
     def __call__(self, rate: int) -> str: ...
+
+
+class Tariff(enum.Enum):
+    """An Enum that EnumCall's __call__ wraps."""
+
+    PEAK = "peak"
+
+
+class StringSignedCall:
+    """A class whose __call__ carries a string as __signature__."""
+
+    def __call__(self, rate: int) -> None: ...
+
+    __call__.__signature__ = "(self, rate)"
+
+
+class EnumCall:
+    """A class whose __call__ wraps Tariff, as functools.wraps records one."""
+
+    @functools.wraps(Tariff)
+    def __call__(self, value: object) -> object: ...
+
+
+class GetterCall:
+    """A class whose __call__ is a CallableGetter, whose signature inspect cannot read."""
+
+    __call__ = CallableGetter()
+
+
+class TextedCall:
+    """A class whose instances carry a __text_signature__ beside the __call__ it defines."""
+
+    __text_signature__ = "(rate)"
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class UnsignedTextedCall(TextedCall):
+    """A TextedCall whose instances also carry a __signature__ of None."""
+
+    __signature__ = None
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -1115,6 +1159,159 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_t
     assert surface_form(functools.partial(Settable())) == "(rate: int) -> str"
     assert surface_form(functools.partial(Getless())) == "(rate: int) -> str"
     assert surface_form(functools.partial(signed)) == "(rate: int)"
+
+
+@pytest.mark.parametrize(
+    ("called", "refusing_its_call"),
+    [
+        pytest.param(
+            StringSignedCall(),
+            r" is read through .*\.StringSignedCall\.__call__\b.*'\(self, rate\)'.*\bbuiltins\.str\b",
+            id="string-signature",
+        ),
+        pytest.param(EnumCall(), r" wraps .*\.Tariff\b.*\benum\.Enum\b", id="enum"),
+        pytest.param(
+            GetterCall(),
+            r" is a functools\.partial that wraps <.*\.CallableGetter object\b"
+            r".*\bsurface_forms_helper\._fixtures\.CallableGetter\b",
+            id="callable-getter",
+        ),
+    ],
+)
+def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine(
+    called: object, refusing_its_call: str
+) -> None:
+    routine = functools.partial(called)
+    naming_the_routine = re.escape(repr(routine)) + refusing_its_call
+    with pytest.raises(TypeError, match=naming_the_routine):
+        surface_form(routine)
+    with pytest.raises(TypeError, match=naming_the_routine):
+        named_classes(routine)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_whose_call_wraps_a_refused_class_raises_the_type_error_naming_that_class() -> None:
+    class ZipCall:
+        @functools.wraps(zip)
+        def __call__(self, *iterables: object) -> object: ...
+
+    zipping = functools.partial(ZipCall())
+
+    naming_zip = r"\bbuiltins\.zip\b.*\bbuiltins\.zip\b"
+    with pytest.raises(TypeError, match=naming_zip):
+        surface_form(zipping)
+    with pytest.raises(TypeError, match=naming_zip):
+        named_classes(zipping)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial() -> None:
+    def settle(rate: int) -> None: ...
+
+    class PartialCall:
+        __call__ = functools.partial(settle)
+
+    class SignedPartialCall:
+        __call__ = functools.partial(settle)
+        __call__.__signature__ = inspect.Signature(
+            [
+                inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+                inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int),
+            ]
+        )
+
+    class NestedCall:
+        __call__ = PartialCall()
+
+    called = functools.partial(PartialCall())
+    calling = functools.wraps(PartialCall())(lambda rate: None)
+    nested = functools.partial(NestedCall())
+
+    naming_the_partial_and_that_call = r"\bfunctools\.partial\(.*\.PartialCall\.__call__\b.*\bfunctools\.partial\b.*\b3\.14\b"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=naming_the_partial_and_that_call):
+            surface_form(called)
+        with pytest.raises(TypeError, match=naming_the_partial_and_that_call):
+            named_classes(called)
+        with pytest.raises(TypeError, match=r"\.<lambda> is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(calling)
+        with pytest.raises(TypeError, match=r"\bfunctools\.partial\(.*\.SignedPartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(functools.partial(SignedPartialCall()))
+        with pytest.raises(TypeError, match=rf"{re.escape(repr(nested))} is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(nested)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:
+    def settle(rate: int) -> None: ...
+
+    def charge(owner: object, rate: int) -> None: ...
+
+    class StaticCall:
+        __call__ = staticmethod(functools.partial(settle))
+
+    class ClassCall:
+        __call__ = classmethod(charge)
+
+    class HalvedCall:
+        __call__ = functools.partialmethod(charge, rate=1)
+
+    class SignedCall:
+        __signature__ = inspect.Signature([inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=float)])
+        __text_signature__ = "(rate)"
+        __call__ = functools.partial(settle)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert surface_form(functools.partial(StaticCall())) == "(rate: int) -> None"
+        assert surface_form(functools.partial(ClassCall())) == "(rate: int) -> None"
+        assert surface_form(functools.partial(HalvedCall())) == "(*, rate: int = 1) -> None"
+        assert surface_form(functools.partial(SignedCall())) == "(share: float)"
+        assert named_classes(functools.partial(SignedCall())) == {float}
+
+
+def test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_callable_raises_a_type_error_naming_it_that_object_and_that_class() -> None:
+    getting = functools.partial(operator.itemgetter(1))
+
+    naming_it_that_object_and_that_class = (
+        r"\bfunctools\.partial\(operator\.itemgetter\(1\)\).*\boperator\.itemgetter\.__call__\b"
+        r".*\bdefined in C\b"
+    )
+    with pytest.raises(TypeError, match=naming_it_that_object_and_that_class):
+        surface_form(getting)
+    with pytest.raises(TypeError, match=naming_it_that_object_and_that_class):
+        named_classes(getting)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_overrides_a_call_a_base_defines_in_c_raises_a_type_error_naming_it_that_object_and_that_base() -> None:
+    class Connected(sqlite3.Connection):
+        def __call__(self, rate: int) -> None: ...
+
+    naming_it_that_object_and_that_base = (
+        r"\bfunctools\.partial\(.*\.Connected\b.*\bsqlite3\.Connection\.__call__\b.*\bdefined in C\b"
+    )
+    with contextlib.closing(Connected(":memory:")) as connection:
+        with pytest.raises(TypeError, match=naming_it_that_object_and_that_base):
+            surface_form(functools.partial(connection))
+        with pytest.raises(TypeError, match=naming_it_that_object_and_that_base):
+            named_classes(functools.partial(connection))
+
+
+@pytest.mark.parametrize(
+    "called",
+    [
+        pytest.param(TextedCall(), id="text-signature"),
+        pytest.param(UnsignedTextedCall(), id="beside-a-signature-of-none"),
+    ],
+)
+def test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text(
+    called: object,
+) -> None:
+    naming_it_that_object_and_that_text = (
+        rf"\bfunctools\.partial\(.*{re.escape(repr(called))}.*\b__text_signature__ '\(rate\)'"
+    )
+    with pytest.raises(TypeError, match=naming_it_that_object_and_that_text):
+        surface_form(functools.partial(called))
+    with pytest.raises(TypeError, match=naming_it_that_object_and_that_text):
+        named_classes(functools.partial(called))
 
 
 def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:

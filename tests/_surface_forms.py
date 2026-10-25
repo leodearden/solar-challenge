@@ -84,7 +84,15 @@ def surface_form(obj: object) -> str:
     that wraps a descriptor whose type defines __get__ and __delete__ but no __set__,
     which inspect reads as a builtin before 3.13 and as a data descriptor from 3.13,
     raises TypeError naming it, that descriptor and its type, unless the descriptor or
-    one of the routine's links carries a signature.
+    one of the routine's links carries a signature. inspect reads an object its class
+    makes callable, at which a routine's chain ends, through the __call__ that class
+    resolves, bound to the object, unless the object carries a signature; each refusal
+    here applies to that __call__ as to the routine, naming the routine. The routine
+    also raises TypeError naming it and the object if a class in the object's type's MRO
+    defines __call__ in C, or if the object carries a __text_signature__, either of
+    which inspect may read differently from Python 3.13; and naming that __call__ if it
+    is a functools.partial, which Python 3.14 binds to the object as a method and
+    earlier minors call without it.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
@@ -157,17 +165,17 @@ def named_classes(obj: object) -> set[type]:
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries, but a wrapper that is no partial and
     carries a __signature__ of None, where _annotations_author says its annotations were
-    spelled; an object its class makes callable,
-    where the __call__ that class resolves is, which may be a base's in another module;
-    and a class in the one sys.modules holds under the name its __module__ records. One
-    whose module another of the same name has since replaced in sys.modules raises
-    LookupError naming it and the module found there, and one whose module has since
-    left sys.modules, LookupError naming it and that module's name. Where inspect reads
-    no source for the module found, a class it does not bind under its qualified name,
-    as _json binds _json.Scanner as make_scanner, is checked only by the functions its
-    body compiled, which must carry that module's globals. A signature carried over a
-    callable that spells no annotation, such as one defined in C or a class constructed
-    by object or in C, is read where the def or lambda given it is defined.
+    spelled; an object its class makes callable, where the __call__ that class resolves
+    is once bound to the object, as inspect binds it, which may be a base's in another
+    module; and a class in the one sys.modules holds under the name its __module__
+    records. One whose module another of the same name has since replaced in sys.modules
+    raises LookupError naming it and the module found there, and one whose module has
+    since left sys.modules, LookupError naming it and that module's name. Where inspect
+    reads no source for the module found, a class it does not bind under its qualified
+    name, as _json binds _json.Scanner as make_scanner, is checked only by the functions
+    its body compiled, which must carry that module's globals. A signature carried over
+    a callable that spells no annotation, such as one defined in C or a class
+    constructed by object or in C, is read where the def or lambda given it is defined.
     A string in one given to a link that records no module, as a functools.partial
     records none, or to a function that wraps a link carrying a signature of its own,
     which the new one may copy, raises TypeError naming the link and the string. A
@@ -612,17 +620,62 @@ def _is_get_delete_descriptor(obj: object) -> bool:
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once each refusal below has passed the end of the chain inspect follows from it."""
-    link = _unreadable_link(obj)
-    if link is not None:
-        raise _unreadable_routine_error(_label(obj), obj, link)
-    end = _chain_end(obj, stop=_has_non_none_signature)
-    _refuse_wrapped_enum(obj, end)
-    _refuse_wrapped_get_delete_descriptor(obj, end)
-    _refuse_minor_dependent_signature(obj, end)
-    if inspect.isclass(end) and not _carries_inspect_signature(end):
-        _refuse_minor_dependent_constructor(end)
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_chain_without_a_portable_form has passed the chain inspect follows from it."""
+    _refuse_chain_without_a_portable_form(obj, obj)
     return inspect.signature(obj)
+
+
+def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None:
+    """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject* ends."""
+    unreadable = _unreadable_link(link)
+    if unreadable is not None:
+        raise _unreadable_routine_error(_label(subject), subject, unreadable)
+    end = _chain_end(link, stop=_has_non_none_signature)
+    _refuse_wrapped_enum(subject, end)
+    _refuse_wrapped_get_delete_descriptor(subject, end)
+    _refuse_minor_dependent_signature(subject, end)
+    if _carries_inspect_signature(end):
+        return
+    if inspect.isclass(end):
+        _refuse_minor_dependent_constructor(end)
+    elif callable(end) and not _is_routine(end):
+        _refuse_minor_dependent_call(subject, end)
+        _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
+
+
+def _call_as_read(obj: object) -> object:
+    """The __call__ inspect reads for *obj*, an object its class makes callable: the one its type resolves, as inspect.getattr_static finds it, bound to *obj* as _bound_to binds it."""
+    return _bound_to(inspect.getattr_static(type(obj), "__call__"), obj)
+
+
+def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
+    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
+    holders = list(_namespace_holders(type(obj).__mro__, "__call__"))
+    c_holder = next(
+        (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
+        None,
+    )
+    if c_holder is not None:
+        raise TypeError(
+            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, whose MRO holds "
+            f"{_label(c_holder)}.__call__, which is defined in C: from Python 3.13 inspect reads "
+            "a __text_signature__ such a class may give its instances in place of the __call__ "
+            "their type resolves, which it reads on 3.11 and 3.12: make the name private, wrap a "
+            "function defined with def, or set a __signature__ that is an inspect.Signature on "
+            "the routine or on what it wraps"
+        )
+    text_signature = getattr(obj, "__text_signature__", None)
+    if text_signature:
+        raise TypeError(
+            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, which carries the "
+            f"__text_signature__ {text_signature!r}: inspect reads it in place of the __call__ "
+            "its type resolves from Python 3.13, and reads that __call__ on 3.11 and 3.12: make "
+            "the name private, or set a __signature__ that is an inspect.Signature on the "
+            "routine or on what it wraps"
+        )
+    _refuse_partial_bound_as_method(
+        subject, "is read through", holders[0], "__call__", vars(holders[0])["__call__"]
+    )
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -799,14 +852,14 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     call = _metaclass_call(cls)
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
-        _refuse_partial_bound_as_method(cls, type(cls), "__call__", call)
+        _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_signature(cls, type(cls), "__call__", call)
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
-        _refuse_partial_bound_as_method(cls, holder, name, constructor)
+        _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_signature(cls, holder, name, constructor)
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
@@ -879,12 +932,16 @@ _PARTIAL_BOUND_BY_MINOR = (
 
 
 def _refuse_partial_bound_as_method(
-    cls: type, owner: type, name: str, constructor: object
+    subject: object,
+    verb: typing.Literal["is constructed through", "is read through"],
+    owner: type,
+    name: str,
+    method: object,
 ) -> None:
-    """Raise TypeError naming *cls* and *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds through its type's __get__, is a functools.partial."""
-    if isinstance(constructor, functools.partial):
+    """Raise TypeError saying *subject* *verb* *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *method*, the one *owner* holds as *name* that inspect reads for *subject* and binds through its type's __get__, is a functools.partial."""
+    if isinstance(method, functools.partial):
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(owner)}.{name}, "
+            f"{_label(subject)} {verb} {_label(owner)}.{name}, "
             f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
         )
 
@@ -958,15 +1015,16 @@ def _end_spelling_modules(
     """The module that spells each of *names* where *end*, the end of a chain, spells it; None if *end* spells no annotation.
 
     A class spells them where _constructor_spelling_modules says. An object its class
-    makes callable spells them as the __call__ its class resolves does, from which
-    inspect derives its signature. A routine of a kind in _C_ROUTINE_KINDS spells none;
-    any other, in the module whose globals the callable _annotations_author gives for
-    it carries.
+    makes callable spells them as the __call__ _call_as_read gives for it does, from
+    which inspect derives its signature; anything else that is no routine, such as a
+    property a wrapper records as __wrapped__, spells none. A routine of a kind in
+    _C_ROUTINE_KINDS spells none; any other, in the module whose globals the callable
+    _annotations_author gives for it carries.
     """
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
     if not _is_routine(end):
-        return _chain_spelling_modules(type(end).__call__, names)
+        return _chain_spelling_modules(_call_as_read(end), names) if callable(end) else None
     if isinstance(end, _C_ROUTINE_KINDS):
         return None
     return dict.fromkeys(names, _defining_module(_annotations_author(end)))
@@ -1101,7 +1159,7 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
