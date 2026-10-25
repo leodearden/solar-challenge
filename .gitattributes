@@ -1,0 +1,2 @@
+# A weather-cache entry is a year of PVGIS data, not text to review: git diff and numstat show it as binary.
+tests/fixtures/weather_cache/*.csv -diff
