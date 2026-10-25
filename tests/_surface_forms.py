@@ -631,12 +631,23 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
     if inspect.isclass(end):
         _refuse_minor_dependent_constructor(end)
     elif callable(end) and not _is_routine(end):
+        _refuse_minor_dependent_call(subject, end)
         _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
 
 
 def _call_as_read(obj: object) -> object:
     """The __call__ inspect reads for *obj*, an object its class makes callable: the one its type resolves, as inspect.getattr_static finds it, bound to *obj* as _bound_to binds it."""
     return _bound_to(inspect.getattr_static(type(obj), "__call__"), obj)
+
+
+def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
+    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: the __call__ its type resolves is a functools.partial."""
+    holders = list(_namespace_holders(type(obj).__mro__, "__call__"))
+    if isinstance(inspect.getattr_static(type(obj), "__call__"), functools.partial):
+        raise TypeError(
+            f"{_label(subject)} is read through {_label(holders[0])}.__call__, "
+            f"{_PARTIAL_BOUND_BY_MINOR}: define __call__ with def"
+        )
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
