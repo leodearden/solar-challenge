@@ -1021,13 +1021,8 @@ class TestRunFleetSimulation:
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
-@pytest.mark.slow
 class TestRunHomeSimulationWithRealJobManager:
-    """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
-
-    Excluded from the standard verify loop by the 'slow' marker.  Run with
-    ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
-    """
+    """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it."""
 
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
         """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
