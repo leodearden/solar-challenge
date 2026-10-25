@@ -731,8 +731,9 @@ figures reported for transparency; no test pins them to specific digits.
 
 Source: `tests/integration/test_cost_recovery_calibration.py::TestPhysicsReconciliationColumn::test_physics_path_reported`,
 on the fleet `tests/_fin_calibration.py::make_physics_column_scenario` builds.  The verify
-runs it offline, on the clear June days of `tests/_fin_calibration.py::PHYSICS_COLUMN_DAYS`,
-which its module seeds as Bristol's TMY (`tests/_seeded_tmy.py`).
+runs it offline, on the clear June days that `PHYSICS_COLUMN_DAYS` in
+`tests/_fin_calibration.py` names and that the test's module seeds as Bristol's TMY
+(`tests/_seeded_tmy.py`).
 
 The physics column solves 2 homes of 5.5 kWp + 5 kWh under the §7.2 [FIN] finance,
 simulated over three clear June days (2024-06-21 to 2024-06-23).  It hard-asserts only that

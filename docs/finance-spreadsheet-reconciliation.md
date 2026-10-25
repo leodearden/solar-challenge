@@ -121,7 +121,7 @@ The calibration test suite maintains two parallel columns:
 Only the **spreadsheet-input column** is hard-asserted (capex + covenant floor).
 The **physics column** runs offline in the verify, over a 2-home fleet and three
 clear June days that the test seeds as Bristol's TMY
-(`tests/_fin_calibration.py::PHYSICS_COLUMN_DAYS`), and is *reported* alongside the
+(`PHYSICS_COLUMN_DAYS` in `tests/_fin_calibration.py`), and is *reported* alongside the
 spreadsheet column as a smoke check of the physics path. It does **not** document
 the §2.3 annual self-consumption tension: three synthetic days cannot show an
 annual self-consumption fraction. The DSCR/IRR that report prints are degenerate in
