@@ -18,7 +18,7 @@
         <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
             <div
                 class="h-full rounded-full transition-all duration-500 ease-out"
-                :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
+                :class="status === 'completed' ? 'bg-status-completed-500' : 'bg-status-running-500'"
                 :style="'width: ' + Math.min(progress, 100) + '%'"
             ></div>
         </div>
