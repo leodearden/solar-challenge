@@ -641,7 +641,7 @@ def _call_as_read(obj: object) -> object:
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: a class in its type's MRO defines __call__ in C, or the __call__ its type resolves is a functools.partial."""
+    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
     holders = list(_namespace_holders(type(obj).__mro__, "__call__"))
     c_holder = next(
         (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
@@ -655,6 +655,15 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "their type resolves, which it reads on 3.11 and 3.12: make the name private, wrap a "
             "function defined with def, or set a __signature__ that is an inspect.Signature on "
             "the routine or on what it wraps"
+        )
+    text_signature = getattr(obj, "__text_signature__", None)
+    if text_signature:
+        raise TypeError(
+            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, which carries the "
+            f"__text_signature__ {text_signature!r}: inspect reads it in place of the __call__ "
+            "its type resolves from Python 3.13, and reads that __call__ on 3.11 and 3.12: make "
+            "the name private, or set a __signature__ that is an inspect.Signature on the "
+            "routine or on what it wraps"
         )
     if isinstance(inspect.getattr_static(type(obj), "__call__"), functools.partial):
         raise TypeError(
