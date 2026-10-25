@@ -61,7 +61,7 @@ def test_physics_column_homes_are_the_golden_fin_install_on_their_own_load() -> 
 
 
 def test_physics_column_runs_over_every_one_of_physics_column_days() -> None:
-    first_day, last_day = PHYSICS_COLUMN_DAYS.window(PHYSICS_COLUMN_DAYS.count)
+    first_day, last_day = PHYSICS_COLUMN_DAYS.window()
     period = make_physics_column_scenario().period
 
     assert (period.get_start_timestamp().date(), period.get_end_timestamp().date()) == (

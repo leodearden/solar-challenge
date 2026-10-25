@@ -51,7 +51,7 @@ def _make_config(
 
 # Short simulation period to keep tests fast
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
-START, END = _JUNE_DAYS.window(_JUNE_DAYS.count)
+START, END = _JUNE_DAYS.window()
 
 
 class TestSelfConsumptionStrategy:

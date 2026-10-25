@@ -153,7 +153,7 @@ def make_physics_column_scenario() -> ScenarioConfig:
         make_sized_home(pv_kwp=FIN_GOLDEN["inp_kWp"], battery_kwh=FIN_GOLDEN["inp_Batt_kWh"]),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1),
     )
-    first_day, last_day = PHYSICS_COLUMN_DAYS.window(PHYSICS_COLUMN_DAYS.count)
+    first_day, last_day = PHYSICS_COLUMN_DAYS.window()
     return ScenarioConfig(
         name="FIN-Physics-Column",
         period=SimulationPeriod(

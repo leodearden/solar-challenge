@@ -66,6 +66,10 @@ def test_a_window_runs_from_the_first_day_over_whole_days_in_the_first_days_time
     assert {day.tz for day in june_days.window(3)} == {first_day.tz}
 
 
+def test_a_window_of_no_stated_days_spans_every_one_of_the_days() -> None:
+    assert _THREE_DAYS.window() == _THREE_DAYS.window(_THREE_DAYS.count)
+
+
 @pytest.mark.parametrize("days", [0, 4])
 def test_a_window_of_no_days_or_of_more_days_than_were_seeded_is_refused_naming_both(days: int) -> None:
     with pytest.raises(
