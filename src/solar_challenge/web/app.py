@@ -4,6 +4,7 @@
 import functools
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,20 @@ from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StoreLocation:
+    """Where a dashboard store is: its data directory, which holds its run files and its lock, and its database file."""
+
+    data_dir: Path
+    database: Path
+
+
+def default_store_location() -> StoreLocation:
+    """The store create_app opens unless its config names another, which `solar-challenge web start` serves and `solar-challenge web migrate` migrates: ~/.solar-challenge, and the solar-challenge.db in it."""
+    data_dir = Path.home() / ".solar-challenge"
+    return StoreLocation(data_dir=data_dir, database=data_dir / "solar-challenge.db")
 
 
 def _get_secret_key(data_dir: Path) -> str:
@@ -117,9 +132,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         static_folder=_packaged_folder("static"),
     )
 
-    # Default data directory configuration
-    default_data_dir = Path.home() / ".solar-challenge"
-    default_db_path = default_data_dir / "solar-challenge.db"
+    default_location = default_store_location()
 
     # Default configuration.  Why the session cookie is not Secure:
     # tests/unit/test_web_app.py::test_the_session_cookie_is_not_marked_secure
@@ -127,8 +140,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=False,
-        DATA_DIR=str(default_data_dir),
-        DATABASE=str(default_db_path),
+        DATA_DIR=str(default_location.data_dir),
+        DATABASE=str(default_location.database),
     )
 
     if test_config is not None:
@@ -148,7 +161,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     store_lock = acquire_store_lock(Path(app.config["DATA_DIR"]))
     try:
-        _open_store(app, default_data_dir)
+        _open_store(app, default_location.data_dir)
     except BaseException:
         store_lock.release()
         raise
