@@ -20,6 +20,7 @@ pytest.importorskip("flask")
 
 SERVER_WITH_BLOCKING_SIMULATIONS = """
 import functools
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -49,6 +50,7 @@ def submit_to_blocking_jobs(dashboard, **extra):
 
 
 request_started.connect(submit_to_blocking_jobs)
+signal.signal(signal.SIGINT, signal.default_int_handler)
 try:
     app(["web", "start", "--port", port])
 finally:
