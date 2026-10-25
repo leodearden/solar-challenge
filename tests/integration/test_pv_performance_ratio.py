@@ -39,6 +39,11 @@ def pv_performance_ratio() -> ModuleType:
 @pytest.fixture(scope="module")
 def bristol_tmy() -> pd.DataFrame:
     """Bristol's TMY as the weather cache committed under tests/fixtures/weather_cache holds it: PVGIS's, as PvgisTmy caches it."""
+    if not COMMITTED_WEATHER_CACHE_DIR.is_dir():
+        pytest.fail(
+            f"No directory is at {COMMITTED_WEATHER_CACHE_DIR}, where the weather cache holding Bristol's TMY "
+            "is committed: restore it from git, or, if it moved, point COMMITTED_WEATHER_CACHE_DIR at it"
+        )
     tmy = WeatherCache(cache_dir=COMMITTED_WEATHER_CACHE_DIR).get("tmy", Location.bristol())
     if tmy is None:
         pytest.fail(
