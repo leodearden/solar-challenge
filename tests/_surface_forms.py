@@ -110,8 +110,8 @@ def surface_form(obj: object) -> str:
     object carries a __text_signature__, either of which inspect may read differently
     from Python 3.13; and naming that __call__ if it is a functools.partial, which
     Python 3.14 binds to the object as a method and earlier minors call without it.
-    _refuse_constructor_without_a_portable_form in tests/_surface_forms_signatures.py
-    lists the constructors it refuses.
+    signature_of in tests/_surface_forms_signatures.py reads the signature and says
+    which constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -182,8 +182,7 @@ def named_classes(obj: object) -> set[type]:
     module its __module__ names; a functools.partial, a bound method, or a routine that
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries, but a wrapper that is no partial and
-    carries a __signature__ of None, where _annotations_author in
-    tests/_surface_forms_signatures.py says its annotations were
+    carries a __signature__ of None, where its annotations were
     spelled; an object its class makes callable, where the __call__ that class resolves
     is once bound to the object, as inspect binds it, which may be a base's in another
     module; and a class in the one sys.modules holds under the name its __module__
@@ -210,10 +209,10 @@ def named_classes(obj: object) -> set[type]:
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
     A class's signature, an Enum's aside, is spelled where its constructor is, the
-    __call__ its metaclass resolves if inspect reads that, as
-    _constructor_spelling_modules in tests/_surface_forms_signatures.py describes,
-    whether or not the class carries a signature in the constructor's place; one its
-    metaclass or a descriptor gives raises TypeError.
+    __call__ its metaclass resolves if inspect reads that, as spelling_modules in
+    tests/_surface_forms_signatures.py says, whether or not the class carries a
+    signature in the constructor's place; one its metaclass or a descriptor gives raises
+    TypeError.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what

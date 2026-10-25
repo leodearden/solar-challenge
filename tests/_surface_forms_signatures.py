@@ -92,7 +92,11 @@ def is_enum(obj: object) -> typing.TypeGuard[type[enum.Enum]]:
 
 
 def signature_of(obj: Callable[..., object]) -> inspect.Signature:
-    """The signature inspect reads for *obj*, a class or a routine, once _refuse_chain_without_a_portable_form has passed the chain inspect follows from it."""
+    """The signature inspect reads for *obj*, a class or a routine, once _refuse_chain_without_a_portable_form has passed the chain inspect follows from it.
+
+    For a class at that chain's end, _refuse_constructor_without_a_portable_form lists
+    the constructors it refuses.
+    """
     _refuse_chain_without_a_portable_form(obj, obj)
     return inspect.signature(obj)
 
@@ -476,7 +480,10 @@ def _refuse_constructor_signature(
 
 
 def spelling_modules(obj: object, names: Collection[str]) -> Mapping[str, ModuleOrUnspelled]:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return", as _chain_spelling_modules finds it; _RecordsNoModule, naming *obj*, for each if it finds none."""
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return", as _chain_spelling_modules finds it; _RecordsNoModule, naming *obj*, for each if it finds none.
+
+    A class spells them where _constructor_spelling_modules says.
+    """
     spelled = _chain_spelling_modules(obj, names)
     if spelled is None:
         return dict.fromkeys(names, _RecordsNoModule(obj))
