@@ -1117,6 +1117,45 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_t
     assert surface_form(functools.partial(signed)) == "(rate: int)"
 
 
+def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine() -> None:
+    class Period(enum.Enum):
+        PEAK = "peak"
+
+    class SignedCall:
+        def __call__(self, rate: int) -> None: ...
+
+        __call__.__signature__ = "(self, rate)"
+
+    class EnumCall:
+        @functools.wraps(Period)
+        def __call__(self, value: object) -> object: ...
+
+    class ZipCall:
+        @functools.wraps(zip)
+        def __call__(self, *iterables: object) -> object: ...
+
+    getter = CallableGetter()
+
+    class GetterCall:
+        __call__ = getter
+
+    signed = functools.partial(SignedCall())
+    enumerated = functools.partial(EnumCall())
+    zipping = functools.partial(ZipCall())
+    gotten = functools.partial(GetterCall())
+
+    for routine, naming_it in (
+        (signed, rf"{re.escape(repr(signed))} is read through .*\.SignedCall\.__call__\b.*'\(self, rate\)'.*\bbuiltins\.str\b"),
+        (enumerated, rf"{re.escape(repr(enumerated))} wraps .*\.Period\b.*\benum\.Enum\b"),
+        (zipping, r"\bbuiltins\.zip\b.*\bbuiltins\.zip\b"),
+        (gotten, rf"{re.escape(repr(gotten))} is a functools\.partial that wraps {re.escape(repr(getter))}.*\bsurface_forms_helper\._fixtures\.CallableGetter\b"),
+    ):
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(routine)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(routine)
+
+
 def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
     class Deleting(functools.partial):
         def __delete__(self, instance: object) -> None: ...
