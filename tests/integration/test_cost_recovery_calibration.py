@@ -38,6 +38,7 @@ from solar_challenge.home import SimulationResults, calculate_summary
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
+    PHYSICS_COLUMN_DAYS,
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
@@ -1096,11 +1097,16 @@ class TestPhysicsColumnPremises:
         assert econ.debt_gbp == 0.0, f"physics fleet carries £{econ.debt_gbp:,.2f} debt"
 
 
+bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestPhysicsReconciliationColumn:
     """Physics column — REPORTED, not asserted == spreadsheet.
 
     Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
-    real-physics path returns a structurally valid CostRecoverySolution.  It runs
+    real-physics path returns a structurally valid CostRecoverySolution.  The days
+    are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as Bristol's TMY.  It runs
     simulate_fleet in this process, because a worker pool would fork the test
     process, which tests/conftest.py's offline guard makes multi-threaded.  Its
     numbers are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation);

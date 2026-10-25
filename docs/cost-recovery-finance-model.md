@@ -729,21 +729,22 @@ figures reported for transparency; no test pins them to specific digits.
 
 ### 7.6 Why the Real-Physics Column Is Not Comparable with the Anchor
 
-Source: `tests/integration/test_cost_recovery_calibration.py::TestPhysicsReconciliationColumn::test_physics_path_reported`
-(`@pytest.mark.slow`; real PVGIS weather), on the fleet
-`tests/_fin_calibration.py::make_physics_column_scenario` builds.
+Source: `tests/integration/test_cost_recovery_calibration.py::TestPhysicsReconciliationColumn::test_physics_path_reported`,
+on the fleet `tests/_fin_calibration.py::make_physics_column_scenario` builds.  The verify
+runs it offline, on the clear June days of `tests/_fin_calibration.py::PHYSICS_COLUMN_DAYS`,
+which its module seeds as Bristol's TMY (`tests/_seeded_tmy.py`).
 
 The physics column solves 2 homes of 5.5 kWp + 5 kWh under the §7.2 [FIN] finance,
-simulated over three January days (2024-01-01 to 2024-01-03).  It hard-asserts only that
+simulated over three clear June days (2024-06-21 to 2024-06-23).  It hard-asserts only that
 the physics path returns a structurally valid `CostRecoverySolution`; the rate, saving
 and surplus it prints are reported, not pinned.  Its rate cannot be set against the
 anchor's (§7.3), for three reasons:
 
-- **One winter window stands in for a year.**  The window is under 360 days, so
+- **Three days stand in for a year.**  The window is under 360 days, so
   `project_multi_year` scales each home's window totals to a 365-day year by
   `k = 365 / 3 ≈ 121.67` (§4, *Annual basis*).  The rate therefore extrapolates three
-  January days to a whole year: one season's sample, where the anchor's injected
-  aggregates are already annual (`k = 1`).
+  synthetic clear June days to a whole year: one season's sample, and not Bristol's
+  weather, where the anchor's injected aggregates are already annual (`k = 1`).
 - **The fleet carries no debt.**  Its capex,
   `2 × (5.5 × 1,000 + 1,000 + 5 × 250) = £15,500`, is below the £250,000 [FIN] grant, so
   financed capex, debt and equity are all zero (§6).  No debt service enters its solve,

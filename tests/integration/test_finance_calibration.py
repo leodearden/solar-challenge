@@ -43,6 +43,7 @@ from solar_challenge.fleet import simulate_fleet
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
+    PHYSICS_COLUMN_DAYS,
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
@@ -502,13 +503,18 @@ class TestCalibrationG6Guards:
 # ---------------------------------------------------------------------------
 
 
+bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestCalibrationPhysicsColumn:
     """Physics column for calibration (REPORTED, not asserted == spreadsheet).
 
     Runs a small 2-home fleet over three days, in this process (a worker pool
     would fork the test process, which tests/conftest.py's offline guard makes
     multi-threaded), to smoke-test the physics path alongside the spreadsheet
-    column. This does NOT document the §2.3 annual self-consumption tension:
+    column. The days are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as
+    Bristol's TMY. This does NOT document the §2.3 annual self-consumption tension:
     three days cannot show an annual self-consumption fraction, and its DSCR/IRR
     are degenerate for a 2-home fleet because the [FIN] grant exceeds the 2-home
     capex (financed capex, debt and equity are all zero). The printed physics

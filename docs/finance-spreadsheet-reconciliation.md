@@ -116,14 +116,15 @@ The calibration test suite maintains two parallel columns:
 | Column | Method | DSCR | IRR | Self-cons fraction |
 |--------|--------|------|-----|-------------------|
 | **Spreadsheet-input** | `spreadsheet_revenue_curve` (analytic) | ~4.02 | ~10.7% | 0.70 (named inp) |
-| **Physics** | `project_multi_year` (real PVGIS sim) | reported | reported | reported (window-dependent) |
+| **Physics** | `project_multi_year` (simulated fleet) | reported | reported | reported (window-dependent) |
 
 Only the **spreadsheet-input column** is hard-asserted (capex + covenant floor).
-The **physics column** is run in the `@pytest.mark.slow` suite over a 2-home,
-3-day January window and *reported* alongside the spreadsheet column as a smoke
-check of the physics path. It does **not** document the §2.3 annual
-self-consumption tension: a short winter window cannot show an annual
-self-consumption fraction. The DSCR/IRR that report prints are degenerate in
+The **physics column** runs offline in the verify, over a 2-home fleet and three
+clear June days that the test seeds as Bristol's TMY
+(`tests/_fin_calibration.py::PHYSICS_COLUMN_DAYS`), and is *reported* alongside the
+spreadsheet column as a smoke check of the physics path. It does **not** document
+the §2.3 annual self-consumption tension: three synthetic days cannot show an
+annual self-consumption fraction. The DSCR/IRR that report prints are degenerate in
 **both** columns (the [FIN] grant exceeds the 2-home capex, so financed capex,
 debt and equity are all zero); the ~4.02 / ~10.7% in the table above are the
 100-home spreadsheet-input figures. Documenting the annual tension would need a
@@ -201,7 +202,7 @@ without the losses and 3.77 with them.]**
   to abstracted fees/deferral — covenant floor (≥1.20) and IRR > 0 are asserted
 - The £125,000 capex delta is a battery-size reconciliation, not an error
 - Annual physics self-consumption is expected to differ from the spreadsheet's
-  0.70 by design — physics is the correct path for real projections. The slow
+  0.70 by design — physics is the correct path for real projections. The
   3-day physics column is a smoke report, not evidence of that difference
 - The spreadsheet's 0.70 × 5,775 = 4,042.5 kWh/home of own-use exceeds the 3,400 kWh
   demand the calibration scenario assumes by 642.5 kWh (£57.825/home/yr at 15 p rather

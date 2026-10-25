@@ -14,17 +14,25 @@ once for both:
   its caller prices own-use with;
 - make_fin_spreadsheet_curve: the spreadsheet's flat revenue curve for a fleet of
   the [FIN] install, at FIN_SCF;
-- make_physics_column_scenario: the fleet that each suite's slow physics column
-  simulates through PVGIS.
+- PHYSICS_COLUMN_DAYS: the clear June days each suite's physics column simulates.
+  Its module seeds them as Bristol's TMY with the fixture
+  PHYSICS_COLUMN_DAYS.bristol_tmy_fixture() makes;
+- make_physics_column_scenario: the fleet each physics column simulates over those
+  days.
 
 Usage::
 
     from tests._fin_calibration import (
-        FIN_SCF, make_fin_finance, make_fin_spreadsheet_curve, make_physics_column_scenario,
+        FIN_SCF, PHYSICS_COLUMN_DAYS, make_fin_finance, make_fin_spreadsheet_curve,
+        make_physics_column_scenario,
     )
 
-    sol = solve_cost_recovery_rate(
-        make_physics_column_scenario(), make_fin_finance(self_consumption_override=None)
+    bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
+
+    sol = solve_cost_recovery_rate(  # in a test that uses bristol_june_tmy
+        make_physics_column_scenario(),
+        make_fin_finance(self_consumption_override=None),
+        simulate=functools.partial(simulate_fleet, parallel=False),
     )
     spreadsheet_finance = make_fin_finance(self_consumption_override=FIN_SCF)
     spreadsheet_curve = make_fin_spreadsheet_curve(
@@ -37,10 +45,13 @@ import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
+import pandas as pd
+
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
 from solar_challenge.load import LoadConfig
 from tests._finance_builders import make_sized_home
+from tests._seeded_tmy import ClearJuneDays
 
 # The investor spreadsheet's named cells, transcribed from
 # finance/Forecast Model for Community Owned Solar_INVESTOR_PITCH_v3.xlsm.  They were
@@ -82,6 +93,9 @@ FIN_GOLDEN: Mapping[str, float] = MappingProxyType({
 
 # The spreadsheet's with-battery self-consumption fraction assumption.
 FIN_SCF = 0.70
+
+PHYSICS_COLUMN_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
+"""The clear June days each suite's physics column simulates, which its module seeds as Bristol's TMY."""
 
 
 def make_fin_finance(*, self_consumption_override: float | None) -> FinanceConfig:
@@ -128,7 +142,7 @@ def make_fin_spreadsheet_curve(*, n_homes: int, asset_life_years: int) -> MultiY
 
 
 def make_physics_column_scenario() -> ScenarioConfig:
-    """Two homes of the [FIN] install on a deterministic 3,400 kWh load, over three January days of 2024.
+    """Two homes of the [FIN] install on a deterministic 3,400 kWh load, over every day of PHYSICS_COLUMN_DAYS.
 
     The fleet is small and the window short for speed.
     """
@@ -136,8 +150,11 @@ def make_physics_column_scenario() -> ScenarioConfig:
         make_sized_home(pv_kwp=FIN_GOLDEN["inp_kWp"], battery_kwh=FIN_GOLDEN["inp_Batt_kWh"]),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1),
     )
+    first_day, last_day = PHYSICS_COLUMN_DAYS.window(PHYSICS_COLUMN_DAYS.count)
     return ScenarioConfig(
         name="FIN-Physics-Column",
-        period=SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03"),
+        period=SimulationPeriod(
+            start_date=first_day.date().isoformat(), end_date=last_day.date().isoformat()
+        ),
         homes=[home] * 2,
     )
