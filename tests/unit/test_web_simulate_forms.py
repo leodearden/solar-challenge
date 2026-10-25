@@ -14,7 +14,6 @@ from flask.testing import FlaskClient
 
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.weather import WeatherCache
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
@@ -27,6 +26,9 @@ from tests._html_page import (
     texts,
 )
 from tests._web_job_days import web_job_days
+
+_JOB_DAYS = web_job_days(count=1)
+bristol_june_tmy = _JOB_DAYS.bristol_tmy_fixture()
 
 
 def _options_per_seg_preset_key(page: str) -> dict[str, int]:
@@ -91,22 +93,21 @@ class TestSimulateHomeRoute:
 
         assert name_input["placeholder"] == RUN_KINDS["home"].default_name(())
 
+    @pytest.mark.usefixtures("bristol_june_tmy")
     @pytest.mark.parametrize("blank_name", ["", "   "], ids=["empty", "only-spaces"])
     def test_a_home_run_submitted_with_its_simulation_name_blank_completes_under_the_placeholders_name(
-        self, app: Flask, client: FlaskClient, weather_cache: WeatherCache, blank_name: str
+        self, app: Flask, client: FlaskClient, blank_name: str
     ) -> None:
         """A home run posted with the Simulation Name blank, as the form posts it untouched or holding only spaces, completes and reads in Run History under the name the input's placeholder shows.
 
-        Its job runs offline, on a clear day seeded as Bristol's TMY.
+        Its job runs offline, on the clear day bristol_june_tmy seeds as Bristol's TMY.
         """
-        job_days = web_job_days(count=1)
-        job_days.seed_as_bristol_tmy(weather_cache)
         page = client.get("/simulate/home").get_data(as_text=True)
         [name_input] = [
             attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "sim_name"
         ]
 
-        submitted = client.post("/api/simulate/home", json={"location": "bristol", "days": job_days.count, "name": blank_name})
+        submitted = client.post("/api/simulate/home", json={"location": "bristol", "days": _JOB_DAYS.count, "name": blank_name})
         assert submitted.status_code == 201, submitted.get_json()
         assert app.extensions["job_manager"].wait_until_idle(timeout=120)
         run = client.get(f"/api/history/runs/{submitted.get_json()['run_id']}").get_json()
