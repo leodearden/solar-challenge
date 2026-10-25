@@ -133,7 +133,7 @@
                                     <span
                                         class="text-sm font-medium text-slate-900 dark:text-white cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
                                         @dblclick="startEdit(run)"
-                                        x-text="run.name || 'Unnamed Run'"
+                                        x-text="run.name"
                                     ></span>
                                 </div>
                             </template>
@@ -257,7 +257,7 @@
         <template x-for="run in runs" :key="run.id + '-card'">
             <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
                 <div class="flex items-center justify-between mb-2">
-                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="run.name || 'Unnamed Run'"></span>
+                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="run.name"></span>
                     {{ bound_run_status_badge('run.status') }}
                 </div>
                 <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-3">

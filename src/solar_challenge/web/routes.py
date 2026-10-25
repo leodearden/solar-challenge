@@ -103,11 +103,9 @@ def run_results(run_id: str) -> Any:
     match stored:
         case StoredHomeRun():
             template = "results/home.html"
-            unnamed_title = "Home Simulation"
             page_values = _home_results_values(stored)
         case StoredFleetRun():
             template = "results/fleet.html"
-            unnamed_title = "Fleet Simulation"
             page_values = _fleet_results_values(stored)
         case _:
             assert_never(stored)
@@ -115,7 +113,7 @@ def run_results(run_id: str) -> Any:
     return render_template(
         template,
         run_id=run_id,
-        run_name=record.name or unnamed_title,
+        run_name=record.name,
         **page_values,
     )
 
