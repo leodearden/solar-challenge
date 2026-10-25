@@ -11,6 +11,11 @@ a MigrationReport.
 Each table's owner states the table's schema and its part of each step: storage.py the runs
 table, presets.py config_presets and database.py chat_messages. This module states only the
 steps' order, the version and the transaction (docs/prds/run-store-one-owner.md §3.1, §3.9).
+
+A change to any table's schema is a new MigrationStep, committed with the schema of its version
+as tests/fixtures/databases/schema_v<N>.sql. Once a later step changes a table, an earlier step
+that rebuilds the table rebuilds it to the schema of its own version, the one its snapshot
+holds, not to the table owner's current schema.
 """
 
 import sqlite3
