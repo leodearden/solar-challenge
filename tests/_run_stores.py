@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The RunStorages that belong to no app, for tests that drive the run store directly rather than through the dashboard.
 
-empty_run_storage builds a new, empty store in a directory a test gives it; run_storage_over
-reads a Database a test gives it, its run files where an app keeps a store's. The RunStorage
-an app keeps its runs in is tests/_web_app.py's run_storage_of(app).
+empty_run_storage builds one over a new, empty store in a directory a test gives it, and
+run_storage_over one over a Database a test gives it. The RunStorage an app keeps its runs in
+is tests/_web_app.py's run_storage_of(app).
 
 Usage::
 
