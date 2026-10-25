@@ -9,7 +9,8 @@ timeout, every one of them is killed.
 
 describe_outcome describes how any run ended: its exit code, then the tail of
 each stream. describe_pytest_outcome describes a pytest run, such as the verify
-suite's, with its report's ERRORS and FAILURES sections ahead of those tails.
+suite's, with each ERRORS and FAILURES section of its report that stdout's tail
+lacks ahead of those tails.
 
 Usage::
 
@@ -90,9 +91,14 @@ class Outcome(Protocol):
     def stderr(self) -> str: ...
 
 
+def _tail(stream: str) -> str:
+    """Return the end of *stream* that a description shows: its last _STREAM_TAIL_CHARS chars."""
+    return stream[-_STREAM_TAIL_CHARS:]
+
+
 def _tails(stdout: str, stderr: str) -> str:
     """Return the tail of each stream, so a long stderr, such as uv's log, cannot crowd out the end of stdout."""
-    return f"stdout tail:\n{stdout[-_STREAM_TAIL_CHARS:]}\nstderr tail:\n{stderr[-_STREAM_TAIL_CHARS:]}"
+    return f"stdout tail:\n{_tail(stdout)}\nstderr tail:\n{_tail(stderr)}"
 
 
 def describe_outcome(outcome: Outcome) -> str:
@@ -101,16 +107,20 @@ def describe_outcome(outcome: Outcome) -> str:
 
 
 def describe_pytest_outcome(outcome: Outcome) -> str:
-    """Describe how *outcome*'s pytest run ended, as describe_outcome does, with its report's failure sections first.
+    """Describe how *outcome*'s pytest run ended, as describe_outcome does, with the failure sections stdout's tail lacks first.
 
     Those are the ERRORS and FAILURES sections of the pytest report in its stdout,
     which hold each failing test's traceback and captured output. pytest prints
     them before its warnings summary, so a long summary pushes them out of
     stdout's tail. Each keeps at most its first _FAILURE_SECTION_HEAD_CHARS chars.
     A stdout with neither, as when uv refused to start pytest or the run passed,
-    is described exactly as describe_outcome describes it.
+    or whose tail holds each whole, is described exactly as describe_outcome
+    describes it.
     """
-    excerpts = "".join(_excerpt(section.text) for section in failure_sections(outcome.stdout))
+    stdout_tail = _tail(outcome.stdout)
+    excerpts = "".join(
+        _excerpt(section) for section in failure_sections(outcome.stdout) if section not in stdout_tail
+    )
     return f"exit {outcome.returncode}\n{excerpts}{_tails(outcome.stdout, outcome.stderr)}"
 
 

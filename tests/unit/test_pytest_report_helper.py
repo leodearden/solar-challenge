@@ -94,7 +94,7 @@ def test_a_report_that_a_failing_test_printed_is_part_of_its_failures_section(pr
 
     sections = failure_sections(_SESSION_START + failures + _TAIL)
 
-    assert [(section.start, section.text) for section in sections] == [(len(_SESSION_START), failures)]
+    assert sections == [failures]
 
 
 def test_a_report_that_an_erroring_test_printed_is_part_of_its_errors_section() -> None:
@@ -108,14 +108,10 @@ def test_a_report_that_an_erroring_test_printed_is_part_of_its_errors_section() 
     failures = (
         _separator("=", "FAILURES") + _separator("_", "test_fails") + "E   AssertionError: the outer test failed\n"
     )
-    report = _SESSION_START + errors + failures + _TAIL
 
-    sections = failure_sections(report)
+    sections = failure_sections(_SESSION_START + errors + failures + _TAIL)
 
-    assert [(section.start, section.text) for section in sections] == [
-        (report.index(errors), errors),
-        (report.index(failures), failures),
-    ]
+    assert sections == [errors, failures]
 
 
 def test_a_report_cut_short_in_a_failure_section_keeps_that_section_to_its_end() -> None:
@@ -124,7 +120,7 @@ def test_a_report_cut_short_in_a_failure_section_keeps_that_section_to_its_end()
 
     sections = failure_sections(_SESSION_START + failures)
 
-    assert [(section.start, section.text) for section in sections] == [(len(_SESSION_START), failures)]
+    assert sections == [failures]
 
 
 @pytest.mark.parametrize(

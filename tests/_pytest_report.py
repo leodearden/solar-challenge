@@ -13,12 +13,11 @@ Usage::
     from tests._pytest_report import failure_sections
 
     for section in failure_sections(result.stdout):
-        print(section.start, section.text)
+        print(section)
 """
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
 from itertools import pairwise
 
 # The line TerminalWriter.sep("=", title) prints to open each section of pytest's report.
@@ -38,21 +37,14 @@ _TAIL_TITLES = (
 )
 
 
-@dataclass(frozen=True)
-class ReportSection:
-    """A section of a pytest report: the offset in the report at which it starts, and its text, from its header line on."""
-
-    start: int
-    text: str
-
-
-def failure_sections(report: str) -> list[ReportSection]:
-    """Return the ERRORS and FAILURES sections of *report*, a pytest run's terminal report, in report order.
+def failure_sections(report: str) -> list[str]:
+    """Return the text of each ERRORS and FAILURES section of *report*, a pytest run's terminal report, in report order.
 
     pytest prints each of them at most once, ERRORS first, so a header line opens
     one only if its title comes later in _FAILURE_TITLES than that of the section
     open before it; any other is part of a test's captured output. A section runs
-    to the header line of the next one, or to the report's tail.
+    from its header line to the header line of the next one, or to the report's
+    tail.
     """
     headers = list(_SECTION_HEADER.finditer(report))
     tail = _tail_start(headers)
@@ -63,7 +55,7 @@ def failure_sections(report: str) -> list[ReportSection]:
             starts.append(header.start())
             titles_to_come = titles_to_come[titles_to_come.index(header["title"]) + 1 :]
     end = headers[tail].start() if tail < len(headers) else len(report)
-    return [ReportSection(start, report[start:stop]) for start, stop in pairwise([*starts, end])]
+    return [report[start:stop] for start, stop in pairwise([*starts, end])]
 
 
 def _tail_start(headers: Sequence[re.Match[str]]) -> int:

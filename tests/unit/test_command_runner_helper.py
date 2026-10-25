@@ -530,3 +530,21 @@ def test_a_pytest_outcome_keeps_the_head_of_each_long_failure_section_and_says_h
     assert "ERRORS-END" not in description
     assert str(len(errors_section)) in description
     assert "FAILURES-MARKER" in description
+
+
+def test_a_pytest_outcome_quotes_no_failure_section_that_its_stdout_tail_already_holds() -> None:
+    """Quoting such a section ahead of the tails too would print each of its failures twice."""
+    errors_section = _report_separator("ERRORS") + "ERRORS-MARKER\n" + "x" * 10_000 + "\n"
+    stdout = (
+        _report_separator("test session starts")
+        + errors_section
+        + _report_separator("FAILURES")
+        + "FAILURES-MARKER\n"
+        + _report_separator("1 failed, 1 error in 0.01s")
+    )
+    outcome = subprocess.CompletedProcess("a command", 1, stdout, "")
+
+    description = describe_pytest_outcome(outcome)
+
+    assert description.count("ERRORS-MARKER") == 1, description
+    assert description.count("FAILURES-MARKER") == 1, description
