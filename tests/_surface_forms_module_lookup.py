@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The module that defined an object, as sys.modules holds it, checked to be that object's own, and a string annotation evaluated there as a type checker reads it.
 
-label_of, is_routine, is_immutable_type and spelled_function are what that lookup
-reads, and the helper's other modules share them. This module imports no other module
-of the helper, as tests/unit/test_surface_forms_layers.py checks.
+That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
+is_immutable_type and spelled_function, and names it in errors through label_of: the
+helper's other modules read and name objects through them too. This module imports no
+other module of the helper, as tests/unit/test_surface_forms_layers.py checks.
 """
 
 import ast
