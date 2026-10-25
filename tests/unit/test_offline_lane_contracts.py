@@ -7,6 +7,8 @@ suite the per-task verify never runs. These tests pin the git settings that
 start the lane, and the contracts every job keeps, with one row per job in
 LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
 that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
+One test checks that every slow test runs in some LANE_JOBS job, unless
+SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
 
 import os
@@ -18,7 +20,12 @@ import pytest
 
 from tests._collect_only import requires_uv
 from tests._command_runner import describe_outcome, run_command
-from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
+from tests._lane_collection import (
+    collect_lane_job,
+    default_collection_node_ids_under,
+    every_test_matching,
+    suite_node_ids_matching,
+)
 from tests._network_guard import send_child_processes_to_a_dead_proxy
 from tests._orchestrator_config import (
     git_config,
@@ -101,6 +108,34 @@ LANE_JOBS: tuple[LaneJob, ...] = (
         service="PyPI",
     ),
 )
+
+
+@dataclass(frozen=True)
+class SlowTestsNoLaneJobRuns:
+    """Slow tests no LANE_JOBS job runs, and the live service they need.
+
+    node_ids are exact node ids, compared by equality, never by prefix: a new
+    test in a listed class is listed only once its own id is.
+    """
+
+    service: str
+    node_ids: frozenset[str]
+
+
+SLOW_TESTS_NO_LANE_JOB_RUNS: tuple[SlowTestsNoLaneJobRuns, ...] = (
+    SlowTestsNoLaneJobRuns(
+        service="the Anthropic API",
+        node_ids=frozenset(
+            {
+                "tests/unit/web_assistant/test_chat.py::TestChatLiveSmoke::test_single_turn_returns_nonempty_reply",
+                "tests/unit/web_assistant/test_chat.py::TestChatLiveSmoke::test_second_turn_shows_cache_hit",
+            }
+        ),
+    ),
+)
+
+# tests/e2e's modules import the e2e extra, so only every extra imports every test module.
+_EVERY_EXTRA_PYTEST = ("uv", "run", "--locked", "--all-extras", "pytest")
 
 
 def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
@@ -187,6 +222,39 @@ def test_the_job_collects_its_suite_and_nothing_else(
     assert not outside, (
         f"the {job.name!r} lane job {collection.command!r} collected tests outside {job.suite}, the one suite it "
         f"exists to run, so after every merge it runs them beside that suite: {outside}"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+def test_every_slow_test_runs_in_a_lane_job_or_is_listed_as_one_no_lane_job_runs(
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
+) -> None:
+    """Every slow test runs in some LANE_JOBS job, as the lane runs it, unless SLOW_TESTS_NO_LANE_JOB_RUNS lists it.
+
+    The slow tests are collected across all of tests/ with every extra, the
+    lane-only suites included. Each listed id must still be a slow test no lane
+    job runs.
+    """
+    env_for = shared_uv_probe_environments.for_command
+    slow = every_test_matching(project_root, "slow", pytest_invocation=_EVERY_EXTRA_PYTEST, env_for=env_for)
+    laned = {
+        node_id for job in LANE_JOBS for node_id in collect_lane_job(project_root, job.name, env_for=env_for).node_ids()
+    }
+    unlaned = [test.node_id for test in slow if test.node_id not in laned]
+    listed = {node_id: entry.service for entry in SLOW_TESTS_NO_LANE_JOB_RUNS for node_id in entry.node_ids}
+
+    unlisted = [node_id for node_id in unlaned if node_id not in listed]
+    assert not unlisted, (
+        f"no lane job runs the slow tests {unlisted}, and the per-task verify deselects every slow test, so nothing "
+        "runs them; seed what such a test fetches and drop its slow mark if it needs no live service (CLAUDE.md, "
+        "\"Offline fast tests\"), bring it into a lane job's suite, or list it in SLOW_TESTS_NO_LANE_JOB_RUNS, naming "
+        "the live service no lane job runs it against"
+    )
+    stale = {node_id: listed[node_id] for node_id in sorted(listed.keys() - set(unlaned))}
+    assert not stale, (
+        f"SLOW_TESTS_NO_LANE_JOB_RUNS lists {stale}, each id with its entry's service, though none is a slow test no "
+        "lane job runs: `-m slow` no longer selects it, or a lane job now runs it; remove each from its entry"
     )
 
 
