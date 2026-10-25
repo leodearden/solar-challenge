@@ -1156,6 +1156,71 @@ def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises
             named_classes(routine)
 
 
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial() -> None:
+    def settle(rate: int) -> None: ...
+
+    class PartialCall:
+        __call__ = functools.partial(settle)
+
+    class SignedPartialCall:
+        __call__ = functools.partial(settle)
+        __call__.__signature__ = inspect.Signature(
+            [
+                inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+                inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int),
+            ]
+        )
+
+    class NestedCall:
+        __call__ = PartialCall()
+
+    called = functools.partial(PartialCall())
+    calling = functools.wraps(PartialCall())(lambda rate: None)
+    nested = functools.partial(NestedCall())
+
+    naming_the_partial_and_that_call = r"\bfunctools\.partial\(.*\.PartialCall\.__call__\b.*\bfunctools\.partial\b.*\b3\.14\b"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=naming_the_partial_and_that_call):
+            surface_form(called)
+        with pytest.raises(TypeError, match=naming_the_partial_and_that_call):
+            named_classes(called)
+        with pytest.raises(TypeError, match=r"\.<lambda> is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(calling)
+        with pytest.raises(TypeError, match=r"\bfunctools\.partial\(.*\.SignedPartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(functools.partial(SignedPartialCall()))
+        with pytest.raises(TypeError, match=rf"{re.escape(repr(nested))} is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
+            surface_form(nested)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:
+    def settle(rate: int) -> None: ...
+
+    def charge(owner: object, rate: int) -> None: ...
+
+    class StaticCall:
+        __call__ = staticmethod(functools.partial(settle))
+
+    class ClassCall:
+        __call__ = classmethod(charge)
+
+    class HalvedCall:
+        __call__ = functools.partialmethod(charge, rate=1)
+
+    class SignedCall:
+        __signature__ = inspect.Signature([inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=float)])
+        __text_signature__ = "(rate)"
+        __call__ = functools.partial(settle)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert surface_form(functools.partial(StaticCall())) == "(rate: int) -> None"
+        assert surface_form(functools.partial(ClassCall())) == "(rate: int) -> None"
+        assert surface_form(functools.partial(HalvedCall())) == "(*, rate: int = 1) -> None"
+        assert surface_form(functools.partial(SignedCall())) == "(share: float)"
+        assert named_classes(functools.partial(SignedCall())) == {float}
+
+
 def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
     class Deleting(functools.partial):
         def __delete__(self, instance: object) -> None: ...
