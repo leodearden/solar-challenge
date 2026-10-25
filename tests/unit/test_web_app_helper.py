@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, names the database file it gives that app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
 
 import subprocess
 import sys
@@ -16,7 +16,7 @@ from flask.testing import FlaskClient
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
 from tests._finance_builders import make_home_config, make_sim_results
-from tests._web_app import build_test_app, database_of, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
+from tests._web_app import build_test_app, database_of, database_path_in, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
 
 
@@ -41,6 +41,12 @@ def test_the_app_runs_in_testing_mode_with_its_data_under_the_given_directory(
     assert app.testing
     assert Path(app.config["DATABASE"]).is_relative_to(tmp_path)
     assert Path(app.config["DATA_DIR"]) == tmp_path
+
+
+def test_database_path_in_names_the_database_file_of_the_app_built_on_its_directory(tmp_path: Path) -> None:
+    app = build_test_app(tmp_path)
+
+    assert database_of(app).path == database_path_in(tmp_path)
 
 
 def test_the_app_serves_a_run_saved_to_its_run_storage_after_its_store_config_names_a_missing_directory(
