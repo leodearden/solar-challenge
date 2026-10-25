@@ -10,22 +10,19 @@ job runs offline.
 import time
 from pathlib import Path
 
-import pandas as pd
 import pytest
-
-from tests._seeded_tmy import ClearJuneDays
 
 pytest.importorskip("flask")
 
-from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._web_app import build_test_app
+from tests._web_job_days import web_job_days
 
 
 # ---------------------------------------------------------------------------
 # Payload
 # ---------------------------------------------------------------------------
 
-_FLEET_DAYS = ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1)
+_FLEET_DAYS = web_job_days(count=1)
 
 _DIST_PAYLOAD = {
     "name": "E2E Dist Fleet",
