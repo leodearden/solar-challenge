@@ -6,7 +6,6 @@ request from: heat pump, tariff, dispatch, PV age, system losses and SEG on /sim
 dispatch and SEG on /simulate/fleet.
 """
 
-import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -17,7 +16,6 @@ from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
     counts_of,
@@ -28,7 +26,7 @@ from tests._html_page import (
     headings,
     texts,
 )
-from tests._seeded_tmy import ClearJuneDays
+from tests._web_job_days import web_job_days
 
 
 def _options_per_seg_preset_key(page: str) -> dict[str, int]:
@@ -101,13 +99,14 @@ class TestSimulateHomeRoute:
 
         Its job runs offline, on a clear day seeded as Bristol's TMY.
         """
-        ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(weather_cache)
+        job_days = web_job_days(count=1)
+        job_days.seed_as_bristol_tmy(weather_cache)
         page = client.get("/simulate/home").get_data(as_text=True)
         [name_input] = [
             attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "sim_name"
         ]
 
-        submitted = client.post("/api/simulate/home", json={"location": "bristol", "days": 1, "name": blank_name})
+        submitted = client.post("/api/simulate/home", json={"location": "bristol", "days": job_days.count, "name": blank_name})
         assert submitted.status_code == 201, submitted.get_json()
         assert app.extensions["job_manager"].wait_until_idle(timeout=120)
         run = client.get(f"/api/history/runs/{submitted.get_json()['run_id']}").get_json()

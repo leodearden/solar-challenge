@@ -5,7 +5,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -14,12 +13,10 @@ from flask.testing import FlaskClient
 
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
-from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._fleet_form import valid_distribution_form
 from tests._run_storage_layout import stored_run_dir
-from tests._seeded_tmy import ClearJuneDays
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
-from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
+from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
@@ -46,9 +43,9 @@ def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClie
     """A client of the JobManager create_app built, whose jobs run the real simulate_home.
 
     Its jobs run on the weather create_app bound, the test's own weather cache. There Bristol's TMY is a
-    clear day on DAYS_WINDOW_START, the first day of every days window the API simulates.
+    clear day on the first day of every days window the API simulates.
     """
-    ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(weather_cache)
+    A_HOME_JOB_DAYS.seed_as_bristol_tmy(weather_cache)
     return app.test_client()
 
 
