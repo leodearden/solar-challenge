@@ -16,7 +16,12 @@ subpackage outside a function. Any module of the subpackage may import the web e
 module top, and the CLI, scripts/ and the dev-only offline-lane jobs run without that extra.
 ALLOWED_FUNCTION_LOCAL_IMPORTS lists the function-local imports that reach the subpackage.
 
-All three read import statements only: the lazy loader in solar_challenge/__init__.py
+web/database.py, the leaf of the run store's persistence stratum, imports no module of the
+web subpackage at any scope (docs/prds/run-store-one-owner.md §4): every table owner and
+web/schema.py import it (§3.1), so such an import closes a cycle or reaches up the stratum.
+No ALLOWED_FUNCTION_LOCAL_IMPORTS entry exempts one.
+
+All four read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
 tests/unit/test_init_lazy_surface.py.
 """
@@ -32,6 +37,7 @@ from tests._declared_dependencies import WEB_SUBPACKAGE
 
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
+_WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 
@@ -181,6 +187,15 @@ def _module_top_imports_into_the_web_subpackage(sites: Iterable[_ImportSite]) ->
         if not site.in_function
         and _in_package(site.imported, WEB_SUBPACKAGE)
         and not _in_package(site.importer, WEB_SUBPACKAGE)
+    ]
+
+
+def _web_database_imports_of_the_web_subpackage(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* at which web/database.py imports a module of the web subpackage, at any scope."""
+    return [
+        site
+        for site in sites
+        if site.importer == _WEB_DATABASE and _in_package(site.imported, WEB_SUBPACKAGE)
     ]
 
 
