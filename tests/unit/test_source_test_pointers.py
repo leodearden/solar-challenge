@@ -21,7 +21,6 @@ that reads as a test, such as Werkzeug's TestResponse, is written after its modu
 
 import ast
 import re
-import subprocess
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -29,6 +28,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
+from tests._hermetic_checkout import init_hermetic_checkout
 from tests._working_tree import working_tree_files
 
 _UNSCANNED = tuple(
@@ -296,7 +296,7 @@ def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """Return a git checkout whose tests/unit holds notes.txt and test_pointed_at.py, defining tests, a class and a nested one."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    init_hermetic_checkout(tmp_path)
     tests = tmp_path / "tests" / "unit"
     tests.mkdir(parents=True)
     (tests / "test_pointed_at.py").write_text(
