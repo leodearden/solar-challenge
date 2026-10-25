@@ -673,11 +673,9 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "the name private, or set a __signature__ that is an inspect.Signature on the "
             "routine or on what it wraps"
         )
-    if isinstance(inspect.getattr_static(type(obj), "__call__"), functools.partial):
-        raise TypeError(
-            f"{_label(subject)} is read through {_label(holders[0])}.__call__, "
-            f"{_PARTIAL_BOUND_BY_MINOR}: define __call__ with def"
-        )
+    _refuse_partial_bound_as_method(
+        subject, "is read through", holders[0], "__call__", vars(holders[0])["__call__"]
+    )
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -854,14 +852,14 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     call = _metaclass_call(cls)
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
-        _refuse_partial_bound_as_method(cls, type(cls), "__call__", call)
+        _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_signature(cls, type(cls), "__call__", call)
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
-        _refuse_partial_bound_as_method(cls, holder, name, constructor)
+        _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_signature(cls, holder, name, constructor)
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
@@ -934,12 +932,16 @@ _PARTIAL_BOUND_BY_MINOR = (
 
 
 def _refuse_partial_bound_as_method(
-    cls: type, owner: type, name: str, constructor: object
+    subject: object,
+    verb: typing.Literal["is constructed through", "is read through"],
+    owner: type,
+    name: str,
+    method: object,
 ) -> None:
-    """Raise TypeError naming *cls* and *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *constructor*, the one *owner* holds as *name* that inspect reads first for *cls* and binds through its type's __get__, is a functools.partial."""
-    if isinstance(constructor, functools.partial):
+    """Raise TypeError saying *subject* *verb* *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *method*, the one *owner* holds as *name* that inspect reads for *subject* and binds through its type's __get__, is a functools.partial."""
+    if isinstance(method, functools.partial):
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(owner)}.{name}, "
+            f"{_label(subject)} {verb} {_label(owner)}.{name}, "
             f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
         )
 
