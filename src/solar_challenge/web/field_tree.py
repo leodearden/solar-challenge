@@ -13,16 +13,22 @@ item and None for the root, and the reason. A missing field that has a default t
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
 as an UnknownKey.
 
+The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
+object or a leaf, each child with the annotation it is read as and its path. So a new container
+shape is one branch of _shape. A new leaf codec, such as a date or a timedelta, is a branch of
+_read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string. Neither is
+an edit of a second walker.
+
 The module imports no solar_challenge module. web/stored_runs.py writes and reads a run's
 documents through it, and its StoredDocument.read maps a FieldTreeRefused to a
 StoredRunUnreadable.
 """
 
 import functools
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -92,7 +98,7 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
             default, holds a value of a JSON type its annotation cannot be or an unknown union
             tag, or a dataclass refuses its values, whose refusal is then the cause.
     """
-    value = _read_value(content, cls, None)
+    value = _read(content, cls, None)
     assert isinstance(value, cls)
     return value
 
@@ -100,40 +106,233 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
 def without_unknown_keys(content: Any, cls: type) -> tuple[Any, tuple[UnknownKey, ...]]:
     """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has; and each dropped key, in the content's order.
 
-    It is walked as _without_unknown_keys walks it, and is not itself changed.
+    It is walked as read_field_tree reads it, and is not itself changed.
     """
     return _without_unknown_keys(content, cls, None)
 
 
-def _read_value(value: Any, annotation: Any, path: str | None) -> Any:
-    """*value*, decoded JSON at *path* in its document, read as *annotation* declares.
+@dataclass(frozen=True)
+class _Child:
+    """A value within an object or an array: the value, the annotation it is read as, and its dotted path."""
 
-    A union is read by _read_union. A dataclass is read from an object by _read_dataclass, a
-    list or tuple from an array by _read_sequence, a dict's values from an object, a
-    pd.Timestamp from its ISO text. A Literal, bool, int, float and str admit only values of
-    their JSON type; an int or a float is any number but a bool, kept as decoded. Any admits
-    anything as it is.
+    value: Any
+    annotation: Any
+    path: str
+
+
+@dataclass(frozen=True)
+class _DataclassObject:
+    """An object read as dataclass *cls* at *path*: each of its keys in its order, as the _Child of the field it names or an UnknownKey."""
+
+    cls: type
+    path: str | None
+    members: tuple[tuple[str, _Child | UnknownKey], ...]
+
+
+@dataclass(frozen=True)
+class _Array:
+    """An array read as a list or a tuple: the container it is read into, and each of its items."""
+
+    container: Callable[[Iterable[Any]], Collection[Any]]
+    items: tuple[_Child, ...]
+
+
+@dataclass(frozen=True)
+class _Mapping:
+    """An object read as a dict: each of its keys, in its order, with its value."""
+
+    entries: tuple[tuple[str, _Child], ...]
+
+
+@dataclass(frozen=True)
+class _Leaf:
+    """A value with no children, which _read_leaf reads as *annotation*."""
+
+    value: Any
+    annotation: Any
+    path: str | None
+
+
+_Shape = _DataclassObject | _Array | _Mapping | _Leaf
+
+
+def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
+    """*value*, decoded JSON at *path* in its document, in the shape *annotation* reads it as, each child with the annotation it is read as and its path.
+
+    Any is a leaf, and so is null where None is a member of a union. A union's other values take
+    the shape of the member _union_member picks. A dataclass reads an object of its fields, a list or
+    tuple an array, a dict an object of its values; any other annotation is a leaf.
+
+    Raises:
+        FieldTreeRefused: *value* is null and *annotation* admits no null; its members tag
+            themselves and it is no object, or its tag names no member, refused at the tag's path;
+            or it is of a JSON type a dataclass, a sequence or a dict cannot be, or a fixed tuple's
+            array of another length.
+    """
+    origin = get_origin(annotation)
+    if annotation is Any:
+        return _Leaf(value, annotation, path)
+    if value is None:
+        if origin in (Union, UnionType) and type(None) in get_args(annotation):
+            return _Leaf(None, Any, path)
+        raise FieldTreeRefused(path, f"is null, not {_stored_form(annotation)}")
+    if origin in (Union, UnionType):
+        return _shape(value, _member_for(value, annotation, path), path)
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        return _dataclass_object(value, annotation, path)
+    if origin in (list, tuple):
+        return _array(value, annotation, path)
+    if origin is dict:
+        return _mapping(value, annotation, path)
+    return _Leaf(value, annotation, path)
+
+
+def _member_for(value: Any, union: Any, path: str | None) -> Any:
+    """The member of *union* that *value*, decoded JSON at *path* that is not null, is read as: the one _union_member picks.
+
+    Raises:
+        FieldTreeRefused: The members tag themselves and *value* is no object, or its tag names no
+            member, refused at the tag's path from _union_member's ValueError.
+    """
+    members = [arg for arg in get_args(union) if arg is not type(None)]
+    tag_field = _shared_tag_field(members)
+    if tag_field is None:
+        return _union_member(union, value)
+    if not isinstance(value, dict):
+        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object")
+    try:
+        return _union_member(union, value)
+    except ValueError as unknown_tag:
+        tags = [_tags(each)[tag_field] for each in members]
+        stored = "missing" if tag_field not in value else repr(value[tag_field])
+        raise FieldTreeRefused(_child(path, tag_field), f"is {stored}, not one of {tags}") from unknown_tag
+
+
+def _dataclass_object(value: Any, cls: type, path: str | None) -> _DataclassObject:
+    """The object *value* read as dataclass *cls*: each key the _Child of the field it names, annotated as that field, or an UnknownKey.
+
+    A key is a field's when fields(cls) names it; get_type_hints also names a ClassVar.
+
+    Raises:
+        FieldTreeRefused: *value* is no object.
+    """
+    if not isinstance(value, dict):
+        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object, as a {cls.__name__} is stored")
+    names = {each.name for each in fields(cls)}
+    field_types = _field_types(cls)
+    return _DataclassObject(
+        cls,
+        path,
+        tuple(
+            (key, _Child(item, field_types[key], _child(path, key)) if key in names else UnknownKey(_child(path, key), item))
+            for key, item in value.items()
+        ),
+    )
+
+
+def _array(value: Any, annotation: Any, path: str | None) -> _Array:
+    """The array *value* read as the list or tuple *annotation* declares: that container, and each item annotated as _item_annotations annotates it.
+
+    Raises:
+        FieldTreeRefused: *value* is no array, or a fixed tuple's array has another length.
+    """
+    if not isinstance(value, list):
+        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an array")
+    item_annotations = _item_annotations(annotation, len(value))
+    if item_annotations is None:
+        raise FieldTreeRefused(path, f"holds {len(value)} items, not the {len(get_args(annotation))} of a {annotation!r}")
+    return _Array(
+        tuple if get_origin(annotation) is tuple else list,
+        tuple(
+            _Child(item, item_annotation, _item(path, index))
+            for index, (item, item_annotation) in enumerate(zip(value, item_annotations, strict=True))
+        ),
+    )
+
+
+def _mapping(value: Any, annotation: Any, path: str | None) -> _Mapping:
+    """The object *value* read as the dict *annotation* declares: each key with its value, annotated as _value_annotation annotates it.
+
+    Raises:
+        FieldTreeRefused: *value* is no object.
+    """
+    if not isinstance(value, dict):
+        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object")
+    value_annotation = _value_annotation(annotation)
+    return _Mapping(tuple((key, _Child(item, value_annotation, _child(path, key))) for key, item in value.items()))
+
+
+def _read(value: Any, annotation: Any, path: str | None) -> Any:
+    """*value*, decoded JSON at *path* in its document, read as *annotation* declares, by its _shape.
+
+    A dataclass's object is read by _read_dataclass, an array into its container, a dict's
+    object into a dict, and a leaf by _read_leaf.
+
+    Raises:
+        FieldTreeRefused: *value*, or a value within it, cannot be its annotation, as _shape,
+            _read_dataclass or _read_leaf refuses it.
+    """
+    shape = _shape(value, annotation, path)
+    match shape:
+        case _DataclassObject():
+            return _read_dataclass(shape)
+        case _Array(container, items):
+            return container(_read(item.value, item.annotation, item.path) for item in items)
+        case _Mapping(entries):
+            return {key: _read(entry.value, entry.annotation, entry.path) for key, entry in entries}
+        case _Leaf():
+            return _read_leaf(shape.value, shape.annotation, shape.path)
+        case _:
+            assert_never(shape)
+
+
+def _read_dataclass(obj: _DataclassObject) -> Any:
+    """The *obj.cls* the object *obj* holds, each field read as its annotation declares.
+
+    A field with a default that the object lacks takes it. A field no constructor takes, a
+    union's tag, is read as its annotation but not passed to the class.
+
+    Raises:
+        FieldTreeRefused: The object holds a key no field has, the first such key's path; it lacks
+            a field with no default; a field's value is refused; or the class refuses the values
+            with a ValueError or TypeError, the cause, at the object's path.
+    """
+    stored: dict[str, _Child] = {}
+    for key, member in obj.members:
+        if isinstance(member, UnknownKey):
+            raise FieldTreeRefused(member.path, f"is not a field of {obj.cls.__name__}")
+        stored[key] = member
+    kwargs: dict[str, Any] = {}
+    for each in fields(obj.cls):
+        child = stored.get(each.name)
+        if child is None:
+            if each.init and each.default is MISSING and each.default_factory is MISSING:
+                raise FieldTreeRefused(
+                    _child(obj.path, each.name), f"is missing, and {obj.cls.__name__} has no default for it"
+                )
+            continue
+        item = _read(child.value, child.annotation, child.path)
+        if each.init:
+            kwargs[each.name] = item
+    try:
+        return obj.cls(**kwargs)
+    except (ValueError, TypeError) as refusal:
+        raise FieldTreeRefused(obj.path, f"is refused by {obj.cls.__name__}: {refusal}") from refusal
+
+
+def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
+    """*value*, decoded JSON at *path* in its document, read as *annotation*, which _shape found to be a leaf.
+
+    Any admits anything as it is. A Literal, bool, int, float and str admit only values of their
+    JSON type; an int or a float is any number but a bool, kept as decoded. A pd.Timestamp is
+    read from its ISO text.
 
     Raises:
         FieldTreeRefused: *value* cannot be *annotation*, or *annotation* has no stored form.
     """
-    origin = get_origin(annotation)
     if annotation is Any:
         return value
-    if origin in (Union, UnionType):
-        return _read_union(value, annotation, path)
-    if value is None:
-        raise FieldTreeRefused(path, f"is null, not {_stored_form(annotation)}")
-    if isinstance(annotation, type) and is_dataclass(annotation):
-        return _read_dataclass(value, annotation, path)
-    if origin in (list, tuple):
-        return _read_sequence(value, annotation, path)
-    if origin is dict:
-        if not isinstance(value, dict):
-            raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object")
-        value_annotation = _value_annotation(annotation)
-        return {key: _read_value(item, value_annotation, _child(path, key)) for key, item in value.items()}
-    if origin is Literal:
+    if get_origin(annotation) is Literal:
         if any(type(value) is type(option) and value == option for option in get_args(annotation)):
             return value
     elif annotation is bool:
@@ -156,137 +355,49 @@ def _read_value(value: Any, annotation: Any, path: str | None) -> Any:
     raise FieldTreeRefused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
 
 
-def _read_union(value: Any, annotation: Any, path: str | None) -> Any:
-    """*value* read as union *annotation*: null only when None is a member, else as the member _union_member picks.
-
-    Raises:
-        FieldTreeRefused: *value* is null and None is no member; its members tag themselves and it is
-            no object, or its tag names no member, refused at the tag's path; or the member
-            refuses it.
-    """
-    if value is None:
-        if type(None) in get_args(annotation):
-            return None
-        raise FieldTreeRefused(path, f"is null, not {_stored_form(annotation)}")
-    members = [arg for arg in get_args(annotation) if arg is not type(None)]
-    tag_field = _shared_tag_field(members)
-    if tag_field is None:
-        return _read_value(value, _union_member(annotation, value), path)
-    if not isinstance(value, dict):
-        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object")
-    try:
-        member = _union_member(annotation, value)
-    except ValueError as unknown_tag:
-        tags = [_tags(each)[tag_field] for each in members]
-        stored = "missing" if tag_field not in value else repr(value[tag_field])
-        raise FieldTreeRefused(_child(path, tag_field), f"is {stored}, not one of {tags}") from unknown_tag
-    return _read_value(value, member, path)
-
-
-def _read_dataclass(value: Any, cls: type, path: str | None) -> Any:
-    """The *cls* the object *value* holds, each field read as its annotation declares.
-
-    A field with a default that *value* lacks takes it. A field no constructor takes, a
-    union's tag, is read as its annotation but not passed to *cls*.
-
-    Raises:
-        FieldTreeRefused: *value* is no object; it holds a key no field has, the first such key's path;
-            it lacks a field with no default; a field's value is refused; or *cls* refuses the
-            values with a ValueError or TypeError, the cause, at *path*.
-    """
-    if not isinstance(value, dict):
-        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object, as a {cls.__name__} is stored")
-    cls_fields = fields(cls)
-    names = {each.name for each in cls_fields}
-    for key in value:
-        if key not in names:
-            raise FieldTreeRefused(_child(path, key), f"is not a field of {cls.__name__}")
-    field_types = _field_types(cls)
-    kwargs: dict[str, Any] = {}
-    for each in cls_fields:
-        if each.name not in value:
-            if each.init and each.default is MISSING and each.default_factory is MISSING:
-                raise FieldTreeRefused(_child(path, each.name), f"is missing, and {cls.__name__} has no default for it")
-            continue
-        item = _read_value(value[each.name], field_types[each.name], _child(path, each.name))
-        if each.init:
-            kwargs[each.name] = item
-    try:
-        return cls(**kwargs)
-    except (ValueError, TypeError) as refusal:
-        raise FieldTreeRefused(path, f"is refused by {cls.__name__}: {refusal}") from refusal
-
-
-def _read_sequence(value: Any, annotation: Any, path: str | None) -> Any:
-    """The list or tuple *annotation* declares, read from the array *value*.
-
-    A fixed tuple, as tuple[int, int], reads an array of exactly its arity, each item by
-    position; list[X] and tuple[X, ...] read each item as X.
-
-    Raises:
-        FieldTreeRefused: *value* is no array, a fixed tuple's array has another length, or an item is refused.
-    """
-    if not isinstance(value, list):
-        raise FieldTreeRefused(path, f"is {_json_value(value)}, not an array")
-    item_annotations = _item_annotations(annotation, len(value))
-    if item_annotations is None:
-        raise FieldTreeRefused(path, f"holds {len(value)} items, not the {len(get_args(annotation))} of a {annotation!r}")
-    items = [
-        _read_value(item, item_annotation, _item(path, index))
-        for index, (item, item_annotation) in enumerate(zip(value, item_annotations, strict=True))
-    ]
-    return tuple(items) if get_origin(annotation) is tuple else items
-
-
 def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tuple[Any, tuple[UnknownKey, ...]]:
     """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has; and each dropped key, an UnknownKey.
 
-    *value* is walked as _read_value reads it: an object read as a dataclass keeps the keys its
-    fields name, its tag's included; a union's value is walked as the member _union_member
-    picks; an array's items and an object's values are walked as their annotations declare. A
-    value of a JSON type its annotation cannot be, or of a tag no member of its union has, is
-    kept as it is, for the strict reader to refuse. *value* itself is not changed.
+    *value* is walked by its _shape, as _read reads it: a dataclass's object keeps the keys its
+    fields name, its tag's included, and an array's items and an object's values are walked in
+    their order. A value _shape refuses is kept whole, for the strict reader to refuse. *value*
+    itself is not changed.
     """
-    origin = get_origin(annotation)
-    if value is None:
+    try:
+        shape = _shape(value, annotation, path)
+    except FieldTreeRefused:
         return value, ()
-    if origin in (Union, UnionType):
-        try:
-            member = _union_member(annotation, value)
-        except ValueError:
+    match shape:
+        case _DataclassObject():
+            return _dataclass_object_without_unknown_keys(shape)
+        case _Array(items=items):
+            return _each_without_unknown_keys(items)
+        case _Mapping(entries=entries):
+            values, dropped = _each_without_unknown_keys(child for _, child in entries)
+            return dict(zip((key for key, _ in entries), values, strict=True)), dropped
+        case _Leaf():
             return value, ()
-        return _without_unknown_keys(value, member, path)
-    if isinstance(annotation, type) and is_dataclass(annotation) and isinstance(value, dict):
-        names = {each.name for each in fields(annotation)}
-        field_types = _field_types(annotation)
-        kept: dict[str, Any] = {}
-        dropped: list[UnknownKey] = []
-        for key, item in value.items():
-            if key in names:
-                kept[key], dropped_within = _without_unknown_keys(item, field_types[key], _child(path, key))
-                dropped.extend(dropped_within)
-            else:
-                dropped.append(UnknownKey(_child(path, key), item))
-        return kept, tuple(dropped)
-    if origin in (list, tuple) and isinstance(value, list):
-        item_annotations = _item_annotations(annotation, len(value))
-        if item_annotations is None:
-            return value, ()
-        walked = [
-            _without_unknown_keys(item, item_annotation, _item(path, index))
-            for index, (item, item_annotation) in enumerate(zip(value, item_annotations, strict=True))
-        ]
-        return [item for item, _ in walked], tuple(each for _, dropped_within in walked for each in dropped_within)
-    if origin is dict and isinstance(value, dict):
-        value_annotation = _value_annotation(annotation)
-        walked_values = {
-            key: _without_unknown_keys(item, value_annotation, _child(path, key)) for key, item in value.items()
-        }
-        return (
-            {key: item for key, (item, _) in walked_values.items()},
-            tuple(each for _, dropped_within in walked_values.values() for each in dropped_within),
-        )
-    return value, ()
+        case _:
+            assert_never(shape)
+
+
+def _dataclass_object_without_unknown_keys(obj: _DataclassObject) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
+    """The object *obj* without each key no field of its dataclass has, each field's value walked; and each dropped key, in the object's order."""
+    kept: dict[str, Any] = {}
+    dropped: list[UnknownKey] = []
+    for key, member in obj.members:
+        if isinstance(member, UnknownKey):
+            dropped.append(member)
+        else:
+            kept[key], dropped_within = _without_unknown_keys(member.value, member.annotation, member.path)
+            dropped.extend(dropped_within)
+    return kept, tuple(dropped)
+
+
+def _each_without_unknown_keys(children: Iterable[_Child]) -> tuple[list[Any], tuple[UnknownKey, ...]]:
+    """Each of *children*'s values without the keys no field has, in order; and each key dropped within them, in order."""
+    walked = [_without_unknown_keys(child.value, child.annotation, child.path) for child in children]
+    return [content for content, _ in walked], tuple(key for _, dropped in walked for key in dropped)
 
 
 def _child(path: str | None, name: str) -> str:
