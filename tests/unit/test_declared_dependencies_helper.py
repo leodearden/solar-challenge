@@ -18,6 +18,7 @@ from tests._declared_dependencies import (
 
 _UNPROVIDED_MODULE = "no_installed_distribution_provides_this_module"
 _ASSIGNS_RERUNFAILURES = 'pytest_plugins = ["pytest_rerunfailures"]'
+_SOURCE_ASSIGNING_RERUNFAILURES = 'SOURCE = "pytest_plugins = [\'pytest_rerunfailures\']"'
 _ASSIGNS_PYTESTER = 'pytest_plugins = ["pytester"]'
 _UNREADABLE_USE = "which can bind or change pytest_plugins in a form the contract cannot read"
 
@@ -1054,6 +1055,271 @@ def test_a_scope_fails_naming_the_file_and_line_of_a_pytest_plugins_it_cannot_re
             _UNREADABLE_USE,
             id="imported-in-a-function",
         ),
+        pytest.param(
+            ("globals().update(pytest_plugins=['pytest_rerunfailures'])",),
+            "globals().update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-globals-by-a-keyword",
+        ),
+        pytest.param(
+            ("vars().update({'pytest_plugins': ['pytest_rerunfailures']})",),
+            "vars().update({'pytest_plugins': ['pytest_rerunfailures']})",
+            _UNREADABLE_USE,
+            id="updated-through-vars-by-a-dict",
+        ),
+        pytest.param(
+            ("locals().__setitem__('pytest_plugins', ['pytest_rerunfailures'])",),
+            "locals().__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-locals-by-setitem",
+        ),
+        pytest.param(
+            ("sys.modules[__name__].__dict__.setdefault('pytest_plugins', ['pytest_rerunfailures'])",),
+            "sys.modules[__name__].__dict__.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-the-dict-of-the-module-by-setdefault",
+        ),
+        pytest.param(
+            (_ASSIGNS_PYTESTER, "globals().get('pytest_plugins').append('pytest_rerunfailures')"),
+            "globals().get('pytest_plugins').append('pytest_rerunfailures')",
+            _UNREADABLE_USE,
+            id="appended-through-a-get-of-globals",
+        ),
+        pytest.param(
+            ("dict.update(globals(), pytest_plugins=['pytest_rerunfailures'])",),
+            "dict.update(globals(), pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-by-a-function-given-globals",
+        ),
+        pytest.param(
+            ("sys._getframe().f_globals['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "sys._getframe().f_globals['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-globals-of-a-frame",
+        ),
+        pytest.param(
+            ("sys._getframe().f_locals.setdefault('pytest_plugins', ['pytest_rerunfailures'])",),
+            "sys._getframe().f_locals.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-the-locals-of-a-frame",
+        ),
+        pytest.param(
+            (
+                "def configure(): pass",
+                "configure.__globals__.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            ),
+            "configure.__globals__.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-the-globals-of-a-function",
+        ),
+        pytest.param(
+            ("getattr(sys.modules[__name__], '__dict__')['pytest_plugins'] = ['pytest_rerunfailures']",),
+            "getattr(sys.modules[__name__], '__dict__')['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-the-dict-of-the-module-by-getattr",
+        ),
+        pytest.param(
+            ("namespace = globals()", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-variable-holding-globals",
+        ),
+        pytest.param(
+            (
+                "namespace: dict[str, object] = sys.modules[__name__].__dict__",
+                "namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            "namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-an-annotated-variable-holding-the-dict-of-the-module",
+        ),
+        pytest.param(
+            (
+                "namespace = vars(sys.modules[__name__])",
+                "alias = namespace",
+                "alias.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            ),
+            "alias.setdefault('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-through-an-alias-of-a-variable-holding-a-namespace",
+        ),
+        pytest.param(
+            (
+                "namespace = globals()",
+                "def configure():",
+                "    namespace.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            ),
+            "namespace.__setitem__('pytest_plugins', ['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="set-in-a-function-through-a-module-variable-holding-globals",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    frame_globals = sys._getframe().f_globals",
+                "    frame_globals.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            "frame_globals.update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-a-function-variable-holding-the-globals-of-a-frame",
+        ),
+        pytest.param(
+            ("(namespace := globals()).update(pytest_plugins=['pytest_rerunfailures'])",),
+            "(namespace := globals()).update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-through-a-walrus-of-globals",
+        ),
+        pytest.param(
+            ("if (namespace := globals()): pass", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-variable-a-walrus-binds-to-globals",
+        ),
+        pytest.param(
+            ("namespace = globals()", "namespace |= {'pytest_plugins': ['pytest_rerunfailures']}"),
+            "namespace |= {'pytest_plugins': ['pytest_rerunfailures']}",
+            _UNREADABLE_USE,
+            id="updated-by-or-equals-through-a-variable-holding-globals",
+        ),
+        pytest.param(
+            ("exec(\"pytest_plugins = ['pytest_rerunfailures']\")",),
+            "exec(\"pytest_plugins = ['pytest_rerunfailures']\")",
+            _UNREADABLE_USE,
+            id="assigned-by-exec",
+        ),
+        pytest.param(
+            ("exec(\"import sys; sys.modules['plugin'].pytest_plugins.append('pytest_rerunfailures')\", {})",),
+            "exec(\"import sys; sys.modules['plugin'].pytest_plugins.append('pytest_rerunfailures')\", {})",
+            _UNREADABLE_USE,
+            id="appended-to-an-attribute-of-a-module-by-exec-in-a-namespace-of-its-own",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE)"),
+            "exec(SOURCE)",
+            _UNREADABLE_USE,
+            id="run-by-exec-of-code-it-cannot-read",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE, None)"),
+            "exec(SOURCE, None)",
+            _UNREADABLE_USE,
+            id="run-by-exec-given-none-for-globals",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(compile(SOURCE, 'plugins', 'exec'), globals())"),
+            "exec(compile(SOURCE, 'plugins', 'exec'), globals())",
+            _UNREADABLE_USE,
+            id="run-by-exec-of-compiled-code-in-globals",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "exec(SOURCE, globals=globals())"),
+            "exec(SOURCE, globals=globals())",
+            _UNREADABLE_USE,
+            id="run-by-exec-given-globals-by-keyword",
+        ),
+        pytest.param(
+            (
+                _SOURCE_ASSIGNING_RERUNFAILURES,
+                "namespace = globals()",
+                "def configure():",
+                "    exec(SOURCE, {}, namespace)",
+            ),
+            "exec(SOURCE, {}, namespace)",
+            _UNREADABLE_USE,
+            id="run-by-exec-with-locals-held-in-a-module-variable",
+        ),
+        pytest.param(
+            ("eval(\"globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",),
+            "eval(\"globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",
+            _UNREADABLE_USE,
+            id="set-by-eval",
+        ),
+        pytest.param(
+            ("eval(\" globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",),
+            "eval(\" globals().setdefault('pytest_plugins', ['pytest_rerunfailures'])\")",
+            _UNREADABLE_USE,
+            id="set-by-eval-of-code-with-a-leading-blank",
+        ),
+        pytest.param(
+            ("exec(\"pytest_plugins, count = ['pytest_rerunfailures'], 1\")",),
+            "exec(\"pytest_plugins, count = ['pytest_rerunfailures'], 1\")",
+            _UNREADABLE_USE,
+            id="bound-by-a-tuple-target-in-exec",
+        ),
+        pytest.param(
+            (
+                "namespace = globals()",
+                "class Settings:",
+                "    namespace = {}",
+                "    def configure(self):",
+                "        namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="set-in-a-method-through-a-module-variable-holding-globals-that-its-class-rebinds",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    namespace = globals()",
+                "    class Settings:",
+                "        def apply(self):",
+                "            namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="set-in-a-method-through-a-function-variable-holding-globals-around-its-class",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    global namespace",
+                "    namespace = globals()",
+                "configure()",
+                "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-module-variable-a-function-binds-to-globals-as-a-global",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    global namespace",
+                "    namespace = globals()",
+                "def apply():",
+                "    namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            "namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            _UNREADABLE_USE,
+            id="updated-in-a-function-through-a-variable-another-function-binds-to-globals-as-a-global",
+        ),
+        pytest.param(
+            (
+                "class Settings:",
+                "    def configure(self):",
+                "        global namespace",
+                "        namespace = globals()",
+                "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-module-variable-a-method-binds-to-globals-as-a-global",
+        ),
+        pytest.param(
+            (
+                "def outer():",
+                "    namespace = {}",
+                "    def inner():",
+                "        nonlocal namespace",
+                "        namespace = globals()",
+                "    inner()",
+                "    namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            _UNREADABLE_USE,
+            id="assigned-through-a-variable-an-inner-function-binds-to-globals-as-a-nonlocal",
+        ),
     ],
 )
 def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_pytest_plugins_it_cannot_read(
@@ -1062,17 +1328,11 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
     statement: str,
     clause: str,
 ) -> None:
-    """A pytest_plugins the detector cannot read fails it, wherever a statement of the module's own
-    scope gives or binds it. Its value may be no str, list or tuple of str, nor a literal. The name
-    may be bound by a tuple, a walrus, a for, a with, an except clause, of a try* too, a capture
-    of a match pattern or a from-import, a star import among them; be the name of a def or class;
-    sit beside another target of a chained assignment, which aliases the list; or be declared
-    global in a function. It may also be read or deleted in any scope, function and class bodies
-    included, as a method call such as append, a subscript, an alias or a del does, and a read may
-    sit in a case guard. Or a namespace, the dict that globals(), locals() or vars() returns or the
-    __dict__ of an object such as sys.modules[__name__], may be subscripted with the name, or an
-    attribute pytest_plugins of an object reached directly, through getattr, setattr or delattr, or
-    by a from-import of that name, in any position or scope.
+    """A pytest_plugins the detector cannot read fails it, wherever the module's code gives, binds
+    or changes it: a value that is no literal str, list or tuple of str; a binding of the name in a
+    form the contract does not follow; a read of the name, which can change the list it holds; an
+    entry of the module's namespace, or an attribute of the module, reached under the name,
+    directly, through a name that holds the namespace, or through exec or eval of code that does.
 
     pytest accepts None, a str or a sequence only, and imports each entry as a module name, so an int
     read as one would otherwise fail on its first string method, naming no file. Only None and the
@@ -1119,18 +1379,104 @@ def test_undeclared_distributions_fails_naming_the_file_line_and_statement_of_a_
             ("import sys", "sys.modules[__name__].__dict__['other_plugins'] = ['pytest_rerunfailures']"),
             id="another-key-of-the-dict-of-the-module",
         ),
+        pytest.param(
+            ("settings = {}", "settings.update(pytest_plugins=['pytest_rerunfailures'])"),
+            id="a-keyword-of-another-dicts-method",
+        ),
+        pytest.param(
+            ("globals().update(other_plugins=['pytest_rerunfailures'])",),
+            id="another-key-updated-through-globals",
+        ),
+        pytest.param(
+            ("import sys", "sys._getframe().f_builtins['pytest_plugins'] = ['pytest_rerunfailures']"),
+            id="a-key-of-the-builtins-of-a-frame",
+        ),
+        pytest.param(
+            ("namespace = dict(globals())", "namespace['pytest_plugins'] = ['pytest_rerunfailures']"),
+            id="a-key-of-a-copy-of-a-namespace",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    namespace = globals()",
+                "def report():",
+                "    namespace = {}",
+                "    namespace.update(pytest_plugins=['pytest_rerunfailures'])",
+            ),
+            id="a-name-holding-a-namespace-in-another-function",
+        ),
+        pytest.param(
+            (
+                "namespace = globals()",
+                "def report():",
+                "    namespace = {}",
+                "    namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            id="a-module-variable-holding-globals-rebound-in-a-function",
+        ),
+        pytest.param(
+            ("PLUGINS = []", "exec(\"PLUGINS.append('pytester')\", globals())"),
+            id="exec-of-code-that-names-no-pytest-plugins-in-globals",
+        ),
+        pytest.param(
+            (
+                "import sys",
+                _SOURCE_ASSIGNING_RERUNFAILURES,
+                "namespace = dict(vars(sys.modules[__name__]))",
+                "exec(SOURCE, namespace)",
+            ),
+            id="exec-of-code-it-cannot-read-in-a-copy-of-the-module-namespace",
+        ),
+        pytest.param(
+            (_SOURCE_ASSIGNING_RERUNFAILURES, "loader = object()", "loader.exec(SOURCE)"),
+            id="a-method-named-exec-of-another-object",
+        ),
+        pytest.param(
+            (
+                "namespace = {}",
+                "class Settings:",
+                "    namespace = globals()",
+                "    def configure(self):",
+                "        namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            id="a-class-variable-holding-globals-that-a-method-cannot-see",
+        ),
+        pytest.param(
+            (
+                "namespace = {}",
+                "def configure():",
+                "    namespace = globals()",
+                "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            id="a-function-variable-holding-globals-that-is-no-global",
+        ),
+        pytest.param(
+            (
+                "def configure():",
+                "    global namespace",
+                "    namespace = dict(globals())",
+                "namespace['pytest_plugins'] = ['pytest_rerunfailures']",
+            ),
+            id="a-copy-of-globals-a-function-binds-as-a-global",
+        ),
     ],
 )
 def test_undeclared_distributions_ignores_what_only_resembles_a_use_of_pytest_plugins(
     tmp_path: Path,
     lines: tuple[str, ...],
 ) -> None:
-    """Only the name pytest_plugins, its entry in a namespace, the dict that globals(), locals() or
-    vars() returns or the __dict__ of an object, or an attribute of that name, reached directly,
-    through getattr, setattr or delattr, or by a from-import, reaches the attribute of the module.
+    """What only resembles a use of pytest_plugins requires nothing and fails nothing: the same key
+    of another dict, another key of a namespace, a string that spells a use, hasattr, which only
+    tests for the attribute, and a key of something pytest never consults for the module's
+    attribute, such as a frame's f_builtins or a copy of a namespace.
 
-    The same key of another dict, another key of a namespace, a string that spells such a
-    statement, and hasattr, which only tests for the attribute, require nothing and fail nothing.
+    A name holds a namespace only where Python resolves it to a binding that gives it one: a name
+    so bound in another scope, rebound in this one, bound in a class whose methods cannot see it,
+    or bound in a function without a global declaration does not.
+
+    Code that names no pytest_plugins does not fail when exec runs it, wherever it runs. Nor does
+    code it cannot read that exec runs in a namespace of its own, such as a copy of the module's,
+    or a method named exec of another object.
     """
     resembling = _write_module(tmp_path / "resembling.py", *lines)
 
