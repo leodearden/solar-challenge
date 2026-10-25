@@ -78,6 +78,19 @@ conventions:
       overlap is no longer billed at the first listed period's rate (fk-872021ade9b6; D27
       invariant 2; docs/prds/tariff-coverage-classifier-presets.md §5.1).
 
+  - rule: "One owner of each seam of the dashboard's store: under src/solar_challenge/web only database.py opens a SQLite connection (Database.connect), only storage.py issues SQL against the runs table, its migrations included, and only app.py builds a RunStorage and reads the store's location from the Flask config (tests/unit/test_web_runs_table_owner.py)"
+    why: >
+      JobManager used to write the runs table with its own positional INSERT, api, assistant and
+      routes read it with their own SQL, decoders and fallbacks, and api.py and assistant.py read
+      the store's location from current_app.config (fk-df9d0fc1b2d3, fk-bfdae4525795). Now each
+      has one home: the connection policy in Database; every runs statement in storage.py, in
+      RunStorage, which the other modules take from the app through shared.get_storage(), and in
+      the runs table's migration functions; and the store's location in create_app. The test's
+      _SEAMS is the allow-list D27 ratified, and the web persistence code that later streams add
+      (S2, S10, S12, S16, S20, S25, S28) is held to it. A seam that moves to another module
+      changes _SEAMS and this line together (D27 invariant 4; contract C1;
+      docs/prds/run-store-one-owner.md §3.12).
+
   - rule: "The dashboard database's schema version matches the code, and its runs table matches RunRecord: open_database creates a new store at schema.SCHEMA_VERSION with one runs column per RunRecord field, and refuses a store at any other version, naming its path and both versions, until `solar-challenge web migrate` brings an older one there (tests/unit/test_web_schema.py)"
     why: >
       Stores used to be created by CREATE TABLE IF NOT EXISTS with no version, so a constraint
