@@ -5,23 +5,26 @@ scripts/measure_pv_performance_ratio.py measures the ratio that docs/pv-system-l
 defines and records; the note also sources the band. The same measurement's kWh per wired
 kWp is validation.BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP to within 1%, the figure that
 docs/pv-cell-temperature.md §3 records.
-Why 1%, and why the pvgis lane job does not run this: docs/prds/assistant-facts-from-engine.md §6 decision 3.
+Why 1%: docs/prds/assistant-facts-from-engine.md §6 decision 3.
 
-The TMY comes through PvgisTmy from the weather cache WeatherCache() resolves, the one
-every slow test reads: the working directory's, unless SOLAR_CHALLENGE_WEATHER_CACHE_DIR
-names another. A cold cache needs network access to PVGIS.
+The TMY is the weather-cache entry committed under tests/fixtures/weather_cache: PVGIS's
+v5_3 TMY for Bristol as PvgisTmy caches it, the entry docs/pv-cell-temperature.md §3's
+measurement read. So these tests reach no network, and run in the per-task verify.
 """
 
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
-from solar_challenge.weather import PvgisTmy, WeatherCache
+from solar_challenge.weather import WeatherCache
 from tests._scripts import load_script
 
+COMMITTED_WEATHER_CACHE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "weather_cache"
 MCS_PERFORMANCE_RATIO_LOW = 0.76
 MCS_PERFORMANCE_RATIO_HIGH = 0.84
 BRISTOL_YIELD_RELATIVE_TOLERANCE = 0.01
@@ -34,13 +37,30 @@ def pv_performance_ratio() -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def bristol_site(pv_performance_ratio: ModuleType) -> Any:
-    """measure_pv_performance_ratio's measurement of the default system over Bristol's TMY, one simulated year for every test here."""
-    bristol = Location.bristol()
-    return pv_performance_ratio.measure("Bristol", bristol, PvgisTmy(WeatherCache()).get(bristol))
+def bristol_tmy() -> pd.DataFrame:
+    """Bristol's TMY as the weather cache committed under tests/fixtures/weather_cache holds it: PVGIS's, as PvgisTmy caches it."""
+    if not COMMITTED_WEATHER_CACHE_DIR.is_dir():
+        pytest.fail(
+            f"No directory is at {COMMITTED_WEATHER_CACHE_DIR}, where the weather cache holding Bristol's TMY "
+            "is committed: restore it from git, or, if it moved, point COMMITTED_WEATHER_CACHE_DIR at it"
+        )
+    tmy = WeatherCache(cache_dir=COMMITTED_WEATHER_CACHE_DIR).get("tmy", Location.bristol())
+    if tmy is None:
+        pytest.fail(
+            f"WeatherCache reads no Bristol TMY entry in {COMMITTED_WEATHER_CACHE_DIR}, as after a change to "
+            "WeatherCache's keys. With network access to PVGIS, write the entry again with "
+            f'PvgisTmy(WeatherCache(cache_dir=Path("{COMMITTED_WEATHER_CACHE_DIR}"))).get(Location.bristol()), '
+            "delete the old entry's two files, and re-measure as docs/pv-cell-temperature.md §3 records"
+        )
+    return tmy
 
 
-@pytest.mark.slow
+@pytest.fixture(scope="module")
+def bristol_site(pv_performance_ratio: ModuleType, bristol_tmy: pd.DataFrame) -> Any:
+    """measure_pv_performance_ratio's measurement of the default system over the committed Bristol TMY, one simulated year for every test here."""
+    return pv_performance_ratio.measure("Bristol", Location.bristol(), bristol_tmy)
+
+
 class TestBristolPerformanceRatio:
     """The ratio band is MCS's performance ratio of 0.8, +/- 5%; the yield is validation's Bristol constant, +/- 1%."""
 
