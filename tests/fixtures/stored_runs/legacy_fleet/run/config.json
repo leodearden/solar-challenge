@@ -1,0 +1,98 @@
+{
+  "homes": [
+    {
+      "pv_config": {
+        "capacity_kw": 3.5,
+        "azimuth": 180.0,
+        "tilt": 35.0,
+        "name": "",
+        "module_efficiency": 0.2,
+        "temperature_coefficient": -0.004,
+        "custom_module_params": null,
+        "inverter_efficiency": 0.96,
+        "inverter_capacity_kw": null,
+        "custom_inverter_params": null,
+        "system_age_years": 0.0,
+        "degradation_rate_per_year": 0.005,
+        "system_losses": 0.14075660688264469
+      },
+      "load_config": {
+        "annual_consumption_kwh": 2900.0,
+        "household_occupants": 3,
+        "name": "",
+        "use_stochastic": true,
+        "seed": null
+      },
+      "battery_config": {
+        "capacity_kwh": 5.0,
+        "max_charge_kw": 2.5,
+        "max_discharge_kw": 2.5,
+        "name": "",
+        "dispatch_strategy": null,
+        "grid_charging": null,
+        "min_soc_fraction": 0.1,
+        "max_soc_fraction": 0.9,
+        "charge_efficiency": 0.975,
+        "discharge_efficiency": 0.975,
+        "efficiency": null,
+        "system_age_years": 0.0,
+        "calendar_fade_rate_per_year": 0.02,
+        "cycle_fade_per_equivalent_full_cycle": 5e-05,
+        "soh_floor": 0.5,
+        "soh": null
+      },
+      "heat_pump_config": null,
+      "ev_config": null,
+      "location": {
+        "latitude": 51.45,
+        "longitude": -2.58,
+        "timezone": "Europe/London",
+        "altitude": 11.0,
+        "name": "Bristol, UK"
+      },
+      "name": "Oak Close 1",
+      "tariff_config": null,
+      "dispatch_strategy": "greedy",
+      "seg_tariff": null
+    },
+    {
+      "pv_config": {
+        "capacity_kw": 4.5,
+        "azimuth": 200.0,
+        "tilt": 30.0,
+        "name": "",
+        "module_efficiency": 0.2,
+        "temperature_coefficient": -0.004,
+        "custom_module_params": null,
+        "inverter_efficiency": 0.96,
+        "inverter_capacity_kw": null,
+        "custom_inverter_params": null,
+        "system_age_years": 0.0,
+        "degradation_rate_per_year": 0.005,
+        "system_losses": 0.14075660688264469
+      },
+      "load_config": {
+        "annual_consumption_kwh": 4100.0,
+        "household_occupants": 3,
+        "name": "",
+        "use_stochastic": true,
+        "seed": null
+      },
+      "battery_config": null,
+      "heat_pump_config": null,
+      "ev_config": null,
+      "location": {
+        "latitude": 51.45,
+        "longitude": -2.58,
+        "timezone": "Europe/London",
+        "altitude": 11.0,
+        "name": "Bristol, UK"
+      },
+      "name": "Oak Close 2",
+      "tariff_config": null,
+      "dispatch_strategy": "greedy",
+      "seg_tariff": null
+    }
+  ],
+  "n_homes": 2
+}

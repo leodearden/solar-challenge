@@ -65,6 +65,7 @@ from solar_challenge.web.sse import (
     sse_frame,
 )
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage, headline_figures
+from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 bp = Blueprint("assistant", __name__)
 
@@ -414,9 +415,9 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         Dict with keys ``run_id``, ``name``, ``type``, ``status``,
         ``created_at``, ``n_homes``, and ``summary``, the field tree of the
         run's summary, {} while it has none. Returns ``{"error": "<reason>"}``
-        when not found, on any DB error, or when the run's summary does not
-        decode, the reason then RunRecord.summary's refusal naming the run and
-        runs.summary_json. Never raises.
+        when not found, on any DB error, or when the run's summary cannot be
+        read, the reason then RunRecord.summary's StoredRunUnreadable naming the
+        run, runs.summary_json and the field. Never raises.
     """
     try:
         run = storage.run_record(run_id_or_name) or storage.latest_run_named(run_id_or_name)
@@ -426,7 +427,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         return {"error": f"Run not found: {run_id_or_name!r}"}
     try:
         summary = run.summary()
-    except ValueError as unreadable:
+    except StoredRunUnreadable as unreadable:
         return {"error": str(unreadable)}
     return {
         "run_id": run.id,
@@ -444,7 +445,8 @@ def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
 
     Reads the first page of *storage*'s run list; a limit above _LIST_RUNS_MAX_LIMIT
     is clamped to it, so callers cannot request an unbounded result set.  Returns
-    identifying fields plus each run's headline figures.
+    identifying fields plus each run's headline figures and, as ``unreadable``,
+    why its summary cannot be read, if it cannot.
 
     Args:
         limit:   Maximum number of runs to return (at most
@@ -466,7 +468,7 @@ def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
 
 
 def _recent_run_entry(record: RunRecord) -> dict[str, Any]:
-    """list_recent_runs' entry for *record*'s run: its identifying fields and its headline_figures."""
+    """list_recent_runs' entry for *record*'s run: its identifying fields and its headline_figures, unreadable among them."""
     return {
         "run_id": record.id,
         "name": record.name,
@@ -771,7 +773,9 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
             "name": "list_recent_runs",
             "description": (
                 "List recent simulation runs in reverse chronological order.  "
-                "Returns identifying fields and key summary metrics for each run. "
+                "Returns identifying fields and key summary metrics for each run; "
+                "a run whose stored summary cannot be read has no metrics, and its "
+                "'unreadable' says why. "
                 "Use this when the user asks what simulations have been run recently."
             ),
             "input_schema": {

@@ -33,16 +33,25 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
+from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
+from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
 
+from tests._dashboard_databases import write_database_at_schema_version_1
 from tests._finance_builders import make_fleet_results, make_home_config
-from tests._html_page import element_attributes, element_count, texts_after
+from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import database_of, point_store_config_at_a_missing_directory
+from tests._web_app import (
+    build_test_app,
+    database_of,
+    database_path_in,
+    point_store_config_at_a_missing_directory,
+    release_store_lock,
+)
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -114,10 +123,15 @@ def _insert_test_run(
         )
 
 
+def _overwrite(app: Flask, run_id: str, column: str, text: str) -> None:
+    """Overwrite run *run_id*'s *column*, summary_json or config_json, with *text*."""
+    with database_of(app).transaction() as conn:
+        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (text, run_id))
+
+
 def _garble(app: Flask, run_id: str, column: str) -> None:
     """Overwrite run *run_id*'s *column*, summary_json or config_json, with text that is not JSON."""
-    with database_of(app).transaction() as conn:
-        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", ("{not json", run_id))
+    _overwrite(app, run_id, column, "{not json")
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +357,33 @@ class TestRunsAPI:
             logging.WARNING
         ]
 
+    def test_a_run_whose_summary_holds_a_key_no_field_has_lists_no_figures_and_names_why_beside_the_others(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """The row's unreadable names the run, runs.summary_json and the key, so the list can say why the run shows no figures (the G7 waiver)."""
+        _insert_test_run(
+            app, run_id="readable-run", summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
+        )
+        _insert_test_run(app, run_id="retired-key-run")
+        _overwrite(
+            app,
+            "retired-key-run",
+            "summary_json",
+            json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+        )
+
+        rows = {row["id"]: row for row in client.get("/api/history/runs").get_json()["runs"]}
+
+        readable, damaged = rows["readable-run"], rows["retired-key-run"]
+        assert (readable["total_generation_kwh"], readable["self_consumption_ratio"], readable["unreadable"]) == (
+            987.65,
+            0.37,
+            None,
+        )
+        assert (damaged["total_generation_kwh"], damaged["self_consumption_ratio"]) == (None, None)
+        unreadable = damaged["unreadable"]
+        assert [text for text in ("'retired-key-run'", "runs.summary_json", "retired_figure") if text not in unreadable] == []
+
     def test_dates_keep_the_runs_created_from_the_first_date_to_the_end_of_the_last(
         self, app: Flask, client: FlaskClient
     ) -> None:
@@ -469,10 +510,10 @@ class TestRunDetailAPI:
         }
 
     @pytest.mark.parametrize("column", ["summary_json", "config_json"])
-    def test_api_get_run_of_a_run_whose_document_does_not_decode_answers_409_naming_the_run_and_its_column(
+    def test_api_get_run_of_a_run_whose_document_is_not_json_answers_409_naming_the_run_and_its_column(
         self, app: Flask, client: FlaskClient, column: str
     ) -> None:
-        """A stored summary or config that is not JSON is refused, not decoded as {}."""
+        """A stored summary or config that is not JSON is refused as a whole, its field None, not decoded as {}."""
         _insert_test_run(app, run_id="garbled-run")
         _garble(app, "garbled-run", column)
 
@@ -480,7 +521,7 @@ class TestRunDetailAPI:
 
         assert response.status_code == 409
         body = response.get_json()
-        assert body == {"error": body["error"], "run_id": "garbled-run"}
+        assert body == {"error": body["error"], "run_id": "garbled-run", "document": f"runs.{column}", "field": None}
         assert "'garbled-run'" in body["error"] and f"runs.{column}" in body["error"], body["error"]
 
 
@@ -805,22 +846,37 @@ class TestExportAPI:
         assert load_fleet_config(path).homes == home_configs
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-    def test_export_of_a_run_stored_before_the_dispatch_union_loads_back_with_its_variant(
-        self, app: Flask, client: FlaskClient, tmp_path: Path, strategy: object
+    def test_export_of_a_run_stored_before_the_dispatch_union_answers_its_variant_once_migrated(
+        self, tmp_path: Path, strategy: object
     ) -> None:
-        """Such a run stores all three strategy keys, the ones its strategy does not read null."""
-        stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
-        _insert_test_run(app, run_id="pre-union", config=stored)
+        """Such a run stores all three strategy keys, the ones its strategy does not read null.
 
-        response = client.get("/api/history/runs/pre-union/export/yaml")
+        The strict reader refuses a key no field has, null or not, so the run's row is migrated
+        first, as `solar-challenge web migrate` migrates a store at schema version 1, which drops
+        those keys.
+        """
+        store = tmp_path / "store"
+        database = write_database_at_schema_version_1(database_path_in(store))
+        stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
+        with Database(database).transaction() as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status) VALUES (?, ?, ?, ?, ?, ?)",
+                ("pre-union", "Pre-union Run", "home", json.dumps(stored), summary_json(home_summary()), "completed"),
+            )
+        migrate_store(database, store)
+
+        app = build_test_app(store)
+        try:
+            response = app.test_client().get("/api/history/runs/pre-union/export/yaml")
+        finally:
+            release_store_lock(app)
 
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        battery_config = home_config_for_run(path).battery_config
-        assert battery_config is not None
-        assert battery_config.dispatch_strategy == strategy
-        assert battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
+        battery = home_config_for_run(path).battery_config
+        assert battery is not None
+        assert battery.dispatch_strategy == strategy
 
     def test_export_refuses_a_run_config_the_scenario_grammar_cannot_express(
         self, storage: RunStorage, client: FlaskClient
@@ -837,9 +893,9 @@ class TestExportAPI:
         assert "custom_module_params" in response.get_json()["error"]
 
     @pytest.mark.parametrize(
-        ("config", "named"),
+        ("config", "field"),
         [
-            pytest.param({"pv_config": {"capacity_kw": 4.0}}, (), id="no load_config"),
+            pytest.param({"pv_config": {"capacity_kw": 4.0}}, "load_config", id="no load_config"),
             pytest.param(
                 {
                     "pv_config": {"capacity_kw": 4.0},
@@ -849,7 +905,7 @@ class TestExportAPI:
                         "dispatch_strategy": {"strategy_type": "tou_optimized"},
                     },
                 },
-                (),
+                "battery_config.dispatch_strategy.peak_hours",
                 id="TOU dispatch strategy without peak hours",
             ),
             pytest.param(
@@ -861,24 +917,23 @@ class TestExportAPI:
                         "dispatch_strategy": {"strategy_type": "turbo"},
                     },
                 },
-                ("strategy_type", "'turbo'"),
+                "battery_config.dispatch_strategy.strategy_type",
                 id="dispatch strategy no strategy is tagged with",
             ),
         ],
     )
-    def test_export_of_an_undecodable_stored_config_is_a_server_error(
-        self, app: Flask, client: FlaskClient, config: dict, named: tuple[str, ...]
+    def test_export_of_a_stored_config_that_cannot_be_read_answers_409_naming_its_column_and_field(
+        self, app: Flask, client: FlaskClient, config: dict, field: str
     ) -> None:
-        """A stored config that a HomeConfig-tree constructor refuses, or whose strategy no variant is tagged with, is a JSON server error."""
+        """A stored config the strict reader refuses, lacking a field with no default or tagging its strategy as no variant is tagged, is refused with the one 409 of an unreadable run."""
         _insert_test_run(app, run_id="undecodable", config=config)
 
         response = client.get("/api/history/runs/undecodable/export/yaml")
 
-        assert response.status_code == 500
-        error = response.get_json()["error"]
-        assert error.startswith("Invalid run data")
-        for text in named:
-            assert text in error
+        assert response.status_code == 409
+        body = response.get_json()
+        assert body == {"error": body["error"], "run_id": "undecodable", "document": "runs.config_json", "field": field}
+        assert field in body["error"], body["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -943,10 +998,13 @@ class TestComparisonRoute:
     def test_compare_answers_a_server_error_when_a_chart_cannot_be_drawn(
         self, app: Flask, client: FlaskClient
     ) -> None:
-        """A comparison chart that cannot be drawn fails the request with the app's 500 page, as a results page's chart does, instead of the page being served without it."""
+        """A comparison chart that cannot be drawn fails the request with the app's 500 page, as a results page's chart does, instead of the page being served without it.
+
+        A stored figure may be any JSON number, so a battery charge too large for a float is read,
+        and the efficiency radar cannot divide it by the generation.
+        """
         _insert_test_run(app, run_id="cmp-1", name="Compare A")
-        null_ratio = home_summary(grid_dependency_ratio=None)
-        _insert_test_run(app, run_id="cmp-2", name="Compare B", summary=null_ratio)
+        _insert_test_run(app, run_id="cmp-2", name="Compare B", summary=home_summary(total_battery_charge_kwh=10**400))
         app.config["PROPAGATE_EXCEPTIONS"] = False
 
         response = client.get("/history/compare?ids=cmp-1,cmp-2")
@@ -955,20 +1013,31 @@ class TestComparisonRoute:
         page = response.get_data(as_text=True)
         assert texts_after(page, "500", 1) == ["Internal Server Error"]
 
-    def test_compare_answers_a_server_error_when_a_run_s_summary_does_not_decode(
-        self, app: Flask, client: FlaskClient
+    @pytest.mark.parametrize(
+        ("damaged_summary_json", "field"),
+        [
+            pytest.param("{not json", None, id="summary-not-json"),
+            pytest.param(
+                summary_json(home_summary(grid_dependency_ratio=None)),
+                "grid_dependency_ratio",
+                id="summary-holds-null-for-a-ratio",
+            ),
+        ],
+    )
+    def test_compare_of_a_run_whose_summary_cannot_be_read_redirects_to_the_runs_page_flashing_its_refusal(
+        self, app: Flask, client: FlaskClient, damaged_summary_json: str, field: str | None
     ) -> None:
-        """A run whose stored summary is not JSON fails the request with the app's 500 page, instead of being compared as a run of zeros."""
+        """The run is not compared as a run of zeros: the flash names the run, runs.summary_json and the field (D-S19-9)."""
         _insert_test_run(app, run_id="cmp-1", name="Compare A")
         _insert_test_run(app, run_id="cmp-2", name="Compare B")
-        _garble(app, "cmp-2", "summary_json")
-        app.config["PROPAGATE_EXCEPTIONS"] = False
+        _overwrite(app, "cmp-2", "summary_json", damaged_summary_json)
 
-        response = client.get("/history/compare?ids=cmp-1,cmp-2")
+        response = client.get("/history/compare?ids=cmp-1,cmp-2", follow_redirects=True)
 
-        assert response.status_code == 500
-        page = response.get_data(as_text=True)
-        assert texts_after(page, "500", 1) == ["Internal Server Error"]
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        named = ["cmp-2", "runs.summary_json", *([] if field is None else [field])]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if all(name in text for name in named)]) == 1, page_texts
 
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""

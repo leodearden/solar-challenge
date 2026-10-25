@@ -103,12 +103,23 @@ def migrate() -> None:
     migration step it is behind by, and prints each step it applied. A store
     already at this version is left as it is.
 
+    A step can bring each stored run to the stored-run format too: it prints
+    each value it drops from a run's documents that is not null, naming the
+    run, the document and the field, and each run it cannot migrate, which it
+    leaves as it was, naming its run, document and field. It reads a run's
+    JSON documents, not its time series, which have no format version: a run
+    whose time series is damaged is migrated, and refused naming it when it is
+    loaded.
+
     It refuses, changing nothing and exiting with an error: a store another
     dashboard holds, naming its lock file; a store a newer solar-challenge
     wrote, naming both versions; a store holding a row this version cannot
     keep, naming that row; a store whose tables a step cannot rebuild, naming
     the step and the fault; and a database file that cannot be read as one,
-    naming it.
+    naming it. A step that cannot write a stored run's file, e.g. on a full
+    disk, is refused too, naming the step and the fault: the store stays at
+    the version before it, and the command, run again once the fault is
+    fixed, migrates it.
 
     Examples:
       solar-challenge web migrate
@@ -121,7 +132,7 @@ def migrate() -> None:
     try:
         store_lock = acquire_store_lock(location.data_dir)
         try:
-            report = migrate_store(location.database)
+            report = migrate_store(location.database, location.data_dir)
         finally:
             store_lock.release()
     except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused) as refused:

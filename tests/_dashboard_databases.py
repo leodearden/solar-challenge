@@ -4,6 +4,8 @@
 write_pre_548_database writes the store tests/fixtures/databases/pre_548_store.sql holds: the
 schema init_db created before task 548, whose runs table admits 'sweep' runs and nameless runs
 and which keeps the retired jobs table, with a few rows and no schema version.
+write_database_at_schema_version_1 writes an empty store at schema version 1, whose schema
+schema_v1.sql holds: the store a solar-challenge at that version left.
 write_database_a_newer_solar_challenge_wrote writes a store at the schema version after
 SCHEMA_VERSION. schema_of reads a database's schema as data, so a test can compare two stores'
 schemas. FIXTURES_DIR is the directory holding the database fixtures.
@@ -32,10 +34,34 @@ def write_pre_548_database(path: Path) -> Path:
     Raises:
         FileExistsError: A file is already at *path*, so the store would not be the fixture's alone.
     """
+    return _write_new_database(path, "the pre-548 store", (FIXTURES_DIR / "pre_548_store.sql").read_text())
+
+
+def write_database_at_schema_version_1(path: Path) -> Path:
+    """Write a store at schema version 1 as a new database file at *path*, creating its directory; return *path*.
+
+    Its schema is the one schema_v1.sql holds, its tables hold no row, its user_version is 1 and
+    it journals in WAL mode, as a store a solar-challenge at schema version 1 created does.
+
+    Raises:
+        FileExistsError: A file is already at *path*, so the store would not be the fixture's alone.
+    """
+    script = (FIXTURES_DIR / "schema_v1.sql").read_text()
+    return _write_new_database(
+        path, "the store at schema version 1", f"PRAGMA journal_mode=WAL;\n{script}\nPRAGMA user_version = 1;\n"
+    )
+
+
+def _write_new_database(path: Path, store: str, script: str) -> Path:
+    """Run the SQL *script* on a new database file at *path*, creating its directory; return *path*.
+
+    Raises:
+        FileExistsError: A file is already at *path*; the message names it and *store*, what the
+            file would have held.
+    """
     if path.exists():
-        raise FileExistsError(f"A file is already at {path}; the pre-548 store is written as a new file")
+        raise FileExistsError(f"A file is already at {path}; {store} is written as a new file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    script = (FIXTURES_DIR / "pre_548_store.sql").read_text()
     with closing(sqlite3.connect(path)) as conn:
         conn.executescript(script)
     return path

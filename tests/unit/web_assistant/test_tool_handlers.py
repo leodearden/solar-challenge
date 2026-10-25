@@ -2,6 +2,7 @@
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
 import dataclasses
+import json
 import logging
 import time
 from datetime import date
@@ -30,6 +31,7 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
@@ -364,10 +366,10 @@ class TestGetRunResults:
             f"Expected summary=={{}} for NULL summary_json; got {result.get('summary')!r}"
         )
 
-    def test_a_run_whose_summary_does_not_decode_answers_the_refusal_naming_the_run_not_a_database_error(
+    def test_a_run_whose_summary_cannot_be_read_answers_the_refusal_naming_the_run_not_a_database_error(
         self, tmp_path: Path
     ) -> None:
-        """The error is RunRecord.summary's refusal, which names the run and runs.summary_json."""
+        """The error is RunRecord.summary's StoredRunUnreadable, which names the run and runs.summary_json."""
         database = open_database(tmp_path / "grr_garbled.db")
         seed_run(database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
         with database.transaction() as conn:
@@ -375,10 +377,11 @@ class TestGetRunResults:
         storage = run_storage_over(database)
         record = storage.run_record("garbled-run")
         assert record is not None
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(StoredRunUnreadable) as refusal:
             record.summary()
 
         assert get_run_results("garbled-run", storage) == {"error": str(refusal.value)}
+        assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", "runs.summary_json")
 
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
         """get_run_results over a storage whose database cannot be opened returns {'error':...}, no raise."""
@@ -580,10 +583,20 @@ class TestListRecentRuns:
         assert figures == (summary.total_generation_kwh, summary.fleet_self_consumption_ratio)
         assert figures == (row["total_generation_kwh"], row["self_consumption_ratio"])
 
-    def test_a_run_whose_summary_does_not_decode_is_listed_without_figures_beside_the_others(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(
+                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                id="summary-with-a-key-no-field-has",
+            ),
+        ],
+    )
+    def test_a_run_whose_summary_cannot_be_read_is_listed_without_figures_with_its_refusal_beside_the_others(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
-        """One damaged run neither fails the list nor hides the other runs' figures, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
+        """One damaged run neither fails the list nor hides the other runs' figures; its entry carries its refusal as unreadable, as its History row does, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
         database = open_database(tmp_path / "lrr_garbled.db")
         seed_run(
             database,
@@ -600,16 +613,22 @@ class TestListRecentRuns:
             summary=home_summary(),
         )
         with database.transaction() as conn:
-            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, "garbled-run"))
+        storage = run_storage_over(database)
+        garbled = storage.run_record("garbled-run")
+        assert garbled is not None
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            garbled.summary()
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
-        result = list_recent_runs(10, run_storage_over(database))
+        result = list_recent_runs(10, storage)
 
         assert "error" not in result, result
         assert [
-            (entry["run_id"], entry["total_generation_kwh"], entry["self_consumption_ratio"])
+            (entry["run_id"], entry["total_generation_kwh"], entry["self_consumption_ratio"], entry["unreadable"])
             for entry in result["runs"]
-        ] == [("readable-run", 987.65, 0.37), ("garbled-run", None, None)]
+        ] == [("readable-run", 987.65, 0.37, None), ("garbled-run", None, None, str(refusal.value))]
+        assert "runs.summary_json" in str(refusal.value)
         assert [record.levelno for record in caplog.records if "garbled-run" in record.getMessage()] == [
             logging.WARNING
         ]

@@ -50,7 +50,7 @@ from solar_challenge.web.shared import get_database, get_job_manager, get_storag
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import HEARTBEAT, event_stream
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
-from solar_challenge.web.stored_runs import RUN_TYPES
+from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,19 @@ def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable
     """
     logger.error("%s", unreadable, exc_info=unreadable)
     return jsonify({"error": str(unreadable)}), 500
+
+
+@api_bp.errorhandler(StoredRunUnreadable)
+def _answer_a_stored_run_that_cannot_be_read(unreadable: StoredRunUnreadable) -> tuple[Response, int]:
+    """Answer HTTP 409 with the refusal of a stored run that cannot be read, logged as a warning: its message as error, and its run_id, document and field.
+
+    Any endpoint of this blueprint that reads a stored run is answered this way (D-S19-9 in
+    docs/prds/run-store-one-owner.md); field is None when the document as a whole is refused.
+    """
+    logger.warning("%s", unreadable)
+    return jsonify(
+        {"error": str(unreadable), "run_id": unreadable.run_id, "document": unreadable.document, "field": unreadable.field}
+    ), 409
 
 
 def _submitted_job_answer(job_id: str, run_id: str) -> tuple[Response, int]:
@@ -259,7 +272,8 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
     Returns:
         JSON with the job's run's id, name, type and creation time, and as ``summary`` its
         summary's field tree, {} while it has none; or 404/409 on error. A run whose summary
-        does not decode fails the request, with RunRecord.summary's refusal.
+        cannot be read is answered 409 with its refusal, as the blueprint answers a
+        StoredRunUnreadable.
     """
     job_manager = get_job_manager()
     state = job_manager.job_state(job_id)
@@ -681,7 +695,7 @@ def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
 
 
 def _history_row(record: RunRecord) -> dict[str, Any]:
-    """The History list's row for *record*'s run: its columns but its documents and error, its headline_figures, and its results page's path."""
+    """The History list's row for *record*'s run: its columns but its documents and error, its headline_figures, unreadable among them, and its results page's path."""
     return {
         "id": record.id,
         "name": record.name,
@@ -712,7 +726,7 @@ def _pagination(query: RunQuery, total: int) -> dict[str, int | bool]:
 
 @api_bp.route("/history/runs/<run_id>")
 def history_get_run(run_id: str) -> Response | tuple[Response, int]:
-    """A run's detail: each column of its row, with its summary and its homes decoded through its kind.
+    """A run's detail: each column of its row, with its summary and its homes read through its kind.
 
     Args:
         run_id: Unique run identifier.
@@ -720,19 +734,17 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON of each column of the run's row, plus, once the run has them, ``summary``, its
         summary's field tree, and ``home_configs``, the HomeConfig field tree of each of its
-        homes, in order. 404 if no run has the id; 409 {error, run_id} if its summary or its
-        config does not decode, the error naming the run and the column.
+        homes, in order. 404 if no run has the id; 409 {error, run_id, document, field} if its
+        summary or its config cannot be read, as the blueprint answers a StoredRunUnreadable,
+        the document being runs.summary_json or runs.config_json.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    try:
-        summary = run.summary()
-        homes = run.home_configs()
-    except ValueError as refusal:
-        return jsonify({"error": str(refusal), "run_id": run_id}), 409
+    summary = run.summary()
+    homes = run.home_configs()
 
     detail = asdict(run)
     if summary is not None:
@@ -804,7 +816,8 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        CSV file response, or 404 if not found.
+        CSV file response, or 404 if not found; 409 {error, run_id, document, field} if a file of
+        the run cannot be read, as the blueprint answers a StoredRunUnreadable.
     """
     storage = get_storage()
     run = storage.run_record(run_id)
@@ -841,18 +854,16 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response; 404 if the run or its config is missing, 500 if its record names
-        no run kind or its config does not decode, 422 if the scenario grammar cannot express it.
+        YAML file response; 404 if the run or its config is missing; 409 {error, run_id,
+        document, field} if its record names no run kind or its config cannot be read, as the
+        blueprint answers a StoredRunUnreadable; 422 if the scenario grammar cannot express it.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    try:
-        homes = run.home_configs()
-    except ValueError as exc:
-        return jsonify({"error": f"Invalid run data: {exc}"}), 500
+    homes = run.home_configs()
     if homes is None:
         return jsonify({"error": "No config data available"}), 404
 

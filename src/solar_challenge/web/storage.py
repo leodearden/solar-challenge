@@ -7,6 +7,13 @@ Provides RunStorage class for saving and loading simulation results with:
 
 Storage structure:
   {data_dir}/runs/{run_id}/   # the run's documents, as stored_runs lays them out for its kind
+
+A save writes the run's documents, then its format.json, then its runs row.
+
+The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
+and for a step carrying a run-document step, migrate_stored_run_files, which brings every
+stored run's files forward before the step's transaction, and migrate_runs_table_documents,
+which brings the copies in each runs row forward inside it.
 """
 
 import json
@@ -15,17 +22,35 @@ import math
 import re
 import shutil
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
+from typing import Any, Literal, TypedDict, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.run_names import is_run_name, require_run_name
-from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunKind, RunType, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.stored_runs import (
+    RUN_KINDS,
+    RUN_TYPES,
+    DroppedValue,
+    RunDocumentStep,
+    RunKind,
+    RunType,
+    StoredDocument,
+    StoredFleetRun,
+    StoredHomeRun,
+    StoredRun,
+    StoredRunDocuments,
+    StoredRunUnreadable,
+    UnmigratedRun,
+    documents_in_current_format,
+    read_run_documents,
+    step_run_documents,
+    write_run_documents,
+)
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
@@ -81,76 +106,78 @@ class RunRecord:
         """The kind of run the record's type names: its entry in RUN_KINDS.
 
         Raises:
-            ValueError: The record has no type, so it names no kind; the message names its run.
+            StoredRunUnreadable: The record has no type, so its run is of no run kind; the
+                document is runs.type.
         """
         return _run_kind(self.id, self.type)
 
     def summary(self) -> SummaryStatistics | FleetSummary | None:
-        """The run's summary, decoded from summary_json as its kind's summary_type; None while the run has none.
+        """The run's summary, read from summary_json as its kind's summary_type; None while the run has none.
 
         Raises:
-            ValueError: The record has no type, as RunRecord.kind refuses it, or summary_json does
-                not decode as its kind's summary; then the message names the run and
-                runs.summary_json, and the decoder's refusal is the cause.
+            StoredRunUnreadable: The record has no type, as RunRecord.kind refuses it, or
+                summary_json is not the field tree of its kind's summary, as StoredDocument.read
+                refuses it; the document is then runs.summary_json.
         """
         return _run_summary(self.id, self.type, self.summary_json)
 
     def home_configs(self) -> tuple[HomeConfig, ...] | None:
-        """Each home's HomeConfig, in order, decoded from config_json as the run's kind decodes it; None while the run has none.
+        """Each home's HomeConfig, in order, read from config_json as the run's kind reads it; None while the run has none.
 
         Raises:
-            ValueError: The record has no type, as RunRecord.kind refuses it, or config_json does
-                not decode as its kind's config; then the message names the run and
-                runs.config_json, and the decoder's refusal is the cause.
+            StoredRunUnreadable: The record has no type, as RunRecord.kind refuses it, or
+                config_json is not the field tree of its kind's config, as StoredDocument.read
+                refuses it; the document is then runs.config_json.
         """
         if self.config_json is None:
             return None
-        return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
+        return self.kind.home_configs(_row_document(self.id, "config_json", self.config_json))
 
 
 def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
     """The kind of run that *run_type*, run *run_id*'s type, names: its entry in RUN_KINDS.
 
     Raises:
-        ValueError: *run_type* is None, so it names no kind; the message names the run.
+        StoredRunUnreadable: *run_type* is None, as _run_type refuses it.
+    """
+    return RUN_KINDS[_run_type(run_id, run_type)]
+
+
+def _run_type(run_id: str, run_type: RunType | None) -> RunType:
+    """*run_type*, run *run_id*'s type, which a stored run needs to be read as a run of a kind.
+
+    Raises:
+        StoredRunUnreadable: *run_type* is None, so the run is of no run kind; the document is runs.type.
     """
     if run_type is None:
-        raise ValueError(f"Run {run_id!r} is recorded with no type, so it is of no run kind")
-    return RUN_KINDS[run_type]
+        raise StoredRunUnreadable(run_id, "runs.type", None, "is NULL, so the run is of no run kind")
+    return run_type
 
 
 def _run_summary(
     run_id: str, run_type: RunType | None, summary_json: str | None
 ) -> SummaryStatistics | FleetSummary | None:
-    """Run *run_id*'s summary, decoded from its *summary_json* as the kind *run_type* names decodes it; None while it has none.
+    """Run *run_id*'s summary, read from its *summary_json* as the kind *run_type* names reads it; None while it has none.
 
     Raises:
-        ValueError: As RunRecord.summary() raises.
+        StoredRunUnreadable: As RunRecord.summary() raises.
     """
     if summary_json is None:
         return None
-    return _decoded_document(run_id, "summary_json", summary_json, _run_kind(run_id, run_type).summary)
+    return _run_kind(run_id, run_type).summary(_row_document(run_id, "summary_json", summary_json))
 
 
 _DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
-_Decoded = TypeVar("_Decoded")
 
 
-def _decoded_document(
-    run_id: str, column: _DocumentColumn, text: str, decode: Callable[[Mapping[str, Any]], _Decoded]
-) -> _Decoded:
-    """What *decode* reads from the document JSON *text* holds, run *run_id*'s runs.*column*.
+def _row_document(run_id: str, column: _DocumentColumn, text: str | None) -> StoredDocument:
+    """The document runs.*column* of run *run_id*, whose JSON text is *text*; its content is None when *text* is.
 
     Raises:
-        ValueError: *text* is not JSON, or *decode* refuses the document it holds; the message
-            names the run and the column, and the refusal is the cause.
+        StoredRunUnreadable: *text* is not JSON; the document is runs.*column* and the field None.
     """
-    try:
-        return decode(json.loads(text))
-    except (ValueError, TypeError, KeyError, AttributeError) as refusal:
-        raise ValueError(
-            f"The runs.{column} of run {run_id!r} is not a document its kind decodes: {type(refusal).__name__}: {refusal}"
-        ) from refusal
+    name = f"runs.{column}"
+    return StoredDocument(run_id, name, None) if text is None else StoredDocument.decoded(run_id, name, text)
 
 
 def _record_of(row: sqlite3.Row) -> RunRecord:
@@ -239,18 +266,142 @@ def _require_version_1_keeps(run_id: str, run_type: object, name: object) -> Non
 def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str | None) -> str:
     """The name a job given none would have created run *run_id* under: the default_name of *run_type*'s kind for the homes *config_json* holds.
 
-    A run with no config is named as a run of no homes, and so is one whose config does not
-    decode as its kind's, with a logged warning naming the run and the refusal: the name is a
-    label its user can rename, so a damaged config does not keep the store from migrating.
+    The legacy config is read as the stored-run format reads it once migrated, every
+    run-document step brought to bear on it in memory first. A run with no config is named as a
+    run of no homes, and so is one whose config cannot be read as its kind's even so, with a
+    logged warning naming the run and the refusal: the name is a label its user can rename, so a
+    damaged config does not keep the store from migrating.
     """
     kind = RUN_KINDS[run_type]
     homes: tuple[HomeConfig, ...] = ()
     if config_json is not None:
         try:
-            homes = _decoded_document(run_id, "config_json", config_json, kind.home_configs)
-        except ValueError as refusal:
-            logger.warning("Run %r is named as a run of no homes, as its config does not decode: %s", run_id, refusal)
+            legacy = StoredRunDocuments(
+                config=_row_document(run_id, "config_json", config_json),
+                summary=_row_document(run_id, "summary_json", None),
+            )
+            homes = kind.home_configs(documents_in_current_format(run_type, legacy).config)
+        except StoredRunUnreadable as refusal:
+            logger.warning("Run %r is named as a run of no homes, as its config cannot be read: %s", run_id, refusal)
     return kind.default_name(homes)
+
+
+def _run_dir(data_dir: Path, run_id: str) -> Path:
+    """The directory of the files of run *run_id* in the store whose data directory is *data_dir*: {data_dir}/runs/{run_id}.
+
+    Raises:
+        ValueError: No run can be stored under *run_id*, to keep a path from leaving the runs
+            directory: it holds a character other than a letter, digit, hyphen or underscore, or
+            resolves outside the runs directory.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
+        raise ValueError(
+            f"Invalid run_id: {run_id!r}. Only alphanumeric characters, hyphens, and underscores are allowed."
+        )
+    runs_dir = (data_dir / "runs").resolve()
+    if (runs_dir / run_id).resolve().parent != runs_dir:
+        raise ValueError(f"Invalid run_id: {run_id!r}. Resolved path is outside the runs directory.")
+    return data_dir / "runs" / run_id
+
+
+@dataclass(frozen=True)
+class RunDocumentsOutcome:
+    """What a run-document step did to a store's runs: each value it dropped that is not null, and each run it left unmigrated, in order."""
+
+    dropped: tuple[DroppedValue, ...] = ()
+    unmigrated: tuple[UnmigratedRun, ...] = ()
+
+    def __add__(self, later: "RunDocumentsOutcome") -> "RunDocumentsOutcome":
+        """This outcome followed by *later*'s."""
+        return RunDocumentsOutcome(self.dropped + later.dropped, self.unmigrated + later.unmigrated)
+
+
+def migrate_stored_run_files(database: Database, data_dir: Path, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the files of each run the runs table of *database* records forward by *step*, the run-file part of the schema step carrying it.
+
+    A run with no directory under *data_dir* is skipped, and so is a directory no row records.
+    Each run's JSON documents are read as its kind lays them out and brought forward as
+    step_run_documents brings them; then only the documents the step changed are rewritten, and
+    format.json naming step.version last. A run whose documents cannot be read or brought
+    forward, or whose row has no type, is left as it was and reported as unmigrated. A run's
+    time series are not read: they have no format version, so a run whose time series is
+    damaged is brought forward as any other is, and refused naming it when it is loaded. The
+    writes are idempotent, so a migration stopped part way through runs again from the start.
+
+    Raises:
+        sqlite3.Error: The runs table cannot be read; nothing has been written.
+        OSError: A run's file cannot be written, e.g. on a full disk, or its directory cannot
+            be looked for; the runs before it have been brought forward, and so may some of its
+            documents have been, each whole.
+    """
+    with database.transaction() as conn:
+        rows = conn.execute("SELECT id, type FROM runs ORDER BY id").fetchall()
+    outcome = RunDocumentsOutcome()
+    for row in rows:
+        run_dir = _existing_run_dir(data_dir, row["id"])
+        if run_dir is not None:
+            outcome += _migrate_run_files(run_dir, row["id"], row["type"], step)
+    return outcome
+
+
+def _existing_run_dir(data_dir: Path, run_id: str) -> Path | None:
+    """The directory of run *run_id*'s files under *data_dir*; None when no directory holds them, or no run can be stored under the id."""
+    try:
+        run_dir = _run_dir(data_dir, run_id)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the files of run *run_id* of *run_type*, which *run_dir* holds, forward by *step*, as migrate_stored_run_files does for each run."""
+    try:
+        typed = _run_type(run_id, run_type)
+        documents = read_run_documents(run_dir, run_id, typed)
+        result = step_run_documents(step, typed, documents)
+    except StoredRunUnreadable as refusal:
+        return RunDocumentsOutcome(unmigrated=(UnmigratedRun.of(refusal),))
+    write_run_documents(run_dir, result.documents.changed_from(documents), step.version)
+    return RunDocumentsOutcome(dropped=result.dropped)
+
+
+_DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
+
+
+def migrate_runs_table_documents(conn: sqlite3.Connection, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """The runs table's part of the schema step carrying *step*, run on *conn* inside that step's transaction.
+
+    Each run's runs.config_json and runs.summary_json are brought forward as
+    step_run_documents brings them, and only a column the step changed is rewritten, as the
+    JSON text a save writes. A row that holds neither document is skipped. A row whose
+    documents cannot be brought forward, or that has no type, is left as it was and reported as
+    unmigrated.
+    """
+    rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
+    outcome = RunDocumentsOutcome()
+    for row in rows:
+        if row["config_json"] is not None or row["summary_json"] is not None:
+            outcome += _migrate_runs_row(conn, row, step)
+    return outcome
+
+
+def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward by *step*, as migrate_runs_table_documents does for each row."""
+    run_id = row["id"]
+    try:
+        typed = _run_type(run_id, row["type"])
+        documents = StoredRunDocuments(
+            config=_row_document(run_id, "config_json", row["config_json"]),
+            summary=_row_document(run_id, "summary_json", row["summary_json"]),
+        )
+        result = step_run_documents(step, typed, documents)
+    except StoredRunUnreadable as refusal:
+        return RunDocumentsOutcome(unmigrated=(UnmigratedRun.of(refusal),))
+    stepped = (result.documents.config, result.documents.summary)
+    for column, was, document in zip(_DOCUMENT_COLUMNS, (documents.config, documents.summary), stepped, strict=True):
+        if document.content != was.content:
+            conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
+    return RunDocumentsOutcome(dropped=result.dropped)
 
 
 @dataclass(frozen=True)
@@ -299,41 +450,61 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
             assert_never(summary)
 
 
-def readable_headline(record: RunRecord) -> RunHeadline | None:
-    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary is damaged.
+def _read_headline(
+    run_id: str, run_type: RunType | None, summary_json: str | None
+) -> RunHeadline | StoredRunUnreadable | None:
+    """What a run list reads of run *run_id* from the only columns of its row it needs, its type and its summary_json.
 
-    A summary is damaged when it does not decode, or run_headline refuses it for a figure that
-    is not a finite number. A damaged summary is logged as a warning naming the run, which the
-    run lists then show without figures and the dashboard's totals without its generation,
-    rather than fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15,
-    D-S19-9).
+    That is the run's headline; the refusal of its summary, when that cannot be read; or None,
+    while it has no summary, or when run_headline refuses it for a figure that is not a finite
+    number. A summary that cannot be read or that run_headline refuses is damaged, and is logged
+    as a warning naming the run, which the run lists then show without figures and the
+    dashboard's totals without its generation, rather than fail for one damaged run (the G7
+    waiver in docs/prds/run-store-one-owner.md §15, D-S19-9).
     """
-    return _readable_headline(record.id, record.type, record.summary_json)
-
-
-def _readable_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> RunHeadline | None:
-    """readable_headline of run *run_id*, read from the only columns of its row it needs: its type and its summary_json."""
     try:
         summary = _run_summary(run_id, run_type, summary_json)
-        return None if summary is None else run_headline(summary)
-    except ValueError as damaged:
-        logger.warning("Run %r shows no figures, as its summary is damaged: %s", run_id, damaged)
+    except StoredRunUnreadable as unreadable:
+        logger.warning("Run %r shows no figures, as its summary cannot be read: %s", run_id, unreadable)
+        return unreadable
+    if summary is None:
+        return None
+    try:
+        return run_headline(summary)
+    except ValueError as refusal:
+        logger.warning("Run %r shows no figures, as its summary's headline is damaged: %s", run_id, refusal)
         return None
 
 
 class HeadlineFigures(TypedDict):
-    """The figures a run list's row shows for a run, under the names the History list and the assistant's run list give them; None where it has none."""
+    """The figures a run list's row shows for a run, under the names the History list and the assistant's run list give them; None where it has none.
+
+    unreadable is the message of the StoredRunUnreadable refusing the run's summary, naming the
+    run, the document and the field, when the summary cannot be read; None when it can be, or
+    the run has none.
+    """
 
     total_generation_kwh: float | None
     self_consumption_ratio: float | None
+    unreadable: str | None
 
 
 def headline_figures(record: RunRecord) -> HeadlineFigures:
-    """The figures a run list's row shows for *record*'s run: its readable_headline's figures, each None when it has no headline to read."""
-    headline = readable_headline(record)
-    if headline is None:
-        return {"total_generation_kwh": None, "self_consumption_ratio": None}
-    return {"total_generation_kwh": headline.generation_kwh, "self_consumption_ratio": headline.self_consumption_ratio}
+    """The figures a run list's row shows for *record*'s run: its headline's figures, each None when _read_headline reads it no headline, and why its summary cannot be read, if it cannot."""
+    headline = _read_headline(record.id, record.type, record.summary_json)
+    match headline:
+        case RunHeadline():
+            return {
+                "total_generation_kwh": headline.generation_kwh,
+                "self_consumption_ratio": headline.self_consumption_ratio,
+                "unreadable": None,
+            }
+        case StoredRunUnreadable():
+            return {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(headline)}
+        case None:
+            return {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": None}
+        case _:
+            assert_never(headline)
 
 
 RunSort =Literal["created_at", "name", "type", "status", "duration_seconds", "n_homes"]  # a runs column a run list sorts by
@@ -514,43 +685,13 @@ class RunStorage:
         self.database = database
         self.data_dir = Path(data_dir)
 
-    def _validate_run_id(self, run_id: str) -> None:
-        """Validate run_id to prevent path traversal attacks.
-
-        Args:
-            run_id: Run identifier to validate
-
-        Raises:
-            ValueError: If run_id contains invalid characters or resolves
-                outside the runs directory
-        """
-        if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
-            raise ValueError(
-                f"Invalid run_id: {run_id!r}. "
-                "Only alphanumeric characters, hyphens, and underscores are allowed."
-            )
-        runs_dir = (self.data_dir / "runs").resolve()
-        resolved = (runs_dir / run_id).resolve()
-        if not resolved.parent == runs_dir:
-            raise ValueError(
-                f"Invalid run_id: {run_id!r}. "
-                "Resolved path is outside the runs directory."
-            )
-
     def _get_run_dir(self, run_id: str) -> Path:
-        """Get the directory path for a run's data files.
-
-        Args:
-            run_id: Unique run identifier
-
-        Returns:
-            Path to run directory
+        """The directory of the files of run *run_id*, as _run_dir names it in this store's data directory.
 
         Raises:
-            ValueError: If run_id is invalid or would escape the runs directory
+            ValueError: The store refuses *run_id*, as _run_dir refuses it.
         """
-        self._validate_run_id(run_id)
-        return self.data_dir / "runs" / run_id
+        return _run_dir(self.data_dir, run_id)
 
     def _stored_run_dir(self, run_id: str) -> Path:
         """The directory holding the files of the run stored under *run_id*.
@@ -593,7 +734,7 @@ class RunStorage:
             sqlite3.Error: The database refuses the row, e.g. for an id a run already has.
             Neither leaves anything written.
         """
-        self._validate_run_id(run_id)
+        self._get_run_dir(run_id)
         record = RunRecord(
             id=run_id,
             name=name,
@@ -836,20 +977,18 @@ class RunStorage:
 
         Raises:
             FileNotFoundError: No run is stored under *run_id*: the store refuses the id (the
-                refusal is the cause), no directory holds it, no run is recorded under it, its
-                record names no run kind (RunRecord.kind's refusal is the cause), or a document
-                its kind reads is missing. The message names the id.
-            ValueError: A stored document is corrupted or incomplete.
+                refusal is the cause), no directory holds it, or no run is recorded under it. The
+                message names the id.
+            StoredRunUnreadable: The run is stored but cannot be read: its record has no type,
+                as RunRecord.kind refuses it, naming runs.type, or a document its kind reads is
+                missing or cannot be read, as the kind's read refuses it, naming the run, the
+                document and the field.
         """
         run_dir = self._stored_run_dir(run_id)
         record = self.run_record(run_id)
         if record is None:
             raise FileNotFoundError(f"No run is recorded under {run_id!r}")
-        try:
-            kind = record.kind
-        except ValueError as no_kind:
-            raise FileNotFoundError(f"No run kind reads the files of run {run_id!r}: {no_kind}") from no_kind
-        return kind.read(run_dir, run_id)
+        return record.kind.read(run_dir, run_id)
 
     def run_record(self, run_id: str) -> RunRecord | None:
         """The record of run *run_id*: its row in the runs table. None when no run has that id."""
@@ -915,11 +1054,12 @@ class RunStorage:
         return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
 
     def totals(self) -> RunTotals:
-        """The count of the completed runs and of their homes, and the generation of those whose readable_headline reads.
+        """The count of the completed runs and of their homes, and the generation of those whose headline _read_headline reads.
 
         A run whose row records no count of homes counts as one home. A run whose summary is
-        damaged still counts, with its homes, but adds no generation; readable_headline logs it.
-        The generation is read from each run's type and summary alone, never its config.
+        damaged, as _read_headline says, still counts, with its homes, but adds no
+        generation, and a warning names it. The generation is read from each run's type and
+        summary alone, never its config.
         """
         completed = {"completed": _COMPLETED_RUN_STATUS}
         with self.database.transaction() as conn:
@@ -932,8 +1072,10 @@ class RunStorage:
                 "SELECT id, type, summary_json FROM runs WHERE status = :completed AND summary_json IS NOT NULL",
                 completed,
             ).fetchall()
-        headlines = (_readable_headline(row["id"], row["type"], row["summary_json"]) for row in rows)
-        generation_kwh = sum((headline.generation_kwh for headline in headlines if headline is not None), 0.0)
+        headlines = (_read_headline(row["id"], row["type"], row["summary_json"]) for row in rows)
+        generation_kwh = sum(
+            (headline.generation_kwh for headline in headlines if isinstance(headline, RunHeadline)), 0.0
+        )
         return RunTotals(run_count=run_count, home_count=home_count, generation_kwh=generation_kwh)
 
     def delete_run(self, run_id: str) -> None:
