@@ -118,7 +118,10 @@ goes to its confirm and is filed, with a broken-probe escalation beside it.
 - **`css-build`.** Rebuilds `static/dist/style.css` in a scratch copy from the committed sources
   and `package-lock.json` (`tests/css_build`), and goes red when the committed file differs,
   for example after an unrebuilt `tailwind.config.js` edit, or when the Tailwind license texts
-  beside it are not the locked tailwindcss package's. It needs npm and
+  beside it are not the locked tailwindcss package's. It also rebuilds `static/dist/favicon.svg`,
+  which `build-favicon.js` draws in the theme's primary-500, and goes red when the committed
+  favicon differs, for example after an accent edit in `static/src/theme-tokens.json` committed
+  without `npm run build:favicon`. It needs npm and
   `registry.npmjs.org`, which its probe asks. The `timeout` prefix caps a hung run.
 - **`newest-releases`.** Re-runs the verify suite in a scratch copy whose `uv.lock` is upgraded
   to the newest releases `pyproject.toml`'s ranges admit (`tests/newest_releases`), the
