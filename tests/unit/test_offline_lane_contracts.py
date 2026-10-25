@@ -13,6 +13,7 @@ SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 
 import functools
 import os
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from pathlib import Path, PurePosixPath
@@ -127,7 +128,8 @@ class SlowTestsNoLaneJobRuns:
     """Slow tests no LANE_JOBS job runs, and the live service they need.
 
     node_ids are exact node ids, compared by equality, never by prefix: a new
-    test in a listed class is listed only once its own id is.
+    test in a listed class is listed only once its own id is. No id is in two
+    entries.
     """
 
     service: LiveService
@@ -173,6 +175,28 @@ def _needing_a_live_service() -> tuple[LaneJob, ...]:
 def _whose_suite_lies_directly_under_tests() -> tuple[LaneJob, ...]:
     """Return the LANE_JOBS rows whose suite lies directly under tests/, in table order."""
     return tuple(job for job in LANE_JOBS if PurePosixPath(job.suite).parent == PurePosixPath("tests"))
+
+
+def _service_of_each_listed_node_id() -> dict[str, LiveService]:
+    """Return each node id SLOW_TESTS_NO_LANE_JOB_RUNS lists, with its entry's service.
+
+    It asserts that no id is in two entries, naming each id that is with its entries' services.
+    """
+    services_of: defaultdict[str, list[LiveService]] = defaultdict(list)
+    for entry in SLOW_TESTS_NO_LANE_JOB_RUNS:
+        for node_id in entry.node_ids:
+            services_of[node_id].append(entry.service)
+    listed_more_than_once = {
+        node_id: [service.value for service in services]
+        for node_id, services in sorted(services_of.items())
+        if len(services) > 1
+    }
+    assert not listed_more_than_once, (
+        f"SLOW_TESTS_NO_LANE_JOB_RUNS lists {listed_more_than_once} in more than one entry, each id with its "
+        "entries' services; list each id in one entry only, the one naming the live service no lane job runs it "
+        "against"
+    )
+    return {node_id: services[0] for node_id, services in services_of.items()}
 
 
 def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: Path) -> None:
@@ -263,15 +287,15 @@ def test_every_slow_test_runs_in_a_lane_job_or_is_listed_as_one_no_lane_job_runs
     """Every slow test runs in some LANE_JOBS job, as the lane runs it, unless SLOW_TESTS_NO_LANE_JOB_RUNS lists it.
 
     The slow tests are collected across all of tests/ with every extra, the
-    lane-only suites included. Each listed id must still be a slow test no lane
-    job runs.
+    lane-only suites included. Each listed id must be in one entry and still be
+    a slow test no lane job runs.
     """
+    listed = _service_of_each_listed_node_id()
     slow = every_test_matching(
         project_root, "slow", pytest_invocation=_EVERY_EXTRA_PYTEST, env_for=shared_uv_probe_environments.for_command
     )
     laned = {node_id for job in LANE_JOBS for node_id in lane_job_collection(project_root, job.name).node_ids()}
     unlaned = [test.node_id for test in slow if test.node_id not in laned]
-    listed = {node_id: entry.service for entry in SLOW_TESTS_NO_LANE_JOB_RUNS for node_id in entry.node_ids}
 
     unlisted = [node_id for node_id in unlaned if node_id not in listed]
     assert not unlisted, (
