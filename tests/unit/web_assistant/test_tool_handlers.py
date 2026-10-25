@@ -35,6 +35,7 @@ from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
+from tests._web_job_days import web_job_days
 from tests._web_runs import store_fleet_run
 from tests.unit.web_assistant._fakes import run_storage_over, seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
@@ -1021,12 +1022,15 @@ class TestRunFleetSimulation:
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
-@pytest.mark.slow
-class TestRunHomeSimulationWithRealJobManager:
-    """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
+_REAL_JOB_DAYS = web_job_days(count=1)
+bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
 
-    Excluded from the standard verify loop by the 'slow' marker.  Run with
-    ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
+
+@pytest.mark.usefixtures("bristol_june_tmy")
+class TestRunHomeSimulationWithRealJobManager:
+    """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it.
+
+    Its one day is the clear June day on DAYS_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
     """
 
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
@@ -1040,7 +1044,7 @@ class TestRunHomeSimulationWithRealJobManager:
                 "battery_kwh": 0,
                 "occupants": 3,
                 "location": "bristol",
-                "days": 1,
+                "days": _REAL_JOB_DAYS.count,
             },
             job_manager,
             _results_url_for_test,

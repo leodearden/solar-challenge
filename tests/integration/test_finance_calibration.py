@@ -9,14 +9,12 @@ The golden constants are tests/_fin_calibration.py's FIN_GOLDEN, transcribed fro
 the spreadsheet's named cells; their provenance is recorded there.
 
 Layout:
-  - Fast (no-network) classes:
-      TestSpreadsheetRevenueCurve — pure helper unit tests
-      TestFinCalibrationScenarioParses — YAML scenario parsing
-      TestCalibrationCapexMethodAgreement — H6 capex gate
-      TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate
-      TestCalibrationG6Guards — G6 premise guards
-  - @pytest.mark.slow class:
-      TestCalibrationPhysicsColumn — real-PVGIS physics column (reported, not asserted ==)
+  - TestSpreadsheetRevenueCurve — pure helper unit tests
+  - TestFinCalibrationScenarioParses — YAML scenario parsing
+  - TestCalibrationCapexMethodAgreement — H6 capex gate
+  - TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate
+  - TestCalibrationG6Guards — G6 premise guards
+  - TestCalibrationPhysicsColumn — the physics column on a simulated fleet (reported, not asserted ==)
 """
 from __future__ import annotations
 
@@ -43,9 +41,11 @@ from solar_challenge.finance import (
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
+    PHYSICS_COLUMN_DAYS,
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
+    simulate_physics_column,
 )
 from tests._finance_builders import make_scenario_of, make_sized_home
 
@@ -498,26 +498,28 @@ class TestCalibrationG6Guards:
 
 
 # ---------------------------------------------------------------------------
-# Step-7 slow: TestCalibrationPhysicsColumn — real PVGIS (reported only)
+# Step-7: TestCalibrationPhysicsColumn — simulated physics column (reported only)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
+bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestCalibrationPhysicsColumn:
-    """Real-PVGIS physics column for calibration (REPORTED, not asserted == spreadsheet).
+    """Physics column for calibration (REPORTED, not asserted == spreadsheet).
 
-    Runs a small 2-home fleet over a 3-day January window to smoke-test the
-    physics path alongside the spreadsheet column. This does NOT document the
-    §2.3 annual self-consumption tension: a short winter window cannot show an
-    annual self-consumption fraction, and its DSCR/IRR are degenerate for a
-    2-home fleet because the [FIN] grant exceeds the 2-home capex (financed
-    capex, debt and equity are all zero). The printed physics values are
-    reported for inspection only and are not pinned.
+    Runs a small 2-home fleet over three days to smoke-test the physics path
+    alongside the spreadsheet column. The days are PHYSICS_COLUMN_DAYS, which
+    bristol_june_tmy seeds as Bristol's TMY. This does NOT document the §2.3
+    annual self-consumption tension: three days cannot show an annual
+    self-consumption fraction, and its DSCR/IRR are degenerate for a 2-home fleet
+    because the [FIN] grant exceeds the 2-home capex (financed capex, debt and
+    equity are all zero). The printed physics values are reported for inspection
+    only and are not pinned.
 
-    The fast suite enforces that no-debt premise in
-    tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises.
-
-    Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
+    tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises
+    asserts that no-debt premise.
     """
 
     def test_physics_column_structural_sanity(self) -> None:
@@ -532,8 +534,8 @@ class TestCalibrationPhysicsColumn:
         finance = _make_finance_fin()
         physics_finance = make_fin_finance(self_consumption_override=None)
 
-        # Physics column (real PVGIS)
-        physics_curve = project_multi_year(scenario, physics_finance)
+        # Physics column (simulated fleet)
+        physics_curve = project_multi_year(scenario, physics_finance, simulate=simulate_physics_column)
         physics_econ = project_economics(physics_curve, scenario, physics_finance)
 
         # Spreadsheet column (analytic)

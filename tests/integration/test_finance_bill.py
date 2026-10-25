@@ -2,10 +2,8 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests for the finance bill module (task/44 – δ).
 
-Layout:
-  - Fast (no-network) classes: H1 invariants, H2 override, annualisation,
-    bill_distribution, report rendering, CLI help/error paths.
-  - One @pytest.mark.slow class for the real-PVGIS end-to-end path.
+Layout: H1 invariants, H2 override, annualisation, bill_distribution, report
+rendering, CLI help/error paths.
 """
 import dataclasses
 import warnings
@@ -890,7 +888,7 @@ class TestGenerateFinanceReport:
 
 
 # ---------------------------------------------------------------------------
-# Step-9: CLI tests (fast + slow e2e)
+# Step-9: CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -1481,35 +1479,3 @@ class TestCbsAmountDue:
             b.total_outlay_gbp
             - (b.import_cost_gbp + b.standing_charge_gbp) * (1.0 + finance.vat_rate)
         )
-
-
-@pytest.mark.slow
-class TestFinanceCLIEndToEnd:
-    """Slow end-to-end CLI test using real PVGIS (weather cache must be warm)."""
-
-    def test_finance_run_bristol_short_window(self) -> None:
-        """E2E: `finance run scenarios/bristol-phase1.yaml` exits 0 with report headings."""
-        scenario = Path("scenarios/bristol-phase1.yaml")
-        if not scenario.exists():
-            pytest.skip("bristol-phase1.yaml not found")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [
-                "finance",
-                "run",
-                str(scenario),
-                "--start",
-                "2024-01-01",
-                "--end",
-                "2024-01-03",
-            ],
-        )
-        assert result.exit_code == 0, (
-            f"Exit {result.exit_code}. Output:\n{result.output}"
-        )
-        output = result.output.lower()
-        # Householder-bill block headings must be present (CR3: outlay-based)
-        assert "finance" in output or "bill" in output
-        assert "outlay" in output or "import" in output

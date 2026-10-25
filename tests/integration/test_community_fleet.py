@@ -551,19 +551,6 @@ class TestCommunityPipelineAB:
         assert "Community Battery" in report
         assert "Charged" in report
 
-    @pytest.mark.slow
-    def test_real_pvgis_smoke(self, tmp_path: Path) -> None:
-        """Smoke test: fleet run on live PVGIS weather (marked slow, so no TMY is seeded)."""
-        tmp_report = tmp_path / "smoke_report.md"
-        result = _fleet_run_in_process(
-            SCENARIO,
-            "--start", "2024-06-21",
-            "--end", "2024-06-21",
-            "--community-report", str(tmp_report),
-        )
-        assert result.exit_code == 0, f"smoke test failed:\n{result.output}"
-        assert "Community" in result.output
-
 
 # ---------------------------------------------------------------------------
 # TestCommunityBillingReport

@@ -2,11 +2,8 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests for the finance economics module (task/47 – η).
 
-Layout:
-  - Fast (no-network) classes: H5 ProjectEconomics dataclass, capex build-up,
-    debt service, per-year surplus/DSCR, IRR/payback/determinism, report
-    rendering, CLI help/error paths.
-  - One @pytest.mark.slow class for the real-PVGIS end-to-end path.
+Layout: H5 ProjectEconomics dataclass, capex build-up, debt service, per-year
+surplus/DSCR, IRR/payback/determinism, report rendering, CLI help/error paths.
 """
 from __future__ import annotations
 
@@ -932,42 +929,6 @@ class TestFinanceProjectCLI:
         assert "Project Economics" in result.output, (
             f"Expected the 'Project Economics' block in output:\n{result.output}"
         )
-
-
-@pytest.mark.slow
-class TestFinanceProjectCLIEndToEnd:
-    """Slow end-to-end CLI test for finance run --project (real PVGIS)."""
-
-    def test_finance_run_project_bristol(self) -> None:
-        """E2E: `finance run --project scenarios/bristol-phase1.yaml` exits 0 with economics block."""
-        scenario = Path("scenarios/bristol-phase1.yaml")
-        if not scenario.exists():
-            pytest.skip("bristol-phase1.yaml not found")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [
-                "finance",
-                "run",
-                "--project",
-                str(scenario),
-                "--start",
-                "2024-01-01",
-                "--end",
-                "2024-01-03",
-            ],
-        )
-        assert result.exit_code == 0, (
-            f"Exit {result.exit_code}. Output:\n{result.output}"
-        )
-        output = result.output.lower()
-        # Economics block headings must be present
-        assert "project economics" in output
-        assert "capex" in output
-        assert "dscr" in output or "debt service" in output
-        assert "irr" in output
-        assert "payback" in output
 
 
 # ---------------------------------------------------------------------------

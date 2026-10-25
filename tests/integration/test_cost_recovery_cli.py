@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Integration tests for CR5: --cost-recovery CLI flag and report block.
-
-This file mixes fast and slow tests: the slow class carries @pytest.mark.slow
-directly, and the fast classes run in the offline verify loop.
-"""
+"""Integration tests for CR5: --cost-recovery CLI flag and report block."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -432,35 +428,4 @@ class TestFinanceCLICostRecoveryE2EFast:
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         assert "cost-recovery analysis" not in result.output.lower(), (
             f"'Cost-Recovery Analysis' should NOT appear without --cost-recovery:\n{result.output}"
-        )
-
-
-@pytest.mark.slow
-class TestFinanceCLICostRecoverySlowE2E:
-    """Slow real-PVGIS end-to-end test (H8 board signal)."""
-
-    def test_cost_recovery_bristol_short_window(self) -> None:
-        """E2E: `finance run --cost-recovery scenarios/bristol-phase1.yaml` exits 0 with CR block."""
-        scenario = Path("scenarios/bristol-phase1.yaml")
-        if not scenario.exists():
-            pytest.skip("bristol-phase1.yaml not found")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [
-                "finance",
-                "run",
-                str(scenario),
-                "--cost-recovery",
-                "--start", "2024-01-01",
-                "--end", "2024-01-03",
-            ],
-        )
-        assert result.exit_code == 0, (
-            f"Exit {result.exit_code}. Output:\n{result.output}"
-        )
-        output = result.output.lower()
-        assert "cost-recovery" in output, (
-            f"Expected cost-recovery block headings in output:\n{result.output}"
         )
