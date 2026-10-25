@@ -14,6 +14,8 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from tests._css_classes import names_palette
+from tests._html_page import element_attributes
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -471,6 +473,30 @@ class TestChatPageWiring:
         assert "ANTHROPIC_API_KEY" in html, (
             "Configure-notice MUST appear when ANTHROPIC_API_KEY is unset"
         )
+
+    def test_configure_notice_is_drawn_in_the_warning_palette(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ANTHROPIC_API_KEY, the configure-notice is drawn in the token file's
+        tailwind.warning role, and no other div of the page is."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = client.get("/assistant")
+
+        warning_classes = {
+            css_class
+            for div in element_attributes(resp.get_data(as_text=True), "div")
+            for css_class in (div.get("class") or "").split()
+            if names_palette(css_class, "warning")
+        }
+
+        assert warning_classes == {
+            "border-warning-300",
+            "bg-warning-50",
+            "text-warning-800",
+            "dark:border-warning-700",
+            "dark:bg-warning-900/20",
+            "dark:text-warning-300",
+        }
 
     def test_foundation_markers_present_key_set(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch

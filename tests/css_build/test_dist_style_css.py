@@ -7,7 +7,9 @@ static/src/input.css, and the templates and scripts it scans.
 tests/unit/test_web_compiled_css.py checks only class names, so a theme or
 input edit committed without a rebuild passes it. This module rebuilds the
 stylesheet in a scratch copy of the web package, with the committed
-package-lock.json, and compares bytes.
+package-lock.json, and compares bytes. It also checks that a token file fails
+the stylesheet build, naming the roles at fault, when a tailwind role names no
+built-in Tailwind palette or two roles would take one Tailwind colour name.
 
 build-favicon.js draws static/dist/favicon.svg, the brand sun, in the theme's
 primary-500, so the browser tab's icon follows the accent. This module rebuilds
@@ -38,6 +40,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -161,6 +164,24 @@ def _build_copy(scratch_web_package: Path, destination: Path) -> Path:
     return web_package
 
 
+def _build_css_with_tailwind_keys(
+    scratch_web_package: Path, destination: Path, keys: Mapping[str, object]
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run `npm run build:css` in a build copy whose token file's tailwind section takes *keys*.
+
+    Return the finished run and whether it wrote static/dist/style.css, which the copy's build starts without.
+    """
+    web_package = _build_copy(scratch_web_package, destination)
+    token_file = web_package / _THEME_TOKENS
+    tokens = json.loads(token_file.read_text(encoding="utf-8"))
+    tokens["tailwind"].update(keys)
+    token_file.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    stylesheet = web_package / _DIST_STYLESHEET
+    stylesheet.unlink()
+    result = _npm_run(["run", "build:css"], web_package, destination / "npm-cache")
+    return result, stylesheet.exists()
+
+
 @pytest.fixture(scope="module")
 def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return a scratch copy of the web package in which `npm ci` installed what package-lock.json locks.
@@ -193,6 +214,58 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package
         "script change was committed without a rebuild. Rebuild "
         "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         f"static/dist/style.css. The rules that differ:\n{_rule_diff(committed.decode(), rebuilt.decode())}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tailwind_key", "written", "role", "name"),
+    [
+        pytest.param("status", {"running": "ambr"}, "status.running", "ambr", id="status-running-ambr"),
+        pytest.param("warning", "black", "warning", "black", id="warning-black"),
+    ],
+)
+def test_a_tailwind_role_naming_no_built_in_palette_fails_the_build_naming_the_role_and_the_name(
+    scratch_web_package: Path, tmp_path: Path, tailwind_key: str, written: str | dict[str, str], role: str, name: str
+) -> None:
+    """A token file whose tailwind *role* names *name*, no built-in Tailwind palette, fails the build, naming both.
+
+    *name* is either no Tailwind colour at all, as in a grouped role naming "ambr", or a single colour with no
+    shades, such as black.
+    """
+    result, wrote_stylesheet = _build_css_with_tailwind_keys(scratch_web_package, tmp_path, {tailwind_key: written})
+
+    assert result.returncode != 0 and f"tailwind.{role}" in result.stderr and name in result.stderr, (
+        f"`npm run build:css` exited {result.returncode} for a token file whose tailwind.{role} names {name!r}, "
+        "which is no built-in Tailwind palette, where it must fail naming the role and the name: Tailwind silently "
+        "drops a palette it cannot resolve, and every class that names it, so tailwind.config.js must refuse such "
+        f"a token file. npm's stderr:\n{result.stderr}"
+    )
+    assert not wrote_stylesheet, (
+        f"`npm run build:css` wrote static/dist/style.css for a token file whose tailwind.{role} names {name!r}"
+    )
+
+
+def test_two_tailwind_roles_of_one_tailwind_colour_name_fail_the_build_naming_both(
+    scratch_web_package: Path, tmp_path: Path
+) -> None:
+    """A token file with a status-running role beside the status group's running role fails the build, naming both.
+
+    Tailwind names both colours status-running, so one palette would silently replace the other.
+    """
+    roles = ("tailwind.status.running", "tailwind.status-running")
+
+    result, wrote_stylesheet = _build_css_with_tailwind_keys(
+        scratch_web_package, tmp_path, {"status": {"running": "amber"}, "status-running": "green"}
+    )
+
+    assert result.returncode != 0 and all(role in result.stderr for role in roles), (
+        f"`npm run build:css` exited {result.returncode} for a token file with the roles {' and '.join(roles)}, "
+        "which Tailwind would both name status-running, where it must fail naming both: one palette would silently "
+        f"replace the other, so tailwind.config.js must refuse such a token file. npm's stderr:\n{result.stderr}"
+    )
+    assert not wrote_stylesheet, (
+        f"`npm run build:css` wrote static/dist/style.css for a token file with the roles {' and '.join(roles)}, "
+        "which Tailwind would both name status-running"
     )
 
 

@@ -3,7 +3,10 @@
 templates, its standalone scripts, the stylesheets base.html links, its Python modules,
 the JavaScript files at the package root, and the theme token file
 static/src/theme-tokens.json, the one home of the dashboard's colours: tailwind.config.js
-reads its tailwind section and charts.py its chart section.
+reads its tailwind section and charts.py its chart section. tailwind_role_palettes reads
+the tailwind section's roles under the palette names their classes write, such as
+``status-running`` for the ``running`` role of the ``status`` group, and
+tailwind_role_named_by tells which of those roles a class names.
 
 Each template, script, stylesheet, Python module, JavaScript file at the package root
 and the token file is keyed by its POSIX path relative to the package directory, such as
@@ -29,7 +32,7 @@ Usage::
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,7 @@ from tests._css_classes import (
     applied_classes_in_script,
     applied_classes_in_template,
     linked_stylesheets,
+    names_palette,
 )
 
 _WEB_DIR = Path(solar_challenge.web.__file__).parent
@@ -136,6 +140,56 @@ def theme_tokens() -> dict[str, Any]:
     """The token file theme_tokens_source reads, parsed afresh on each call, so a test may edit its copy."""
     tokens: dict[str, Any] = json.loads(theme_tokens_source())
     return tokens
+
+
+def tailwind_role_palettes(section: Mapping[str, Any]) -> dict[str, str]:
+    """The built-in palette each role of the token file's tailwind *section* names, keyed by the
+    palette name the role's classes write, in section order.
+
+    A JSON object value is a group of roles, each keyed by the group's key and its own joined by
+    a hyphen, at any depth, as tailwind.config.js names it: the ``running`` role of the
+    ``status`` group is ``status-running``, applied as ``bg-status-running-100``. Raises
+    ValueError naming dotted paths, such as ``tailwind.status.running``, as tailwind.config.js's
+    refusals do: for a value that is neither a palette's name nor a group, and for two roles
+    keyed alike, such as a ``status-running`` role beside the ``status`` group's ``running``.
+    Only the build knows which names are built-in Tailwind palettes."""
+    palettes: dict[str, str] = {}
+    paths: dict[str, str] = {}
+    for role, palette in _role_palettes(section, ()):
+        name, path = "-".join(role), ".".join(role)
+        if name in paths:
+            raise ValueError(
+                f"{THEME_TOKENS_KEY}: tailwind.{paths[name]} and tailwind.{path} both define the "
+                f"Tailwind colour {name}, so one of their palettes would silently replace the other"
+            )
+        palettes[name] = palette
+        paths[name] = path
+    return palettes
+
+
+def _role_palettes(
+    section: Mapping[str, Any], group: tuple[str, ...]
+) -> Iterator[tuple[tuple[str, ...], str]]:
+    for key, value in section.items():
+        role = (*group, key)
+        if isinstance(value, Mapping):
+            yield from _role_palettes(value, role)
+        elif isinstance(value, str):
+            yield role, value
+        else:
+            raise ValueError(
+                f"{THEME_TOKENS_KEY}: tailwind.{'.'.join(role)} names {json.dumps(value)}, which is "
+                "neither a built-in Tailwind palette's name nor a group of roles"
+            )
+
+
+def tailwind_role_named_by(css_class: str, roles: Iterable[str]) -> str | None:
+    """The role of *roles*, keyed as tailwind_role_palettes keys them, one of whose shades
+    *css_class* names, as tests/_css_classes.py's names_palette reads it; None if it names none.
+
+    A class that names shades of two roles, one name ending the other, names the longer:
+    ``bg-component-pv-50`` names component-pv, never a pv role."""
+    return max((role for role in roles if names_palette(css_class, role)), key=len, default=None)
 
 
 def tailwind_content_globs(config_source: str) -> list[str]:

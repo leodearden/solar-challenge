@@ -51,9 +51,9 @@ def _save_home_run(storage: RunStorage, run_id: str, status: RunStatus = "comple
 @pytest.mark.parametrize(
     ("status", "colours"),
     [
-        pytest.param("running", _colours("amber"), id="running"),
-        pytest.param("completed", _colours("green"), id="completed"),
-        pytest.param("failed", _colours("red"), id="failed"),
+        pytest.param("running", _colours("status-running"), id="running"),
+        pytest.param("completed", _colours("status-completed"), id="completed"),
+        pytest.param("failed", _colours("status-failed"), id="failed"),
         pytest.param("pending", _NEUTRAL, id="pending"),
         pytest.param("queued", _NEUTRAL, id="a status with no colours of its own"),
     ],

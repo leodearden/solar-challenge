@@ -16,6 +16,7 @@ from solar_challenge.web.fleet_components import (
     EditorDistribution,
     FleetComponent,
 )
+from tests._css_classes import names_palette
 from tests._html_page import counts_of, element_attributes, headings
 
 
@@ -156,3 +157,28 @@ class TestPagesHeadEachCardFromTheTable:
         page = client.get("/simulate/fleet").get_data(as_text=True)
         subjects = tuple(component.subject for component in FLEET_COMPONENTS.values())
         assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
+
+
+class TestTheFleetPageColoursEachCardByItsComponent:
+    """The fleet page draws each component's card in the role palette the token file's
+    tailwind.component group names under that component's key."""
+
+    @pytest.mark.parametrize("key", list(FLEET_COMPONENTS))
+    def test_the_fleet_page_draws_each_components_card_in_its_role_palette(
+        self, client: FlaskClient, key: str
+    ) -> None:
+        """The card's header band and its dot are the page's only divs naming component-<key>."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+
+        role_classes = {
+            css_class
+            for div in element_attributes(page, "div")
+            for css_class in (div.get("class") or "").split()
+            if names_palette(css_class, f"component-{key}")
+        }
+
+        assert role_classes == {
+            f"bg-component-{key}-50",
+            f"dark:bg-component-{key}-900/20",
+            f"bg-component-{key}-500",
+        }
