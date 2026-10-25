@@ -314,22 +314,15 @@ def test_no_module_outside_the_web_subpackage_imports_it_at_module_top(
 def test_web_database_imports_no_module_of_the_web_subpackage(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
-    """web/database.py imports no module of the web subpackage, at any scope: docs/prds/run-store-one-owner.md §4 makes it the leaf of the persistence stratum, which every table owner and web/schema.py import."""
+    """web/database.py imports no module of the web subpackage, at any scope."""
     found = _web_database_imports_of_the_web_subpackage(real_tree_imports)
 
     sites = "\n".join(str(site) for site in found)
     assert not found, (
         "these import statements of web/database.py import a module of the web subpackage:"
         f"\n{sites}\n"
-        "docs/prds/run-store-one-owner.md §4 makes database.py the leaf of the persistence "
-        "stratum: it imports no solar_challenge.web module. Every table owner and web/schema.py "
-        "import it (§3.1), so a web import in it closes an import cycle or makes the bottom of "
-        "the stratum depend on a module above it. The rule holds at any scope. An import inside "
-        "a function counts, and an ALLOWED_FUNCTION_LOCAL_IMPORTS entry does not exempt it; "
-        "neither does one in a TYPE_CHECKING block or an ImportError guard. Import a table "
-        "owner's names from that owner, never through database.py; pass what database.py needs "
-        "in as an argument, as check_one_of takes each owner's values; or move the code into "
-        "database.py if it belongs to the connection policy or the table mechanism"
+        "database.py is the leaf of the persistence stratum and imports no solar_challenge.web "
+        "module at any scope (docs/prds/run-store-one-owner.md §4)"
     )
 
 
