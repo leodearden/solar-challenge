@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from tests._hermetic_checkout import init_hermetic_checkout
 from tests._working_tree import copy_working_tree, working_tree_files
 
 pytestmark = pytest.mark.skipif(
@@ -18,9 +19,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def checkout(tmp_path: Path) -> Path:
     """Return a git checkout holding a tracked file, an untracked one, an ignored one and a tracked one since deleted."""
-    root = tmp_path / "checkout"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    root = init_hermetic_checkout(tmp_path / "checkout")
     (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
     (root / "tracked.txt").write_text("tracked", encoding="utf-8")
     (root / "deleted.txt").write_text("deleted", encoding="utf-8")

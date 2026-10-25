@@ -5,13 +5,12 @@ It does so because working_tree_files' listing feeds the pointer gate's scan and
 It ignores them only at the root, since project directories of those names exist deeper.
 """
 
-import os
 import shutil
-import subprocess
 from pathlib import Path, PurePosixPath
 
 import pytest
 
+from tests._hermetic_checkout import init_hermetic_checkout
 from tests._working_tree import working_tree_files
 
 pytestmark = pytest.mark.skipif(
@@ -34,11 +33,8 @@ _PROJECT_FILES_IN_DIRECTORIES_NAMED_LIKE_RUNTIME_ONES = (
 
 @pytest.fixture
 def checkout(project_root: Path, tmp_path: Path) -> Path:
-    """Return a new git checkout holding a copy of the project's .gitignore, where git reads no excludes file of the user's or the system's."""
-    root = tmp_path / "checkout"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "core.excludesFile", os.devnull], cwd=root, check=True)
+    """Return a new hermetic git checkout holding a copy of the project's .gitignore."""
+    root = init_hermetic_checkout(tmp_path / "checkout")
     shutil.copyfile(project_root / ".gitignore", root / ".gitignore")
     return root
 

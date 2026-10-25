@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from tests._command_runner import describe_pytest_outcome
+from tests._hermetic_checkout import init_hermetic_checkout
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
 from tests._working_tree import copy_working_tree
@@ -86,7 +87,7 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
     """
     project = copy_working_tree(PROJECT_ROOT, tmp_path / "project")
     # So the suite's tests that list the tree's files with git, such as test_external_install.py's, run.
-    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    init_hermetic_checkout(project)
 
     pinned = _locked_releases(project)
     upgrade = _run(["uv", "lock", "--upgrade"], project, isolated_uv_env(tmp_path / "venv"))
