@@ -87,6 +87,15 @@ conventions:
       tests/fixtures/databases/schema_v<N>.sql (D27 invariant 7;
       docs/prds/run-store-one-owner.md §3.9).
 
+  - rule: "A stored run names the format version that wrote it (format.json, stored_runs.RUN_FORMAT_VERSION), and a loader refuses a run it cannot rebuild with StoredRunUnreadable naming the run id, the document and the field (tests/unit/test_web_stored_run_format.py)"
+    why: >
+      Stored runs used to be read leniently: unknown keys were skipped, wrong types and nulls
+      passed through, and a constructor's error escaped as a 500 (fk-273b8b09c91a). A
+      stored-dataclass shape change ships with a RunDocumentStep, a schema step and a fixture,
+      run by tests/unit/test_web_run_document_steps.py (contract C10), and `solar-challenge web
+      migrate` brings older runs forward (D27 invariant 6; D-S19-5;
+      docs/prds/run-store-one-owner.md §3.10).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are
