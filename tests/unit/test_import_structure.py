@@ -296,6 +296,42 @@ def test_no_module_outside_the_web_subpackage_imports_it_at_module_top(
     )
 
 
+def test_web_database_imports_no_module_of_the_web_subpackage(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """web/database.py imports no module of the web subpackage, at any scope: docs/prds/run-store-one-owner.md §4 makes it the leaf of the persistence stratum, which every table owner and web/schema.py import."""
+    found = _web_database_imports_of_the_web_subpackage(real_tree_imports)
+
+    sites = "\n".join(str(site) for site in found)
+    assert not found, (
+        "these import statements of web/database.py import a module of the web subpackage:"
+        f"\n{sites}\n"
+        "docs/prds/run-store-one-owner.md §4 makes database.py the leaf of the persistence "
+        "stratum: it imports no solar_challenge.web module. Every table owner and web/schema.py "
+        "import it (§3.1), so a web import in it closes an import cycle or makes the bottom of "
+        "the stratum depend on a module above it. The rule holds at any scope. An import inside "
+        "a function counts, and an ALLOWED_FUNCTION_LOCAL_IMPORTS entry does not exempt it; "
+        "neither does one in a TYPE_CHECKING block or an ImportError guard. Import a table "
+        "owner's names from that owner, never through database.py; pass what database.py needs "
+        "in as an argument, as check_one_of takes each owner's values; or move the code into "
+        "database.py if it belongs to the connection policy or the table mechanism"
+    )
+
+
+def test_the_scan_reads_the_imports_of_web_database(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """The scan reads the import statements of web/database.py, so the leaf rule cannot pass by reading none once the module is renamed or moved."""
+    importers = {site.importer for site in real_tree_imports}
+
+    assert _WEB_DATABASE in importers, (
+        f"the scan of src/solar_challenge read no import statement of {_WEB_DATABASE}, so "
+        "test_web_database_imports_no_module_of_the_web_subpackage checks nothing. If the module "
+        "was renamed or moved, point _WEB_DATABASE at the module that holds Database and "
+        "TableSchema, and update docs/prds/run-store-one-owner.md §3.1 and §4 with it"
+    )
+
+
 def _write_package(src_dir: Path, modules: dict[str, str]) -> Path:
     """Write each of *modules*, keyed by its path in the package, under src_dir/solar_challenge, and return *src_dir*."""
     for relative_path, source in modules.items():
@@ -571,3 +607,77 @@ def test_the_scan_finds_module_top_imports_into_the_web_subpackage(
     found = _module_top_imports_into_the_web_subpackage(_import_sites(src_dir))
 
     assert [(site.importer, site.imported, site.line) for site in found] == expected
+
+
+@pytest.mark.parametrize(
+    ("module", "source", "expected"),
+    [
+        pytest.param(
+            "web/database.py",
+            "import sqlite3\n"
+            "\n"
+            "from solar_challenge.web.storage import RunRecord\n"
+            "import solar_challenge.web.presets as presets\n",
+            [("solar_challenge.web.storage", 3), ("solar_challenge.web.presets", 4)],
+            id="module-top",
+        ),
+        pytest.param(
+            "web/database.py",
+            "from .chat_messages import ChatRole\nfrom . import presets\n",
+            [("solar_challenge.web.chat_messages", 1), ("solar_challenge.web.presets", 2)],
+            id="relative",
+        ),
+        pytest.param(
+            "web/database.py",
+            "import solar_challenge.web\nfrom solar_challenge import web\nfrom .. import web\n",
+            [("solar_challenge.web", 1), ("solar_challenge.web", 2), ("solar_challenge.web", 3)],
+            id="the-web-package-itself",
+        ),
+        pytest.param(
+            "web/database.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from solar_challenge.web.stored_runs import RunType\n",
+            [("solar_challenge.web.stored_runs", 4)],
+            id="type-checking",
+        ),
+        pytest.param(
+            "web/database.py",
+            "def rebuild(conn):\n"
+            "    from solar_challenge.web.schema import MIGRATIONS\n"
+            "\n"
+            "\n"
+            "try:\n"
+            "    from .storage import RunStorage\n"
+            "except ImportError:\n"
+            "    RunStorage = None\n",
+            [("solar_challenge.web.schema", 2), ("solar_challenge.web.storage", 6)],
+            id="in-a-function-and-an-import-error-guard",
+        ),
+        pytest.param(
+            "web/database.py",
+            "import sqlite3\n"
+            "from solar_challenge.errors import ConfigurationError\n"
+            "from .. import fleet\n"
+            "import solar_challenge.web_tools\n",
+            [],
+            id="not-the-web-subpackage",
+        ),
+        pytest.param(
+            "web/storage.py",
+            "from solar_challenge.web.database import Database\nfrom .stored_runs import RunType\n",
+            [],
+            id="another-web-module",
+        ),
+    ],
+)
+def test_the_scan_finds_web_database_imports_of_the_web_subpackage_at_any_scope(
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int]]
+) -> None:
+    """The scan finds an import of the web subpackage in web/database.py at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute or relative, the web package itself included. It finds none of a package module outside the subpackage, none of a module merely named web_tools, and none that another web module makes."""
+    src_dir = _write_package(tmp_path / "src", {module: source})
+
+    found = _web_database_imports_of_the_web_subpackage(_import_sites(src_dir))
+
+    assert [(site.imported, site.line) for site in found] == expected
