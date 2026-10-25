@@ -80,19 +80,19 @@ def surface_form(obj: object) -> str:
     carries it. That applies on the routine or class itself, on the link of a routine's
     chain where inspect stops, and on the constructor inspect reads for a class, its
     metaclass __call__ included. A routine that wraps an Enum, whose signature inspect
-    reads differently on each minor, raises TypeError naming it and that Enum. A routine
-    that wraps a descriptor whose type defines __get__ and __delete__ but no __set__,
-    which inspect reads as a builtin before 3.13 and as a data descriptor from 3.13,
-    raises TypeError naming it, that descriptor and its type, unless the descriptor or
-    one of the routine's links carries a signature. inspect reads an object its class
-    makes callable, at which a routine's chain ends, through the __call__ that class
-    resolves, bound to the object, unless the object carries a signature; each refusal
-    here applies to that __call__ as to the routine, naming the routine. The routine
-    also raises TypeError naming it and the object if a class in the object's type's MRO
-    defines __call__ in C, or if the object carries a __text_signature__, either of
-    which inspect may read differently from Python 3.13; and naming that __call__ if it
-    is a functools.partial, which Python 3.14 binds to the object as a method and
-    earlier minors call without it.
+    reads differently on each minor, raises TypeError naming it and that Enum, unless
+    one of the routine's links carries a signature. A routine that wraps a descriptor
+    whose type defines __get__ and __delete__ but no __set__, which inspect reads as a
+    builtin before 3.13 and as a data descriptor from 3.13, raises TypeError naming it,
+    that descriptor and its type, unless the descriptor or one of the routine's links
+    carries a signature. inspect reads an object its class makes callable, at which a
+    routine's chain ends, through the __call__ that class resolves, bound to the object,
+    unless the object carries a signature; each refusal here applies to that __call__ as
+    to the routine, naming the routine. The routine also raises TypeError naming it and
+    the object if a class in the object's type's MRO defines __call__ in C, or if the
+    object carries a __text_signature__, either of which inspect may read differently
+    from Python 3.13; and naming that __call__ if it is a functools.partial, which
+    Python 3.14 binds to the object as a method and earlier minors call without it.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
@@ -179,19 +179,22 @@ def named_classes(obj: object) -> set[type]:
     A string in one given to a link that records no module, as a functools.partial
     records none, or to a function that wraps a link carrying a signature of its own,
     which the new one may copy, raises TypeError naming the link and the string. A
-    signature that annotates nothing, as that of each routine CPython defines in C such
-    as str.join, names no class, and no module is looked up for it. Met again
-    inside its own evaluation in the same module, as each
+    string in one carried over an Enum raises TypeError naming that Enum and the string:
+    inspect reads an Enum's own signature, which the carried one may copy, from a
+    different place on each minor. A signature that annotates nothing, as that of each
+    routine CPython defines in C such as str.join, names no class, and no module is
+    looked up for it. Met again inside its own evaluation in the same module, as each
     "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
     no class there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class or routine whose signature surface_form refuses
     raises the TypeError surface_form raises for it, and a class with a member
     member_forms refuses, the TypeError member_forms raises for it.
-    A class's signature is spelled where its constructor is, the __call__ its metaclass
-    resolves if inspect reads that, as _constructor_spelling_modules describes, whether
-    or not the class carries a signature in the constructor's place; one its metaclass
-    or a descriptor gives raises TypeError.
+    A class's signature, an Enum's aside, is spelled where its constructor is, the
+    __call__ its metaclass resolves if inspect reads that, as
+    _constructor_spelling_modules describes, whether or not the class carries a
+    signature in the constructor's place; one its metaclass or a descriptor gives raises
+    TypeError.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
