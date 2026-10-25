@@ -51,7 +51,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
-from itertools import chain
 from pathlib import Path
 
 import pytest
@@ -520,25 +519,18 @@ def _may_run_in_a_namespace_of_the_module(call: ast.Call, namespace_names: froze
 
 def _code_can_bind_or_change_pytest_plugins(source: str | bytes, namespace_names: frozenset[str]) -> bool:
     """Return whether the literal *source* of an exec or eval can bind or change pytest_plugins:
-    it does not parse as a module, or it holds a unit that any of the finders of a module's
-    pytest_plugins, _pytest_plugins_assignments, _unreadable_pytest_plugins_bindings and
-    _unreadable_pytest_plugins_uses, finds.
+    it does not parse as a module, or _pytest_plugins_units finds a unit in it.
 
-    The code is judged as a module is, wherever it runs, given *namespace_names*, those that hold
-    a namespace where exec runs. So code that names no pytest_plugins does not count, in the
-    module's namespace too, and a literal exec nested in it is judged the same way. Code that
-    does not parse counts, since eval strips leading blanks, which a module does not accept.
+    The code is judged as a module is, given *namespace_names*, those that hold a namespace where
+    exec runs, so code that names no pytest_plugins counts for nothing, wherever it runs, and a
+    literal exec nested in it is judged the same way. Code that does not parse counts, since eval
+    strips leading blanks, which a module does not accept.
     """
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
         return True
-    finders = chain(
-        _pytest_plugins_assignments(tree),
-        _unreadable_pytest_plugins_bindings(tree),
-        _unreadable_pytest_plugins_uses(tree, namespace_names),
-    )
-    return next(finders, None) is not None
+    return next(_pytest_plugins_units(tree, namespace_names), None) is not None
 
 
 def _runs_code_that_can_change_pytest_plugins(node: ast.AST, namespace_names: frozenset[str]) -> bool:
@@ -654,18 +646,13 @@ def _units_with_their_namespace_names(
             )
 
 
-def _unreadable_pytest_plugins_uses(
-    tree: ast.Module, enclosing: frozenset[str] = frozenset()
-) -> Iterator[_Unit]:
+def _unreadable_pytest_plugins_uses(tree: ast.Module, enclosing: frozenset[str]) -> Iterator[_Unit]:
     """Yield each unit of *tree*, in any scope, that can change pytest_plugins in a form
-    _pytest_plugins_assignments does not read: one that reads or deletes the name, through which a
-    method call such as append, a subscript or an alias can change the list; subscripts a
-    namespace with the name, as _subscripts_namespace_with_pytest_plugins reads it; calls a method
-    of a namespace, or a function given one, or |= one, with the name, as
-    _calls_on_namespace_with_pytest_plugins reads it; runs code that can change it with exec or
-    eval, as _runs_code_that_can_change_pytest_plugins reads it; reaches an attribute of that
-    name, as _reaches_attribute_pytest_plugins reads it; or declares it global, since a function
-    or class that does can rebind the attribute of the module.
+    _pytest_plugins_assignments does not read: one that declares the name global, since a function
+    or class that does can rebind the attribute of the module, or one that holds a node that
+    _reads_or_deletes_pytest_plugins, _subscripts_namespace_with_pytest_plugins,
+    _calls_on_namespace_with_pytest_plugins, _runs_code_that_can_change_pytest_plugins or
+    _reaches_attribute_pytest_plugins reads.
 
     A read of the name in a function or class body counts even where the name is a local there,
     since that name is not resolved by scope. So does a read in an except type or a case pattern
@@ -673,10 +660,12 @@ def _unreadable_pytest_plugins_uses(
     a namespace are resolved by scope, as _units_with_their_namespace_names says, from *enclosing*,
     those that hold one around *tree*'s code, which matter for the code an exec runs.
 
-    Not read: a key held in a variable, or a mapping that does not spell it; a binding of a
-    namespace in a form _bound_name_and_value does not follow; a namespace passed into a function
-    and written there, or returned by one; a method of one held in a variable; exec or eval
-    reached other than by its bare name.
+    This is the one list of what the reader does not read, here or in the functions above: a key
+    _spells_pytest_plugins_key does not spell; exec or eval, or the code they run, as
+    _runs_code_that_can_change_pytest_plugins does not read them; a name bound to a namespace in a
+    form _bound_name_and_value does not follow, or, by a def or class that declares it global or
+    nonlocal, to a name of its own that holds one; a namespace passed into a function and written
+    there, or returned by one; a method of one held in a variable.
     """
     for unit, namespace_names in _units_with_their_namespace_names(tree.body, enclosing):
         if (isinstance(unit, ast.Global) and _PYTEST_PLUGINS in unit.names) or any(
@@ -688,6 +677,26 @@ def _unreadable_pytest_plugins_uses(
             for node in _own_nodes(unit)
         ):
             yield unit
+
+
+def _pytest_plugins_units(
+    tree: ast.Module, enclosing: frozenset[str] = frozenset()
+) -> Iterator[tuple[_Unit, ast.expr | None]]:
+    """Yield (unit, value) for each unit of *tree* that can give or change its pytest_plugins: first
+    those that bind or change it in a form the contract cannot read, as
+    _unreadable_pytest_plugins_bindings and _unreadable_pytest_plugins_uses find them, with None
+    for *value*; then those _pytest_plugins_assignments reads, with the value each assigns or adds.
+
+    This is the one definition of what can give or change a module's pytest_plugins. It serves
+    the judgement of a module, whose assignments are read and the rest fail, and that of the code
+    an exec or eval runs, where any of them fails. *enclosing* are the names that hold a
+    namespace around *tree*'s code, as _unreadable_pytest_plugins_uses takes them.
+    """
+    for unit in _unreadable_pytest_plugins_bindings(tree):
+        yield unit, None
+    for unit in _unreadable_pytest_plugins_uses(tree, enclosing):
+        yield unit, None
+    yield from _pytest_plugins_assignments(tree)
 
 
 def _first_unparsed_line(tree: ast.Module, unit: _Unit) -> str:
@@ -733,23 +742,20 @@ def _pytest_plugin_imports(source: Path, tree: ast.Module) -> Iterator[ast.Impor
     the module it spells. The entries are read without running *source*, so each value must be a
     literal: a str, whose entries are its pieces between commas, or a list or tuple of str. None
     names no plugin. Any other value fails, naming *source*, the line and the unit, and so does a
-    unit that _unreadable_pytest_plugins_bindings or _unreadable_pytest_plugins_uses finds.
+    unit that _pytest_plugins_units finds in a form the assignments do not read.
 
     Each assignment's value is read on its own, not added to what the module held before it. That
     is why a str's empty pieces are dropped, such as the one before the comma of `+= ",x"`, and why
     a str added to a list reads as the module it spells, not as the characters list.extend adds.
     """
-    unreadable = next(
-        chain(_unreadable_pytest_plugins_bindings(tree), _unreadable_pytest_plugins_uses(tree)), None
-    )
-    if unreadable is not None:
-        raise _pytest_plugins_failure(
-            source,
-            tree,
-            unreadable,
-            "which can bind or change pytest_plugins in a form the contract cannot read",
-        )
-    for unit, value in _pytest_plugins_assignments(tree):
+    for unit, value in _pytest_plugins_units(tree):
+        if value is None:
+            raise _pytest_plugins_failure(
+                source,
+                tree,
+                unit,
+                "which can bind or change pytest_plugins in a form the contract cannot read",
+            )
         try:
             plugins = ast.literal_eval(value)
         except ValueError:
