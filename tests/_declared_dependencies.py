@@ -47,7 +47,7 @@ Usage::
 
 import ast
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
@@ -575,56 +575,83 @@ def _unreadable_pytest_plugins_bindings(tree: ast.Module) -> Iterator[_Unit]:
             yield unit
 
 
-def _namespace_names(units: Iterable[_Unit], enclosing: frozenset[str]) -> frozenset[str]:
+def _bindings_in(units: Iterable[_Unit]) -> Iterator[tuple[str, ast.expr]]:
+    """Yield (name, value) for each binding _bound_name_and_value reads in the own nodes of
+    *units*, a walrus among them.
+    """
+    for unit in units:
+        for node in _own_nodes(unit):
+            if (binding := _bound_name_and_value(node)) is not None:
+                yield binding
+
+
+def _declared_name_bindings_in_nested_scopes(units: Sequence[_Unit]) -> Iterator[tuple[str, ast.expr]]:
+    """Yield (name, value) for each binding that a def or class under *units*, however deep, makes
+    of a name it declares global or nonlocal.
+
+    Such a binding sets the name in the scope the declaration points to, not in the one that makes
+    it, so every scope around has to count it.
+    """
+    for unit in units:
+        if isinstance(unit, _ScopeOwner):
+            inner_units = list(_scope_units(unit.body))
+            declared = {
+                name
+                for inner in inner_units
+                if isinstance(inner, (ast.Global, ast.Nonlocal))
+                for name in inner.names
+            }
+            yield from ((name, value) for name, value in _bindings_in(inner_units) if name in declared)
+            yield from _declared_name_bindings_in_nested_scopes(inner_units)
+
+
+def _namespace_names(units: Sequence[_Unit], enclosing: frozenset[str]) -> frozenset[str]:
     """Return the names that hold a namespace in the scope whose units are *units*, given those of
     the scope around it, *enclosing*: each name a binding in the units binds to a namespace,
     directly or through another such name, and each of *enclosing* that no binding in the units
     rebinds.
 
-    A binding is one that _bound_name_and_value reads in a unit's own nodes, a walrus among them.
     The names are the same for every unit of the scope, wherever in it the binding is. A name the
-    scope binds to anything else shadows the one around it.
-
-    Not followed: a target of a tuple, a star or a chained assignment, a for or a with; a
-    parameter or its default; an import; a namespace passed into a function and written there
-    through its parameter, or returned by one; a method of a namespace, as
-    `setitem = globals().__setitem__` binds. A parameter named like a name of *enclosing* leaves it
-    held, so that fails rather than escapes.
+    scope binds to anything else shadows the one around it. A name a def or class nested in the
+    scope declares global or nonlocal and binds to a namespace holds one here too, and shadows
+    nothing.
     """
-    bindings = [
-        binding
-        for unit in units
-        for node in _own_nodes(unit)
-        if (binding := _bound_name_and_value(node)) is not None
-    ]
+    bindings = list(_bindings_in(units))
+    set_in_nested_scopes = list(_declared_name_bindings_in_nested_scopes(units))
     names = enclosing - {name for name, _ in bindings}
     while True:
-        holding = names | {name for name, value in bindings if _spells_namespace(value, names)}
+        holding = names | {
+            name for name, value in [*bindings, *set_in_nested_scopes] if _spells_namespace(value, names)
+        }
         if holding == names:
             return names
         names = holding
 
 
 def _units_with_their_namespace_names(
-    nodes: Iterable[ast.AST], enclosing: frozenset[str]
+    nodes: Iterable[ast.AST], enclosing: frozenset[str], is_class_body: bool = False
 ) -> Iterator[tuple[_Unit, frozenset[str]]]:
     """Yield (unit, names) for each unit of the scope *nodes* belong to, as _scope_units finds
     them, followed by those of the body of each def or class among them, in document order.
     *names* are the names that hold a namespace where the unit runs, as _namespace_names finds
-    them, given *enclosing*, those of the scope around *nodes*.
+    them, given *enclosing*, those of the scope around *nodes*. *is_class_body* says that *nodes*
+    are a class's.
 
     Unlike the name pytest_plugins, whose reads count in any scope, the names that hold a
-    namespace are resolved by scope. A file may bind one name to a namespace in one function and
-    to a copy of it in another, as tests/_surface_forms.py binds `namespace`, handing the copy to
-    exec and eval. A def's decorators and defaults are its own nodes, so they run, and a walrus in
-    them binds, in the scope around it, where Python evaluates them.
+    namespace are resolved by scope, since a name may hold a namespace in one function and a copy
+    of one in another. A class body does not enclose the defs in it: they see the names around the
+    class, not its variables. A def's decorators and defaults are its own nodes, so they run, and
+    a walrus in them binds, in the scope around it, where Python evaluates them.
     """
     units = list(_scope_units(nodes))
     names = _namespace_names(units, enclosing)
+    seen_by_nested_scopes = enclosing if is_class_body else names
     for unit in units:
         yield unit, names
         if isinstance(unit, _ScopeOwner):
-            yield from _units_with_their_namespace_names(unit.body, names)
+            yield from _units_with_their_namespace_names(
+                unit.body, seen_by_nested_scopes, isinstance(unit, ast.ClassDef)
+            )
 
 
 def _unreadable_pytest_plugins_uses(
