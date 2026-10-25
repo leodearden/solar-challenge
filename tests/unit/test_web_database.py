@@ -704,6 +704,16 @@ class TestRunRecordTypeAndStatus:
             dataclasses.replace(north_roof_record, **{column: value})
 
 
+class TestRunRecordName:
+    """Tests for RunRecord's name, which is never NULL or blank (contract C7)."""
+
+    @pytest.mark.parametrize("name", ["", " \t", None])
+    def test_a_run_record_refuses_a_name_that_cannot_name_a_run(self, north_roof_record, name):
+        """A record is refused as require_run_name refuses its name, with a ValueError naming it, wherever it is built: not only by a save."""
+        with pytest.raises(ValueError, match=re.escape(f"name is {name!r}, not a run's name")):
+            dataclasses.replace(north_roof_record, name=name)
+
+
 class TestRunName:
     """Tests for RunStorage.run_name, the name Run History lists and renames a run under."""
 

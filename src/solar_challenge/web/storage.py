@@ -48,7 +48,8 @@ class RunRecord:
 
     config_json and summary_json are the JSON texts a save wrote; None while the run has none.
     type holds one of RUN_TYPES and status one of RUN_STATUSES, each None for NULL; a record
-    given another value raises ValueError. A run's name is never NULL (contract C7).
+    given another value raises ValueError. A run's name is never NULL or blank (contract C7):
+    a record given a name require_run_name refuses raises its ValueError.
     """
 
     id: str = field(metadata=_runs_column("TEXT PRIMARY KEY"))
@@ -69,6 +70,7 @@ class RunRecord:
     notes: str | None = field(metadata=_runs_column("TEXT"))
 
     def __post_init__(self) -> None:
+        require_run_name(self.name)
         if self.type is not None:
             one_of(self.type, RUN_TYPES, "RunRecord.type")
         if self.status is not None:
@@ -473,12 +475,12 @@ def _saved_run_row(
 
     Raises:
         ValueError: *name* cannot name a run, as require_run_name refuses it, or *status* is
-            not one of RUN_STATUSES, as RunRecord refuses it.
+            not one of RUN_STATUSES; RunRecord refuses either.
     """
     now = _now()
     return RunRecord(
         id=run_id,
-        name=require_run_name(name),
+        name=name,
         type=run_type,
         config_json=json.dumps(config),
         summary_json=json.dumps(summary),
@@ -594,7 +596,7 @@ class RunStorage:
         self._validate_run_id(run_id)
         record = RunRecord(
             id=run_id,
-            name=require_run_name(name),
+            name=name,
             type=run_type,
             config_json=None,
             summary_json=None,
