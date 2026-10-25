@@ -17,7 +17,6 @@ Layout:
 from __future__ import annotations
 
 import dataclasses
-import functools
 
 import pytest
 
@@ -33,7 +32,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
 from tests._fin_calibration import (
     FIN_GOLDEN,
@@ -42,6 +41,7 @@ from tests._fin_calibration import (
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
+    simulate_physics_column,
 )
 from tests._finance_builders import (
     make_fleet_results,
@@ -1106,9 +1106,7 @@ class TestPhysicsReconciliationColumn:
 
     Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
     real-physics path returns a structurally valid CostRecoverySolution.  The days
-    are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as Bristol's TMY.  It runs
-    simulate_fleet in this process, because a worker pool would fork the test
-    process, which tests/conftest.py's offline guard makes multi-threaded.  Its
+    are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as Bristol's TMY.  Its
     numbers are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation);
     see docs/cost-recovery-finance-model.md §7.6.
     θ's TestCalibrationPhysicsColumn simulates the same fixture, make_physics_column_scenario's.
@@ -1128,9 +1126,7 @@ class TestPhysicsReconciliationColumn:
         finance = _make_finance_fin_cr6()
 
         # Real physics simulation
-        sol = solve_cost_recovery_rate(
-            scenario, finance, simulate=functools.partial(simulate_fleet, parallel=False)
-        )
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate_physics_column)
 
         # STRUCTURAL assertions only
         assert isinstance(sol, CostRecoverySolution)

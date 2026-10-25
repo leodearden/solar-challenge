@@ -18,13 +18,15 @@ once for both:
   Its module seeds them as Bristol's TMY with the fixture
   PHYSICS_COLUMN_DAYS.bristol_tmy_fixture() makes;
 - make_physics_column_scenario: the fleet each physics column simulates over those
-  days.
+  days;
+- simulate_physics_column: the simulator each physics column gives its finance
+  call, which simulates that fleet in the test's own process.
 
 Usage::
 
     from tests._fin_calibration import (
         FIN_SCF, PHYSICS_COLUMN_DAYS, make_fin_finance, make_fin_spreadsheet_curve,
-        make_physics_column_scenario,
+        make_physics_column_scenario, simulate_physics_column,
     )
 
     bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
@@ -32,7 +34,7 @@ Usage::
     sol = solve_cost_recovery_rate(  # in a test that uses bristol_june_tmy
         make_physics_column_scenario(),
         make_fin_finance(self_consumption_override=None),
-        simulate=functools.partial(simulate_fleet, parallel=False),
+        simulate=simulate_physics_column,
     )
     spreadsheet_finance = make_fin_finance(self_consumption_override=FIN_SCF)
     spreadsheet_curve = make_fin_spreadsheet_curve(
@@ -49,6 +51,7 @@ import pandas as pd
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
+from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.load import LoadConfig
 from tests._finance_builders import make_sized_home
 from tests._seeded_tmy import ClearJuneDays
@@ -158,3 +161,14 @@ def make_physics_column_scenario() -> ScenarioConfig:
         ),
         homes=[home] * 2,
     )
+
+
+def simulate_physics_column(
+    config: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> FleetResults:
+    """*config*'s fleet simulated by the real simulate_fleet in this process, which a physics column gives its finance call as simulate.
+
+    It starts no worker pool, because a pool would fork the test process, which
+    tests/conftest.py's offline guard makes multi-threaded.
+    """
+    return simulate_fleet(config, start_date, end_date, parallel=False)

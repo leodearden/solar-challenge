@@ -18,7 +18,6 @@ Layout:
 """
 from __future__ import annotations
 
-import functools
 import math
 from pathlib import Path
 
@@ -39,7 +38,6 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
-from solar_challenge.fleet import simulate_fleet
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -47,6 +45,7 @@ from tests._fin_calibration import (
     make_fin_finance,
     make_fin_spreadsheet_curve,
     make_physics_column_scenario,
+    simulate_physics_column,
 )
 from tests._finance_builders import make_scenario_of, make_sized_home
 
@@ -510,15 +509,14 @@ bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
 class TestCalibrationPhysicsColumn:
     """Physics column for calibration (REPORTED, not asserted == spreadsheet).
 
-    Runs a small 2-home fleet over three days, in this process (a worker pool
-    would fork the test process, which tests/conftest.py's offline guard makes
-    multi-threaded), to smoke-test the physics path alongside the spreadsheet
-    column. The days are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as
-    Bristol's TMY. This does NOT document the §2.3 annual self-consumption tension:
-    three days cannot show an annual self-consumption fraction, and its DSCR/IRR
-    are degenerate for a 2-home fleet because the [FIN] grant exceeds the 2-home
-    capex (financed capex, debt and equity are all zero). The printed physics
-    values are reported for inspection only and are not pinned.
+    Runs a small 2-home fleet over three days to smoke-test the physics path
+    alongside the spreadsheet column. The days are PHYSICS_COLUMN_DAYS, which
+    bristol_june_tmy seeds as Bristol's TMY. This does NOT document the §2.3
+    annual self-consumption tension: three days cannot show an annual
+    self-consumption fraction, and its DSCR/IRR are degenerate for a 2-home fleet
+    because the [FIN] grant exceeds the 2-home capex (financed capex, debt and
+    equity are all zero). The printed physics values are reported for inspection
+    only and are not pinned.
 
     tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises
     asserts that no-debt premise.
@@ -537,9 +535,7 @@ class TestCalibrationPhysicsColumn:
         physics_finance = make_fin_finance(self_consumption_override=None)
 
         # Physics column (simulated fleet)
-        physics_curve = project_multi_year(
-            scenario, physics_finance, simulate=functools.partial(simulate_fleet, parallel=False)
-        )
+        physics_curve = project_multi_year(scenario, physics_finance, simulate=simulate_physics_column)
         physics_econ = project_economics(physics_curve, scenario, physics_finance)
 
         # Spreadsheet column (analytic)
