@@ -26,7 +26,6 @@ Usage::
 
 import contextlib
 import os
-import re
 import signal
 import subprocess
 from collections.abc import Mapping
@@ -34,12 +33,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from tests._pytest_report import failure_sections
+
 _STREAM_TAIL_CHARS = 5000
-
-# The line TerminalWriter.sep("=", title) prints to open each section of pytest's report.
-_PYTEST_SECTION_HEADER = re.compile(r"^=+ (?P<title>.+?) =+$", re.MULTILINE)
-
-_PYTEST_FAILURE_SECTION_TITLES = frozenset({"ERRORS", "FAILURES"})
 
 _FAILURE_SECTION_HEAD_CHARS = 20_000
 
@@ -114,23 +110,8 @@ def describe_pytest_outcome(outcome: Outcome) -> str:
     A stdout with neither, as when uv refused to start pytest or the run passed,
     is described exactly as describe_outcome describes it.
     """
-    return f"exit {outcome.returncode}\n{_failure_sections(outcome.stdout)}{_tails(outcome.stdout, outcome.stderr)}"
-
-
-def _failure_sections(stdout: str) -> str:
-    """Return the excerpt of each ERRORS and FAILURES section of the pytest report in *stdout*, in report order.
-
-    A section runs from the line that opens it to the line that opens the next
-    section, or to the end of *stdout*.
-    """
-    headers = list(_PYTEST_SECTION_HEADER.finditer(stdout))
-    # A stdout with no header still has an end, so the zip below pairs headers with ends non-strictly.
-    ends = [header.start() for header in headers[1:]] + [len(stdout)]
-    return "".join(
-        _excerpt(stdout[header.start() : end])
-        for header, end in zip(headers, ends)
-        if header["title"] in _PYTEST_FAILURE_SECTION_TITLES
-    )
+    excerpts = "".join(_excerpt(section.text) for section in failure_sections(outcome.stdout))
+    return f"exit {outcome.returncode}\n{excerpts}{_tails(outcome.stdout, outcome.stderr)}"
 
 
 def _excerpt(section: str) -> str:
