@@ -3,15 +3,21 @@
 
 Uses a real JobManager (no mocks) to run a tiny 3-home, 1-day Bristol fleet
 through the endpoint, polls the job to completion, and asserts the run lands
-in history with n_homes == 3.
+in history with n_homes == 3.  The test's weather cache serves a clear June day
+on DAYS_WINDOW_START, where a ``days`` window starts, as Bristol's TMY, so the
+job runs offline.
 """
 import time
 from pathlib import Path
 
+import pandas as pd
 import pytest
+
+from tests._seeded_tmy import ClearJuneDays
 
 pytest.importorskip("flask")
 
+from solar_challenge.web.simulation_params import DAYS_WINDOW_START
 from tests._web_app import build_test_app
 
 
@@ -19,12 +25,14 @@ from tests._web_app import build_test_app
 # Payload
 # ---------------------------------------------------------------------------
 
+_FLEET_DAYS = ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1)
+
 _DIST_PAYLOAD = {
     "name": "E2E Dist Fleet",
     "n_homes": 3,
     "seed": 42,
     "location": "bristol",
-    "days": 1,
+    "days": _FLEET_DAYS.count,
     "pv": {
         "capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0},
     },
@@ -42,12 +50,15 @@ _DIST_PAYLOAD = {
     "seg": {"rate_pence_per_kwh": 5.0},
 }
 
+bristol_june_tmy = _FLEET_DAYS.bristol_tmy_fixture()
+
 
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestFleetFromDistributionE2E:
     """End-to-end: a real 3-home distribution fleet runs to completion."""
 
