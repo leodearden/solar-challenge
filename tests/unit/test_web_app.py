@@ -233,12 +233,13 @@ def test_an_app_on_a_store_another_app_holds_is_refused_naming_this_process_and_
 
 
 def test_an_app_refused_its_store_opens_no_database(tmp_path: Path) -> None:
+    """The refused build leaves the store's directory holding only the lock file its holder took, so it wrote no database file there."""
     held = acquire_store_lock(tmp_path)
     try:
         with pytest.raises(StoreLocked):
             build_test_app(tmp_path)
 
-        assert not (tmp_path / "test.db").exists()
+        assert sorted(tmp_path.iterdir()) == [held.path]
     finally:
         held.release()
 
