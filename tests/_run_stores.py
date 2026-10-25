@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The RunStorages that belong to no app, for tests that drive the run store directly rather than through the dashboard.
 
-empty_run_storage builds a new, empty store in a directory a test gives it. The RunStorage
+empty_run_storage builds a new, empty store in a directory a test gives it; run_storage_over
+reads a Database a test gives it, its run files where an app keeps a store's. The RunStorage
 an app keeps its runs in is tests/_web_app.py's run_storage_of(app).
 
 Usage::
 
-    from tests._run_stores import empty_run_storage
+    from tests._run_stores import empty_run_storage, run_storage_over
 
     storage = empty_run_storage(tmp_path)
     storage.save_home_run_from_results("home-1", config, results, name="North Roof")
+    unopenable = run_storage_over(Database(tmp_path / "missing" / "runs.db"))
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from solar_challenge.web.database import Database
 from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 
@@ -34,3 +37,11 @@ def empty_run_storage(directory: Path) -> RunStorage:
     )
     data_dir.mkdir(parents=True)
     return RunStorage(open_database(database_path), data_dir)
+
+
+def run_storage_over(database: Database) -> RunStorage:
+    """Return the RunStorage of no app over *database*, its run files beside the database file, where an app keeps a store's run files.
+
+    It opens and creates nothing.
+    """
+    return RunStorage(database, database.path.parent)

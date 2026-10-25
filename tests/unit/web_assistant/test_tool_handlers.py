@@ -35,11 +35,12 @@ from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import run_storage_over
 from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
 from tests._web_job_days import web_job_days
 from tests._web_runs import store_fleet_run
-from tests.unit.web_assistant._fakes import run_storage_over, seed_run
+from tests.unit.web_assistant._fakes import seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
 
 

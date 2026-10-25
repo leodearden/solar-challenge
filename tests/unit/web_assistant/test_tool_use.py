@@ -48,6 +48,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.schema import open_database
 
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import run_storage_over
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -60,7 +61,6 @@ from tests.unit.web_assistant._fakes import (
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
-    run_storage_over,
     seed_run,
     text_block,
     thinking_block,
