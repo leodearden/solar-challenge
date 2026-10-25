@@ -41,12 +41,20 @@ import dataclasses
 import enum
 import functools
 import inspect
-import sys
 import textwrap
 import types
 import typing
-import weakref
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+
+from tests._surface_forms_module_lookup import (
+    defining_module,
+    evaluated_in,
+    is_get_delete_descriptor,
+    is_immutable_type,
+    is_routine,
+    label_of,
+    spelled_function,
+)
 
 
 def surface_form(obj: object) -> str:
@@ -325,7 +333,7 @@ class _RecordsNoModule(_Unspelled):
 
     def refusal(self, source: str) -> TypeError:
         return TypeError(
-            f"{_label(self.author)} carries a signature whose string annotation {source!r} "
+            f"{label_of(self.author)} carries a signature whose string annotation {source!r} "
             "no module is known to spell: it records no module of its own, and what it "
             "stands for spells no annotation: make the name private, annotate with the "
             "class, not a string, or carry the signature on a function defined with def"
@@ -340,7 +348,7 @@ class _MayBeCopied(_Unspelled):
 
     def refusal(self, source: str) -> TypeError:
         return TypeError(
-            f"{_label(self.author)} carries a signature whose string annotation {source!r} "
+            f"{label_of(self.author)} carries a signature whose string annotation {source!r} "
             "no module is known to spell: it wraps a callable that carries a signature of "
             "its own, so this one may be a copy of it, spelled where that one was given: "
             "make the name private, annotate with the class, not a string, or leave the "
@@ -362,7 +370,7 @@ class _EnumReadByMinor(_Unspelled):
 
     def refusal(self, source: str) -> TypeError:
         return TypeError(
-            f"A signature carried over {_label(self.enum_class)}, an {_label(enum.Enum)} "
+            f"A signature carried over {label_of(self.enum_class)}, an {label_of(enum.Enum)} "
             f"{_ENUM_SIGNATURE_BY_MINOR}, holds the string annotation {source!r}, which no "
             "module is known to spell, since the signature may be a copy of that Enum's: "
             "make the name private, or annotate with the class, not a string"
@@ -400,7 +408,7 @@ class _Unevaluated(_Construct):
         evaluation = _Evaluation(self.source, module)
         if evaluation in self.enclosing:
             return set()
-        evaluated = _evaluated(self.source, module)
+        evaluated = evaluated_in(self.source, module)
         return _parsed(evaluated, self.enclosing | {evaluation}).classes(module)
 
 
@@ -566,13 +574,13 @@ def _parsed_type_variable(variable: _TypeVariable, enclosing: _Enclosing) -> _De
 
 def _declaring_module(variable: _TypeVariable) -> types.ModuleType | None:
     """The module *variable*'s __module__ names, looked up unchecked, as a type variable records nothing else to check it by; None if that name is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
-    return None if variable.__module__ == "typing" else _defining_module(variable)
+    return None if variable.__module__ == "typing" else defining_module(variable)
 
 
 def _parsed_new_type(new_type: typing.NewType, enclosing: _Enclosing) -> _Declared:
     """*new_type* by its qualified name, as a class is spelled, then its supertype, read inside its declaration; its name alone if that declaration encloses it."""
     qualified_name = new_type.__qualname__  # type: ignore[attr-defined]  # typeshed's NewType omits the __qualname__ its __init__ sets
-    module = _defining_module(new_type)
+    module = defining_module(new_type)
     if new_type in enclosing:
         return _Declared(qualified_name, module, ())
     supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
@@ -630,22 +638,7 @@ def _is_enum(obj: object) -> typing.TypeGuard[type[enum.Enum]]:
 
 def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
     """Whether *obj* is a class or a routine, the objects surface_form spells, an Enum aside, by their signature rather than by their type."""
-    return inspect.isclass(obj) or _is_routine(obj)
-
-
-def _is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
-    """Whether *obj* is a routine as inspect.isroutine reads one from Python 3.14, on every admitted minor: before 3.14 inspect counts no functools.partial as one, and before 3.13 it counts each descriptor _is_get_delete_descriptor finds."""
-    return isinstance(obj, functools.partial) or (
-        inspect.isroutine(obj) and not _is_get_delete_descriptor(obj)
-    )
-
-
-def _is_get_delete_descriptor(obj: object) -> bool:
-    """Whether *obj*'s type defines __get__ and __delete__ but no __set__: a data descriptor, as inspect.isdatadescriptor reads one on every admitted minor, that inspect before Python 3.13 also counts as a method descriptor."""
-    kind = type(obj)
-    return (
-        inspect.isdatadescriptor(obj) and hasattr(kind, "__get__") and not hasattr(kind, "__set__")
-    )
+    return inspect.isclass(obj) or is_routine(obj)
 
 
 def _signature(obj: Callable[..., object]) -> inspect.Signature:
@@ -658,7 +651,7 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
     """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject* ends."""
     unreadable = _unreadable_link(link)
     if unreadable is not None:
-        raise _unreadable_routine_error(_label(subject), subject, unreadable)
+        raise _unreadable_routine_error(label_of(subject), subject, unreadable)
     end = _chain_end(link, stop=_has_non_none_signature)
     _refuse_wrapped_enum(subject, end)
     _refuse_wrapped_get_delete_descriptor(subject, end)
@@ -667,7 +660,7 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
         return
     if inspect.isclass(end):
         _refuse_constructor_without_a_portable_form(end)
-    elif callable(end) and not _is_routine(end):
+    elif callable(end) and not is_routine(end):
         _refuse_minor_dependent_call(subject, end)
         _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
 
@@ -686,8 +679,8 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
     )
     if c_holder is not None:
         raise TypeError(
-            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, whose MRO holds "
-            f"{_label(c_holder)}.__call__, which is defined in C: from Python 3.13 inspect reads "
+            f"{label_of(subject)} wraps {label_of(obj)}, a {label_of(type(obj))}, whose MRO holds "
+            f"{label_of(c_holder)}.__call__, which is defined in C: from Python 3.13 inspect reads "
             "a __text_signature__ such a class may give its instances in place of the __call__ "
             "their type resolves, which it reads on 3.11 and 3.12: make the name private, wrap a "
             "function defined with def, or set a __signature__ that is an inspect.Signature on "
@@ -696,7 +689,7 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
     text_signature = getattr(obj, "__text_signature__", None)
     if text_signature:
         raise TypeError(
-            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, which carries the "
+            f"{label_of(subject)} wraps {label_of(obj)}, a {label_of(type(obj))}, which carries the "
             f"__text_signature__ {text_signature!r}: inspect reads it in place of the __call__ "
             "its type resolves from Python 3.13, and reads that __call__ on 3.11 and 3.12: make "
             "the name private, or set a __signature__ that is an inspect.Signature on the "
@@ -757,8 +750,8 @@ def _refuse_minor_dependent_signature(obj: object, end: object) -> None:
     """
     signature = _minor_dependent_signature(end)
     if signature is not None:
-        label = _label(obj)
-        end_label = _label(end)
+        label = label_of(obj)
+        end_label = label_of(end)
         subject = label if end_label == label else f"{label} is read through {end_label}, which"
         raise TypeError(f"{subject} {_minor_dependent_signature_clause(signature)}")
 
@@ -769,7 +762,7 @@ def _minor_dependent_signature_clause(signature: object) -> str:
     It begins with its verb, so that a message begins with its subject.
     """
     return (
-        f"carries the __signature__ {signature!r}, a {_label(type(signature))}: Python 3.12 "
+        f"carries the __signature__ {signature!r}, a {label_of(type(signature))}: Python 3.12 "
         "and 3.13 convert a string given as __signature__ and call a callable given there, "
         "and 3.11 and 3.14 refuse either: set __signature__ to an inspect.Signature, or "
         "make the name private"
@@ -784,7 +777,7 @@ def _unreadable_link(obj: object) -> object | None:
     chain. Else it is the end of the chain, as _chain_end follows it, if
     _is_read_as_builtin finds it.
     """
-    if not _is_routine(obj):
+    if not is_routine(obj):
         return None
     if not callable(obj):
         return obj
@@ -793,30 +786,30 @@ def _unreadable_link(obj: object) -> object | None:
 
 
 def _is_read_as_builtin(obj: object) -> bool:
-    """Whether inspect reads *obj* as a builtin on every admitted minor, as _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR says: a routine, as _is_routine counts one, whose type defines __get__ in Python, carrying no signature for inspect to read in its place."""
+    """Whether inspect reads *obj* as a builtin on every admitted minor, as _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR says: a routine, as is_routine counts one, whose type defines __get__ in Python, carrying no signature for inspect to read in its place."""
     getter = inspect.getattr_static(type(obj), "__get__", None)
     return (
-        _is_routine(obj)
+        is_routine(obj)
         and isinstance(getter, types.FunctionType)
         and not _has_non_none_signature(obj)
     )
 
 
 def _is_read_as_builtin_before_3_13(obj: object) -> bool:
-    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _GET_DELETE_DESCRIPTOR_BY_MINOR says: a descriptor _is_get_delete_descriptor finds, carrying no signature for inspect to read in its place."""
-    return _is_get_delete_descriptor(obj) and not _has_non_none_signature(obj)
+    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _GET_DELETE_DESCRIPTOR_BY_MINOR says: a descriptor is_get_delete_descriptor finds, carrying no signature for inspect to read in its place."""
+    return is_get_delete_descriptor(obj) and not _has_non_none_signature(obj)
 
 
 def _unreadable_routine_error(label: str, routine: object, link: object) -> TypeError:
     """The error for *routine*, which *label* names and whose signature inspect fails to read at *link*, the link _unreadable_link gives for it."""
-    kind = _label(type(routine))
+    kind = label_of(type(routine))
     if link is routine:
         return TypeError(
             f"{label} is a {kind}, a routine whose signature inspect cannot read, so no "
             "form spells it: make the name private, or define it with def"
         )
     return TypeError(
-        f"{label} is a {kind} that wraps {_label(link)}, a {_label(type(link))} whose "
+        f"{label} is a {kind} that wraps {label_of(link)}, a {label_of(type(link))} whose "
         "signature inspect cannot read, so no form spells it: make the name private, or "
         "define what it wraps with def"
     )
@@ -830,7 +823,7 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
     """
     if _is_enum(end):
         raise TypeError(
-            f"{_label(obj)} wraps {_label(end)}, an {_label(enum.Enum)}, "
+            f"{label_of(obj)} wraps {label_of(end)}, an {label_of(enum.Enum)}, "
             f"{_ENUM_SIGNATURE_BY_MINOR}: make the name private, or wrap a function "
             "defined with def"
         )
@@ -857,7 +850,7 @@ def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
     """
     if _is_read_as_builtin_before_3_13(end):
         raise TypeError(
-            f"{_label(obj)} wraps {_label(end)}, a {_label(type(end))}, "
+            f"{label_of(obj)} wraps {label_of(end)}, a {label_of(type(end))}, "
             f"{_GET_DELETE_DESCRIPTOR_BY_MINOR}: make the name private, wrap a function "
             "defined with def, or set a __signature__ that is an inspect.Signature on the "
             "routine or on what it wraps"
@@ -915,7 +908,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     _refuse_constructor_read_as_builtin(cls, holder, name, _constructor_as_read(cls, holder))
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
-            f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
+            f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
             "builtin or extension type), so inspect reads its signature from a text "
             "signature, which a release of its package can add or rewrite, as CPython's "
             "minors do: make the name private, or give the class an __init__ or __new__ "
@@ -954,7 +947,7 @@ def _refuse_wrapper_of_c_callable(
     wrapped = _wrapped_c_callable(constructor)
     if wrapped is not None:
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(owner)}.{name}, which wraps "
+            f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which wraps "
             f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
             "that callable on some Python releases and skips it as defined in C on "
             f"others: make the name private, or define {name} with def, wrapping no "
@@ -993,7 +986,7 @@ def _refuse_partial_bound_as_method(
     """Raise TypeError saying *subject* *verb* *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *method*, the one *owner* holds as *name* that inspect reads for *subject* and binds through its type's __get__, is a functools.partial."""
     if isinstance(method, functools.partial):
         raise TypeError(
-            f"{_label(subject)} {verb} {_label(owner)}.{name}, "
+            f"{label_of(subject)} {verb} {label_of(owner)}.{name}, "
             f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
         )
 
@@ -1010,8 +1003,8 @@ def _refuse_constructor_read_as_builtin(
     else:
         return
     raise TypeError(
-        f"{_label(cls)} is constructed through {_label(owner)}.{name}, which inspect reads "
-        f"as {_label(end)}, a {_label(type(end))}, {reading}: make the name private, or "
+        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
+        f"as {label_of(end)}, a {label_of(type(end))}, {reading}: make the name private, or "
         f"define {name} with def"
     )
 
@@ -1027,7 +1020,7 @@ def _refuse_constructor_signature(
     signature = _minor_dependent_signature(_chain_end(constructor, stop=_has_non_none_signature))
     if signature is not None:
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(owner)}.{name}, which "
+            f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which "
             f"{_minor_dependent_signature_clause(signature)}"
         )
 
@@ -1093,11 +1086,11 @@ def _end_spelling_modules(
     """
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
-    if not _is_routine(end):
+    if not is_routine(end):
         return _chain_spelling_modules(_call_as_read(end), names) if callable(end) else None
     if isinstance(end, _C_ROUTINE_KINDS):
         return None
-    return dict.fromkeys(names, _defining_module(_annotations_author(end)))
+    return dict.fromkeys(names, defining_module(_annotations_author(end)))
 
 
 def _carried_signature_module(carrier: object) -> _ModuleOrUnspelled:
@@ -1107,7 +1100,7 @@ def _carried_signature_module(carrier: object) -> _ModuleOrUnspelled:
         return _RecordsNoModule(author)
     if _signed_link(getattr(author, "__wrapped__", None)) is not None:
         return _MayBeCopied(author)
-    return _defining_module(author)
+    return defining_module(author)
 
 
 def _signature_author(carrier: object) -> object:
@@ -1179,7 +1172,7 @@ def _constructor_spelling_modules(
     constructor = _constructor_as_read(cls, holder)
     end = _chain_end(constructor)
     if signature_holder is not None and isinstance(end, _C_CONSTRUCTOR_KINDS):
-        return dict.fromkeys(names, _defining_module(signature_holder))
+        return dict.fromkeys(names, defining_module(signature_holder))
     author = _annotations_author(end)
     if _is_generated(author):
         _refuse_constructor_generated_for_another_class(cls, holder, author)
@@ -1203,8 +1196,8 @@ def _refuse_constructor_generated_for_another_class(
     )
     if generated.__qualname__ not in renamed_into_holder:
         raise TypeError(
-            f"{_label(cls)} is constructed through {_label(generated)}, a function generated "
-            f"for another class and assigned in the body of {_label(holder)}, so no module is "
+            f"{label_of(cls)} is constructed through {label_of(generated)}, a function generated "
+            f"for another class and assigned in the body of {label_of(holder)}, so no module is "
             "known to spell the fields of the class it was generated for: make the name "
             f"private, or define {generated.__name__} with def"
         )
@@ -1247,7 +1240,7 @@ def _generated_constructor_modules(
     """The module spelling each of *names* in a constructor compiled outside *holder*'s body and renamed into it: that of the nearest class in *holder*'s MRO that the dataclass decorator processed and whose own body annotates the name, or *holder*'s if none does."""
     decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
     return {
-        name: _defining_module(
+        name: defining_module(
             next((base for base in decorated if name in inspect.get_annotations(base)), holder)
         )
         for name in names
@@ -1270,7 +1263,7 @@ def _signature_holder(cls: type) -> type:
     """
     if _metaclass_may_provide_signature(cls):
         raise TypeError(
-            f"{_label(cls)} carries a signature its metaclass {_label(type(cls))} provides "
+            f"{label_of(cls)} carries a signature its metaclass {label_of(type(cls))} provides "
             "or may provide, through an attribute, a data descriptor or a __getattribute__ "
             "or __getattr__ it defines, so no module is known to spell it: make the name "
             "private, or give the class a metaclass that provides no __signature__"
@@ -1279,8 +1272,8 @@ def _signature_holder(cls: type) -> type:
     held = vars(holder)["__signature__"]
     if not isinstance(held, inspect.Signature):
         raise TypeError(
-            f"{_label(cls)} carries the signature a {_label(type(held))} descriptor gives "
-            f"as {_label(holder)}.__signature__, so no module is known to spell it: make "
+            f"{label_of(cls)} carries the signature a {label_of(type(held))} descriptor gives "
+            f"as {label_of(holder)}.__signature__, so no module is known to spell it: make "
             "the name private, or set __signature__ to an inspect.Signature"
         )
     return holder
@@ -1326,207 +1319,9 @@ def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        return _parsed(member.annotation, frozenset()).classes(_defining_module(cls))
-    function = _spelled_function(member)
+        return _parsed(member.annotation, frozenset()).classes(defining_module(cls))
+    function = spelled_function(member)
     return _form_classes(member if function is None else function)
-
-
-def _defining_module(obj: object) -> types.ModuleType:
-    """The module that defined *obj*, as sys.modules holds it: the one place this helper looks a module up by name, through _module_named, checked for a routine and for a class; a functools.partial's is that of the callable it wraps, and anything else records only its module's name, so that module is looked up unchecked."""
-    if isinstance(obj, functools.partial):
-        return _defining_module(obj.func)
-    if _is_routine(obj):
-        return _routine_module(obj)
-    if inspect.isclass(obj):
-        return _class_module(obj)
-    return _module_named(obj.__module__, obj)
-
-
-def _module_named(name: str, obj: object) -> types.ModuleType:
-    """The module sys.modules holds under *name*, the name of the module that defined *obj*; LookupError naming both if sys.modules holds none there, as once that module has left it."""
-    module = sys.modules.get(name)
-    if module is None:
-        raise LookupError(
-            f"{_label(obj)} is defined in the module named {name!r}, but sys.modules holds "
-            "no module under that name: read each module's objects while sys.modules holds it"
-        )
-    return module
-
-
-def _label(obj: object) -> str:
-    """The name this helper's errors give *obj*: its module's name and its qualified name, dotted; its repr if it records no qualified name, as a type variable does not."""
-    qualified_name = getattr(obj, "__qualname__", None)
-    return repr(obj) if qualified_name is None else f"{obj.__module__}.{qualified_name}"
-
-
-def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
-    """The module whose globals *routine* carries, whatever module its __module__ names: the one sys.modules holds under the name that module was imported as, its spec's, or its __name__ if it has no spec.
-
-    If sys.modules holds another module under that name, as once another module of the
-    same name has replaced it there, LookupError names *routine* and both modules. A
-    routine that carries no globals, as a descriptor object that carries a signature
-    carries none, records nothing to check its module by, so the one its __module__
-    names is looked up unchecked.
-    """
-    namespace = getattr(routine, "__globals__", None)
-    if namespace is None:
-        return _module_named(routine.__module__, routine)
-    spec = namespace.get("__spec__")
-    name = namespace.get("__name__") if spec is None else spec.name
-    module = _module_named(name, routine)
-    if vars(module) is not namespace:
-        raise _defined_elsewhere(_label(routine), namespace, module, name)
-    return module
-
-
-_PY_TPFLAGS_IMMUTABLETYPE = 1 << 8
-
-
-def _is_immutable_type(cls: type) -> bool:
-    """Whether *cls*'s flags mark it an immutable type, which only C code defines.
-
-    Python marks no class a class statement or type() creates, and CPython marks every
-    static type and many heap types it defines in C, though not all, such as ast.AST.
-    """
-    return bool(cls.__flags__ & _PY_TPFLAGS_IMMUTABLETYPE)
-
-
-def _class_module(cls: type) -> types.ModuleType:
-    """The module sys.modules holds under the name *cls*'s __module__ records, where typing and inspect read a class's annotations and source, checked to be the module that defined *cls*.
-
-    A class defined outside any function must be bound there under its qualified name,
-    and one defined inside a function must find there the globals the first function its
-    body compiled carries. A module inspect reads no source for, such as a built-in or
-    extension module, holds no class statement to misread, and _evaluated refuses a
-    string read there, so a class such a module does not bind under its qualified name,
-    as _json binds _json.Scanner as make_scanner, is checked as one defined inside a
-    function is. Otherwise, as once another module of the same name has replaced its own
-    in sys.modules, LookupError names *cls* and the module found. An immutable type
-    carries no source or annotation to misread, and a class so checked whose body
-    compiled no function carries nothing to check it by, so their module is looked up
-    unchecked.
-    """
-    module = _module_named(cls.__module__, cls)
-    if _is_immutable_type(cls):
-        return module
-    if "<locals>" in cls.__qualname__:
-        return _checked_by_body_function(cls, module)
-    bound = _bound_under(cls.__qualname__, module)
-    if bound is cls:
-        return module
-    if not _has_source(module):
-        return _checked_by_body_function(cls, module)
-    raise LookupError(
-        f"{_label(cls)} is not bound under {cls.__qualname__!r} in "
-        f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
-        f"the name {cls.__module__!r}: that module binds "
-        f"{'nothing' if bound is None else 'another object'} there. Read each module's "
-        "objects before importing another module of that name, or bind the class under "
-        "its qualified name"
-    )
-
-
-def _checked_by_body_function(cls: type, module: types.ModuleType) -> types.ModuleType:
-    """*module*, checked to hold as its globals those the first function *cls*'s body compiled carries: LookupError naming *cls* and both modules if it does not; unchecked if that body compiled none."""
-    function = _function_compiled_in_body(cls)
-    if function is not None and function.__globals__ is not vars(module):
-        raise _defined_elsewhere(_label(cls), function.__globals__, module, cls.__module__)
-    return module
-
-
-def _defined_elsewhere(
-    label: str, namespace: dict[str, object], module: types.ModuleType, name: str
-) -> LookupError:
-    """The error for *label*, defined in the module whose globals are *namespace*, once sys.modules holds *module* in its place under *name*."""
-    return LookupError(
-        f"{label} is defined in the module at {namespace.get('__file__')}, but sys.modules "
-        f"holds the module at {getattr(module, '__file__', None)} under the name {name!r}: "
-        "read each module's objects before importing another module of that name"
-    )
-
-
-def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
-    """The first function *cls*'s own body compiled, read through _spelled_function and unwrapped from any decorator that records it as __wrapped__: one whose code's qualified name is *cls*'s dotted with the code's name; None if the body compiled none, as an annotation-only body compiles none before Python 3.14, which compiles its __annotate__ unless the module imports annotations from __future__, and as the dataclass decorator and EnumType compile the functions they add elsewhere."""
-    functions = (_spelled_function(member) or member for member in vars(cls).values())
-    unwrapped = (
-        inspect.unwrap(function) for function in functions if isinstance(function, types.FunctionType)
-    )
-    return next(
-        (
-            function
-            for function in unwrapped
-            if isinstance(function, types.FunctionType)
-            and function.__code__.co_qualname == f"{cls.__qualname__}.{function.__code__.co_name}"
-        ),
-        None,
-    )
-
-
-def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
-    """What *module* binds under the dotted *qualified_name*, one attribute at a time; None if it binds nothing there."""
-    bound: object = module
-    for name in qualified_name.split("."):
-        bound = getattr(bound, name, None)
-    return bound
-
-
-def _evaluated(annotation: str, module: types.ModuleType) -> object:
-    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; TypeError naming both if inspect reads no source for *module*, which then has no such block to read."""
-    if not _has_source(module):
-        raise TypeError(
-            f"The string annotation {annotation!r} is read in the module {module.__name__!r}, "
-            "for which inspect reads no source, as for a built-in or extension module, so no "
-            "`if TYPE_CHECKING:` import there can be read: make the name private, or annotate "
-            "with the class, not a string"
-        )
-    namespace = dict(vars(module))
-    exec(_type_checking_imports(module), namespace)
-    return eval(annotation, namespace)
-
-
-_Argument = typing.TypeVar("_Argument")
-_Result = typing.TypeVar("_Result")
-
-
-def _cached_while_alive(function: Callable[[_Argument], _Result]) -> Callable[[_Argument], _Result]:
-    """*function*, its result for each argument computed once and kept only while that argument lives, so the cache keeps no argument alive."""
-    results: weakref.WeakKeyDictionary[_Argument, _Result] = weakref.WeakKeyDictionary()
-
-    @functools.wraps(function)
-    def cached(argument: _Argument) -> _Result:
-        if argument not in results:
-            results[argument] = function(argument)
-        return results[argument]
-
-    return cached
-
-
-@_cached_while_alive
-def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
-    """The Import and ImportFrom statements of *module*'s top-level `if TYPE_CHECKING:` blocks, compiled, so running them binds each name as Python binds it."""
-    imports: list[ast.stmt] = []
-    for node in ast.parse(inspect.getsource(module)).body:
-        match node:
-            case ast.If(
-                test=ast.Name(id="TYPE_CHECKING") | ast.Attribute(attr="TYPE_CHECKING"),
-                body=body,
-            ):
-                imports += [
-                    statement
-                    for statement in body
-                    if isinstance(statement, (ast.Import, ast.ImportFrom))
-                ]
-    return compile(ast.Module(body=imports, type_ignores=[]), module.__name__, "exec")
-
-
-@_cached_while_alive
-def _has_source(module: types.ModuleType) -> bool:
-    """Whether inspect reads a source for *module*: not for a built-in or extension module, nor for one with no file, as a module types.ModuleType makes has none."""
-    try:
-        inspect.getsource(module)
-    except (OSError, TypeError):
-        return False
-    return True
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
@@ -1603,7 +1398,7 @@ class _AnnotatedAttribute:
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
-    A member that _spelled_function has no rule for raises the TypeError
+    A member that spelled_function has no rule for raises the TypeError
     _refuse_member_without_a_portable_form raises for it, if any, naming *cls* and the
     member.
     """
@@ -1614,8 +1409,8 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
-        if _spelled_function(member) is None:
-            _refuse_member_without_a_portable_form(f"{_label(cls)}.{name}", member)
+        if spelled_function(member) is None:
+            _refuse_member_without_a_portable_form(f"{label_of(cls)}.{name}", member)
     return members
 
 
@@ -1663,7 +1458,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
 def _is_class_var(annotation: object, cls: type) -> bool:
     """Whether *annotation*, which *cls*'s own body declares, is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute; a string annotation is evaluated as named_classes evaluates one, in *cls*'s module."""
     if isinstance(annotation, str):
-        return _is_class_var(_evaluated(annotation, _defining_module(cls)), cls)
+        return _is_class_var(evaluated_in(annotation, defining_module(cls)), cls)
     return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
@@ -1677,25 +1472,12 @@ def _member_form(member: object) -> str:
 def _form_by_kind(member: object) -> str:
     if isinstance(member, _AnnotatedAttribute):
         return f"attribute {_parsed(member.annotation, frozenset()).text()}"
-    function = _spelled_function(member)
+    function = spelled_function(member)
     if function is None:
         return surface_form(member)
     if isinstance(member, property):
         return f"{_property_kind(member)} {surface_form(function)}"
     return f"{type(member).__name__} {surface_form(function)}"
-
-
-def _spelled_function(member: object) -> object | None:
-    """The function whose signature the form of *member* spells after its kind: a classmethod's or staticmethod's, a property's getter or a cached_property's; None for any other member."""
-    match member:
-        case classmethod() | staticmethod():
-            return member.__func__
-        case property():
-            return member.fget
-        case functools.cached_property():
-            return member.func
-        case _:
-            return None
 
 
 def _property_kind(member: property) -> str:
@@ -1725,9 +1507,9 @@ def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
 
 def _refuse_immutable_type(cls: type) -> None:
     """Raise TypeError naming *cls* if it is an immutable type."""
-    if _is_immutable_type(cls):
+    if is_immutable_type(cls):
         raise TypeError(
-            f"{_label(cls)} is an immutable type, so no class statement holds an __init__ "
+            f"{label_of(cls)} is an immutable type, so no class statement holds an __init__ "
             "or __post_init__ to read: pass a class that a class statement defines"
         )
 
@@ -1800,13 +1582,13 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
 
 
 def _class_source(cls: type) -> str:
-    """*cls*'s source, dedented, read only once _defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; TypeError naming *cls* if inspect can read no class statement for it."""
-    _defining_module(cls)
+    """*cls*'s source, dedented, read only once defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; TypeError naming *cls* if inspect can read no class statement for it."""
+    defining_module(cls)
     try:
         source = inspect.getsource(cls)
     except (OSError, TypeError) as unread:
         raise TypeError(
-            f"{_label(cls)} has no class statement inspect can read, so the scan has no "
+            f"{label_of(cls)} has no class statement inspect can read, so the scan has no "
             "__init__ or __post_init__ to read: pass a class that a class statement in a "
             "source file defines"
         ) from unread
