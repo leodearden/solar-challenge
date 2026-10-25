@@ -10,7 +10,10 @@ Usage::
     from tests._run_summaries import fleet_summary, home_summary, summary_json
 
     marker = home_summary(total_generation_kwh=987.65)
-    conn.execute("INSERT INTO runs (id, type, summary_json) VALUES (?, ?, ?)", ("run-1", "home", summary_json(marker)))
+    conn.execute(
+        "INSERT INTO runs (id, name, type, summary_json) VALUES (?, ?, ?, ?)",
+        ("run-1", "Run 1", "home", summary_json(marker)),
+    )
     fleet = fleet_summary(fleet_self_consumption_ratio=0.25)
 """
 

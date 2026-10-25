@@ -53,7 +53,7 @@ _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
     "the optional web extra: the CLI runs without it (README.md, Installation), and any module "
     "of the web subpackage may import the extra at module top "
     "(tests/unit/test_dependency_declarations.py), so the CLI reaches the web subpackage only "
-    "inside `web start`"
+    "inside `web start` and `web migrate`"
 )
 _FINANCE_PARTITION = Transitional(
     "program stream S8, the finance partition "
@@ -68,8 +68,10 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "tests/unit/test_init_lazy_surface.py::test_import_is_pvlib_free)"
     ),
     ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.app"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.jobs"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.reloader"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.schema"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.store_lock"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.web", "solar_challenge.web.app"): Permanent(
         "the optional web extra: importing any web submodule runs web/__init__.py, and the web "

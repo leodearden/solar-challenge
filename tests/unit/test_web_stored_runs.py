@@ -22,9 +22,8 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
-from solar_challenge.web.database import RunType
 from solar_challenge.web.storage import RunRecord, RunStorage
-from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import RUN_KINDS, RunType, StoredFleetRun, StoredHomeRun
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -226,7 +225,7 @@ def test_loading_a_run_whose_record_has_no_type_raises_file_not_found_naming_its
 def test_the_kind_of_a_record_with_no_type_is_refused_naming_its_run() -> None:
     record = RunRecord(
         id="untyped-1",
-        name=None,
+        name="Untyped Run",
         type=None,
         config_json=None,
         summary_json=None,

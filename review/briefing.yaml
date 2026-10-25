@@ -78,6 +78,15 @@ conventions:
       overlap is no longer billed at the first listed period's rate (fk-872021ade9b6; D27
       invariant 2; docs/prds/tariff-coverage-classifier-presets.md §5.1).
 
+  - rule: "The dashboard database's schema version matches the code, and its runs table matches RunRecord: open_database creates a new store at schema.SCHEMA_VERSION with one runs column per RunRecord field, and refuses a store at any other version, naming its path and both versions, until `solar-challenge web migrate` brings an older one there (tests/unit/test_web_schema.py)"
+    why: >
+      Stores used to be created by CREATE TABLE IF NOT EXISTS with no version, so a constraint
+      added later never reached an existing store, and the policy was to delete the database
+      (D19; fk-1070454e4c6e). A migrated store's sqlite_master equals a new one's (contract C3),
+      and a DDL change ships as a new migration step with its version's snapshot,
+      tests/fixtures/databases/schema_v<N>.sql (D27 invariant 7;
+      docs/prds/run-store-one-owner.md §3.9).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are
@@ -410,7 +419,7 @@ subprojects:
       - "A user chats with the AI assistant: a streaming (SSE) Claude-backed conversation with a 6-tool agentic loop — advisory (explain_metric / suggest_config), read (get_run_results / list_recent_runs), and TRIGGER (run_home_simulation / run_fleet_simulation via the JobManager) — persisted to the chat_messages table, degrading gracefully when no API key is present."
 
     what_working_means:
-      - "The server starts (`solar-challenge web start`), creates the SQLite DB + tables, and serves the dashboard at 127.0.0.1."
+      - "The server starts (`solar-challenge web start`), creates the SQLite DB at the current schema version or refuses a store at another version, naming it (`solar-challenge web migrate` migrates an older one), and serves the dashboard at 127.0.0.1."
       - "A single-home sim submitted via the API runs to completion as a background job, streams progress over SSE, and persists results that load on the results page."
       - "Charts render (server serialises Plotly figures to JSON; the browser draws them, deferring hidden-tab charts)."
       - "The assistant either streams a real Claude response (key present) or returns a graceful SSE error frame (key absent); chat history persists and reloads."

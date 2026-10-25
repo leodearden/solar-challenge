@@ -2,9 +2,7 @@
 
 import dataclasses
 import re
-import sqlite3
 import tempfile
-from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,8 +16,10 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import CHAT_ROLES, PRESET_TYPES, RUN_STATUSES, RUN_TYPES, Database, init_db
-from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
+from solar_challenge.web.database import Database
+from solar_challenge.web.schema import open_database
+from solar_challenge.web.storage import RUN_STATUSES, RunQuery, RunRecord, RunStorage
+from solar_challenge.web.stored_runs import RUN_TYPES
 
 from tests._run_storage_layout import stored_run_dir
 
@@ -40,7 +40,7 @@ def db_path(temp_dir):
 @pytest.fixture
 def storage(db_path, temp_dir):
     """Create a RunStorage instance for testing, its run files in an empty directory beside its database."""
-    init_db(db_path)
+    open_database(db_path)
     data_dir = temp_dir / "data"
     data_dir.mkdir()
     return RunStorage(Database(db_path), data_dir)
@@ -117,176 +117,6 @@ VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS = [
     pytest.param("status", "queued", id="status-a-job-status"),
 ]
 
-CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES = [
-    *(pytest.param("chat_messages", "role", chat_role, id=f"chat_messages-role-{chat_role}") for chat_role in CHAT_ROLES),
-    pytest.param("chat_messages", "role", None, id="chat_messages-role-null"),
-    *(pytest.param("config_presets", "type", preset_type, id=f"config_presets-type-{preset_type}") for preset_type in PRESET_TYPES),
-    pytest.param("config_presets", "type", None, id="config_presets-type-null"),
-]
-
-VALUES_OUTSIDE_THE_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS = [
-    pytest.param("chat_messages", "role", "system", id="chat_messages-role-system"),
-    pytest.param("chat_messages", "role", "User", id="chat_messages-role-capitalised"),
-    pytest.param("config_presets", "type", "sweep", id="config_presets-type-sweep"),
-    pytest.param("config_presets", "type", "Home", id="config_presets-type-capitalised"),
-]
-
-
-class TestDatabaseInitialization:
-    """Tests for database schema creation and initialization."""
-
-    def test_init_db_creates_database_file(self, db_path):
-        """Test init_db creates database file."""
-        assert not db_path.exists()
-        init_db(db_path)
-        assert db_path.exists()
-
-    @pytest.mark.parametrize("as_given", [Path, str], ids=["path", "str"])
-    def test_init_db_returns_the_database_whose_schema_it_created(self, db_path, as_given):
-        """init_db returns the Database for the file it initialised, whether that file's path comes as a Path or a str."""
-        assert init_db(as_given(db_path)) == Database(db_path)
-
-    def test_init_db_creates_runs_table(self, db_path):
-        """Test init_db creates runs table."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
-            )
-            assert cursor.fetchone() is not None
-
-    def test_init_db_creates_no_jobs_table(self, db_path):
-        """A fresh database has no jobs table: a job's state lives in its JobManager, and its run's row is its outcome."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
-            )
-            assert cursor.fetchone() is None
-
-    def test_init_db_creates_chat_messages_table(self, db_path):
-        """Test init_db creates chat_messages table."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'"
-            )
-            assert cursor.fetchone() is not None
-
-    def test_init_db_creates_config_presets_table(self, db_path):
-        """Test init_db creates config_presets table."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='config_presets'"
-            )
-            assert cursor.fetchone() is not None
-
-    def test_init_db_creates_indexes(self, db_path):
-        """init_db creates exactly the runs and chat_messages indexes, besides those SQLite makes itself."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
-            indexes = {row[0] for row in cursor.fetchall() if not row[0].startswith("sqlite_")}
-        assert indexes == {"idx_runs_created_at", "idx_runs_type", "idx_chat_messages_session_id"}
-
-    def test_init_db_is_idempotent(self, db_path):
-        """Test init_db can be called multiple times safely."""
-        init_db(db_path)
-        init_db(db_path)  # Should not raise
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cursor.fetchall()]
-            # Should have our 3 tables (may also have sqlite_sequence for AUTOINCREMENT)
-            expected_tables = {'runs', 'chat_messages', 'config_presets'}
-            actual_tables = {t for t in tables if not t.startswith('sqlite_')}
-            assert actual_tables == expected_tables
-
-    def test_init_db_creates_parent_directory(self, temp_dir):
-        """Test init_db creates parent directory if it doesn't exist."""
-        nested_path = temp_dir / "nested" / "dir" / "test.db"
-        assert not nested_path.parent.exists()
-        init_db(nested_path)
-        assert nested_path.exists()
-        assert nested_path.parent.exists()
-
-    def test_init_db_creates_its_schema_in_one_transaction_so_a_statement_that_fails_leaves_no_table(self, db_path):
-        """A table named like one of init_db's indexes fails that CREATE INDEX, which comes after every table's."""
-        with closing(sqlite3.connect(db_path)) as conn:
-            conn.execute("CREATE TABLE idx_chat_messages_session_id (x)")
-            conn.commit()
-
-        with pytest.raises(sqlite3.OperationalError, match="idx_chat_messages_session_id"):
-            init_db(db_path)
-
-        with closing(sqlite3.connect(db_path)) as conn:
-            tables = {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {table for table in tables if not table.startswith("sqlite_")} == {"idx_chat_messages_session_id"}, (
-            f"init_db failed and left the tables {sorted(tables)}: it must create its schema in one transaction"
-        )
-
-    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
-    def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
-        """The runs table stores each run type or NULL as a run's type, and each run status or NULL as its status."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
-            stored = conn.execute(f"SELECT {column} FROM runs WHERE id = 'probe'").fetchone()[0]
-
-        assert stored == value
-
-    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
-    def test_init_db_runs_table_refuses_a_type_or_status_outside_its_definition(self, db_path, column, value):
-        """The runs table refuses a type that is not a run type, and a status that is not a run status."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-                conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
-
-    def test_init_db_gives_a_run_inserted_without_a_status_the_status_running(self, db_path):
-        """A run inserted without a status has the status 'running'."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            conn.execute("INSERT INTO runs (id) VALUES ('no-status')")
-            status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
-
-        assert status == "running"
-
-    def test_run_type_and_run_status_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
-        """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
-        assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet"), ("running", "completed", "failed"))
-
-    @pytest.mark.parametrize(("table", "column", "value"), CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_VALUES)
-    def test_init_db_chat_messages_and_config_presets_tables_accept_each_defined_value_and_null(self, db_path, table, column, value):
-        """The chat_messages table stores each chat role or NULL as a message's role, and config_presets each preset type or NULL as a preset's type."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            rowid = conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,)).lastrowid
-            stored = conn.execute(f"SELECT {column} FROM {table} WHERE rowid = ?", (rowid,)).fetchone()[0]
-
-        assert stored == value
-
-    @pytest.mark.parametrize(("table", "column", "value"), VALUES_OUTSIDE_THE_CHAT_MESSAGES_AND_CONFIG_PRESETS_COLUMN_DEFINITIONS)
-    def test_init_db_chat_messages_and_config_presets_tables_refuse_a_value_outside_its_definition(self, db_path, table, column, value):
-        """The chat_messages table refuses a role that is not a chat role, and config_presets a type that is not a preset type."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-                conn.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (value,))
-
-    def test_chat_role_and_preset_type_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
-        """init_db creates each table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
-        assert (CHAT_ROLES, PRESET_TYPES) == (("user", "assistant"), ("home", "fleet"))
-
-
 class TestHomeRunRoundTrip:
     """Tests for home run save/load round-trip."""
 
@@ -355,6 +185,7 @@ class TestHomeRunRoundTrip:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -420,24 +251,26 @@ def sample_fleet_data(sample_home_config, sample_simulation_results, sample_summ
 
 @pytest.fixture
 def saves(storage, sample_home_config, sample_simulation_results, sample_summary, sample_fleet_data):
-    """Each save by the type of run it stores, called with a run id and the save's other row arguments."""
+    """Each save by the type of run it stores, called with a run id, a name, 'Saved Run' by default, and its other row arguments."""
     fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
 
-    def save_home(run_id, **row_arguments):
+    def save_home(run_id, name: str = "Saved Run", **row_arguments):
         storage.save_home_run(
             run_id=run_id,
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name=name,
             **row_arguments,
         )
 
-    def save_fleet(run_id, **row_arguments):
+    def save_fleet(run_id, name: str = "Saved Run", **row_arguments):
         storage.save_fleet_run(
             run_id=run_id,
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name=name,
             **row_arguments,
         )
 
@@ -513,6 +346,7 @@ class TestFleetRunRoundTrip:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -538,6 +372,7 @@ class TestFleetRunRoundTrip:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=[per_home_summaries[0]] * n_summaries,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -585,12 +420,17 @@ class TestSavedRunRow:
             notes=None,
         )
 
+    @pytest.mark.parametrize("name", ["", " \t"])
     @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_given_no_name_gives_its_run_no_default_name(self, storage, saves, kind):
-        """A run a save records for the first time with no name has none."""
-        saves[kind]("new-run")
+    def test_a_first_save_given_a_blank_name_raises_value_error_naming_it_and_writes_nothing(
+        self, storage, saves, kind, name
+    ):
+        """Contract C7: a run's name is never blank, so a save refuses one before it writes a file or a runs row."""
+        with pytest.raises(ValueError, match="name is"):
+            saves[kind]("blank-name", name=name)
 
-        assert storage.run_name("new-run") is None
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.page_runs(RunQuery()).total == 0
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
@@ -712,6 +552,7 @@ class TestDeleteRun:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         assert storage.run_record(run_id) is not None
@@ -731,6 +572,7 @@ class TestDeleteRun:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -752,6 +594,7 @@ class TestDeleteRun:
             fleet_results=fleet_results,
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
+            name="Saved Run",
         )
 
         run_dir = stored_run_dir(storage, run_id)
@@ -861,6 +704,16 @@ class TestRunRecordTypeAndStatus:
             dataclasses.replace(north_roof_record, **{column: value})
 
 
+class TestRunRecordName:
+    """Tests for RunRecord's name, which is never NULL or blank (contract C7)."""
+
+    @pytest.mark.parametrize("name", ["", " \t", None])
+    def test_a_run_record_refuses_a_name_that_cannot_name_a_run(self, north_roof_record, name):
+        """A record is refused as require_run_name refuses its name, with a ValueError naming it, wherever it is built: not only by a save."""
+        with pytest.raises(ValueError, match=re.escape(f"name is {name!r}, not a run's name")):
+            dataclasses.replace(north_roof_record, name=name)
+
+
 class TestRunName:
     """Tests for RunStorage.run_name, the name Run History lists and renames a run under."""
 
@@ -900,27 +753,6 @@ class TestRunName:
     def test_run_name_of_an_id_no_run_has_is_none(self, storage):
         """An id no run has answers None."""
         assert storage.run_name("no-such-run") is None
-
-    def test_run_name_of_a_run_whose_name_is_null_is_none(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """A run whose name is NULL answers None, not a default name.
-
-        A database written before every run was named holds such a row, so the test clears
-        the saved name in the database.
-        """
-        run_id = "null-name-home"
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            name="North Roof",
-        )
-        with storage.database.transaction() as conn:
-            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
-
-        assert storage.run_name(run_id) is None
 
 
 class TestLatestRunNamed:
@@ -1060,19 +892,6 @@ class TestUpdateRunLabels:
         assert storage.run_record(north_roof_run_id) == before
 
 
-class TestDatabasePragmas:
-    """Tests for SQLite pragma settings."""
-
-    def test_wal_mode_enabled_after_init(self, db_path):
-        """Test that WAL journal mode is active after init_db."""
-        init_db(db_path)
-        with Database(db_path).transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA journal_mode")
-            mode = cursor.fetchone()[0]
-            assert mode == "wal"
-
-
 REFUSED_RUN_IDS = [
     pytest.param("../", id="parent-directory"),
     pytest.param("../../etc", id="two-directories-up"),
@@ -1107,6 +926,7 @@ class TestRunIdValidation:
                 config=sample_home_config,
                 results=sample_simulation_results,
                 summary=sample_summary,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -1125,6 +945,7 @@ class TestRunIdValidation:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=per_home_summaries,
+                name="Saved Run",
             )
 
         assert list(storage.data_dir.iterdir()) == []
@@ -1174,6 +995,7 @@ class TestRunIdValidation:
                 config=sample_home_config,
                 results=sample_simulation_results,
                 summary=sample_summary,
+                name="Saved Run",
             )
 
         assert list(outside.iterdir()) == []
@@ -1191,6 +1013,7 @@ class TestRunIdValidation:
                 fleet_results=fleet_results,
                 fleet_summary=fleet_summary,
                 per_home_summaries=per_home_summaries,
+                name="Saved Run",
             )
 
         assert list(outside.iterdir()) == []
@@ -1225,6 +1048,7 @@ class TestRunIdValidation:
             config=sample_home_config,
             results=sample_simulation_results,
             summary=sample_summary,
+            name="Saved Run",
         )
 
         loaded = storage.load_run(run_id)

@@ -2,7 +2,7 @@
 """Every connection the dashboard opens to its database comes from a Database, which applies one policy.
 
 Rows are read by column name, the foreign keys of any table on the database are enforced, and nothing is read
-from the file before the first statement. A database init_db created journals in WAL mode,
+from the file before the first statement. A store open_database created journals in WAL mode,
 so every connection to it reports wal. A transaction commits a block that succeeds, rolls
 back a block that raises, and closes its connection either way.
 """
@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import Database
+from solar_challenge.web.schema import open_database
 
 
 def _connected(database: Database) -> AbstractContextManager[sqlite3.Connection]:
@@ -37,12 +38,12 @@ CONNECTION_OPENERS = [
 
 @pytest.fixture
 def dashboard_database(tmp_path: Path) -> Database:
-    """A dashboard database whose schema init_db has created."""
-    return init_db(tmp_path / "dashboard.db")
+    """A dashboard database, a new store open_database created."""
+    return open_database(tmp_path / "dashboard.db")
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
-def test_a_connection_to_a_database_init_db_created_reports_foreign_keys_on_and_wal_journal_mode(
+def test_a_connection_to_a_store_open_database_created_reports_foreign_keys_on_and_wal_journal_mode(
     open_connection: ConnectionOpener, dashboard_database: Database
 ) -> None:
     with open_connection(dashboard_database) as conn:
@@ -79,7 +80,7 @@ def test_deleting_a_run_on_a_dashboard_connection_deletes_the_rows_that_referenc
 ) -> None:
     with open_connection(dashboard_database) as conn:
         _create_a_table_whose_rows_reference_a_run(conn)
-        conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+        conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
         conn.execute("INSERT INTO run_notes (id, run_id) VALUES ('note-1', 'run-1')")
 
         conn.execute("DELETE FROM runs WHERE id = 'run-1'")
@@ -121,7 +122,7 @@ def test_a_run_inserted_in_a_transaction_whose_block_succeeds_is_read_back_on_a_
     dashboard_database: Database,
 ) -> None:
     with dashboard_database.transaction() as conn:
-        conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+        conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
 
     with closing(dashboard_database.connect()) as conn:
         assert [row["id"] for row in conn.execute("SELECT id FROM runs")] == ["run-1"]
@@ -132,7 +133,7 @@ def test_a_transaction_whose_block_raises_reraises_the_exception_and_keeps_none_
 ) -> None:
     with pytest.raises(_BlockFailed):
         with dashboard_database.transaction() as conn:
-            conn.execute("INSERT INTO runs (id) VALUES ('run-1')")
+            conn.execute("INSERT INTO runs (id, name) VALUES ('run-1', 'Run 1')")
             _fail()
 
     with closing(dashboard_database.connect()) as conn:

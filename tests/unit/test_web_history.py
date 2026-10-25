@@ -33,9 +33,9 @@ from solar_challenge.web.charts import (
     comparison_bar_chart,
     comparison_radar,
 )
-from solar_challenge.web.database import RUN_TYPES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import RUN_TYPES
 
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._html_page import element_attributes, element_count, texts_after

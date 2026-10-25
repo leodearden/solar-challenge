@@ -16,44 +16,61 @@ import re
 import shutil
 import sqlite3
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, UNFINISHED_RUN_STATUS, Database, RunStatus, RunType
-from solar_challenge.web.run_names import require_run_name
-from solar_challenge.web.stored_runs import RUN_KINDS, RunKind, StoredFleetRun, StoredHomeRun, StoredRun
+from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
+from solar_challenge.web.run_names import is_run_name, require_run_name
+from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunKind, RunType, StoredFleetRun, StoredHomeRun, StoredRun
 from solar_challenge.web.text_options import one_of
 
 logger = logging.getLogger(__name__)
 
+RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
+RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
+UNFINISHED_RUN_STATUS: RunStatus = "running"
+
+_COLUMN = "column"
+
+
+def _runs_column(declaration: str) -> dict[str, str]:
+    """Metadata of a RunRecord field: its runs column's *declaration*, the type and constraints CREATE TABLE states for it."""
+    return {_COLUMN: declaration}
+
 
 @dataclass(frozen=True)
 class RunRecord:
-    """One row of the runs table, each column in the field of the same name.
+    """One row of the runs table, each column in the field of the same name, whose metadata declares the column.
 
     config_json and summary_json are the JSON texts a save wrote; None while the run has none.
     type holds one of RUN_TYPES and status one of RUN_STATUSES, each None for NULL; a record
-    given another value raises ValueError.
+    given another value raises ValueError. A run's name is never NULL or blank (contract C7):
+    a record given a name require_run_name refuses raises its ValueError.
     """
 
-    id: str
-    name: str | None
-    type: RunType | None
-    config_json: str | None
-    summary_json: str | None
-    status: RunStatus | None
-    error_message: str | None
-    created_at: str | None
-    completed_at: str | None
-    duration_seconds: float | None
-    n_homes: int | None
-    notes: str | None
+    id: str = field(metadata=_runs_column("TEXT PRIMARY KEY"))
+    name: str = field(metadata=_runs_column("TEXT NOT NULL"))
+    type: RunType | None = field(metadata=_runs_column(f"TEXT {check_one_of('type', RUN_TYPES)}"))
+    config_json: str | None = field(metadata=_runs_column("TEXT"))
+    summary_json: str | None = field(metadata=_runs_column("TEXT"))
+    status: RunStatus | None = field(
+        metadata=_runs_column(
+            f"TEXT DEFAULT {sql_string_literal(UNFINISHED_RUN_STATUS)} {check_one_of('status', RUN_STATUSES)}"
+        )
+    )
+    error_message: str | None = field(metadata=_runs_column("TEXT"))
+    created_at: str | None = field(metadata=_runs_column("TEXT"))
+    completed_at: str | None = field(metadata=_runs_column("TEXT"))
+    duration_seconds: float | None = field(metadata=_runs_column("REAL"))
+    n_homes: int | None = field(metadata=_runs_column("INTEGER DEFAULT 1"))
+    notes: str | None = field(metadata=_runs_column("TEXT"))
 
     def __post_init__(self) -> None:
+        require_run_name(self.name)
         if self.type is not None:
             one_of(self.type, RUN_TYPES, "RunRecord.type")
         if self.status is not None:
@@ -144,6 +161,96 @@ def _record_of(row: sqlite3.Row) -> RunRecord:
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
     return None if row is None else _record_of(row)
+
+
+RUNS_TABLE = TableSchema(
+    name="runs",
+    columns=tuple((each.name, each.metadata[_COLUMN]) for each in fields(RunRecord)),
+    indexes=("CREATE INDEX idx_runs_created_at ON runs(created_at DESC)", "CREATE INDEX idx_runs_type ON runs(type)"),
+)
+"""The runs table this code reads and writes, which a new store creates: one column per RunRecord field, in order, as its metadata declares it, and the indexes of the run list's default order and type filter."""
+
+_RUN_TYPES_V1: tuple[RunType, ...] = ("home", "fleet")
+"""The run types the runs table admits at schema version 1."""
+
+_RUNS_TABLE_V1 = TableSchema(
+    name="runs",
+    columns=(
+        ("id", "TEXT PRIMARY KEY"),
+        ("name", "TEXT NOT NULL"),
+        ("type", f"TEXT {check_one_of('type', _RUN_TYPES_V1)}"),
+        ("config_json", "TEXT"),
+        ("summary_json", "TEXT"),
+        ("status", "TEXT DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed'))"),
+        ("error_message", "TEXT"),
+        ("created_at", "TEXT"),
+        ("completed_at", "TEXT"),
+        ("duration_seconds", "REAL"),
+        ("n_homes", "INTEGER DEFAULT 1"),
+        ("notes", "TEXT"),
+    ),
+    indexes=("CREATE INDEX idx_runs_created_at ON runs(created_at DESC)", "CREATE INDEX idx_runs_type ON runs(type)"),
+)
+"""The runs table at schema version 1, as tests/fixtures/databases/schema_v1.sql holds it, whatever RunRecord declares since."""
+
+
+def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
+    """Schema version 1's part for the runs table, run on *conn* inside its migration step's transaction.
+
+    Every row is first checked against the two constraints version 1 adds to the table, since
+    the database's own refusal would name no row. Each run whose name cannot name a run, NULL
+    or blank, is then named as a job given no name creates its run (contract C7): its kind's
+    default_name of the homes its config holds. The table is then rebuilt to its schema at
+    version 1, whose name column is NOT NULL. A legacy runs table already held every other
+    constraint of that schema, so no other row can be refused.
+
+    Raises:
+        RowRefused: Before anything is written, for a run whose type is neither NULL nor one of
+            the run types version 1 admits, as 'sweep' was once, or whose name cannot name a run
+            while it has no type to take a default name from.
+    """
+    rows = conn.execute("SELECT id, name, type, config_json FROM runs").fetchall()
+    for row in rows:
+        _require_version_1_keeps(row["id"], row["type"], row["name"])
+    for row in rows:
+        if not is_run_name(row["name"]):
+            name = _name_of_a_run_given_none(row["id"], row["type"], row["config_json"])
+            conn.execute("UPDATE runs SET name = ? WHERE id = ?", (name, row["id"]))
+    rebuild_table(conn, _RUNS_TABLE_V1)
+
+
+def _require_version_1_keeps(run_id: str, run_type: object, name: object) -> None:
+    """Check that schema version 1's runs table can keep run *run_id* of *run_type* named *name*, once each nameless run of a type is named.
+
+    Raises:
+        RowRefused: *run_type* is neither None nor one of the run types version 1 admits, the
+            reason being one_of's refusal, from which it is raised; or *name* cannot name a run
+            and *run_type* is None.
+    """
+    if run_type is not None:
+        try:
+            one_of(run_type, _RUN_TYPES_V1, "value")
+        except ValueError as refusal:
+            raise RowRefused("runs", run_id, "type", str(refusal)) from refusal
+    elif not is_run_name(name):
+        raise RowRefused("runs", run_id, "name", "is NULL or blank, and the run has no type to take a default name from")
+
+
+def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str | None) -> str:
+    """The name a job given none would have created run *run_id* under: the default_name of *run_type*'s kind for the homes *config_json* holds.
+
+    A run with no config is named as a run of no homes, and so is one whose config does not
+    decode as its kind's, with a logged warning naming the run and the refusal: the name is a
+    label its user can rename, so a damaged config does not keep the store from migrating.
+    """
+    kind = RUN_KINDS[run_type]
+    homes: tuple[HomeConfig, ...] = ()
+    if config_json is not None:
+        try:
+            homes = _decoded_document(run_id, "config_json", config_json, kind.home_configs)
+        except ValueError as refusal:
+            logger.warning("Run %r is named as a run of no homes, as its config does not decode: %s", run_id, refusal)
+    return kind.default_name(homes)
 
 
 @dataclass(frozen=True)
@@ -350,7 +457,7 @@ def _now() -> str:
 def _saved_run_row(
     *,
     run_id: str,
-    name: str | None,
+    name: str,
     run_type: RunType,
     config: dict[str, Any],
     summary: dict[str, Any],
@@ -367,7 +474,8 @@ def _saved_run_row(
     same save has the same time for both.
 
     Raises:
-        ValueError: *status* is not one of RUN_STATUSES, as RunRecord refuses it.
+        ValueError: *name* cannot name a run, as require_run_name refuses it, or *status* is
+            not one of RUN_STATUSES; RunRecord refuses either.
     """
     now = _now()
     return RunRecord(
@@ -488,7 +596,7 @@ class RunStorage:
         self._validate_run_id(run_id)
         record = RunRecord(
             id=run_id,
-            name=require_run_name(name),
+            name=name,
             type=run_type,
             config_json=None,
             summary_json=None,
@@ -546,7 +654,7 @@ class RunStorage:
         config: HomeConfig,
         results: SimulationResults,
         summary: SummaryStatistics,
-        name: str | None = None,
+        name: str,
         status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
@@ -564,9 +672,9 @@ class RunStorage:
             config: Home configuration
             results: Simulation results with time series
             summary: Summary statistics
-            name: The name the save records a run it records for the first time under, None
-                for none. A run already recorded, as a job's submit records it through
-                create_run, keeps its name, as a re-save keeps a run's labels.
+            name: The name of the run when the save records it for the first time. A run
+                already recorded, as a job's submit records it through create_run, keeps its
+                own name, as a re-save keeps a run's labels.
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -574,8 +682,9 @@ class RunStorage:
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
-                The save has written nothing then.
+            ValueError: If the store refuses run_id, name cannot name a run, as
+                require_run_name refuses it, or status is not one of RUN_STATUSES. The save
+                has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
@@ -603,14 +712,16 @@ class RunStorage:
         config: HomeConfig,
         results: SimulationResults,
         *,
-        name: str | None = None,
+        name: str,
         status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a home run as save_home_run does, with the summary calculate_summary derives from *results*.
 
-        This is the save a finished home job makes. It raises as save_home_run raises.
+        *name* is the name of the run when the save records it for the first time; a run
+        already recorded keeps its own. This is the save a finished home job makes. It raises
+        as save_home_run raises.
         """
         self.save_home_run(
             run_id,
@@ -629,7 +740,7 @@ class RunStorage:
         fleet_results: FleetResults,
         fleet_summary: FleetSummary,
         per_home_summaries: list[SummaryStatistics],
-        name: str | None = None,
+        name: str,
         status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
@@ -647,9 +758,9 @@ class RunStorage:
             fleet_results: Fleet simulation results with per-home data
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
-            name: The name the save records a run it records for the first time under, None
-                for none. A run already recorded, as a job's submit records it through
-                create_run, keeps its name, as a re-save keeps a run's labels.
+            name: The name of the run when the save records it for the first time. A run
+                already recorded, as a job's submit records it through create_run, keeps its
+                own name, as a re-save keeps a run's labels.
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -658,8 +769,9 @@ class RunStorage:
 
         Raises:
             ValueError: If the store refuses run_id, per_home_summaries does not hold one
-                summary per home's results, or status is not one of RUN_STATUSES. The save
-                has written nothing then.
+                summary per home's results, name cannot name a run, as require_run_name
+                refuses it, or status is not one of RUN_STATUSES. The save has written
+                nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredFleetRun(
@@ -691,15 +803,16 @@ class RunStorage:
         run_id: str,
         fleet_results: FleetResults,
         *,
-        name: str | None = None,
+        name: str,
         status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a fleet run as save_fleet_run does, with each home's summary and the fleet summary aggregated from them.
 
-        Each summary is derived once from *fleet_results*. This is the save a finished
-        fleet job makes.
+        *name* is the name of the run when the save records it for the first time; a run
+        already recorded keeps its own. Each summary is derived once from *fleet_results*.
+        This is the save a finished fleet job makes.
 
         Raises:
             ValueError: If fleet_results has no homes, or its home_configs does not hold one
@@ -747,7 +860,7 @@ class RunStorage:
     def run_name(self, run_id: str) -> str | None:
         """The name run *run_id* is saved under, the one Run History lists and renames.
 
-        None when no run has that id, or its name is NULL.
+        None when no run has that id.
         """
         record = self.run_record(run_id)
         return None if record is None else record.name

@@ -26,8 +26,9 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import Database, init_db
+from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import resolve_location
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results
@@ -226,7 +227,7 @@ class TestGetRunResults:
 
         seed_run leaves n_homes at the schema's default, 1.
         """
-        database = init_db(tmp_path / "grr_test.db")
+        database = open_database(tmp_path / "grr_test.db")
         summary = home_summary(total_generation_kwh=1234.5, self_consumption_ratio=0.62)
         seed_run(
             database,
@@ -261,7 +262,7 @@ class TestGetRunResults:
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
-        database = init_db(tmp_path / "grr_name_test.db")
+        database = open_database(tmp_path / "grr_name_test.db")
         summary = fleet_summary()
         seed_run(
             database,
@@ -287,7 +288,7 @@ class TestGetRunResults:
 
     def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
         """get_run_results with unknown id returns a graceful dict, does NOT raise."""
-        database = init_db(tmp_path / "grr_unknown_test.db")
+        database = open_database(tmp_path / "grr_unknown_test.db")
         seed_run(
             database,
             run_id="run-known",
@@ -313,7 +314,7 @@ class TestGetRunResults:
 
     def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
         """When two rows share a name, get_run_results returns the one with the later created_at."""
-        database = init_db(tmp_path / "grr_collision_test.db")
+        database = open_database(tmp_path / "grr_collision_test.db")
         # Older run seeded first
         seed_run(
             database,
@@ -342,7 +343,7 @@ class TestGetRunResults:
 
     def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
-        database = init_db(tmp_path / "grr_null_summary.db")
+        database = open_database(tmp_path / "grr_null_summary.db")
         with database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
@@ -366,7 +367,7 @@ class TestGetRunResults:
         self, tmp_path: Path
     ) -> None:
         """The error is RunRecord.summary's refusal, which names the run and runs.summary_json."""
-        database = init_db(tmp_path / "grr_garbled.db")
+        database = open_database(tmp_path / "grr_garbled.db")
         seed_run(database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
         with database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
@@ -400,7 +401,7 @@ class TestListRecentRuns:
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
-        database = init_db(tmp_path / "lrr_test.db")
+        database = open_database(tmp_path / "lrr_test.db")
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
             seed_run(
@@ -430,7 +431,7 @@ class TestListRecentRuns:
 
     def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
         """Each entry carries id/run_id, name, type, status, created_at."""
-        database = init_db(tmp_path / "lrr_fields_test.db")
+        database = open_database(tmp_path / "lrr_fields_test.db")
         seed_run(
             database,
             run_id="run-fields-001",
@@ -456,7 +457,7 @@ class TestListRecentRuns:
 
     def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
         """list_recent_runs on empty DB returns {'runs': []} without raising."""
-        database = init_db(tmp_path / "lrr_empty_test.db")
+        database = open_database(tmp_path / "lrr_empty_test.db")
 
         try:
             result = list_recent_runs(10, run_storage_over(database))
@@ -473,7 +474,7 @@ class TestListRecentRuns:
 
     def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
         """A very large limit is clamped so returned count <= clamp ceiling."""
-        database = init_db(tmp_path / "lrr_clamp_test.db")
+        database = open_database(tmp_path / "lrr_clamp_test.db")
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
             seed_run(
@@ -494,7 +495,7 @@ class TestListRecentRuns:
 
     def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
         """A non-positive limit is handled gracefully (clamped to default, no raise)."""
-        database = init_db(tmp_path / "lrr_nonpos_test.db")
+        database = open_database(tmp_path / "lrr_nonpos_test.db")
         seed_run(
             database,
             run_id="run-np-001",
@@ -520,7 +521,7 @@ class TestListRecentRuns:
 
     def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
-        database = init_db(tmp_path / "lrr_null_summary.db")
+        database = open_database(tmp_path / "lrr_null_summary.db")
         with database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
@@ -582,7 +583,7 @@ class TestListRecentRuns:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """One damaged run neither fails the list nor hides the other runs' figures, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
-        database = init_db(tmp_path / "lrr_garbled.db")
+        database = open_database(tmp_path / "lrr_garbled.db")
         seed_run(
             database,
             run_id="readable-run",

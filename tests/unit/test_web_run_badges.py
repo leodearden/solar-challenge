@@ -15,8 +15,8 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RUN_STATUSES, RunStatus, RunStorage
+from solar_challenge.web.stored_runs import RUN_TYPES, RunType
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
 from tests._server_drawn_badges import server_drawn_badge, server_drawn_classes

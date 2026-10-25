@@ -15,13 +15,46 @@ import sqlite3
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
-from solar_challenge.web.database import Database, PresetType
+from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table
 
 logger = logging.getLogger(__name__)
 
+PresetType = Literal["home", "fleet"]  # the type of a saved preset, held by the config_presets table's type column
+PRESET_TYPES: tuple[PresetType, ...] = get_args(PresetType)
+
 PresetSource = Literal["builtin", "saved"]
+
+CONFIG_PRESETS_TABLE = TableSchema(
+    name="config_presets",
+    columns=(
+        ("id", "TEXT PRIMARY KEY"),
+        ("name", "TEXT UNIQUE"),
+        ("type", f"TEXT {check_one_of('type', PRESET_TYPES)}"),
+        ("config_json", "TEXT"),
+        ("created_at", "TEXT"),
+    ),
+)
+"""The config_presets table this code reads and writes, which a new store creates: the saved presets, one per name, each of a PresetType."""
+
+_CONFIG_PRESETS_TABLE_V1 = TableSchema(
+    name="config_presets",
+    columns=(
+        ("id", "TEXT PRIMARY KEY"),
+        ("name", "TEXT UNIQUE"),
+        ("type", "TEXT CHECK(type IN ('home', 'fleet'))"),
+        ("config_json", "TEXT"),
+        ("created_at", "TEXT"),
+    ),
+)
+"""The config_presets table at schema version 1, as tests/fixtures/databases/schema_v1.sql holds it, whatever CONFIG_PRESETS_TABLE states since."""
+
+
+def migrate_config_presets_table_v1(conn: sqlite3.Connection) -> None:
+    """Schema version 1's part for the config_presets table, run on *conn* inside its migration step's transaction: the table rebuilt to its schema at version 1."""
+    rebuild_table(conn, _CONFIG_PRESETS_TABLE_V1)
+
 
 _BUILTIN_HOME_PRESETS: tuple[Mapping[str, Any], ...] = (
     {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
