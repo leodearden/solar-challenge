@@ -10,7 +10,7 @@ read as a database with a StoreUnreadable. migrate_store, which
 a MigrationReport.
 
 Each table's owner states the table's schema and its part of each step: storage.py the runs
-table, presets.py config_presets and database.py chat_messages. This module states only the
+table, presets.py config_presets and chat_messages.py chat_messages. This module states only the
 steps' order, the version and the transaction (docs/prds/run-store-one-owner.md §3.1, §3.9).
 
 A change to any table's schema is a new MigrationStep, committed with the schema of its version
@@ -25,13 +25,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from solar_challenge.web.database import (
-    CHAT_MESSAGES_TABLE,
-    Database,
-    RowRefused,
-    create_table,
-    migrate_chat_messages_table_v1,
-)
+from solar_challenge.web.chat_messages import CHAT_MESSAGES_TABLE, migrate_chat_messages_table_v1
+from solar_challenge.web.database import Database, RowRefused, create_table
 from solar_challenge.web.presets import CONFIG_PRESETS_TABLE, migrate_config_presets_table_v1
 from solar_challenge.web.storage import RUNS_TABLE, migrate_runs_table_v1
 

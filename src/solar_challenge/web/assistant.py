@@ -4,9 +4,9 @@
 Serves the chat page (GET /assistant), streams the model's replies as
 Server-Sent Events (POST /assistant/chat) and returns the session's stored
 conversation (GET /assistant/history).  User and assistant turns persist in
-chat_messages through database.py.  While replying, the model can call tools
-that explain metrics, suggest system sizes, look up past runs and submit
-simulation jobs.
+the chat_messages table through its store, chat_messages.py.  While replying,
+the model can call tools that explain metrics, suggest system sizes, look up
+past runs and submit simulation jobs.
 
 The design is specified in docs/prds/web-ai-assistant.md.
 
@@ -36,7 +36,8 @@ from solar_challenge.validation import (
     UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
     UK_YIELD_BENCHMARK_KWH_PER_KWP,
 )
-from solar_challenge.web.database import Database, get_chat_history, save_chat_message
+from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object

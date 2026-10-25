@@ -106,11 +106,12 @@ default name, its summary decoding and its listing each have one implementation.
 
 | Module | Owns | Imports (web) |
 |---|---|---|
-| `web/database.py` | `Database` (the connection policy), `TableSchema` + `rebuild_table`, the `chat_messages` table and its store, `ChatRole` | none |
+| `web/database.py` | `Database` (the connection policy), `TableSchema` + `rebuild_table` | none |
 | `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, strict field-tree read/write, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
 | `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, stored_runs |
 | `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database |
-| `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets |
+| `web/chat_messages.py` | the `chat_messages` table and its store: `ChatRole`, `CHAT_MESSAGES_TABLE` and its migration functions, `save_chat_message`/`get_chat_history` | database |
+| `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets, chat_messages |
 | `web/store_lock.py` (new) | `acquire_store_lock`, `StoreLock`, `StoreLocked` | none |
 | `web/jobs.py` | `JobStatus`, `JobManager(storage, …)` (no SQL), cancellation | storage |
 | `web/app.py` | the composition root: lock → `open_database` → `RunStorage` → `JobManager` → `fail_interrupted_runs` | all of the above |
