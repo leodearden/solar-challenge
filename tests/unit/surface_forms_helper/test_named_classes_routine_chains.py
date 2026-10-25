@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's named_classes for the callable that spells a routine's annotations when it wraps or binds another callable or carries a signature over one, and the errors raised when none is known, one per test.
 
-_typed is defined at module level, where its lambda carries this module's globals.
+_typed is defined at module level, where its lambda carries this module's globals. Band, and
+the classes and links that wrap it, are defined at module level too, where a parametrize
+decorator can reach them.
 """
 
 import datetime
 import decimal
+import enum
 import fractions
 import functools
 import inspect
@@ -50,6 +53,33 @@ _RELAYING_SOURCE = (
     "    resigned.__signature__ = signature.replace(parameters=parameters)\n"
     "    return resigned\n"
 )
+
+
+class Band(enum.Enum):
+    """An Enum that the links below carry a signature over."""
+
+    PEAK = "peak"
+
+
+class BandCaller:
+    """A class whose __call__ wraps Band, as functools.wraps records one, and carries a signature."""
+
+    __call__ = _typed(Band, "receiver")
+
+
+class BandBuilt:
+    """A class whose __init__ wraps Band, as functools.wraps records one, and carries a signature."""
+
+    __init__ = _typed(Band, "receiver")
+
+
+def _typed_partial(function: Callable[..., object]) -> Callable[..., object]:
+    """A functools.partial of *function* given the signature _typed gives a wrapper: share annotated with the string "Decimal"."""
+    partial = functools.partial(function)
+    partial.__signature__ = inspect.Signature(
+        [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Decimal")]
+    )
+    return partial
 
 
 def test_a_partial_names_the_classes_the_callable_it_wraps_names_each_read_where_that_callable_is_spelled(
@@ -373,6 +403,36 @@ def test_a_signature_a_link_carries_over_a_constructor_defined_in_c_names_the_cl
     assert named_classes(_typed(zip)) == {decimal.Decimal}
     assert named_classes(_typed(Plain)) == {decimal.Decimal}
     assert named_classes(initialising.Initialised) == {decimal.Decimal}
+
+
+def test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with() -> None:
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+    banded = functools.partial(Band)
+    banded.__signature__ = signature
+    wrapped = functools.wraps(Band)(lambda rate: Band(rate))
+    wrapped.__signature__ = signature
+
+    assert named_classes(banded) == {int}
+    assert named_classes(wrapped) == {int}
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        pytest.param(_typed_partial(Band), id="partial"),
+        pytest.param(_typed(Band), id="functools-wraps-wrapper"),
+        pytest.param(types.MethodType(_typed(Band, "receiver"), object()), id="bound-method"),
+        pytest.param(functools.partial(BandCaller()), id="callable-object"),
+        pytest.param(BandBuilt, id="constructor"),
+    ],
+)
+def test_a_string_annotation_in_a_signature_a_link_carries_over_an_enum_raises_type_error_naming_that_enum_and_the_string(
+    obj: Callable[..., object],
+) -> None:
+    with pytest.raises(TypeError, match=r"\.Band\b.*\benum\.Enum\b.*'Decimal'"):
+        named_classes(obj)
 
 
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
