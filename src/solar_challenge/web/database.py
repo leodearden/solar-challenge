@@ -3,9 +3,10 @@
 
 Database opens every connection to the database file. TableSchema states a table as its
 owner declares it, create_table creates one, and rebuild_table rebuilds an existing table to
-its owner's current schema, keeping its rows; RowRefused names a row a migration cannot keep.
-Each table's owner states its own schema: storage.py the runs table, presets.py
-config_presets, and this module chat_messages, with the chat history's store.
+a schema, keeping its rows; RowRefused names a row a migration cannot keep. Each table's
+owner states its own schema, the one a new store creates and the one of each schema version
+a migration step rebuilds the table to: storage.py the runs table, presets.py config_presets,
+and this module chat_messages, with the chat history's store.
 
 A store's schema version is its database file's PRAGMA user_version. web/schema.py creates a
 new store at the current version and refuses a store at any other, and
@@ -172,12 +173,26 @@ CHAT_MESSAGES_TABLE = TableSchema(
     ),
     indexes=("CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id)",),
 )
-"""The chat_messages table: the assistant's conversations, each message under its browser session."""
+"""The chat_messages table this code reads and writes, which a new store creates: the assistant's conversations, each message under its browser session."""
+
+_CHAT_MESSAGES_TABLE_V1 = TableSchema(
+    name="chat_messages",
+    columns=(
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("session_id", "TEXT"),
+        ("role", "TEXT CHECK(role IN ('user', 'assistant'))"),
+        ("content", "TEXT"),
+        ("created_at", "TEXT"),
+        ("metadata_json", "TEXT"),
+    ),
+    indexes=("CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id)",),
+)
+"""The chat_messages table at schema version 1, as tests/fixtures/databases/schema_v1.sql holds it, whatever CHAT_MESSAGES_TABLE states since."""
 
 
 def migrate_chat_messages_table_v1(conn: sqlite3.Connection) -> None:
-    """Schema version 1's part for the chat_messages table, run on *conn* inside its migration step's transaction: the table rebuilt to CHAT_MESSAGES_TABLE."""
-    rebuild_table(conn, CHAT_MESSAGES_TABLE)
+    """Schema version 1's part for the chat_messages table, run on *conn* inside its migration step's transaction: the table rebuilt to its schema at version 1."""
+    rebuild_table(conn, _CHAT_MESSAGES_TABLE_V1)
 
 
 def save_chat_message(

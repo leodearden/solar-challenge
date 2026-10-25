@@ -10,8 +10,9 @@ keeping its rows and naming each run that had no name after its kind (D27 invari
 2). A row a step's new constraints refuse makes migrate_store raise MigrationRefused, naming
 the table, the row's id and the column, and leaves the store as it was. MIGRATIONS' versions
 run from 1 without a gap, and SCHEMA_VERSION is the last of them (contract C5). A new store's
-schema is the one committed for its version as tests/fixtures/databases/schema_v<N>.sql, so a
-change to a table's schema cannot ship without its migration step (contract C10).
+schema is the one committed for its version as tests/fixtures/databases/schema_v<N>.sql, and
+version 1's step leaves a legacy store at the one committed for version 1, so a change to a
+table's schema cannot ship without its migration step (contract C10).
 """
 
 import logging
@@ -131,8 +132,15 @@ def _create_statements(path: Path) -> str:
     return "\n".join(f"{row['sql']};" for row in rows)
 
 
+def _store_of_the_committed_schema(version: int, path: Path) -> Path:
+    """A new database file at *path* holding the schema committed for *version*, tests/fixtures/databases/schema_v<version>.sql."""
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript((FIXTURES_DIR / f"schema_v{version}.sql").read_text())
+    return path
+
+
 def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> None:
-    """Contract C10: version 1 rebuilds each table to its owner's current schema, so a migrated store equals a new one even when a table's schema changed with no step to bring version 1 stores to it."""
+    """Contract C10: a change to a table's schema changes a new store's, so it fails here until it ships as a new migration step, committed with its version's snapshot."""
     new_store = open_database(tmp_path / "new.db").path
     committed = FIXTURES_DIR / f"schema_v{SCHEMA_VERSION}.sql"
     remedy = (
@@ -142,9 +150,8 @@ def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> 
         f"(contract C10). A new store's schema is:\n{_create_statements(new_store)}"
     )
     assert committed.is_file(), remedy
-    snapshot = tmp_path / "snapshot.db"
-    with closing(sqlite3.connect(snapshot)) as conn:
-        conn.executescript(committed.read_text())
+
+    snapshot = _store_of_the_committed_schema(SCHEMA_VERSION, tmp_path / "snapshot.db")
 
     assert schema_of(snapshot) == schema_of(new_store), remedy
 
@@ -253,6 +260,17 @@ def test_migrate_store_brings_a_legacy_store_to_the_schema_version_with_the_tabl
     assert open_database(legacy_store) == Database(legacy_store)
 
 
+def test_version_1s_step_rebuilds_a_legacy_stores_tables_to_the_schema_committed_for_version_1(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """Each table is rebuilt to its schema at version 1, not to its owner's current schema, so a later step that changes a table changes nothing version 1's step does."""
+    with Database(legacy_store).transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        MIGRATIONS[0].migrate_database(conn)
+
+    assert schema_of(legacy_store) == schema_of(_store_of_the_committed_schema(1, tmp_path / "schema_v1.db"))
+
+
 @pytest.mark.parametrize(
     ("run_id", "name"),
     [
@@ -359,7 +377,7 @@ ROWS_V1_REFUSES = [
     pytest.param(
         {"id": "legacy-sweep", "name": "Sweep Run", "type": "sweep"},
         "type",
-        ["'sweep'", str(list(RUN_TYPES))],
+        ["'sweep'", "['home', 'fleet']"],
         id="a-sweep-run",
     ),
     pytest.param({"id": "legacy-untyped", "name": None, "type": None}, "name", [], id="a-nameless-run-of-no-type"),

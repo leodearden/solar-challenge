@@ -36,12 +36,25 @@ CONFIG_PRESETS_TABLE = TableSchema(
         ("created_at", "TEXT"),
     ),
 )
-"""The config_presets table: the saved presets, one per name, each of a PresetType."""
+"""The config_presets table this code reads and writes, which a new store creates: the saved presets, one per name, each of a PresetType."""
+
+_CONFIG_PRESETS_TABLE_V1 = TableSchema(
+    name="config_presets",
+    columns=(
+        ("id", "TEXT PRIMARY KEY"),
+        ("name", "TEXT UNIQUE"),
+        ("type", "TEXT CHECK(type IN ('home', 'fleet'))"),
+        ("config_json", "TEXT"),
+        ("created_at", "TEXT"),
+    ),
+)
+"""The config_presets table at schema version 1, as tests/fixtures/databases/schema_v1.sql holds it, whatever CONFIG_PRESETS_TABLE states since."""
 
 
 def migrate_config_presets_table_v1(conn: sqlite3.Connection) -> None:
-    """Schema version 1's part for the config_presets table, run on *conn* inside its migration step's transaction: the table rebuilt to CONFIG_PRESETS_TABLE."""
-    rebuild_table(conn, CONFIG_PRESETS_TABLE)
+    """Schema version 1's part for the config_presets table, run on *conn* inside its migration step's transaction: the table rebuilt to its schema at version 1."""
+    rebuild_table(conn, _CONFIG_PRESETS_TABLE_V1)
+
 
 _BUILTIN_HOME_PRESETS: tuple[Mapping[str, Any], ...] = (
     {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},

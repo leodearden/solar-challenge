@@ -166,7 +166,30 @@ RUNS_TABLE = TableSchema(
     columns=tuple((each.name, each.metadata[_COLUMN]) for each in fields(RunRecord)),
     indexes=("CREATE INDEX idx_runs_created_at ON runs(created_at DESC)", "CREATE INDEX idx_runs_type ON runs(type)"),
 )
-"""The runs table: one column per RunRecord field, in order, as its metadata declares it, and the indexes of the run list's default order and type filter."""
+"""The runs table this code reads and writes, which a new store creates: one column per RunRecord field, in order, as its metadata declares it, and the indexes of the run list's default order and type filter."""
+
+_RUN_TYPES_V1: tuple[RunType, ...] = ("home", "fleet")
+"""The run types the runs table admits at schema version 1."""
+
+_RUNS_TABLE_V1 = TableSchema(
+    name="runs",
+    columns=(
+        ("id", "TEXT PRIMARY KEY"),
+        ("name", "TEXT NOT NULL"),
+        ("type", f"TEXT {check_one_of('type', _RUN_TYPES_V1)}"),
+        ("config_json", "TEXT"),
+        ("summary_json", "TEXT"),
+        ("status", "TEXT DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed'))"),
+        ("error_message", "TEXT"),
+        ("created_at", "TEXT"),
+        ("completed_at", "TEXT"),
+        ("duration_seconds", "REAL"),
+        ("n_homes", "INTEGER DEFAULT 1"),
+        ("notes", "TEXT"),
+    ),
+    indexes=("CREATE INDEX idx_runs_created_at ON runs(created_at DESC)", "CREATE INDEX idx_runs_type ON runs(type)"),
+)
+"""The runs table at schema version 1, as tests/fixtures/databases/schema_v1.sql holds it, whatever RunRecord declares since."""
 
 
 def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
@@ -175,14 +198,14 @@ def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
     Every row is first checked against the two constraints version 1 adds to the table, since
     the database's own refusal would name no row. Each run whose name cannot name a run, NULL
     or blank, is then named as a job given no name creates its run (contract C7): its kind's
-    default_name of the homes its config holds. The table is then rebuilt to RUNS_TABLE, whose
-    name column is NOT NULL. A legacy runs table already held every other constraint of
-    RUNS_TABLE, so no other row can be refused.
+    default_name of the homes its config holds. The table is then rebuilt to its schema at
+    version 1, whose name column is NOT NULL. A legacy runs table already held every other
+    constraint of that schema, so no other row can be refused.
 
     Raises:
         RowRefused: Before anything is written, for a run whose type is neither NULL nor one of
-            RUN_TYPES, as 'sweep' was once, or whose name cannot name a run while it has no
-            type to take a default name from.
+            the run types version 1 admits, as 'sweep' was once, or whose name cannot name a run
+            while it has no type to take a default name from.
     """
     rows = conn.execute("SELECT id, name, type, config_json FROM runs").fetchall()
     for row in rows:
@@ -191,19 +214,20 @@ def migrate_runs_table_v1(conn: sqlite3.Connection) -> None:
         if not is_run_name(row["name"]):
             name = _name_of_a_run_given_none(row["id"], row["type"], row["config_json"])
             conn.execute("UPDATE runs SET name = ? WHERE id = ?", (name, row["id"]))
-    rebuild_table(conn, RUNS_TABLE)
+    rebuild_table(conn, _RUNS_TABLE_V1)
 
 
 def _require_version_1_keeps(run_id: str, run_type: object, name: object) -> None:
     """Check that schema version 1's runs table can keep run *run_id* of *run_type* named *name*, once each nameless run of a type is named.
 
     Raises:
-        RowRefused: *run_type* is neither None nor one of RUN_TYPES, the reason being one_of's
-            refusal, from which it is raised; or *name* cannot name a run and *run_type* is None.
+        RowRefused: *run_type* is neither None nor one of the run types version 1 admits, the
+            reason being one_of's refusal, from which it is raised; or *name* cannot name a run
+            and *run_type* is None.
     """
     if run_type is not None:
         try:
-            one_of(run_type, RUN_TYPES, "value")
+            one_of(run_type, _RUN_TYPES_V1, "value")
         except ValueError as refusal:
             raise RowRefused("runs", run_id, "type", str(refusal)) from refusal
     elif not is_run_name(name):

@@ -13,9 +13,9 @@ table, presets.py config_presets and database.py chat_messages. This module stat
 steps' order, the version and the transaction (docs/prds/run-store-one-owner.md §3.1, §3.9).
 
 A change to any table's schema is a new MigrationStep, committed with the schema of its version
-as a snapshot in tests/fixtures/databases, version N's as schema_v<N>.sql. Once a later step
-changes a table, an earlier step that rebuilds the table rebuilds it to the schema of its own
-version, the one its snapshot holds, not to the table owner's current schema.
+as a snapshot in tests/fixtures/databases, version N's as schema_v<N>.sql. A step rebuilds a
+table to the table's schema at the step's version, which the owner states apart from the
+table's current schema, so a later step changes no earlier one.
 """
 
 import sqlite3
@@ -91,7 +91,7 @@ class MigrationRefused(Exception):
 
 
 def _schema_v1(conn: sqlite3.Connection) -> None:
-    """Version 1's database part: the retired jobs table dropped, then runs, config_presets and chat_messages rebuilt to their current schema.
+    """Version 1's database part: the retired jobs table dropped, then runs, config_presets and chat_messages rebuilt to their schema at version 1.
 
     jobs goes first: its run_id references runs, and rebuild_table refuses a table another
     table's foreign key references. Only the runs part can refuse a row: the constraints of
@@ -106,7 +106,7 @@ def _schema_v1(conn: sqlite3.Connection) -> None:
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         1,
-        "Drop the retired jobs table and rebuild runs, config_presets and chat_messages to their current schema, "
+        "Drop the retired jobs table and rebuild runs, config_presets and chat_messages to version 1's schema, "
         "naming each run that has no name after its kind",
         _schema_v1,
     ),
