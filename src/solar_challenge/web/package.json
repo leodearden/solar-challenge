@@ -5,6 +5,7 @@
   },
   "scripts": {
     "build:css": "npx tailwindcss -i static/src/input.css -o static/dist/style.css --minify",
+    "build:favicon": "node build-favicon.js",
     "watch:css": "npx tailwindcss -i static/src/input.css -o static/dist/style.css --watch"
   }
 }
