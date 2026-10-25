@@ -5,6 +5,7 @@ import decimal
 import fractions
 import functools
 import pathlib
+import warnings
 
 import pytest
 
@@ -790,6 +791,56 @@ def test_a_constructor_assigned_as_a_descriptor_is_read_once_bound_to_its_class_
     )
 
     assert named_classes(getattr(resettling, name)) == {fractions.Fraction, int}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Initialised", id="init"),
+        pytest.param("Called", id="metaclass-call"),
+    ],
+)
+def test_a_functools_partial_constructor_of_a_class_that_carries_a_signature_is_read_unbound_without_a_warning_and_names_the_classes_the_module_of_the_function_it_wraps_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "partialling",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(self, share: 'Share', rate: int) -> None: ...\n",
+    )
+    repartialling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "repartialling",
+        "import functools\n"
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from partialling import settle\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Settling(type):\n"
+        "    __call__ = functools.partial(settle, rate=1)\n"
+        "\n"
+        "class Initialised:\n"
+        "    __signature__ = signature\n"
+        "    __init__ = functools.partial(settle, rate=1)\n"
+        "\n"
+        "class Called(metaclass=Settling):\n"
+        "    __signature__ = signature\n",
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        classes = named_classes(getattr(repartialling, name))
+
+    assert classes == {fractions.Fraction}
 
 
 def test_a_new_is_read_as_getattr_gives_it_not_bound_to_the_class_again_so_names_the_classes_the_module_spelling_that_object_binds_the_names_to(
