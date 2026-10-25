@@ -32,7 +32,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunQuery
-from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 
 bp = Blueprint("main", __name__)
 
@@ -89,7 +89,8 @@ def run_results(run_id: str) -> Any:
     """Display a run's results page: the page of the kind of run load_run reads it as, titled with its name, with the values its stored run gives.
 
     A run with no record, or whose files load_run cannot find, redirects to the dashboard,
-    which flashes "Run not found.".
+    which flashes "Run not found.". A run load_run cannot read redirects there too, flashing
+    its StoredRunUnreadable's message, which names the run, the document and the field.
     """
     storage = get_storage()
     record = storage.run_record(run_id)
@@ -99,6 +100,9 @@ def run_results(run_id: str) -> Any:
         stored = storage.load_run(run_id)
     except FileNotFoundError:
         return _run_not_found()
+    except StoredRunUnreadable as unreadable:
+        flash(str(unreadable), "error")
+        return redirect(url_for("main.index"))
 
     match stored:
         case StoredHomeRun():

@@ -20,6 +20,7 @@ from flask import (
 
 from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
 from solar_challenge.web.shared import get_storage
+from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 bp = Blueprint("history", __name__)
 
@@ -50,8 +51,9 @@ def compare_page() -> str | Response:
     empty ``ids`` renders the no-runs-selected empty state instead.
 
     Each run found is compared by its columns and, as ``summary``, its summary's field
-    tree, {} while it has none. A run whose summary cannot be read fails the request
-    with RunRecord.summary's StoredRunUnreadable, rather than being compared as a run of zeros.
+    tree, {} while it has none. A run whose summary cannot be read is not compared as a run
+    of zeros: the page redirects to the runs page, flashing its StoredRunUnreadable's message,
+    which names the run, the document and the field.
 
     Returns:
         Rendered HTML for the comparison page, or redirect.
@@ -72,7 +74,11 @@ def compare_page() -> str | Response:
     for rid in run_ids:
         record = storage.run_record(rid)
         if record is not None:
-            summary = record.summary()
+            try:
+                summary = record.summary()
+            except StoredRunUnreadable as unreadable:
+                flash(str(unreadable), "error")
+                return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
             runs.append({**asdict(record), "summary": {} if summary is None else asdict(summary)})
 
     if len(runs) < 2:
