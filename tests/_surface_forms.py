@@ -66,12 +66,12 @@ def surface_form(obj: object) -> str:
     class or on the base it inherits them from. An annotation in that signature which it
     has no rule for, such as a type alias, raises TypeError naming it and its type.
 
-    A class whose constructor inspect reads differently by minor raises TypeError naming
-    it and the class holding that constructor, unless it carries a signature, which
-    inspect reads in that constructor's place; so does a routine that wraps such a
-    class, through a functools.partial, a bound method or a functools.wraps wrapper,
-    unless the class or one of the routine's links carries one. A signature is an
-    inspect.Signature as __signature__, which inspect reads as given. inspect reads a
+    A class whose constructor inspect reads differently by minor, or cannot read on any,
+    raises TypeError naming it and the class holding that constructor, unless it carries
+    a signature, which inspect reads in that constructor's place; so does a routine that
+    wraps such a class, through a functools.partial, a bound method or a functools.wraps
+    wrapper, unless the class or one of the routine's links carries one. A signature is
+    an inspect.Signature as __signature__, which inspect reads as given. inspect reads a
     wrapper whose __signature__ is None, whether one of a routine's links or a class's
     constructor, as the callable it is, not as what it wraps, so no refusal here looks
     past it; a functools.partial whose __signature__ is None is still read through its
@@ -93,7 +93,7 @@ def surface_form(obj: object) -> str:
     object carries a __text_signature__, either of which inspect may read differently
     from Python 3.13; and naming that __call__ if it is a functools.partial, which
     Python 3.14 binds to the object as a method and earlier minors call without it.
-    _refuse_minor_dependent_constructor lists the constructors it refuses.
+    _refuse_constructor_without_a_portable_form lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
@@ -666,7 +666,7 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
     if _carries_inspect_signature(end):
         return
     if inspect.isclass(end):
-        _refuse_minor_dependent_constructor(end)
+        _refuse_constructor_without_a_portable_form(end)
     elif callable(end) and not _is_routine(end):
         _refuse_minor_dependent_call(subject, end)
         _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
@@ -867,7 +867,7 @@ _C_ROUTINE_KINDS = (
 )
 
 
-def _refuse_minor_dependent_constructor(cls: type) -> None:
+def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
