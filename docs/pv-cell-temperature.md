@@ -94,7 +94,9 @@ This is a dated record. Re-measure before relying on it.
   numpy 2.4.6.
   - Bristol's TMY comes through `get_tmy_data` from the weather cache: key
     `tmy_f8a4df0259c4` (key version 2), GHI 1069.46 kWh/m², scaled to PVGIS v5_3's
-    2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).
+    2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). Task 1134
+    commits that entry as `tests/fixtures/weather_cache/tmy_f8a4df0259c4.csv`; it
+    equalled PVGIS's live response on 2026-10-25.
   - The clear day is `tests/_synthetic_weather.py::synthetic_june_weather` called with `"2024-06-21"`.
   - Each SAPM figure is the same chain with every array's temperature-model parameters
     set back to pvlib's SAPM `open_rack_glass_glass` set. It reproduces main's figures
@@ -104,8 +106,8 @@ This is a dated record. Re-measure before relying on it.
   `tests/integration/test_pv_performance_ratio.py`'s 0.76–0.84.
 - **The code's copy.** `validation.BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP` is this
   1012.1 figure (task 907, 2026-10-22). `tests/integration/test_pv_performance_ratio.py`
-  fails when a re-measurement moves the figure by more than 1% from the constant, until
-  the constant moves with it.
+  re-measures it on that committed entry in every per-task verify (task 1134), and fails
+  when the figure moves more than 1% from the constant, until the constant moves with it.
 - **Bristol, default 4 kW**, by the script's `measure` (4.00428 wired kWp; in-plane
   1236.12 kWh/m²), SAPM → NOCT-SAM:
   - with the system losses: 3976.80 → 4052.83 kWh, 993.14 → 1012.12 kWh/kWp, ratio
