@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The signature inspect reads for a class or a routine, refused where inspect reads it differently by minor or cannot read it, and the module that spells each annotation it gives.
 
-Both follow the chain and the constructor inspect follows. Of the helper, it imports
-only tests/_surface_forms_module_lookup.py, as tests/unit/test_surface_forms_layers.py
-checks.
+Both follow the chain and the constructor inspect follows. Of the helper, this module
+imports only tests/_surface_forms_module_lookup.py, as
+tests/unit/test_surface_forms_layers.py checks.
 """
 
 import abc

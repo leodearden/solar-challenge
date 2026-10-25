@@ -3,7 +3,7 @@
 
 label_of, is_routine, is_immutable_type and spelled_function are what that lookup
 reads, and the helper's other modules share them. This module imports no other module
-of the helper, which tests/unit/test_surface_forms_layers.py checks.
+of the helper, as tests/unit/test_surface_forms_layers.py checks.
 """
 
 import ast
