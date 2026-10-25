@@ -23,8 +23,8 @@ def init_hermetic_checkout(directory: Path) -> Path:
     The empty --template= copies no template, so the checkout has no info/exclude, whatever GIT_TEMPLATE_DIR or
     init.templateDir names. The checkout's own config names the null device as its core.excludesFile, which outranks
     an excludes file the user's or the system's config names and the user's default ignore file,
-    XDG_CONFIG_HOME/git/ignore. That setting lives in the checkout, not in this process's environment, so every
-    process that runs git there reads it, such as the verify suite the newest-releases suite runs in its copy.
+    XDG_CONFIG_HOME/git/ignore. That setting lives in the checkout's own config, not in this process's environment,
+    so every process that runs git there reads it.
     """
     subprocess.run(["git", "init", "--quiet", "--template=", str(directory)], check=True)
     subprocess.run(["git", "config", "core.excludesFile", os.devnull], cwd=directory, check=True)
