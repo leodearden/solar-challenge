@@ -15,11 +15,11 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from solar_challenge.web.stored_runs import RunType
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage
 from tests._web_runs import store_home_run
 
 _CREATED_AT = "2026-10-20T09:00:00+00:00"
@@ -27,8 +27,8 @@ _CREATED_AT = "2026-10-20T09:00:00+00:00"
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage of no app under tmp_path, its database a new store open_database created."""
-    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path / "data")
+    """The store of no app whose runs the tests create, complete and fail as a job's lifecycle does."""
+    return empty_run_storage(tmp_path)
 
 
 def _create_north_roof_run(

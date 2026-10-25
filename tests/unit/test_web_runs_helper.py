@@ -12,16 +12,16 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._run_stores import empty_run_storage
 from tests._web_runs import store_fleet_run, store_home_run
 
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage under tmp_path, its database a new store open_database created."""
-    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path)
+    """The store of no app that the tests seed runs in with the helpers, beside the runs a finished job saves there."""
+    return empty_run_storage(tmp_path)
 
 
 def _two_unlike_homes() -> FleetResults:
