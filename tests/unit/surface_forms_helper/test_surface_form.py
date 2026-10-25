@@ -1140,9 +1140,23 @@ def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_wh
     class Rerated:
         __init__ = SignedDeletable()
 
+    class Calling(type):
+        __call__ = Giving()
+
+    class Called(metaclass=Calling):
+        pass
+
+    class SignedCalling(type):
+        __call__ = Signed()
+
+    class SignedCalled(metaclass=SignedCalling):
+        pass
+
     assert surface_form(Given) == "(rate: int) -> str"
     assert surface_form(Rated) == "(rate: int)"
     assert surface_form(Rerated) == "(rate: int)"
+    assert surface_form(Called) == "(rate: int) -> str"
+    assert surface_form(SignedCalled) == "(rate: int)"
 
 
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)

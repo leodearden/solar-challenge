@@ -793,7 +793,7 @@ def _unreadable_link(obj: object) -> object | None:
 
 
 def _is_read_as_builtin(obj: object) -> bool:
-    """Whether inspect reads *obj* as a builtin on every admitted minor, by a text signature only a routine defined in C gives: a routine, as _is_routine counts one, whose type defines __get__ in Python, carrying no signature for inspect to read in its place."""
+    """Whether inspect reads *obj* as a builtin on every admitted minor, as _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR says: a routine, as _is_routine counts one, whose type defines __get__ in Python, carrying no signature for inspect to read in its place."""
     getter = inspect.getattr_static(type(obj), "__get__", None)
     return (
         _is_routine(obj)
@@ -835,6 +835,12 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
             "defined with def"
         )
 
+
+_GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR = (
+    "whose type defines __get__ in Python but neither __set__ nor __delete__: inspect reads "
+    "it as a method descriptor, by a text signature only a routine defined in C gives, on "
+    "every admitted minor"
+)
 
 _GET_DELETE_DESCRIPTOR_BY_MINOR = (
     "whose type defines __get__ and __delete__ but no __set__: inspect reads it as a method "
@@ -998,11 +1004,7 @@ def _refuse_constructor_read_as_builtin(
     """Raise TypeError naming *cls*, *owner*'s *name*, and the descriptor that ends the chain inspect follows from *read*, with its type, if inspect reads that descriptor as a builtin on some admitted minor, as _is_read_as_builtin or _is_read_as_builtin_before_3_13 finds; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
     end = _chain_end(read, stop=_has_non_none_signature)
     if _is_read_as_builtin(end):
-        reading = (
-            "whose type defines __get__ in Python but neither __set__ nor __delete__: "
-            "inspect reads it as a method descriptor, by a text signature only a routine "
-            "defined in C gives, on every admitted minor"
-        )
+        reading = _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR
     elif _is_read_as_builtin_before_3_13(end):
         reading = _GET_DELETE_DESCRIPTOR_BY_MINOR
     else:
