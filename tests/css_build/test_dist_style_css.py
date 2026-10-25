@@ -7,7 +7,9 @@ static/src/input.css, and the templates and scripts it scans.
 tests/unit/test_web_compiled_css.py checks only class names, so a theme or
 input edit committed without a rebuild passes it. This module rebuilds the
 stylesheet in a scratch copy of the web package, with the committed
-package-lock.json, and compares bytes.
+package-lock.json, and compares bytes. It also checks that a token file whose
+tailwind role names no built-in Tailwind palette fails the stylesheet build,
+naming the role.
 
 build-favicon.js draws static/dist/favicon.svg, the brand sun, in the theme's
 primary-500, so the browser tab's icon follows the accent. This module rebuilds
@@ -193,6 +195,42 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package
         "script change was committed without a rebuild. Rebuild "
         "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         f"static/dist/style.css. The rules that differ:\n{_rule_diff(committed.decode(), rebuilt.decode())}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tailwind_key", "written", "role", "name"),
+    [
+        pytest.param("status", {"running": "ambr"}, "status.running", "ambr", id="status-running-ambr"),
+        pytest.param("warning", "black", "warning", "black", id="warning-black"),
+    ],
+)
+def test_a_tailwind_role_naming_no_built_in_palette_fails_the_build_naming_the_role_and_the_name(
+    scratch_web_package: Path, tmp_path: Path, tailwind_key: str, written: str | dict[str, str], role: str, name: str
+) -> None:
+    """A token file whose tailwind *role* names *name*, no built-in Tailwind palette, fails the build, naming both.
+
+    *name* is either no Tailwind colour at all, as in a grouped role naming "ambr", or a single colour with no
+    shades, such as black.
+    """
+    web_package = _build_copy(scratch_web_package, tmp_path)
+    token_file = web_package / _THEME_TOKENS
+    tokens = json.loads(token_file.read_text(encoding="utf-8"))
+    tokens["tailwind"][tailwind_key] = written
+    token_file.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    stylesheet = web_package / _DIST_STYLESHEET
+    stylesheet.unlink()
+
+    result = _npm_run(["run", "build:css"], web_package, tmp_path / "npm-cache")
+
+    assert result.returncode != 0 and f"tailwind.{role}" in result.stderr and name in result.stderr, (
+        f"`npm run build:css` exited {result.returncode} for a token file whose tailwind.{role} names {name!r}, "
+        "which is no built-in Tailwind palette, where it must fail naming the role and the name: Tailwind silently "
+        "drops a palette it cannot resolve, and every class that names it, so tailwind.config.js must refuse such "
+        f"a token file. npm's stderr:\n{result.stderr}"
+    )
+    assert not stylesheet.exists(), (
+        f"`npm run build:css` wrote static/dist/style.css for a token file whose tailwind.{role} names {name!r}"
     )
 
 
