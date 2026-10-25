@@ -641,8 +641,21 @@ def _call_as_read(obj: object) -> object:
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: the __call__ its type resolves is a functools.partial."""
+    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: a class in its type's MRO defines __call__ in C, or the __call__ its type resolves is a functools.partial."""
     holders = list(_namespace_holders(type(obj).__mro__, "__call__"))
+    c_holder = next(
+        (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
+        None,
+    )
+    if c_holder is not None:
+        raise TypeError(
+            f"{_label(subject)} wraps {_label(obj)}, a {_label(type(obj))}, whose MRO holds "
+            f"{_label(c_holder)}.__call__, which is defined in C: from Python 3.13 inspect reads "
+            "a __text_signature__ such a class may give its instances in place of the __call__ "
+            "their type resolves, which it reads on 3.11 and 3.12: make the name private, wrap a "
+            "function defined with def, or set a __signature__ that is an inspect.Signature on "
+            "the routine or on what it wraps"
+        )
     if isinstance(inspect.getattr_static(type(obj), "__call__"), functools.partial):
         raise TypeError(
             f"{_label(subject)} is read through {_label(holders[0])}.__call__, "
