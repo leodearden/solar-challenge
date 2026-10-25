@@ -5,8 +5,11 @@ The web guards read the classes the dashboard applies through
 dashboard_applied_classes_by_source, so a source it skips or misreads goes unchecked by
 every guard. tests/_dashboard_sources.py's templates and scripts are the files the content
 globs of tailwind.config.js select, so a glob it misreads or cannot expand leaves files
-Tailwind scans unchecked by every guard.
+Tailwind scans unchecked by every guard. The palettes guard reads the token file's tailwind
+roles through tailwind_role_palettes, so a role it skips or misnames goes unchecked.
 """
+
+import json
 
 import pytest
 
@@ -19,6 +22,7 @@ from tests._dashboard_sources import (
     dashboard_template_sources,
     files_by_content_glob,
     tailwind_content_globs,
+    tailwind_role_palettes,
 )
 
 
@@ -140,3 +144,34 @@ def test_the_dashboard_templates_and_scripts_are_the_files_tailwind_scans() -> N
         "narrow the glob that selects them.\n"
         f"read but not scanned: {' '.join(sorted(set(read) - set(scanned)))}"
     )
+
+
+def test_tailwind_role_palettes_key_each_role_by_the_palette_name_its_classes_write_in_section_order() -> None:
+    """A grouped role is keyed by its group's key and its own joined by hyphens, at any depth, as
+    Tailwind names a nested colour; each value is the built-in palette the role names."""
+    section = {
+        "primary": "amber",
+        "status": {"running": "amber", "failed": "red"},
+        "card": {"header": {"pv": "teal"}},
+    }
+
+    assert list(tailwind_role_palettes(section).items()) == [
+        ("primary", "amber"),
+        ("status-running", "amber"),
+        ("status-failed", "red"),
+        ("card-header-pv", "teal"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [pytest.param(5, id="number"), pytest.param(["amber"], id="array"), pytest.param(None, id="null")],
+)
+def test_tailwind_role_palettes_refuse_a_value_neither_a_palette_name_nor_a_group_naming_its_dotted_path(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError) as refusal:
+        tailwind_role_palettes({"status": {"running": value}})
+
+    assert "tailwind.status.running" in str(refusal.value)
+    assert json.dumps(value) in str(refusal.value)
