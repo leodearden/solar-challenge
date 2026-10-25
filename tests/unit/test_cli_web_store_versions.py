@@ -9,7 +9,9 @@ versions, before the dashboard binds its port, and writes nothing to the store. 
 brings an older store to SCHEMA_VERSION, reporting on stdout each step it applied, and the
 dashboard then builds on the store. It refuses, exiting 1 with the refusal on stderr and
 changing nothing, a store a newer solar-challenge wrote, a store holding a row version 1
-cannot keep, naming the row, and a store another dashboard holds, naming its lock file.
+cannot keep, naming the row, a store whose tables version 1 cannot rebuild, naming the fault,
+and a store another dashboard holds, naming its lock file. Both commands refuse a database
+file that is not a database, naming it, and leave it as it is.
 """
 
 import socket
@@ -183,6 +185,41 @@ def test_web_migrate_refuses_a_store_holding_a_run_version_1_cannot_keep_naming_
     for named in ["runs", "'legacy-sweep'", "type"]:
         assert named in result.stderr, (named, result.stderr)
     assert legacy_store.read_bytes() == bytes_before
+
+
+def test_web_migrate_refuses_a_store_whose_tables_version_1_cannot_rebuild_naming_the_fault_and_changes_nothing(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """A store with no config_presets table, which no solar-challenge left."""
+    with Database(legacy_store).transaction() as conn:
+        conn.execute("DROP TABLE config_presets")
+    bytes_before = legacy_store.read_bytes()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in [str(legacy_store), "schema version 1", "stays at version 0", "config_presets"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert legacy_store.read_bytes() == bytes_before
+
+
+@pytest.mark.parametrize("command", ["start", "migrate"])
+def test_web_start_and_web_migrate_refuse_a_file_that_is_not_a_database_naming_it_and_leave_it_as_it_is(
+    command: str, tmp_path: Path
+) -> None:
+    database = _store_database(tmp_path)
+    database.parent.mkdir()
+    database.write_bytes(b"not a database")
+    options = ["--port", str(_free_port())] if command == "start" else []
+
+    result = _web(tmp_path, command, *options)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in [str(database), "file is not a database"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert database.read_bytes() == b"not a database"
 
 
 def test_web_migrate_refuses_a_store_another_dashboard_holds_naming_its_lock_file_and_changes_nothing(

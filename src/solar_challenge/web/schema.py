@@ -4,7 +4,8 @@
 A store's schema version is its database file's PRAGMA user_version. The MigrationStep of
 version N brings a store at version N - 1 to N, and SCHEMA_VERSION, the version this code
 reads and writes, is the last step's. open_database creates a new store at SCHEMA_VERSION and
-refuses a store at any other version with a SchemaVersionMismatch. migrate_store, which
+refuses a store at any other version with a SchemaVersionMismatch, and a file that cannot be
+read as a database with a StoreUnreadable. migrate_store, which
 `solar-challenge web migrate` runs, brings an older store to SCHEMA_VERSION and reports it in
 a MigrationReport.
 
@@ -60,14 +61,26 @@ def _remedy(found: int, expected: int) -> str:
     return ""
 
 
+class StoreUnreadable(Exception):
+    """A store whose database file cannot be read as a database, e.g. a file that is not one; the message names the file and the database's refusal.
+
+    It is not a ValueError: no request causes it, so it is a start-up refusal, as SchemaVersionMismatch is.
+    """
+
+    def __init__(self, path: Path, refusal: sqlite3.Error) -> None:
+        super().__init__(f"The dashboard database {path} cannot be read: {refusal}")
+        self.path = path
+
+
 @dataclass(frozen=True)
 class MigrationStep:
     """The step of the store's schema to *version*: what brings a store at version - 1 to it.
 
     migrate_database is the step's database part, run on a connection inside the step's
     transaction, which also records *version* as the store's user_version. It raises RowRefused
-    for a row a constraint the step adds refuses. description says what the step does, for the
-    report of a migration.
+    for a row a constraint the step adds refuses, and ValueError or sqlite3.Error for a table it
+    cannot rebuild, e.g. one another table's foreign key references or one the store lacks.
+    description says what the step does, for the report of a migration.
     """
 
     version: int
@@ -76,15 +89,15 @@ class MigrationStep:
 
 
 class MigrationRefused(Exception):
-    """A migration step that cannot run, as a constraint it adds refuses a row; the message names the store, the step's version, the version the store stays at, and the row.
+    """A migration step that cannot run on a store, as a constraint it adds refuses a row or a table is not one it can rebuild; the message names the store, the step's version, the version the store stays at, and the fault.
 
     It is not a ValueError: no request causes it, as SchemaVersionMismatch is not one.
     """
 
-    def __init__(self, path: Path, step: MigrationStep, refusal: RowRefused) -> None:
+    def __init__(self, path: Path, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error) -> None:
         super().__init__(
             f"{path} cannot be migrated to schema version {step.version}, so it stays at version "
-            f"{step.version - 1}, and the step has changed nothing in it: {refusal}"
+            f"{step.version - 1}, and the step has changed nothing in it: {fault}"
         )
         self.path = path
         self.step = step
@@ -146,6 +159,7 @@ def open_database(path: Path) -> Database:
     Raises:
         SchemaVersionMismatch: The store is at another schema version, a legacy store that
             records none being at version 0; nothing is written to it.
+        StoreUnreadable: The file cannot be read as a database; nothing is written to it.
         sqlite3.Error: The new store cannot be created; the file then holds none of its tables.
     """
     database = Database(path)
@@ -178,10 +192,12 @@ def migrate_store(database_path: Path) -> MigrationReport:
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
             solar-challenge wrote; nothing is written to it.
-        MigrationRefused: A step's database part refuses a row, as a constraint the step adds
-            refuses it (RowRefused, the cause); the step has changed nothing, so the store
-            stays at the version before it.
-        sqlite3.Error: A step's database part fails, or a new store cannot be created.
+        StoreUnreadable: The file cannot be read as a database; nothing is written to it.
+        MigrationRefused: A step's database part fails, the cause: a constraint the step adds
+            refuses a row (RowRefused), or a table is not one it can rebuild (ValueError or
+            sqlite3.Error). The step has changed nothing, so the store stays at the version
+            before it.
+        sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
     found = _version_of_existing_or_new_store(database)
@@ -191,8 +207,8 @@ def migrate_store(database_path: Path) -> MigrationReport:
     for step in pending:
         try:
             _apply_step(database, step)
-        except RowRefused as refusal:
-            raise MigrationRefused(database_path, step, refusal) from refusal
+        except (RowRefused, ValueError, sqlite3.Error) as fault:
+            raise MigrationRefused(database_path, step, fault) from fault
     return MigrationReport(database_path, from_version=found, to_version=SCHEMA_VERSION, applied_steps=pending)
 
 
@@ -219,11 +235,18 @@ def _version_of_existing_or_new_store(database: Database) -> int:
 
 
 def _found_version(database: Database) -> int | None:
-    """The schema version *database*'s file records, read without writing to it: None when it holds no table, else its user_version."""
-    with closing(database.connect()) as conn:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is None:
-            return None
-        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    """The schema version *database*'s file records, read without writing to it: None when it holds no table, else its user_version.
+
+    Raises:
+        StoreUnreadable: The file cannot be read as a database, the database's refusal being the cause.
+    """
+    try:
+        with closing(database.connect()) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone() is None:
+                return None
+            return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except sqlite3.Error as refusal:
+        raise StoreUnreadable(database.path, refusal) from refusal
 
 
 def _create_store(database: Database) -> None:

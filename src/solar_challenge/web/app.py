@@ -125,6 +125,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             version other than this solar-challenge's, naming the file and
             both versions; the store is left as it was, and its lock is
             released.
+        StoreUnreadable: If the store's database file cannot be read as a
+            database, naming it; the file is left as it was, and the
+            store's lock is released.
     """
     app = Flask(
         __name__,

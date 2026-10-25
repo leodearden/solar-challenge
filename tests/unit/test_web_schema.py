@@ -8,7 +8,9 @@ them. It refuses a store at any other version, a legacy store with no version be
 migrate_store brings an older store to SCHEMA_VERSION, whose tables are then a new store's,
 keeping its rows and naming each run that had no name after its kind (D27 invariant 7, part
 2). A row a step's new constraints refuse makes migrate_store raise MigrationRefused, naming
-the table, the row's id and the column, and leaves the store as it was. MIGRATIONS' versions
+the table, the row's id and the column, and leaves the store as it was; so do tables a step
+cannot rebuild, naming the fault. Both refuse a file that is not a database with a
+StoreUnreadable naming it, and leave it as it is. MIGRATIONS' versions
 run from 1 without a gap, and SCHEMA_VERSION is the last of them (contract C5). A new store's
 schema is the one committed for its version as tests/fixtures/databases/schema_v<N>.sql, and
 version 1's step leaves a legacy store at the one committed for version 1, so a change to a
@@ -33,6 +35,7 @@ from solar_challenge.web.schema import (
     MigrationRefused,
     MigrationReport,
     SchemaVersionMismatch,
+    StoreUnreadable,
     migrate_store,
     open_database,
 )
@@ -412,6 +415,64 @@ def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it
 def test_a_migration_refused_is_not_a_value_error() -> None:
     """No request causes it: the migration that meets the row refuses to run."""
     assert not issubclass(MigrationRefused, ValueError)
+
+
+STORES_WHOSE_TABLES_VERSION_1_CANNOT_REBUILD = [
+    pytest.param("DROP TABLE config_presets", sqlite3.OperationalError, "config_presets", id="no-config-presets-table"),
+    pytest.param(
+        "CREATE TABLE run_tags (id TEXT PRIMARY KEY, run_id TEXT REFERENCES runs(id))",
+        ValueError,
+        "run_tags",
+        id="another-table-references-runs",
+    ),
+]
+
+
+@pytest.mark.parametrize(("damage", "fault", "named"), STORES_WHOSE_TABLES_VERSION_1_CANNOT_REBUILD)
+def test_migrate_store_refuses_a_store_whose_tables_version_1_cannot_rebuild_naming_the_fault_and_changes_nothing(
+    legacy_store: Path, damage: str, fault: type[Exception], named: str
+) -> None:
+    """No solar-challenge left such a store: each created all four legacy tables, and only jobs referenced runs."""
+    with Database(legacy_store).transaction() as conn:
+        conn.execute(damage)
+    schema_before, rows_before = schema_of(legacy_store), _runs_rows(legacy_store)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(legacy_store)
+
+    assert (refused.value.path, refused.value.step) == (legacy_store, MIGRATIONS[0])
+    message = str(refused.value)
+    for each in [str(legacy_store), "schema version 1", "stays at version 0", named]:
+        assert each in message, (each, message)
+    assert isinstance(refused.value.__cause__, fault)
+    assert schema_of(legacy_store) == schema_before
+    assert _user_version(legacy_store) == 0
+    assert _runs_rows(legacy_store) == rows_before
+
+
+@pytest.mark.parametrize(
+    "open_or_migrate", [pytest.param(open_database, id="open_database"), pytest.param(migrate_store, id="migrate_store")]
+)
+def test_a_file_that_is_not_a_database_is_refused_naming_it_and_left_as_it_is(
+    open_or_migrate: Callable[[Path], object], tmp_path: Path
+) -> None:
+    path = tmp_path / "store.db"
+    path.write_bytes(b"not a database")
+
+    with pytest.raises(StoreUnreadable) as refused:
+        open_or_migrate(path)
+
+    assert refused.value.path == path
+    message = str(refused.value)
+    for named in [str(path), "cannot be read", "file is not a database"]:
+        assert named in message, (named, message)
+    assert isinstance(refused.value.__cause__, sqlite3.DatabaseError)
+    assert path.read_bytes() == b"not a database"
+
+
+def test_a_store_unreadable_is_not_a_value_error() -> None:
+    """No request causes it, so it is a start-up refusal, as SchemaVersionMismatch is."""
+    assert not issubclass(StoreUnreadable, ValueError)
 
 
 def test_migrate_store_keeps_a_named_run_of_no_type_with_no_type(legacy_store: Path, tmp_path: Path) -> None:
