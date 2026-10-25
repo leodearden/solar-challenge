@@ -6,8 +6,8 @@ owner declares it, create_table creates one, and rebuild_table rebuilds an exist
 a schema, keeping its rows; RowRefused names a row a migration cannot keep. Each table's
 owner states its own schema, the one a new store creates and the one of each schema version
 a migration step rebuilds the table to: storage.py the runs table, presets.py config_presets
-and chat_messages.py chat_messages. Each owner imports this module, and this module imports
-none of them.
+and chat_messages.py chat_messages (docs/prds/run-store-one-owner.md §3.1, the persistence
+stratum).
 
 A store's schema version is its database file's PRAGMA user_version. web/schema.py creates a
 new store at the current version and refuses a store at any other, and
