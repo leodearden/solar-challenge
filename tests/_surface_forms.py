@@ -71,11 +71,10 @@ def surface_form(obj: object) -> str:
 
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name; a
-    functools.partial is a routine on every admitted minor, as inspect counts one from
-    3.14, and any other descriptor whose type defines __get__ and __delete__ but no
-    __set__ is no routine on any, as inspect counts none from 3.13. Any other class's
-    or routine's is its signature, a class's being its constructor's without self and
-    a partial's the one it leaves of the callable it wraps.
+    functools.partial is a routine on every admitted minor, and any other descriptor
+    whose type defines __get__ and __delete__ but no __set__ is no routine on any. Any
+    other class's or routine's is its signature, a class's being its constructor's
+    without self and a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -84,34 +83,13 @@ def surface_form(obj: object) -> str:
     has no rule for, such as a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor, or cannot read on any,
-    raises TypeError naming it and the class holding that constructor, unless it carries
-    a signature, which inspect reads in that constructor's place; so does a routine that
-    wraps such a class, through a functools.partial, a bound method or a functools.wraps
-    wrapper, unless the class or one of the routine's links carries one. A signature is
-    an inspect.Signature as __signature__, which inspect reads as given. inspect reads a
-    wrapper whose __signature__ is None, whether one of a routine's links or a class's
-    constructor, as the callable it is, not as what it wraps, so no refusal here looks
-    past it; a functools.partial whose __signature__ is None is still read through its
-    func. Any other __signature__, such as a string or a callable, which Python 3.12 and
-    3.13 convert or call and 3.11 and 3.14 refuse, raises TypeError naming it and what
-    carries it. That applies on the routine or class itself, on the link of a routine's
-    chain where inspect stops, and on the constructor inspect reads for a class, its
-    metaclass __call__ included. A routine that wraps an Enum, whose signature inspect
-    reads differently on each minor, raises TypeError naming it and that Enum, unless
-    one of the routine's links carries a signature. A routine that wraps a descriptor
-    whose type defines __get__ and __delete__ but no __set__, which inspect reads as a
-    builtin before 3.13 and as a data descriptor from 3.13, raises TypeError naming it,
-    that descriptor and its type, unless the descriptor or one of the routine's links
-    carries a signature. inspect reads an object its class makes callable, at which a
-    routine's chain ends, through the __call__ that class resolves, bound to the object,
-    unless the object carries a signature; each refusal here applies to that __call__ as
-    to the routine, naming the routine. The routine also raises TypeError naming it and
-    the object if a class in the object's type's MRO defines __call__ in C, or if the
-    object carries a __text_signature__, either of which inspect may read differently
-    from Python 3.13; and naming that __call__ if it is a functools.partial, which
-    Python 3.14 binds to the object as a method and earlier minors call without it.
-    signature_of in tests/_surface_forms_signatures.py reads the signature and says
-    which constructors it refuses.
+    and a routine whose signature inspect reads differently by minor, raise TypeError
+    naming what inspect reads that way and saying what to do instead. A signature, an
+    inspect.Signature as __signature__, which inspect reads as given, lifts most of
+    these refusals. docs/surface-forms-inspect-readings.md says how each minor reads
+    the objects this docstring names, where a signature lifts each refusal, and which
+    rule tests pin each rule; signature_of in tests/_surface_forms_signatures.py reads
+    the signature and says which constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
