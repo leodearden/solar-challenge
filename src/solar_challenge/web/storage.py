@@ -22,11 +22,11 @@ import math
 import re
 import shutil
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, TypedDict, TypeVar, assert_never, get_args
+from typing import Any, Literal, TypedDict, assert_never, get_args
 
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
@@ -131,7 +131,7 @@ class RunRecord:
         """
         if self.config_json is None:
             return None
-        return _decoded_document(self.id, "config_json", self.config_json, self.kind.home_configs)
+        return self.kind.home_configs(_row_document(self.id, "config_json", self.config_json))
 
 
 def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
@@ -164,23 +164,10 @@ def _run_summary(
     """
     if summary_json is None:
         return None
-    return _decoded_document(run_id, "summary_json", summary_json, _run_kind(run_id, run_type).summary)
+    return _run_kind(run_id, run_type).summary(_row_document(run_id, "summary_json", summary_json))
 
 
 _DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
-_Decoded = TypeVar("_Decoded")
-
-
-def _decoded_document(
-    run_id: str, column: _DocumentColumn, text: str, read: Callable[[StoredDocument], _Decoded]
-) -> _Decoded:
-    """What *read* reads from run *run_id*'s runs.*column*, the document whose JSON text is *text*.
-
-    Raises:
-        StoredRunUnreadable: *text* is not JSON, or *read* refuses the document it holds; the
-            document is runs.*column*.
-    """
-    return read(_row_document(run_id, column, text))
 
 
 def _row_document(run_id: str, column: _DocumentColumn, text: str | None) -> StoredDocument:
@@ -458,27 +445,17 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
             assert_never(summary)
 
 
-def readable_headline(record: RunRecord) -> RunHeadline | None:
-    """The headline a run list shows for *record*'s run; None while it has no summary, or when its summary is damaged.
-
-    A summary is damaged when it cannot be read, or run_headline refuses it for a figure that
-    is not a finite number. A damaged summary is logged as a warning naming the run, which the
-    run lists then show without figures and the dashboard's totals without its generation,
-    rather than fail for one damaged run (the G7 waiver in docs/prds/run-store-one-owner.md §15,
-    D-S19-9).
-    """
-    headline = _read_headline(record.id, record.type, record.summary_json)
-    return headline if isinstance(headline, RunHeadline) else None
-
-
 def _read_headline(
     run_id: str, run_type: RunType | None, summary_json: str | None
 ) -> RunHeadline | StoredRunUnreadable | None:
     """What a run list reads of run *run_id* from the only columns of its row it needs, its type and its summary_json.
 
     That is the run's headline; the refusal of its summary, when that cannot be read; or None,
-    while it has no summary or when run_headline refuses its summary. A refused summary is
-    damaged, as readable_headline says, and logged as a warning naming the run.
+    while it has no summary, or when run_headline refuses it for a figure that is not a finite
+    number. A summary that cannot be read or that run_headline refuses is damaged, and is logged
+    as a warning naming the run, which the run lists then show without figures and the
+    dashboard's totals without its generation, rather than fail for one damaged run (the G7
+    waiver in docs/prds/run-store-one-owner.md §15, D-S19-9).
     """
     try:
         summary = _run_summary(run_id, run_type, summary_json)
@@ -508,7 +485,7 @@ class HeadlineFigures(TypedDict):
 
 
 def headline_figures(record: RunRecord) -> HeadlineFigures:
-    """The figures a run list's row shows for *record*'s run: its readable_headline's figures, each None when it has no headline to read, and why its summary cannot be read, if it cannot."""
+    """The figures a run list's row shows for *record*'s run: its headline's figures, each None when _read_headline reads it no headline, and why its summary cannot be read, if it cannot."""
     headline = _read_headline(record.id, record.type, record.summary_json)
     match headline:
         case RunHeadline():
@@ -1072,10 +1049,10 @@ class RunStorage:
         return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
 
     def totals(self) -> RunTotals:
-        """The count of the completed runs and of their homes, and the generation of those whose readable_headline reads.
+        """The count of the completed runs and of their homes, and the generation of those whose headline _read_headline reads.
 
         A run whose row records no count of homes counts as one home. A run whose summary is
-        damaged, as readable_headline says, still counts, with its homes, but adds no
+        damaged, as _read_headline says, still counts, with its homes, but adds no
         generation, and a warning names it. The generation is read from each run's type and
         summary alone, never its config.
         """

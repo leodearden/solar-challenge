@@ -14,12 +14,11 @@ RunStorage.page_runs answers one page of the run list a RunQuery asks for, filte
 type, text and creation date and sorted by one column, with the count of every run the
 query matches; RunQuery refuses a query no page answers.
 
-readable_headline is the headline a run list shows for a run's record: None while the run
-has no summary, and None, with a warning naming the run, when its summary is damaged: it
-cannot be read, or run_headline refuses it. headline_figures is a run list row's figures
-for a record, named as the run lists name them, with as unreadable the refusal of a summary
-that cannot be read. RunStorage.totals counts the completed runs and their homes and sums
-the generation of those whose headline reads.
+headline_figures is a run list row's figures for a run's record, named as the run lists
+name them. A run has no figures while it has no summary, and none, with a warning naming the
+run, when its summary is damaged: it cannot be read, its refusal then being the row's
+unreadable, or run_headline refuses it. RunStorage.totals counts the completed runs and their
+homes and sums the generation of those whose headline reads.
 """
 
 import dataclasses
@@ -47,7 +46,6 @@ from solar_challenge.web.storage import (
     RunStorage,
     RunTotals,
     headline_figures,
-    readable_headline,
     run_headline,
 )
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
@@ -453,41 +451,6 @@ def _damage_summary(storage: RunStorage, run_id: str, damaged_summary_json: str)
         conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, run_id))
 
 
-class TestReadableHeadline:
-    """readable_headline: the headline a run list shows for a run's record, or None when it has none to show."""
-
-    def test_a_saved_run_s_headline_is_the_headline_of_its_summary(self, storage: RunStorage) -> None:
-        fleet = _two_unlike_homes()
-        store_fleet_run(storage, "fleet-1", fleet)
-
-        assert readable_headline(_record(storage, "fleet-1")) == run_headline(calculate_fleet_summary(fleet))
-
-    def test_a_run_whose_job_is_still_running_has_no_headline_yet(self, storage: RunStorage) -> None:
-        storage.create_run("running-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00")
-
-        assert readable_headline(_record(storage, "running-1")) is None
-
-    @pytest.mark.parametrize(
-        "damaged_summary_json",
-        [
-            pytest.param("{not json", id="summary-not-json"),
-            pytest.param(summary_json(home_summary(total_generation_kwh=None)), id="generation-null"),
-            pytest.param(_with_a_retired_key(summary_json(home_summary())), id="summary-with-a-key-no-field-has"),
-            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), id="generation-nan"),
-        ],
-    )
-    def test_a_run_whose_summary_is_damaged_has_no_headline_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
-    ) -> None:
-        _store_a_home_run(storage, "damaged-run")
-        _damage_summary(storage, "damaged-run", damaged_summary_json)
-        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
-
-        assert readable_headline(_record(storage, "damaged-run")) is None
-        warnings = _storage_warnings(caplog)
-        assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
-
-
 class TestHeadlineFigures:
     """headline_figures: the figures a run list's row shows for a run's record, under the names the run lists give them."""
 
@@ -513,12 +476,22 @@ class TestHeadlineFigures:
             "unreadable": None,
         }
 
+    @pytest.mark.parametrize(
+        ("damaged_summary_json", "field"),
+        [
+            pytest.param("{not json", None, id="summary-not-json"),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=None)), "total_generation_kwh", id="generation-null"
+            ),
+            pytest.param(_with_a_retired_key(summary_json(home_summary())), "retired", id="summary-with-a-key-no-field-has"),
+        ],
+    )
     def test_a_run_whose_summary_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str, field: str | None
     ) -> None:
         """A run list shows the run without figures and says why (the G7 waiver in docs/prds/run-store-one-owner.md §15)."""
-        stored = _store_a_home_run(storage, "damaged-run")
-        _damage_summary(storage, "damaged-run", _with_a_retired_key(stored.summary_json))
+        _store_a_home_run(storage, "damaged-run")
+        _damage_summary(storage, "damaged-run", damaged_summary_json)
         damaged = _record(storage, "damaged-run")
         with pytest.raises(StoredRunUnreadable) as refusal:
             damaged.summary()
@@ -527,7 +500,11 @@ class TestHeadlineFigures:
         figures = headline_figures(damaged)
 
         assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(refusal.value)}
-        assert [text for text in ("damaged-run", "runs.summary_json", "retired") if text not in str(refusal.value)] == []
+        assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == (
+            "damaged-run",
+            "runs.summary_json",
+            field,
+        )
         warnings = _storage_warnings(caplog)
         assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
 
