@@ -3,7 +3,10 @@
 
 The old /results/home/<run_id> and /results/fleet/<run_id> URLs answer 301 to it, whichever
 kind the run is, so a bookmark of either keeps resolving. A run the page cannot show, one
-with no record or no files, redirects to the dashboard, which flashes "Run not found.".
+with no record or no files, redirects to the dashboard, which flashes "Run not found.". A run
+it cannot read, such as one stored before runs carried a format version (B5, before
+`solar-challenge web migrate`), redirects there too, flashing the refusal, which names the run
+and format_version.
 """
 
 import pytest
@@ -16,6 +19,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_ids, headings, texts
+from tests._stored_run_fixtures import install_stored_run_fixture
 from tests._web_runs import store_fleet_run, store_home_run
 
 _HOME_RUN_NAME = "North Roof"
@@ -107,3 +111,18 @@ def test_the_results_page_of_a_run_whose_job_saved_no_files_redirects_to_the_das
 
     assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
     assert "Run not found." in texts(response.get_data(as_text=True))
+
+
+@pytest.mark.parametrize("name", ["pre_469_home", "legacy_fleet"])
+def test_the_results_page_of_a_run_stored_before_format_versions_redirects_to_the_dashboard_flashing_format_version(
+    client: FlaskClient, storage: RunStorage, name: str
+) -> None:
+    """B5 before `solar-challenge web migrate`: the flash names the run and its missing format_version, never a 500."""
+    run_id = install_stored_run_fixture(name, storage.database, storage.data_dir)
+
+    response = client.get(f"/results/{run_id}", follow_redirects=True)
+
+    assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+    assert response.status_code == 200
+    page_texts = texts(response.get_data(as_text=True))
+    assert len([text for text in page_texts if run_id in text and "format_version" in text]) == 1, page_texts

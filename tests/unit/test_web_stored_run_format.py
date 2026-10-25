@@ -2,10 +2,11 @@
 """The stored-run format: RunStorage.load_run refuses a stored run it cannot rebuild with StoredRunUnreadable.
 
 This module holds D27 invariant 6's checkable form (docs/prds/run-store-one-owner.md §14),
-asserted through the public loader: a current run whose summary.json lacks a required field,
-or holds a key no field has, is refused naming the run id, the document and the field, and a
-current run loads. Each test saves a run as a finished job saves it, edits one of its
-documents, and loads it.
+asserted through the public loader: a run stored before runs carried a format version is
+refused naming format.json's format_version; a current run whose summary.json lacks a required
+field, or holds a key no field has, is refused naming the run id, the document and the field;
+and a current run loads. Each test saves a run as a finished job saves it, or installs a
+legacy fixture of tests/_stored_run_fixtures, edits one of its documents, and loads it.
 
 The refusal's field is the dotted path in the document, with [i] for an item; None means the
 document as a whole.
@@ -31,9 +32,10 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
-from solar_challenge.web.stored_runs import StoredFleetRun, StoredHomeRun, StoredRunUnreadable
+from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
+from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_fleet_run, store_home_run
 
 _HOME_RUN_ID = "home-1"
@@ -284,3 +286,71 @@ def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_doc
     _edit_document(stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_0_summary.json", _delete("total_demand_kwh"))
 
     _refusal(storage, _FLEET_RUN_ID, "homes/home_0_summary.json", "total_demand_kwh")
+
+
+def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    _store_fleet_run_of_two_homes(storage)
+
+    markers = [json.loads((stored_run_dir(storage, run_id) / "format.json").read_text()) for run_id in (_HOME_RUN_ID, _FLEET_RUN_ID)]
+
+    assert markers == [{"format_version": RUN_FORMAT_VERSION}] * 2
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_a_run_stored_before_runs_carried_a_format_version_is_refused_naming_format_version(
+    storage: RunStorage, name: str
+) -> None:
+    """Invariant 6's first clause: the refusal sends the user to `solar-challenge web migrate`."""
+    run_id = install_stored_run_fixture(name, storage.database, storage.data_dir)
+
+    refusal = _refusal(storage, run_id, "format.json", "format_version")
+
+    assert "solar-challenge web migrate" in str(refusal)
+
+
+@pytest.mark.parametrize(
+    ("marker", "field"),
+    [
+        (None, "format_version"),
+        ({"format_version": RUN_FORMAT_VERSION - 1}, "format_version"),
+        ({"format_version": RUN_FORMAT_VERSION + 1}, "format_version"),
+        ({"format_version": str(RUN_FORMAT_VERSION)}, "format_version"),
+        ([RUN_FORMAT_VERSION], None),
+        ({"format_version": RUN_FORMAT_VERSION, "written_by": "0.6.0"}, "written_by"),
+    ],
+    ids=["deleted", "an-older-version", "a-newer-version", "a-string-version", "not-an-object", "an-extra-key"],
+)
+def test_a_run_whose_format_marker_is_missing_or_not_the_current_version_is_refused_naming_it(
+    storage: RunStorage, marker: Any, field: str | None
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    marker_path = stored_run_dir(storage, _HOME_RUN_ID) / "format.json"
+    if marker is None:
+        marker_path.unlink()
+    else:
+        marker_path.write_text(json.dumps(marker))
+
+    _refusal(storage, _HOME_RUN_ID, "format.json", field)
+
+
+def test_a_run_of_another_format_version_is_refused_naming_both_versions(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / "format.json").write_text(
+        json.dumps({"format_version": RUN_FORMAT_VERSION + 1})
+    )
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "format.json", "format_version")
+
+    assert str(RUN_FORMAT_VERSION + 1) in refusal.reason
+    assert str(RUN_FORMAT_VERSION) in refusal.reason
+
+
+def test_the_format_marker_is_checked_before_any_other_document(storage: RunStorage) -> None:
+    """A document of an unknown format is not interpreted: a missing marker is the refusal, not the summary's missing field."""
+    _store_home_run_of_every_shape(storage)
+    run_dir = stored_run_dir(storage, _HOME_RUN_ID)
+    (run_dir / "format.json").unlink()
+    _edit_document(run_dir / "summary.json", _delete("total_generation_kwh"))
+
+    _refusal(storage, _HOME_RUN_ID, "format.json", "format_version")
