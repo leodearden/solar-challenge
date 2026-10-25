@@ -178,6 +178,15 @@ class MigrationReport:
     to_version: int
     applied_steps: tuple[MigrationStep, ...]
 
+    def __str__(self) -> str:
+        """The report as `solar-challenge web migrate` prints it: the store's database, both versions and each step applied, or that there was nothing to migrate."""
+        if not self.applied_steps:
+            return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
+        return "\n".join([
+            f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
+            *(f"  {step.version}. {step.description}" for step in self.applied_steps),
+        ])
+
 
 def migrate_store(database_path: Path) -> MigrationReport:
     """Bring the store at *database_path* to SCHEMA_VERSION, applying each step of MIGRATIONS after its version, in order.

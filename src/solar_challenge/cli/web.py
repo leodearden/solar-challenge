@@ -114,27 +114,8 @@ def migrate() -> None:
       solar-challenge web migrate
     """
     from solar_challenge.web.app import default_store_location
-    from solar_challenge.web.schema import (
-        MigrationRefused,
-        MigrationReport,
-        SchemaVersionMismatch,
-        StoreUnreadable,
-        migrate_store,
-    )
+    from solar_challenge.web.schema import MigrationRefused, SchemaVersionMismatch, StoreUnreadable, migrate_store
     from solar_challenge.web.store_lock import StoreLockError, acquire_store_lock
-
-    def _migration_report_text(report: MigrationReport) -> str:
-        """The report of *report*'s migration: the store's database, both versions and each step applied, or that there was nothing to migrate."""
-        if not report.applied_steps:
-            return (
-                f"The dashboard database {report.path} is at schema version {report.to_version}; "
-                "there is nothing to migrate."
-            )
-        return "\n".join([
-            f"Migrated the dashboard database {report.path} from schema version {report.from_version} "
-            f"to {report.to_version}:",
-            *(f"  {step.version}. {step.description}" for step in report.applied_steps),
-        ])
 
     location = default_store_location()
     try:
@@ -146,4 +127,4 @@ def migrate() -> None:
     except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
-    print_report(_migration_report_text(report))
+    print_report(str(report))

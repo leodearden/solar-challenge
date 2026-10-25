@@ -363,6 +363,25 @@ def test_migrate_store_refuses_a_store_a_newer_solar_challenge_wrote_and_writes_
     assert newer.read_bytes() == bytes_before
 
 
+def test_a_migration_report_reads_as_the_store_both_versions_and_each_step_applied_in_order(tmp_path: Path) -> None:
+    path = tmp_path / "store.db"
+    report = MigrationReport(path, from_version=0, to_version=SCHEMA_VERSION, applied_steps=MIGRATIONS)
+
+    assert str(report).splitlines() == [
+        f"Migrated the dashboard database {path} from schema version 0 to {SCHEMA_VERSION}:",
+        *(f"  {step.version}. {step.description}" for step in MIGRATIONS),
+    ]
+
+
+def test_a_migration_report_of_no_step_reads_as_nothing_to_migrate(tmp_path: Path) -> None:
+    path = tmp_path / "store.db"
+    report = MigrationReport(path, from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION, applied_steps=())
+
+    assert str(report) == (
+        f"The dashboard database {path} is at schema version {SCHEMA_VERSION}; there is nothing to migrate."
+    )
+
+
 def test_migrate_store_creates_a_new_store_at_the_schema_version_where_there_is_no_database(tmp_path: Path) -> None:
     path = tmp_path / "store.db"
 
