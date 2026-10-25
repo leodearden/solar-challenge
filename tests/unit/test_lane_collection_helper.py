@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_lane_collection.py, the lane contract tests' collect-only probes.
 
-There is one of an offline-lane job, one of a default collection of tests/, and
-one of a suite under a mark expression. Each runs a throwaway project's lane
-job, tests/ or suite through this interpreter's pytest, with no uv and no mocks.
+There is one of an offline-lane job, one of a default collection of tests/, one
+of a suite under a mark expression, and one of every test under tests/ under a
+mark expression. Each runs a throwaway project's lane job, tests/ or suite
+through this interpreter's pytest, with no uv and no mocks.
 """
 
 import os
@@ -20,13 +21,29 @@ from tests._collect_only import CollectedTest
 from tests._lane_collection import (
     collect_lane_job,
     default_collection_node_ids_under,
+    every_test_matching,
     suite_node_ids_matching,
     suite_tests_matching,
 )
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
+_PYTEST_INVOCATION = (sys.executable, "-m", "pytest")
+
 _PROBE_VARIABLE = "LANE_COLLECTION_PROBE"
+
+_ENVIRONMENT_PROBE_MODULE = textwrap.dedent(
+    f"""\
+    import os
+
+    import pytest
+
+
+    @pytest.mark.parametrize("probe", [os.environ.get({_PROBE_VARIABLE!r}, "unset")])
+    def test_environment(probe):
+        raise AssertionError("collect-only ran test_environment")
+    """
+)
 
 _IMPORT_ERROR_MESSAGE = "test_broken.py refuses to be imported"
 
@@ -99,21 +116,7 @@ def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_thi
     what runs, and an inherited UV_FROZEN never reaches a lane job's `uv run --locked`.
     """
     project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_environment.py")
-    (project_root / "test_environment.py").write_text(
-        textwrap.dedent(
-            f"""\
-            import os
-
-            import pytest
-
-
-            @pytest.mark.parametrize("probe", [os.environ.get({_PROBE_VARIABLE!r}, "unset")])
-            def test_environment(probe):
-                raise AssertionError("collect-only ran test_environment")
-            """
-        ),
-        encoding="utf-8",
-    )
+    (project_root / "test_environment.py").write_text(_ENVIRONMENT_PROBE_MODULE, encoding="utf-8")
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
     asked_for: list[str] = []
 
@@ -328,3 +331,82 @@ def test_a_mark_selection_that_fails_to_collect_fails_describing_its_error(tmp_p
         suite_node_ids_matching(project_root, _SUITE, "not slow")
 
     assert _IMPORT_ERROR_MESSAGE in str(failure.value)
+
+
+def test_every_test_matching_reaches_each_directory_and_test_module_under_tests_a_collect_ignored_suite_included(
+    tmp_path: Path,
+) -> None:
+    """Naming tests/ alone would miss the suite collect_ignore names, and so would naming tests/ beside it.
+
+    pytest drops a path argument that an ancestor argument's ignore rules
+    exclude. tests/data holds no test module, and reaching it is harmless.
+    """
+    project_root = _project_with_a_suite(tmp_path, conftest='collect_ignore = ["suite"]\n')
+    (project_root / "tests" / "data").mkdir()
+    (project_root / "tests" / "data" / "readings.csv").write_text("minute,kwh\n", encoding="utf-8")
+
+    tests = every_test_matching(
+        project_root, "not slow", pytest_invocation=_PYTEST_INVOCATION, env_for=_this_process_environment
+    )
+
+    assert tuple(test.node_id for test in tests) == (_SUITE_NODE_ID, "tests/test_beside.py::test_case")
+
+
+def test_every_test_matching_returns_only_the_tests_its_expression_selects(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path, ini="[pytest]\nmarkers =\n    slow: selected by its mark\n")
+    (project_root / "tests" / "other").mkdir()
+    (project_root / "tests" / "other" / "test_slow.py").write_text(
+        "import pytest\n\n\n@pytest.mark.slow\ndef test_case():\n    pass\n", encoding="utf-8"
+    )
+
+    tests = every_test_matching(
+        project_root, "slow", pytest_invocation=_PYTEST_INVOCATION, env_for=_this_process_environment
+    )
+
+    module = PurePosixPath("tests/other/test_slow.py")
+    assert tests == (CollectedTest(f"{module}::test_case", module, None),)
+
+
+def test_every_test_matching_collects_in_the_environment_env_for_returns_for_its_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env_for is given the very command that runs, as collect_lane_job's is, so an environment keyed on it fits what runs."""
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "test_environment.py").write_text(_ENVIRONMENT_PROBE_MODULE, encoding="utf-8")
+    monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
+    asked_for: list[str] = []
+
+    def env_for(command: str) -> dict[str, str]:
+        asked_for.append(command)
+        return {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
+
+    tests = every_test_matching(project_root, "not slow", pytest_invocation=_PYTEST_INVOCATION, env_for=env_for)
+
+    assert len(asked_for) == 1, asked_for
+    assert asked_for[0].startswith(shlex.join(_PYTEST_INVOCATION)), asked_for
+    assert f"{_SUITE}/test_environment.py::test_environment[unset]" in {test.node_id for test in tests}
+
+
+def test_every_test_matching_that_fails_to_collect_fails_describing_its_error(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "test_broken.py").write_text(
+        f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        every_test_matching(
+            project_root, "not slow", pytest_invocation=_PYTEST_INVOCATION, env_for=_this_process_environment
+        )
+
+    assert _IMPORT_ERROR_MESSAGE in str(failure.value)
+
+
+def test_every_test_matching_whose_expression_selects_nothing_returns_no_tests(tmp_path: Path) -> None:
+    """pytest exits NO_TESTS_COLLECTED, as for `-m slow` on a tree that holds no slow test."""
+    project_root = _project_with_a_suite(tmp_path)
+
+    tests = every_test_matching(
+        project_root, "slow", pytest_invocation=_PYTEST_INVOCATION, env_for=_this_process_environment
+    )
+
+    assert tests == ()
