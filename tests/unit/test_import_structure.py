@@ -70,6 +70,7 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
     ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.jobs"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.reloader"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.schema"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.store_lock"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.web", "solar_challenge.web.app"): Permanent(
         "the optional web extra: importing any web submodule runs web/__init__.py, and the web "

@@ -49,6 +49,10 @@ def start(
     another holds it, this command exits with an error naming the lock file
     and the holding process.
 
+    A store at a schema version other than this solar-challenge's is refused
+    too, with an error naming its database and both versions; `solar-challenge
+    web migrate` brings an older store to this version.
+
     Under --debug the server restarts when a source file changes; the
     restarted server process, not the watcher that restarts it, holds the
     store.
@@ -67,14 +71,15 @@ def start(
 
 
 def _serve(host: str, port: int, debug: bool) -> None:
-    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped; exit 1 if this process cannot take the store."""
+    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped; exit 1 if this process cannot take the store or the store is at another schema version."""
     from solar_challenge.web import create_app
     from solar_challenge.web.jobs import shutdown_all_managers
+    from solar_challenge.web.schema import SchemaVersionMismatch
     from solar_challenge.web.store_lock import StoreLockError
 
     try:
         flask_app = create_app()
-    except StoreLockError as refused:
+    except (StoreLockError, SchemaVersionMismatch) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
 
