@@ -15,27 +15,31 @@ SCENARIOS = """
     import json
     import urllib.request
 
-    import pandas as pd
     import pytest
 
     from solar_challenge.weather import WeatherCache
-    from solar_challenge.web.simulation_params import DAYS_WINDOW_START
+    from tests._web_job_days import web_job_days
 
-    from tests._seeded_tmy import ClearJuneDays
-
-    HOME_JOB = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
+    HOME_JOB_DAYS = web_job_days(count=1)
+    HOME_JOB = {
+        "pv_kw": 4.0,
+        "battery_kwh": 0,
+        "occupants": 3,
+        "location": "bristol",
+        "days": HOME_JOB_DAYS.count,
+    }
 
     LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     jobs_submitted_by_earlier_tests = []
 
 
-    # HOME_JOB's days window starts on DAYS_WINDOW_START, so Bristol's TMY is a clear day on that date.
+    # HOME_JOB_DAYS are the days HOME_JOB simulates, so Bristol's TMY is a clear day on each of them.
     # It overrides the e2e conftest's live_server_weather, the weather cache the live server's jobs read.
     @pytest.fixture(scope="session")
     def live_server_weather(tmp_path_factory):
         cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("weather"))
-        ClearJuneDays(first_day=pd.Timestamp(DAYS_WINDOW_START), count=1).seed_as_bristol_tmy(cache)
+        HOME_JOB_DAYS.seed_as_bristol_tmy(cache)
         return cache
 
 
