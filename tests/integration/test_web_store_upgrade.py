@@ -27,7 +27,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import pandas as pd
 import pytest
@@ -64,11 +64,16 @@ _NO_HEADLINE = (None, None)
 
 @dataclass(frozen=True)
 class _LegacyStore:
-    """The legacy store's database file, every run id it holds, and, by run id, the fixture name of each run that has files."""
+    """The legacy store's database file; by run id, each run's name as the database holds it (None for NULL); and by run id, the fixture name of each run that has files."""
 
     database: Path
-    run_ids: frozenset[str]
+    run_names: Mapping[str, str | None]
     stored_runs: Mapping[str, str]
+
+    @property
+    def run_ids(self) -> frozenset[str]:
+        """Every run id the legacy database holds."""
+        return frozenset(self.run_names)
 
 
 def _web(*args: str) -> Result:
@@ -76,10 +81,15 @@ def _web(*args: str) -> Result:
     return CliRunner().invoke(app, ["web", *args], env={"COLUMNS": "1000"})
 
 
-def _run_ids_in(database: Path) -> frozenset[str]:
-    """The id of every run the runs table of the database file *database* holds, read with sqlite3 before anything migrates it."""
+def _run_names_in(database: Path) -> dict[str, str | None]:
+    """By run id, the name (None for NULL) of every run the runs table of the database file *database* holds, read with sqlite3 before anything migrates it."""
     with closing(sqlite3.connect(database)) as conn:
-        return frozenset(run_id for (run_id,) in conn.execute("SELECT id FROM runs"))
+        return {run_id: name for run_id, name in conn.execute("SELECT id, name FROM runs")}
+
+
+def _names_a_run(name: object) -> TypeGuard[str]:
+    """Whether *name* can name a run, as contract C7 requires of every run's name: a str holding a character other than whitespace."""
+    return isinstance(name, str) and name.strip() != ""
 
 
 @pytest.fixture
@@ -91,7 +101,7 @@ def legacy_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _LegacyStor
     stored = {
         install_stored_run_fixture(name, Database(database), location.data_dir): name for name in STORED_RUN_FIXTURES
     }
-    return _LegacyStore(database, _run_ids_in(database), stored)
+    return _LegacyStore(database, _run_names_in(database), stored)
 
 
 @pytest.fixture
@@ -189,6 +199,20 @@ def test_history_lists_every_run_each_stored_one_with_its_summary_s_headline(
         run_id: _fixture_headline(name) for run_id, name in legacy_store.stored_runs.items()
     }
     assert {row["id"]: row["unreadable"] for row in rows if row["unreadable"] is not None} == {}
+
+
+def test_history_lists_every_run_under_a_name_each_named_one_under_the_name_it_had(
+    dashboard: Flask, legacy_store: _LegacyStore
+) -> None:
+    """`web migrate` names each run the pre-548 database left NULL or blank (contract C7), and keeps every other run's name."""
+    listed = {row["id"]: row["name"] for row in _history_rows(dashboard.test_client())}
+    named = {run_id: name for run_id, name in legacy_store.run_names.items() if _names_a_run(name)}
+    assert named.keys() < legacy_store.run_names.keys(), (
+        f"the legacy store names every run, so this test sees no name back-filled: {legacy_store.run_names}"
+    )
+
+    assert {run_id: name for run_id, name in listed.items() if not _names_a_run(name)} == {}
+    assert {run_id: listed.get(run_id) for run_id in named} == named
 
 
 def test_each_stored_run_s_results_url_renders_its_results_page_under_its_name(
