@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The web dashboard's Flask app for tests, its database and run files under one directory, the Database it keeps its tables in, the RunStorage it keeps its runs in, and the release of the store lock it holds.
+"""The web dashboard's Flask app for tests, its database and run files under one directory, the path of the database file it is given there, the Database it keeps its tables in, the RunStorage it keeps its runs in, and the release of the store lock it holds.
 
 build_test_app, database_of, run_storage_of and release_store_lock import the web package
 when they are called, not when this module loads. So importing this module needs no web
@@ -8,10 +8,11 @@ the factory anew.
 
 Usage::
 
-    from tests._web_app import build_test_app, database_of, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
+    from tests._web_app import build_test_app, database_of, database_path_in, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 
     app = build_test_app(tmp_path)
     database = database_of(app)
+    assert database.path == database_path_in(tmp_path)
     storage = run_storage_of(app)
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 
@@ -47,11 +48,16 @@ def build_test_app(
     return create_app(
         test_config={
             "TESTING": True,
-            "DATABASE": str(data_dir / "test.db"),
+            "DATABASE": str(database_path_in(data_dir)),
             "DATA_DIR": str(data_dir),
             **secret_key_config,
         }
     )
+
+
+def database_path_in(data_dir: Path) -> Path:
+    """Return the database file build_test_app gives an app whose data is under *data_dir*."""
+    return data_dir / "test.db"
 
 
 def database_of(app: Flask) -> Database:
@@ -95,5 +101,5 @@ def point_store_config_at_a_missing_directory(app: Flask, directory: Path) -> No
     assert not directory.exists(), (
         f"{directory} exists, so a request that read the store config could still open a database in it"
     )
-    app.config["DATABASE"] = str(directory / "test.db")
+    app.config["DATABASE"] = str(database_path_in(directory))
     app.config["DATA_DIR"] = str(directory)

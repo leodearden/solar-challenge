@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app, names the database file it gives that app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
 
 import subprocess
 import sys
