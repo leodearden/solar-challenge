@@ -6,14 +6,17 @@ where their qualified names carry no '<locals>'.
 """
 
 import collections.abc
+import contextlib
 import datetime
 import decimal
 import enum
 import fractions
 import functools
 import inspect
+import operator
 import pathlib
 import re
+import sqlite3
 import sys
 import types
 import typing
@@ -1219,6 +1222,23 @@ def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spe
         assert surface_form(functools.partial(HalvedCall())) == "(*, rate: int = 1) -> None"
         assert surface_form(functools.partial(SignedCall())) == "(share: float)"
         assert named_classes(functools.partial(SignedCall())) == {float}
+
+
+def test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_callable_raises_a_type_error_naming_it_that_object_and_that_class() -> None:
+    class Connected(sqlite3.Connection):
+        def __call__(self, rate: int) -> None: ...
+
+    getting = functools.partial(operator.itemgetter(1))
+    with contextlib.closing(Connected(":memory:")) as connection:
+        connecting = functools.partial(connection)
+        for routine, naming_it_that_object_and_that_class in (
+            (getting, r"\bfunctools\.partial\(operator\.itemgetter\(1\)\).*\boperator\.itemgetter\.__call__\b.*\bdefined in C\b"),
+            (connecting, r"\bfunctools\.partial\(.*\.Connected\b.*\bsqlite3\.Connection\.__call__\b.*\bdefined in C\b"),
+        ):
+            with pytest.raises(TypeError, match=naming_it_that_object_and_that_class):
+                surface_form(routine)
+            with pytest.raises(TypeError, match=naming_it_that_object_and_that_class):
+                named_classes(routine)
 
 
 def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves() -> None:
