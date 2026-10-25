@@ -13,7 +13,7 @@ from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parents[1]
 
-LAYERS = ("_surface_forms_module_lookup", "_surface_forms")
+LAYERS = ("_surface_forms_module_lookup", "_surface_forms_signatures", "_surface_forms")
 
 
 def _helper_imports(tree: ast.Module) -> Iterator[tuple[ast.Import | ast.ImportFrom, str]]:
