@@ -6,6 +6,11 @@
       "running": "amber",
       "completed": "green",
       "failed": "red"
+    },
+    "component": {
+      "pv": "amber",
+      "battery": "teal",
+      "load": "red"
     }
   },
   "chart": {
