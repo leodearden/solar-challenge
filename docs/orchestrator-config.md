@@ -44,7 +44,7 @@ per-worktree `.venv`.
   instead of silently re-locking in the worktree. That silent re-lock once let a commit that
   forgot `uv lock` pass verify and merge its stale lock. `tests/unit/test_stale_uv_lock.py`
   guards this.
-- **`-m 'not slow'`.** Slow tests need a live service (PVGIS, PyPI, npm), which does not belong
+- **`-m 'not slow'`.** Slow tests need a live service (PVGIS, PyPI, npm, the Anthropic API), which does not belong
   in a per-task verify loop. They run in the offline lane instead (§8), and
   `tests/unit/test_offline_lane_contracts.py` checks that each does, unless it lists the test
   as needing a service no lane job runs it against.
