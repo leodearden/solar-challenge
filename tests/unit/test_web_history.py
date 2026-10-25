@@ -114,10 +114,15 @@ def _insert_test_run(
         )
 
 
+def _overwrite(app: Flask, run_id: str, column: str, text: str) -> None:
+    """Overwrite run *run_id*'s *column*, summary_json or config_json, with *text*."""
+    with database_of(app).transaction() as conn:
+        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (text, run_id))
+
+
 def _garble(app: Flask, run_id: str, column: str) -> None:
     """Overwrite run *run_id*'s *column*, summary_json or config_json, with text that is not JSON."""
-    with database_of(app).transaction() as conn:
-        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", ("{not json", run_id))
+    _overwrite(app, run_id, column, "{not json")
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +347,33 @@ class TestRunsAPI:
         assert [record.levelno for record in caplog.records if "garbled-run" in record.getMessage()] == [
             logging.WARNING
         ]
+
+    def test_a_run_whose_summary_holds_a_key_no_field_has_lists_no_figures_and_names_why_beside_the_others(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """The row's unreadable names the run, runs.summary_json and the key, so the list can say why the run shows no figures (the G7 waiver)."""
+        _insert_test_run(
+            app, run_id="readable-run", summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
+        )
+        _insert_test_run(app, run_id="retired-key-run")
+        _overwrite(
+            app,
+            "retired-key-run",
+            "summary_json",
+            json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+        )
+
+        rows = {row["id"]: row for row in client.get("/api/history/runs").get_json()["runs"]}
+
+        readable, damaged = rows["readable-run"], rows["retired-key-run"]
+        assert (readable["total_generation_kwh"], readable["self_consumption_ratio"], readable["unreadable"]) == (
+            987.65,
+            0.37,
+            None,
+        )
+        assert (damaged["total_generation_kwh"], damaged["self_consumption_ratio"]) == (None, None)
+        unreadable = damaged["unreadable"]
+        assert [text for text in ("'retired-key-run'", "runs.summary_json", "retired_figure") if text not in unreadable] == []
 
     def test_dates_keep_the_runs_created_from_the_first_date_to_the_end_of_the_last(
         self, app: Flask, client: FlaskClient

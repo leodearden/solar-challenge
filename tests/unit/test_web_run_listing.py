@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The typed reads of a run's record, and the headline a run list shows for a run.
 
-A record decodes its summary_json and config_json through its kind, in RunRecord.summary()
+A record reads its summary_json and config_json through its kind, in RunRecord.summary()
 and RunRecord.home_configs(): a home run's summary is a SummaryStatistics and a fleet run's
 a FleetSummary, and each run's config is its homes' HomeConfigs, in order. A run with no
-document yet answers None, and a document that does not decode is refused with a
-ValueError naming the run and the column. run_headline maps a summary of either kind to
-the generation and self-consumption ratio a run list shows, and refuses a summary whose
-figure for either is not a finite number.
+document yet answers None. A document that cannot be read is refused with a
+StoredRunUnreadable naming the run, the column, e.g. runs.summary_json, and the field; so is
+each document of a record with no type, naming runs.type. run_headline maps a summary of
+either kind to the generation and self-consumption ratio a run list shows, and refuses a
+summary whose figure for either is not a finite number.
 
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
@@ -15,12 +16,14 @@ query matches; RunQuery refuses a query no page answers.
 
 readable_headline is the headline a run list shows for a run's record: None while the run
 has no summary, and None, with a warning naming the run, when its summary is damaged: it
-does not decode, or run_headline refuses it. headline_figures is a run list row's figures
-for a record, named as the run lists name them. RunStorage.totals counts the completed
-runs and their homes and sums the generation of those whose headline reads.
+cannot be read, or run_headline refuses it. headline_figures is a run list row's figures
+for a record, named as the run lists name them, with as unreadable the refusal of a summary
+that cannot be read. RunStorage.totals counts the completed runs and their homes and sums
+the generation of those whose headline reads.
 """
 
 import dataclasses
+import json
 import logging
 import math
 from collections.abc import Callable
@@ -47,7 +50,7 @@ from solar_challenge.web.storage import (
     readable_headline,
     run_headline,
 )
-from solar_challenge.web.stored_runs import RUN_TYPES
+from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._web_runs import store_fleet_run, store_home_run
@@ -113,6 +116,20 @@ _READ_OF_COLUMN: dict[str, Callable[[RunRecord], object]] = {
 }
 
 
+def _with_a_retired_key(document_json: str | None) -> str:
+    """*document_json*, a document's JSON text, with '{"retired": 1}' merged into its root: a key no field has."""
+    assert document_json is not None, "the run holds no such document"
+    return json.dumps({**json.loads(document_json), "retired": 1})
+
+
+def _without_total_generation_kwh(document_json: str | None) -> str:
+    """*document_json*, a summary's JSON text, without total_generation_kwh, a field each kind's summary requires."""
+    assert document_json is not None, "the run holds no summary"
+    document = json.loads(document_json)
+    del document["total_generation_kwh"]
+    return json.dumps(document)
+
+
 class TestRunRecordTypedDocuments:
     """RunRecord.summary() and RunRecord.home_configs(): the run's documents, decoded through its kind."""
 
@@ -158,7 +175,7 @@ class TestRunRecordTypedDocuments:
             pytest.param("config_json", '{"pv_config": {"capacity_kw": 4.0}}', id="config-missing-load-config"),
         ],
     )
-    def test_a_document_that_does_not_decode_is_refused_with_a_value_error_naming_the_run_and_its_column(
+    def test_a_document_that_cannot_be_read_is_refused_as_unreadable_naming_the_run_and_its_column(
         self,
         storage: RunStorage,
         store_a_run: Callable[[RunStorage, str], RunRecord],
@@ -167,23 +184,54 @@ class TestRunRecordTypedDocuments:
     ) -> None:
         garbled = dataclasses.replace(store_a_run(storage, "garbled-run"), **{column: text})
 
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(StoredRunUnreadable) as refusal:
             _READ_OF_COLUMN[column](garbled)
 
+        assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", f"runs.{column}")
         assert "'garbled-run'" in str(refusal.value)
         assert f"runs.{column}" in str(refusal.value)
 
+    @pytest.mark.parametrize("store_a_run", _STORE_A_RUN_OF_EACH_KIND)
+    @pytest.mark.parametrize(
+        ("damage", "field"),
+        [
+            pytest.param(_with_a_retired_key, "retired", id="a-key-no-field-has"),
+            pytest.param(_without_total_generation_kwh, "total_generation_kwh", id="a-required-field-missing"),
+        ],
+    )
+    def test_a_summary_holding_a_key_no_field_has_or_lacking_a_required_field_is_refused_naming_that_field(
+        self,
+        storage: RunStorage,
+        store_a_run: Callable[[RunStorage, str], RunRecord],
+        damage: Callable[[str | None], str],
+        field: str,
+    ) -> None:
+        record = store_a_run(storage, "damaged-run")
+        damaged = dataclasses.replace(record, summary_json=damage(record.summary_json))
+
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            damaged.summary()
+
+        assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == (
+            "damaged-run",
+            "runs.summary_json",
+            field,
+        )
+        assert field in str(refusal.value)
+
     @pytest.mark.parametrize("column", list(_READ_OF_COLUMN))
-    def test_a_record_with_no_type_is_refused_its_documents_by_the_kind_s_refusal_naming_its_run(
+    def test_a_record_with_no_type_is_refused_its_documents_by_the_kind_s_refusal_naming_its_run_and_runs_type(
         self, storage: RunStorage, column: str
     ) -> None:
         untyped = dataclasses.replace(_store_a_home_run(storage, "untyped-run"), type=None)
-        with pytest.raises(ValueError) as kind_refusal:
+        with pytest.raises(StoredRunUnreadable) as kind_refusal:
             _ = untyped.kind
 
-        with pytest.raises(ValueError, match="untyped-run") as refusal:
+        with pytest.raises(StoredRunUnreadable) as refusal:
             _READ_OF_COLUMN[column](untyped)
 
+        assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == ("untyped-run", "runs.type", None)
+        assert "untyped-run" in str(refusal.value)
         assert str(refusal.value) == str(kind_refusal.value)
 
 
@@ -424,6 +472,8 @@ class TestReadableHeadline:
         [
             pytest.param("{not json", id="summary-not-json"),
             pytest.param(summary_json(home_summary(total_generation_kwh=None)), id="generation-null"),
+            pytest.param(_with_a_retired_key(summary_json(home_summary())), id="summary-with-a-key-no-field-has"),
+            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), id="generation-nan"),
         ],
     )
     def test_a_run_whose_summary_is_damaged_has_no_headline_and_a_warning_names_it(
@@ -451,6 +501,7 @@ class TestHeadlineFigures:
         assert headline_figures(_record(storage, "fleet-1")) == {
             "total_generation_kwh": summary.total_generation_kwh,
             "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+            "unreadable": None,
         }
 
     def test_a_run_with_no_headline_to_read_has_neither_figure(self, storage: RunStorage) -> None:
@@ -459,7 +510,40 @@ class TestHeadlineFigures:
         assert headline_figures(_record(storage, "running-1")) == {
             "total_generation_kwh": None,
             "self_consumption_ratio": None,
+            "unreadable": None,
         }
+
+    def test_a_run_whose_summary_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A run list shows the run without figures and says why (the G7 waiver in docs/prds/run-store-one-owner.md §15)."""
+        stored = _store_a_home_run(storage, "damaged-run")
+        _damage_summary(storage, "damaged-run", _with_a_retired_key(stored.summary_json))
+        damaged = _record(storage, "damaged-run")
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            damaged.summary()
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        figures = headline_figures(damaged)
+
+        assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(refusal.value)}
+        assert [text for text in ("damaged-run", "runs.summary_json", "retired") if text not in str(refusal.value)] == []
+        warnings = _storage_warnings(caplog)
+        assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
+
+    def test_a_run_whose_headline_figure_is_not_a_finite_number_has_neither_figure_and_a_warning_names_it_though_it_reads(
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """NaN is a number, so the summary reads; run_headline refuses it, and no document is unreadable."""
+        _store_a_home_run(storage, "nan-run")
+        _damage_summary(storage, "nan-run", summary_json(home_summary(total_generation_kwh=math.nan)))
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        figures = headline_figures(_record(storage, "nan-run"))
+
+        assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": None}
+        warnings = _storage_warnings(caplog)
+        assert len(warnings) == 1 and "nan-run" in warnings[0], warnings
 
 
 class TestRunTotals:
@@ -497,6 +581,7 @@ class TestRunTotals:
         [
             pytest.param("{not json", id="summary-not-json"),
             pytest.param(summary_json(fleet_summary(total_generation_kwh=None)), id="generation-null"),
+            pytest.param(_with_a_retired_key(summary_json(fleet_summary())), id="summary-with-a-key-no-field-has"),
         ],
     )
     def test_a_completed_run_whose_summary_is_damaged_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(

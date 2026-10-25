@@ -3,9 +3,10 @@
 
 RUN_KINDS holds one RunKind for each RunType. A run's record names its kind, and load_run
 reads the run's files back as a StoredHomeRun or a StoredFleetRun, the variant whose
-export_frame the run's CSV export answers with. The kind also reads the HomeConfigs the
-run's record holds, and builds from them the scenario the run's YAML export answers with.
-A kind also names a run created without a name.
+export_frame the run's CSV export answers with. A record with no type names no kind, so its
+run is refused as a StoredRunUnreadable naming runs.type. The kind also reads the
+HomeConfigs the run's record holds, and builds from them the scenario the run's YAML export
+answers with. A kind also names a run created without a name.
 """
 
 import dataclasses
@@ -22,7 +23,14 @@ from solar_challenge.fleet import FleetResults, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.storage import RunRecord, RunStorage
-from solar_challenge.web.stored_runs import RUN_KINDS, RunType, StoredDocument, StoredFleetRun, StoredHomeRun
+from solar_challenge.web.stored_runs import (
+    RUN_KINDS,
+    RunType,
+    StoredDocument,
+    StoredFleetRun,
+    StoredHomeRun,
+    StoredRunUnreadable,
+)
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -204,24 +212,28 @@ def test_loading_a_run_whose_job_saved_no_files_raises_file_not_found_naming_its
         storage.load_run("pending-1")
 
 
-def test_loading_a_run_whose_record_has_no_type_raises_file_not_found_naming_its_id_caused_by_the_kinds_refusal(
+def test_loading_a_run_whose_record_has_no_type_is_refused_as_the_kind_refuses_it_naming_its_id_and_runs_type(
     storage: RunStorage,
 ) -> None:
-    """The error's cause is the refusal RunRecord.kind makes of the record, the one place a record with no type is refused a kind."""
+    """A run stored with no type cannot be read, so it is refused as unreadable, not as absent.
+
+    The refusal is the one RunRecord.kind makes of the record, the one place a record with no
+    type is refused a kind.
+    """
     store_home_run(storage, _HOME_RUN_ID, *_a_home())
     with storage.database.transaction() as conn:
         conn.execute("UPDATE runs SET type = NULL WHERE id = ?", (_HOME_RUN_ID,))
-    with pytest.raises(ValueError) as refused:
+    with pytest.raises(StoredRunUnreadable) as refused:
         _ = _record(storage, _HOME_RUN_ID).kind
 
-    with pytest.raises(FileNotFoundError, match=_HOME_RUN_ID) as raised:
+    with pytest.raises(StoredRunUnreadable) as raised:
         storage.load_run(_HOME_RUN_ID)
 
-    assert isinstance(raised.value.__cause__, ValueError)
-    assert str(raised.value.__cause__) == str(refused.value)
+    assert (raised.value.run_id, raised.value.document, raised.value.field) == (_HOME_RUN_ID, "runs.type", None)
+    assert str(raised.value) == str(refused.value)
 
 
-def test_the_kind_of_a_record_with_no_type_is_refused_naming_its_run() -> None:
+def test_the_kind_of_a_record_with_no_type_is_refused_as_unreadable_naming_its_run_and_runs_type() -> None:
     record = RunRecord(
         id="untyped-1",
         name="Untyped Run",
@@ -237,5 +249,7 @@ def test_the_kind_of_a_record_with_no_type_is_refused_naming_its_run() -> None:
         notes=None,
     )
 
-    with pytest.raises(ValueError, match="untyped-1"):
+    with pytest.raises(StoredRunUnreadable, match="untyped-1") as refused:
         _ = record.kind
+
+    assert (refused.value.run_id, refused.value.document, refused.value.field) == ("untyped-1", "runs.type", None)
