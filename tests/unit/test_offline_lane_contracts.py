@@ -132,6 +132,16 @@ SLOW_TESTS_NO_LANE_JOB_RUNS: tuple[SlowTestsNoLaneJobRuns, ...] = (
             }
         ),
     ),
+    # docs/prds/assistant-facts-from-engine.md §6 decision 3 keeps this guard out of the pvgis lane job.
+    SlowTestsNoLaneJobRuns(
+        service="PVGIS",
+        node_ids=frozenset(
+            {
+                "tests/integration/test_pv_performance_ratio.py::TestBristolPerformanceRatio::test_the_default_system_performs_at_mcs_ratio",
+                "tests/integration/test_pv_performance_ratio.py::TestBristolPerformanceRatio::test_the_default_systems_yield_is_validations_bristol_constant",
+            }
+        ),
+    ),
 )
 
 # tests/e2e's modules import the e2e extra, so only every extra imports every test module.
