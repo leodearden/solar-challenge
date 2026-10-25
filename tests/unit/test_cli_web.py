@@ -82,6 +82,15 @@ print("a line on stderr", file=sys.stderr, flush=True)
 time.sleep(600)
 """
 
+RUNS_A_SCRIPT_WITH_SIGINT_IGNORED = """
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+os.execv(sys.executable, [sys.executable, "-c", *sys.argv[1:]])
+"""
+
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 _PATIENCE_SECS = 60
@@ -263,6 +272,27 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
         server.process.send_signal(signal.SIGINT)
         server.process.wait(timeout=_PATIENCE_SECS)
         assert started() == ["1.0", "2.0"]
+
+
+def test_the_server_with_blocking_simulations_takes_ctrl_c_though_it_was_started_with_sigint_ignored(
+    tmp_path: Path,
+) -> None:
+    """A non-interactive shell starts a background command with SIGINT ignored, and every child inherits that, so the script takes Ctrl+C back itself for the Ctrl+C test above to hold however pytest was launched.
+
+    A negative return code means SIGINT killed the server outright, skipping the shutdown that test pins.
+    """
+    started_dir = tmp_path / "started"
+    started_dir.mkdir()
+
+    with _server(
+        tmp_path, RUNS_A_SCRIPT_WITH_SIGINT_IGNORED, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0"
+    ) as server:
+        _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
+
+        server.process.send_signal(signal.SIGINT)
+        returncode = server.process.wait(timeout=_PATIENCE_SECS)
+
+        assert returncode >= 0, f"SIGINT killed the server (return code {returncode}) instead of raising KeyboardInterrupt in it"
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
