@@ -8,13 +8,16 @@ step (contract C10) ships with a fixture that exercises it.
 
 The rest pins v2, the step that drops each key a document's dataclass does not have: what it
 drops, which dropped values it reports, what it leaves for the strict reader to refuse, and that
-it changes none of its input. A run stored before the battery's dispatch strategies were variants
-of one union migrates, then loads.
+it changes none of its input. It walks a document as the strict reader reads it: a key no field
+has, added to each object of a config of every field shape, is dropped from a dataclass's object
+and kept in a dict field's, and the config then reads back as the home saved. A run stored before
+the battery's dispatch strategies were variants of one union migrates, then loads.
 """
 
 import copy
 import dataclasses
 import json
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -41,6 +44,7 @@ from solar_challenge.web.stored_runs import (
     documents_in_current_format,
     read_run_documents,
 )
+from tests._every_field_shape import home_of_every_field_shape
 from tests._stored_run_fixtures import FIXTURES_DIR, STORED_RUN_FIXTURES, fixture_run_type, stored_run_fixture_dir
 
 _V2 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 2)
@@ -262,6 +266,69 @@ def test_v2_reports_each_dropped_value_of_each_document_of_a_fleet_run() -> None
         DroppedValue("legacy_fleet", "summary.json", "retired_figure", 2),
         DroppedValue("legacy_fleet", "homes/home_1_summary.json", "retired_figure", 3),
     )
+
+
+_EVERY_SHAPE_RUN = "every-shape"
+
+_EVERY_SHAPE_CONFIG = json.loads(json.dumps(dataclasses.asdict(home_of_every_field_shape())))
+"""home_of_every_field_shape()'s config document: its field tree in JSON, as a save writes it (test_web_storage_roundtrip.py's TestPersistedJson)."""
+
+_A_DICT_FIELD: Keys = ("pv_config", "custom_module_params")
+"""The one object of that document that is a dict field's, whose keys are its own rather than fields."""
+
+
+def _object_keys(content: Any, keys: Keys = ()) -> Iterator[Keys]:
+    """The keys of each JSON object within *content*, itself first when it is one, a key or an index per level."""
+    if isinstance(content, dict):
+        yield keys
+        for key, item in content.items():
+            yield from _object_keys(item, (*keys, key))
+    elif isinstance(content, list):
+        for index, item in enumerate(content):
+            yield from _object_keys(item, (*keys, index))
+
+
+def _dotted(keys: Keys) -> str:
+    """The path of the value at *keys* as a DroppedValue names its field: dotted, with [i] for an item."""
+    return "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in keys).lstrip(".")
+
+
+def _every_shape_documents() -> StoredRunDocuments:
+    """A home run's documents whose config is _EVERY_SHAPE_CONFIG and which has no summary yet."""
+    return StoredRunDocuments(
+        config=StoredDocument(_EVERY_SHAPE_RUN, "config.json", copy.deepcopy(_EVERY_SHAPE_CONFIG)),
+        summary=StoredDocument(_EVERY_SHAPE_RUN, "summary.json", None),
+    )
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [keys for keys in _object_keys(_EVERY_SHAPE_CONFIG) if keys != _A_DICT_FIELD],
+    ids=lambda keys: _dotted(keys) or "the-home",
+)
+def test_v2_drops_a_key_no_field_has_from_each_dataclass_s_object_of_a_config_of_every_field_shape(keys: Keys) -> None:
+    """Review suggestion 3: v2 must walk each value as the strict reader reads it, or the reader refuses the key v2 kept."""
+    documents = _every_shape_documents()
+
+    result = _V2.apply("home", _with_value(documents, "config.json", (*keys, "retired"), 1.5))
+
+    assert result.documents == documents
+    assert result.dropped == (DroppedValue(_EVERY_SHAPE_RUN, "config.json", _dotted((*keys, "retired")), 1.5),)
+    assert result.documents.config.read(HomeConfig) == home_of_every_field_shape()
+
+
+def test_v2_keeps_a_key_of_a_dict_field_s_object() -> None:
+    """A dict's keys are its own, not a dataclass's fields, so none is a key v2 drops."""
+    documents = _with_value(_every_shape_documents(), "config.json", (*_A_DICT_FIELD, "retired"), 1.5)
+
+    result = _V2.apply("home", documents)
+
+    assert (result.documents, result.dropped) == (documents, ())
+    assert result.documents.config.read(HomeConfig).pv_config.custom_module_params == {
+        "pdc0": 250.0,
+        "gamma_pdc": -0.004,
+        "retired": 1.5,
+    }
 
 
 def test_v2_leaves_a_missing_required_field_for_the_strict_reader_to_refuse() -> None:

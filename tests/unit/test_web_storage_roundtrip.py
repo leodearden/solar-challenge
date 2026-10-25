@@ -45,17 +45,16 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
+from tests._every_field_shape import home_of_every_field_shape
 from tests._run_storage_layout import stored_run_dir
 
 
@@ -161,33 +160,6 @@ def _make_fleet_summary(n_homes: int = 2) -> FleetSummary:
         per_home_self_consumption_ratio_max=0.65,
         per_home_self_consumption_ratio_mean=0.6,
         simulation_days=1,
-    )
-
-
-def _make_home_config_with_every_field_shape(name: str = "Every Shape") -> HomeConfig:
-    """Create a HomeConfig whose stored form holds every field shape a save reaches.
-
-    Those are nested dataclasses, a tuple of dataclasses (the tariff periods), a tuple
-    of tuples (the battery's peak hours), a field no constructor takes (the dispatch
-    strategy's tag), a dict (the PV custom module params), and None (the heat pump and
-    the unset optionals).
-    """
-    return HomeConfig(
-        pv_config=PVConfig(
-            capacity_kw=4.0,
-            custom_module_params={"pdc0": 250.0, "gamma_pdc": -0.004},
-        ),
-        load_config=LoadConfig(annual_consumption_kwh=3200.0),
-        battery_config=BatteryConfig(
-            capacity_kwh=5.0,
-            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))),
-            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-        ),
-        ev_config=EVConfig(charger_type="7kW", arrival_hour=18),
-        location=Location.bristol(),
-        name=name,
-        tariff_config=TariffConfig.economy_7(),
-        seg_tariff=SEGTariff(name="Octopus Outgoing", rate_pence_per_kwh=15.0),
     )
 
 
@@ -607,7 +579,7 @@ class TestEveryFieldShapeRoundtrip:
     """
 
     def test_home_config_loads_equal(self, storage: RunStorage) -> None:
-        config = _make_home_config_with_every_field_shape()
+        config = home_of_every_field_shape()
 
         storage.save_home_run(
             run_id="every-shape-home",
@@ -623,7 +595,7 @@ class TestEveryFieldShapeRoundtrip:
 
     def test_fleet_home_configs_load_equal(self, storage: RunStorage) -> None:
         home_configs = [
-            _make_home_config_with_every_field_shape(f"Home {i}") for i in range(2)
+            home_of_every_field_shape(f"Home {i}") for i in range(2)
         ]
 
         storage.save_fleet_run(
@@ -654,7 +626,7 @@ class TestPersistedJson:
         self, storage: RunStorage
     ) -> None:
         """A home run's config and summary, as files and as DB columns, are their field trees."""
-        config = _make_home_config_with_every_field_shape()
+        config = home_of_every_field_shape()
         summary = _make_summary()
 
         storage.save_home_run(
@@ -678,7 +650,7 @@ class TestPersistedJson:
     ) -> None:
         """A fleet run's configs and summaries, as files and as DB columns, are their field trees."""
         home_configs = [
-            _make_home_config_with_every_field_shape(f"Home {i}") for i in range(2)
+            home_of_every_field_shape(f"Home {i}") for i in range(2)
         ]
         home_summaries = [_make_summary(), _make_summary(include_heat_pump=True)]
         fleet_summary = _make_fleet_summary(n_homes=2)

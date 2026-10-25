@@ -12,7 +12,6 @@ The refusal's field is the dotted path in the document, with [i] for an item; No
 document as a whole.
 """
 
-import dataclasses
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -23,17 +22,14 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
-from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, calculate_summary
-from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._every_field_shape import home_of_every_field_shape
 from tests._run_storage_layout import stored_run_dir
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_fleet_run, store_home_run
@@ -50,30 +46,9 @@ def storage(tmp_path: Path) -> RunStorage:
     return RunStorage(open_database(tmp_path / "runs.db"), tmp_path)
 
 
-def _home_of_every_shape() -> HomeConfig:
-    """A home whose config.json holds every shape the format reads.
-
-    Those are nested dataclasses, a tagged union (the battery's dispatch strategy), a tuple of
-    fixed tuples (its peak hours), a tuple of dataclasses (the tariff's periods), a Literal
-    (the heat pump's type), and Optional fields set and unset.
-    """
-    battery = BatteryConfig(
-        capacity_kwh=5.0,
-        dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-        grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-    )
-    return dataclasses.replace(
-        make_home_config(battery_config=battery),
-        heat_pump_config=HeatPumpConfig(heat_pump_type="ASHP"),
-        tariff_config=TariffConfig.economy_7(),
-        seg_tariff=SEGTariff(name="Outgoing", rate_pence_per_kwh=15.0),
-        name="Every Shape",
-    )
-
-
 def _store_home_run_of_every_shape(storage: RunStorage) -> HomeConfig:
-    """Save a day's run of _home_of_every_shape() under _HOME_RUN_ID, and return its config."""
-    config = _home_of_every_shape()
+    """Save a day's run of home_of_every_field_shape() under _HOME_RUN_ID, and return its config."""
+    config = home_of_every_field_shape()
     store_home_run(storage, _HOME_RUN_ID, config, make_sim_results(days=1))
     return config
 
@@ -138,7 +113,7 @@ def test_a_stored_run_unreadable_is_not_a_value_error() -> None:
 
 
 def test_a_current_home_run_loads_unchanged(storage: RunStorage) -> None:
-    config = _home_of_every_shape()
+    config = home_of_every_field_shape()
     results = make_sim_results(days=1)
     store_home_run(storage, _HOME_RUN_ID, config, results)
 
@@ -152,7 +127,7 @@ def test_a_current_home_run_loads_unchanged(storage: RunStorage) -> None:
 def test_a_current_fleet_run_loads_unchanged(storage: RunStorage) -> None:
     fleet = make_fleet_results_of(
         [make_sim_results(days=1), make_sim_results(self_kwh=10.0, days=1)],
-        homes=[make_home_config(), _home_of_every_shape()],
+        homes=[make_home_config(), home_of_every_field_shape()],
     )
     store_fleet_run(storage, _FLEET_RUN_ID, fleet)
 
