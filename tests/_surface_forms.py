@@ -84,7 +84,15 @@ def surface_form(obj: object) -> str:
     that wraps a descriptor whose type defines __get__ and __delete__ but no __set__,
     which inspect reads as a builtin before 3.13 and as a data descriptor from 3.13,
     raises TypeError naming it, that descriptor and its type, unless the descriptor or
-    one of the routine's links carries a signature.
+    one of the routine's links carries a signature. inspect reads an object its class
+    makes callable, at which a routine's chain ends, through the __call__ that class
+    resolves, bound to the object, unless the object carries a signature; each refusal
+    here applies to that __call__ as to the routine, naming the routine. The routine
+    also raises TypeError naming it and the object if a class in the object's type's MRO
+    defines __call__ in C, or if the object carries a __text_signature__, either of
+    which inspect may read differently from Python 3.13; and naming that __call__ if it
+    is a functools.partial, which Python 3.14 binds to the object as a method and
+    earlier minors call without it.
     _refuse_minor_dependent_constructor lists the constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
@@ -157,17 +165,17 @@ def named_classes(obj: object) -> set[type]:
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries, but a wrapper that is no partial and
     carries a __signature__ of None, where _annotations_author says its annotations were
-    spelled; an object its class makes callable,
-    where the __call__ that class resolves is, which may be a base's in another module;
-    and a class in the one sys.modules holds under the name its __module__ records. One
-    whose module another of the same name has since replaced in sys.modules raises
-    LookupError naming it and the module found there, and one whose module has since
-    left sys.modules, LookupError naming it and that module's name. Where inspect reads
-    no source for the module found, a class it does not bind under its qualified name,
-    as _json binds _json.Scanner as make_scanner, is checked only by the functions its
-    body compiled, which must carry that module's globals. A signature carried over a
-    callable that spells no annotation, such as one defined in C or a class constructed
-    by object or in C, is read where the def or lambda given it is defined.
+    spelled; an object its class makes callable, where the __call__ that class resolves
+    is once bound to the object, as inspect binds it, which may be a base's in another
+    module; and a class in the one sys.modules holds under the name its __module__
+    records. One whose module another of the same name has since replaced in sys.modules
+    raises LookupError naming it and the module found there, and one whose module has
+    since left sys.modules, LookupError naming it and that module's name. Where inspect
+    reads no source for the module found, a class it does not bind under its qualified
+    name, as _json binds _json.Scanner as make_scanner, is checked only by the functions
+    its body compiled, which must carry that module's globals. A signature carried over
+    a callable that spells no annotation, such as one defined in C or a class
+    constructed by object or in C, is read where the def or lambda given it is defined.
     A string in one given to a link that records no module, as a functools.partial
     records none, or to a function that wraps a link carrying a signature of its own,
     which the new one may copy, raises TypeError naming the link and the string. A
