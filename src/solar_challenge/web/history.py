@@ -50,8 +50,8 @@ def compare_page() -> str | Response:
     empty ``ids`` renders the no-runs-selected empty state instead.
 
     Each run found is compared by its columns and, as ``summary``, its summary's field
-    tree, {} while it has none. A run whose summary does not decode fails the request
-    with RunRecord.summary's ValueError, rather than being compared as a run of zeros.
+    tree, {} while it has none. A run whose summary cannot be read fails the request
+    with RunRecord.summary's StoredRunUnreadable, rather than being compared as a run of zeros.
 
     Returns:
         Rendered HTML for the comparison page, or redirect.
