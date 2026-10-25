@@ -293,6 +293,10 @@ def test_a_signature_a_link_carries_over_the_call_of_a_callable_object_that_wrap
     assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
 
 
+def test_a_signature_a_link_carries_over_an_object_that_is_neither_callable_nor_a_routine_names_the_classes_it_names_read_where_the_link_given_it_is_spelled() -> None:
+    assert named_classes(_typed(property(len))) == {decimal.Decimal}
+
+
 @pytest.mark.parametrize(
     "wrapped",
     [

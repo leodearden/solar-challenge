@@ -1005,15 +1005,16 @@ def _end_spelling_modules(
     """The module that spells each of *names* where *end*, the end of a chain, spells it; None if *end* spells no annotation.
 
     A class spells them where _constructor_spelling_modules says. An object its class
-    makes callable spells them as the __call__ its class resolves does, from which
-    inspect derives its signature. A routine of a kind in _C_ROUTINE_KINDS spells none;
-    any other, in the module whose globals the callable _annotations_author gives for
-    it carries.
+    makes callable spells them as the __call__ _call_as_read gives for it does, from
+    which inspect derives its signature; anything else that is no routine, such as a
+    property a wrapper records as __wrapped__, spells none. A routine of a kind in
+    _C_ROUTINE_KINDS spells none; any other, in the module whose globals the callable
+    _annotations_author gives for it carries.
     """
     if inspect.isclass(end):
         return _constructor_spelling_modules(end, names)
     if not _is_routine(end):
-        return _chain_spelling_modules(type(end).__call__, names)
+        return _chain_spelling_modules(_call_as_read(end), names) if callable(end) else None
     if isinstance(end, _C_ROUTINE_KINDS):
         return None
     return dict.fromkeys(names, _defining_module(_annotations_author(end)))
