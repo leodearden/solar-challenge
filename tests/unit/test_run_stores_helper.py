@@ -2,12 +2,13 @@
 """Unit tests for tests/_run_stores.py, which builds the RunStorages of no app that tests driving the run store directly use: empty_run_storage's over a new, empty store, and run_storage_over's over a Database a test gives it."""
 
 import re
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 from solar_challenge.web.database import Database
-from solar_challenge.web.schema import open_database
+from solar_challenge.web.schema import SCHEMA_VERSION
 from solar_challenge.web.storage import RunQuery
 from tests._run_stores import empty_run_storage, run_storage_over
 
@@ -23,7 +24,8 @@ def test_an_empty_run_storage_keeps_a_store_at_the_schema_version_in_the_given_d
     storage = empty_run_storage(tmp_path)
 
     assert storage.database.path.is_file()
-    assert open_database(storage.database.path) == storage.database
+    with closing(storage.database.connect()) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert storage.database.path.is_relative_to(tmp_path)
     assert storage.data_dir.is_relative_to(tmp_path)
 
