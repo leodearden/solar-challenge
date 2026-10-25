@@ -41,7 +41,12 @@ from solar_challenge.web.schema import (
 )
 from solar_challenge.web.storage import RUN_STATUSES, RunRecord, RunStorage
 from solar_challenge.web.stored_runs import RUN_KINDS, RUN_TYPES, RunType
-from tests._dashboard_databases import FIXTURES_DIR, schema_of, write_pre_548_database
+from tests._dashboard_databases import (
+    FIXTURES_DIR,
+    schema_of,
+    write_database_a_newer_solar_challenge_wrote,
+    write_pre_548_database,
+)
 
 
 def _user_version(path: Path) -> int:
@@ -159,14 +164,6 @@ def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> 
     assert schema_of(snapshot) == schema_of(new_store), remedy
 
 
-def _store_a_newer_solar_challenge_wrote(path: Path) -> Path:
-    """A store open_database created at *path*, then recorded at SCHEMA_VERSION + 1, as a newer solar-challenge records it."""
-    open_database(path)
-    with closing(Database(path).connect()) as conn:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    return path
-
-
 def test_open_database_refuses_a_legacy_store_naming_it_both_versions_and_the_migrate_command(tmp_path: Path) -> None:
     legacy = write_pre_548_database(tmp_path / "legacy.db")
 
@@ -182,7 +179,7 @@ def test_open_database_refuses_a_legacy_store_naming_it_both_versions_and_the_mi
 
 
 def test_open_database_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_versions(tmp_path: Path) -> None:
-    newer = _store_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
+    newer = write_database_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
 
     with pytest.raises(SchemaVersionMismatch) as refused:
         open_database(newer)
@@ -196,7 +193,7 @@ def test_open_database_refuses_a_store_a_newer_solar_challenge_wrote_naming_both
 
 STORES_AT_ANOTHER_VERSION = [
     pytest.param(write_pre_548_database, id="legacy-store"),
-    pytest.param(_store_a_newer_solar_challenge_wrote, id="newer-store"),
+    pytest.param(write_database_a_newer_solar_challenge_wrote, id="newer-store"),
 ]
 
 
@@ -355,7 +352,7 @@ def test_migrate_store_applies_no_step_to_a_store_at_the_schema_version_and_writ
 
 
 def test_migrate_store_refuses_a_store_a_newer_solar_challenge_wrote_and_writes_nothing_to_it(tmp_path: Path) -> None:
-    newer = _store_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
+    newer = write_database_a_newer_solar_challenge_wrote(tmp_path / "newer.db")
     bytes_before = newer.read_bytes()
 
     with pytest.raises(SchemaVersionMismatch) as refused:

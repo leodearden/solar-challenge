@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Dashboard database files for tests: a store as an older solar-challenge left it, and the schema of any store.
+"""Dashboard database files for tests: a store as an older solar-challenge left it, a store a newer one wrote, and the schema of any store.
 
 write_pre_548_database writes the store tests/fixtures/databases/pre_548_store.sql holds: the
 schema init_db created before task 548, whose runs table admits 'sweep' runs and nameless runs
-and which keeps the retired jobs table, with a few rows and no schema version. schema_of reads
-a database's schema as data, so a test can compare two stores' schemas. FIXTURES_DIR is the
-directory holding the database fixtures.
+and which keeps the retired jobs table, with a few rows and no schema version.
+write_database_a_newer_solar_challenge_wrote writes a store at the schema version after
+SCHEMA_VERSION. schema_of reads a database's schema as data, so a test can compare two stores'
+schemas. FIXTURES_DIR is the directory holding the database fixtures.
 
 Usage::
 
@@ -18,6 +19,9 @@ Usage::
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+
+from solar_challenge.web.database import Database
+from solar_challenge.web.schema import SCHEMA_VERSION, open_database
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "databases"
 
@@ -34,6 +38,14 @@ def write_pre_548_database(path: Path) -> Path:
     script = (FIXTURES_DIR / "pre_548_store.sql").read_text()
     with closing(sqlite3.connect(path)) as conn:
         conn.executescript(script)
+    return path
+
+
+def write_database_a_newer_solar_challenge_wrote(path: Path) -> Path:
+    """A store open_database created at *path*, then recorded at SCHEMA_VERSION + 1, as a newer solar-challenge records it; return *path*."""
+    open_database(path)
+    with closing(Database(path).connect()) as conn:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     return path
 
 

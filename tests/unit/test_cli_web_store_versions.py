@@ -15,7 +15,6 @@ file that is not a database, naming it, and leave it as it is.
 """
 
 import socket
-from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +28,7 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
 from solar_challenge.web.storage import RunQuery, RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
-from tests._dashboard_databases import schema_of, write_pre_548_database
+from tests._dashboard_databases import schema_of, write_database_a_newer_solar_challenge_wrote, write_pre_548_database
 from tests._web_app import release_store_lock, run_storage_of
 
 
@@ -60,14 +59,6 @@ def _web(home: Path, *args: str) -> Result:
     return CliRunner().invoke(app, ["web", *args], env={"HOME": str(home), "COLUMNS": "1000"})
 
 
-def _store_a_newer_solar_challenge_wrote(path: Path) -> Path:
-    """A store open_database created at *path*, then recorded at SCHEMA_VERSION + 1, as a newer solar-challenge records it."""
-    open_database(path)
-    with closing(Database(path).connect()) as conn:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    return path
-
-
 def test_web_start_refuses_a_legacy_store_naming_its_database_both_versions_and_the_migrate_command(
     tmp_path: Path,
 ) -> None:
@@ -87,7 +78,7 @@ def test_web_start_refuses_a_legacy_store_naming_its_database_both_versions_and_
 
 def test_web_start_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_versions(tmp_path: Path) -> None:
     """B4, for start."""
-    database = _store_a_newer_solar_challenge_wrote(_store_database(tmp_path))
+    database = write_database_a_newer_solar_challenge_wrote(_store_database(tmp_path))
     bytes_before = database.read_bytes()
 
     result = _web(tmp_path, "start", "--port", str(_free_port()))
@@ -158,7 +149,7 @@ def test_web_migrate_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_v
     tmp_path: Path,
 ) -> None:
     """B4, for migrate."""
-    database = _store_a_newer_solar_challenge_wrote(_store_database(tmp_path))
+    database = write_database_a_newer_solar_challenge_wrote(_store_database(tmp_path))
     bytes_before = database.read_bytes()
 
     result = _web(tmp_path, "migrate")
