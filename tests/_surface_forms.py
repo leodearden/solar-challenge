@@ -1101,7 +1101,7 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__, or if it is a functools.partial, which Python 3.13 warns on binding and whose chain _chain_end follows to the same end bound or not."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
