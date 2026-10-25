@@ -214,7 +214,7 @@ Each refusal names the fields involved and their values.
 - **Warning.** `compute_grid_services_at_events` emits one `UserWarning` per call for each window with no timestep in the fleet's simulated index. It names the window's months, weekdays and hours, and the index's first and last timestamp.
 - **Figure unchanged.** That window still contributes £0.
 - **No warning without batteries.** A fleet with no battery home does not warn, because its £0 means no batteries.
-- **Repeats are collapsed.** Under per-age pricing the same text repeats once per simulated age, and Python's default filter shows it once.
+- **Repeats are collapsed.** Under per-age pricing the same text is raised at every simulated age, seed and bisection trial alike. `project_multi_year` collapses them itself: it keeps each distinct warning its pricing raises and shows it once per call, after the march, attributed to its own caller (`tests/integration/test_grid_services_events.py::test_a_projection_shows_each_unobserved_window_warning_once`).
 
 ### 5.5 Band vocabulary and rate table (γ)
 
