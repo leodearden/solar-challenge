@@ -103,6 +103,11 @@ def migrate() -> None:
     migration step it is behind by, and prints each step it applied. A store
     already at this version is left as it is.
 
+    A step can bring each stored run to the stored-run format too: it prints
+    each value it drops from a run's documents that is not null, naming the
+    run, the document and the field, and each run it cannot migrate, which it
+    leaves as it was, naming its run, document and field.
+
     It refuses, changing nothing and exiting with an error: a store another
     dashboard holds, naming its lock file; a store a newer solar-challenge
     wrote, naming both versions; a store holding a row this version cannot
@@ -121,7 +126,7 @@ def migrate() -> None:
     try:
         store_lock = acquire_store_lock(location.data_dir)
         try:
-            report = migrate_store(location.database)
+            report = migrate_store(location.database, location.data_dir)
         finally:
             store_lock.release()
     except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused) as refused:

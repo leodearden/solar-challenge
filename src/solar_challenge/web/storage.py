@@ -9,6 +9,11 @@ Storage structure:
   {data_dir}/runs/{run_id}/   # the run's documents, as stored_runs lays them out for its kind
 
 A save writes the run's documents, then its format.json, then its runs row.
+
+The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
+and for a step carrying a run-document step, migrate_stored_run_files, which brings every
+stored run's files forward before the step's transaction, and migrate_runs_table_documents,
+which brings the copies in each runs row forward inside it.
 """
 
 import json
@@ -30,13 +35,21 @@ from solar_challenge.web.run_names import is_run_name, require_run_name
 from solar_challenge.web.stored_runs import (
     RUN_KINDS,
     RUN_TYPES,
+    DroppedValue,
+    RunDocumentStep,
     RunKind,
     RunType,
     StoredDocument,
     StoredFleetRun,
     StoredHomeRun,
     StoredRun,
+    StoredRunDocuments,
     StoredRunUnreadable,
+    UnmigratedRun,
+    documents_in_current_format,
+    read_run_documents,
+    step_run_documents,
+    write_run_documents,
 )
 from solar_challenge.web.text_options import one_of
 
@@ -125,11 +138,20 @@ def _run_kind(run_id: str, run_type: RunType | None) -> RunKind:
     """The kind of run that *run_type*, run *run_id*'s type, names: its entry in RUN_KINDS.
 
     Raises:
+        StoredRunUnreadable: *run_type* is None, as _run_type refuses it.
+    """
+    return RUN_KINDS[_run_type(run_id, run_type)]
+
+
+def _run_type(run_id: str, run_type: RunType | None) -> RunType:
+    """*run_type*, run *run_id*'s type, which a stored run needs to be read as a run of a kind.
+
+    Raises:
         StoredRunUnreadable: *run_type* is None, so the run is of no run kind; the document is runs.type.
     """
     if run_type is None:
         raise StoredRunUnreadable(run_id, "runs.type", None, "is NULL, so the run is of no run kind")
-    return RUN_KINDS[run_type]
+    return run_type
 
 
 def _run_summary(
@@ -158,7 +180,17 @@ def _decoded_document(
         StoredRunUnreadable: *text* is not JSON, or *read* refuses the document it holds; the
             document is runs.*column*.
     """
-    return read(StoredDocument.decoded(run_id, f"runs.{column}", text))
+    return read(_row_document(run_id, column, text))
+
+
+def _row_document(run_id: str, column: _DocumentColumn, text: str | None) -> StoredDocument:
+    """The document runs.*column* of run *run_id*, whose JSON text is *text*; its content is None when *text* is.
+
+    Raises:
+        StoredRunUnreadable: *text* is not JSON; the document is runs.*column* and the field None.
+    """
+    name = f"runs.{column}"
+    return StoredDocument(run_id, name, None) if text is None else StoredDocument.decoded(run_id, name, text)
 
 
 def _record_of(row: sqlite3.Row) -> RunRecord:
@@ -247,18 +279,137 @@ def _require_version_1_keeps(run_id: str, run_type: object, name: object) -> Non
 def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str | None) -> str:
     """The name a job given none would have created run *run_id* under: the default_name of *run_type*'s kind for the homes *config_json* holds.
 
-    A run with no config is named as a run of no homes, and so is one whose config cannot be
-    read as its kind's, with a logged warning naming the run and the refusal: the name is a
-    label its user can rename, so a damaged config does not keep the store from migrating.
+    The legacy config is read as the stored-run format reads it once migrated, every
+    run-document step brought to bear on it in memory first. A run with no config is named as a
+    run of no homes, and so is one whose config cannot be read as its kind's even so, with a
+    logged warning naming the run and the refusal: the name is a label its user can rename, so a
+    damaged config does not keep the store from migrating.
     """
     kind = RUN_KINDS[run_type]
     homes: tuple[HomeConfig, ...] = ()
     if config_json is not None:
         try:
-            homes = _decoded_document(run_id, "config_json", config_json, kind.home_configs)
+            legacy = StoredRunDocuments(
+                config=_row_document(run_id, "config_json", config_json),
+                summary=_row_document(run_id, "summary_json", None),
+            )
+            homes = kind.home_configs(documents_in_current_format(run_type, legacy).config)
         except StoredRunUnreadable as refusal:
             logger.warning("Run %r is named as a run of no homes, as its config cannot be read: %s", run_id, refusal)
     return kind.default_name(homes)
+
+
+def _run_dir(data_dir: Path, run_id: str) -> Path:
+    """The directory of the files of run *run_id* in the store whose data directory is *data_dir*: {data_dir}/runs/{run_id}.
+
+    Raises:
+        ValueError: No run can be stored under *run_id*, to keep a path from leaving the runs
+            directory: it holds a character other than a letter, digit, hyphen or underscore, or
+            resolves outside the runs directory.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
+        raise ValueError(
+            f"Invalid run_id: {run_id!r}. Only alphanumeric characters, hyphens, and underscores are allowed."
+        )
+    runs_dir = (data_dir / "runs").resolve()
+    if (runs_dir / run_id).resolve().parent != runs_dir:
+        raise ValueError(f"Invalid run_id: {run_id!r}. Resolved path is outside the runs directory.")
+    return data_dir / "runs" / run_id
+
+
+@dataclass(frozen=True)
+class RunDocumentsOutcome:
+    """What a run-document step did to a store's runs: each value it dropped that is not null, and each run it left unmigrated, in order."""
+
+    dropped: tuple[DroppedValue, ...] = ()
+    unmigrated: tuple[UnmigratedRun, ...] = ()
+
+    def __add__(self, later: "RunDocumentsOutcome") -> "RunDocumentsOutcome":
+        """This outcome followed by *later*'s."""
+        return RunDocumentsOutcome(self.dropped + later.dropped, self.unmigrated + later.unmigrated)
+
+
+def migrate_stored_run_files(database: Database, data_dir: Path, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the files of each run the runs table of *database* records forward by *step*, the run-file part of the schema step carrying it.
+
+    A run with no directory under *data_dir* is skipped, and so is a directory no row records.
+    Each run's documents are read as its kind lays them out and brought forward as
+    step_run_documents brings them; then only the documents the step changed are rewritten, and
+    format.json naming step.version last. A run whose documents cannot be brought forward, or
+    whose row has no type, is left as it was and reported as unmigrated. Its writes are
+    idempotent, so a migration stopped part way through runs again from the start.
+
+    Raises:
+        sqlite3.Error: The runs table cannot be read; nothing has been written.
+    """
+    with database.transaction() as conn:
+        rows = conn.execute("SELECT id, type FROM runs ORDER BY id").fetchall()
+    outcome = RunDocumentsOutcome()
+    for row in rows:
+        run_dir = _existing_run_dir(data_dir, row["id"])
+        if run_dir is not None:
+            outcome += _migrate_run_files(run_dir, row["id"], row["type"], step)
+    return outcome
+
+
+def _existing_run_dir(data_dir: Path, run_id: str) -> Path | None:
+    """The directory of run *run_id*'s files under *data_dir*; None when no directory holds them, or no run can be stored under the id."""
+    try:
+        run_dir = _run_dir(data_dir, run_id)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the files of run *run_id* of *run_type*, which *run_dir* holds, forward by *step*, as migrate_stored_run_files does for each run."""
+    try:
+        typed = _run_type(run_id, run_type)
+        documents = read_run_documents(run_dir, run_id, typed)
+        result = step_run_documents(step, typed, documents)
+    except StoredRunUnreadable as refusal:
+        return RunDocumentsOutcome(unmigrated=(UnmigratedRun.of(refusal),))
+    write_run_documents(run_dir, result.documents.changed_from(documents), step.version)
+    return RunDocumentsOutcome(dropped=result.dropped)
+
+
+_DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
+
+
+def migrate_runs_table_documents(conn: sqlite3.Connection, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """The runs table's part of the schema step carrying *step*, run on *conn* inside that step's transaction.
+
+    Each run's runs.config_json and runs.summary_json are brought forward as
+    step_run_documents brings them, and only a column the step changed is rewritten, as the
+    JSON text a save writes. A row that holds neither document is skipped. A row whose
+    documents cannot be brought forward, or that has no type, is left as it was and reported as
+    unmigrated.
+    """
+    rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
+    outcome = RunDocumentsOutcome()
+    for row in rows:
+        if row["config_json"] is not None or row["summary_json"] is not None:
+            outcome += _migrate_runs_row(conn, row, step)
+    return outcome
+
+
+def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, step: RunDocumentStep) -> RunDocumentsOutcome:
+    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward by *step*, as migrate_runs_table_documents does for each row."""
+    run_id = row["id"]
+    try:
+        typed = _run_type(run_id, row["type"])
+        documents = StoredRunDocuments(
+            config=_row_document(run_id, "config_json", row["config_json"]),
+            summary=_row_document(run_id, "summary_json", row["summary_json"]),
+        )
+        result = step_run_documents(step, typed, documents)
+    except StoredRunUnreadable as refusal:
+        return RunDocumentsOutcome(unmigrated=(UnmigratedRun.of(refusal),))
+    stepped = (result.documents.config, result.documents.summary)
+    for column, was, document in zip(_DOCUMENT_COLUMNS, (documents.config, documents.summary), stepped, strict=True):
+        if document.content != was.content:
+            conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
+    return RunDocumentsOutcome(dropped=result.dropped)
 
 
 @dataclass(frozen=True)
@@ -552,43 +703,13 @@ class RunStorage:
         self.database = database
         self.data_dir = Path(data_dir)
 
-    def _validate_run_id(self, run_id: str) -> None:
-        """Validate run_id to prevent path traversal attacks.
-
-        Args:
-            run_id: Run identifier to validate
-
-        Raises:
-            ValueError: If run_id contains invalid characters or resolves
-                outside the runs directory
-        """
-        if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
-            raise ValueError(
-                f"Invalid run_id: {run_id!r}. "
-                "Only alphanumeric characters, hyphens, and underscores are allowed."
-            )
-        runs_dir = (self.data_dir / "runs").resolve()
-        resolved = (runs_dir / run_id).resolve()
-        if not resolved.parent == runs_dir:
-            raise ValueError(
-                f"Invalid run_id: {run_id!r}. "
-                "Resolved path is outside the runs directory."
-            )
-
     def _get_run_dir(self, run_id: str) -> Path:
-        """Get the directory path for a run's data files.
-
-        Args:
-            run_id: Unique run identifier
-
-        Returns:
-            Path to run directory
+        """The directory of the files of run *run_id*, as _run_dir names it in this store's data directory.
 
         Raises:
-            ValueError: If run_id is invalid or would escape the runs directory
+            ValueError: The store refuses *run_id*, as _run_dir refuses it.
         """
-        self._validate_run_id(run_id)
-        return self.data_dir / "runs" / run_id
+        return _run_dir(self.data_dir, run_id)
 
     def _stored_run_dir(self, run_id: str) -> Path:
         """The directory holding the files of the run stored under *run_id*.
@@ -631,7 +752,7 @@ class RunStorage:
             sqlite3.Error: The database refuses the row, e.g. for an id a run already has.
             Neither leaves anything written.
         """
-        self._validate_run_id(run_id)
+        self._get_run_dir(run_id)
         record = RunRecord(
             id=run_id,
             name=name,

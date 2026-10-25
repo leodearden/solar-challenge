@@ -36,8 +36,12 @@ read_run_documents reads them, from the version before its own to its own. Its a
 pure, and applying it to its own result changes nothing and drops nothing. v2, the first,
 drops each key a document's dataclass does not have, as the reader skipped such keys before
 runs carried a format version, and reports each dropped value that is not null.
-documents_in_current_format folds every step over a legacy run's documents in memory;
-`solar-challenge web migrate` applies each step to every stored run's files and runs row.
+documents_in_current_format folds every step over a legacy run's documents in memory.
+`solar-challenge web migrate` applies each step to every stored run's files and runs row
+through step_run_documents, which checks that the documents it brings forward will read once
+at RUN_FORMAT_VERSION; write_run_documents then writes the documents a step changed and the
+run's format.json last. A run whose documents cannot be brought forward is left as it was, an
+UnmigratedRun naming it.
 
 A change to a stored dataclass's shape, such as a renamed or retired field or a new field
 with no default, ships with a RunDocumentStep of the next version appended to
@@ -120,12 +124,16 @@ class StoredRunUnreadable(Exception):
     """
 
     def __init__(self, run_id: str, document: str, field: str | None, reason: str) -> None:
-        subject = document if field is None else f"{document}'s {field}"
-        super().__init__(f"The stored run {run_id!r} cannot be read: {subject} {reason}")
+        super().__init__(f"The stored run {run_id!r} cannot be read: {_refused_value(document, field)} {reason}")
         self.run_id = run_id
         self.document = document
         self.field = field
         self.reason = reason
+
+
+def _refused_value(document: str, field: str | None) -> str:
+    """The value of *document* at *field* that a refusal names, the document as a whole when *field* is None."""
+    return document if field is None else f"{document}'s {field}"
 
 
 class _Refused(Exception):
@@ -723,6 +731,12 @@ class StoredRunDocuments:
     summary: StoredDocument
     home_summaries: tuple[StoredDocument, ...] = ()
 
+    def changed_from(self, earlier: "StoredRunDocuments") -> tuple[StoredDocument, ...]:
+        """Each of these documents whose content differs from the same document's in *earlier*, the run's documents before a step brought them forward."""
+        now = (self.config, self.summary, *self.home_summaries)
+        before = (earlier.config, earlier.summary, *earlier.home_summaries)
+        return tuple(document for document, was in zip(now, before, strict=True) if document.content != was.content)
+
 
 def read_run_documents(run_dir: Path, run_id: str, run_type: RunType) -> StoredRunDocuments:
     """The JSON documents of the run *run_id* of type *run_type* that *run_dir* holds, as its kind's write lays them out.
@@ -924,6 +938,33 @@ class DroppedValue:
     field: str
     value: Any
 
+    def __str__(self) -> str:
+        """The dropped value as `solar-challenge web migrate` reports it: the run, the document's field and the value, in JSON."""
+        return f"run {self.run_id!r}: {_refused_value(self.document, self.field)} was {json.dumps(self.value)}"
+
+
+@dataclass(frozen=True)
+class UnmigratedRun:
+    """A stored run that a run-document step left as it was, as its documents cannot be brought to a format the strict reader reads.
+
+    It names the run, the refused document and field, None for the document as a whole, and the
+    reason, as the StoredRunUnreadable refusing them does.
+    """
+
+    run_id: str
+    document: str
+    field: str | None
+    reason: str
+
+    @classmethod
+    def of(cls, refusal: StoredRunUnreadable) -> "UnmigratedRun":
+        """The run *refusal* refuses, left unmigrated, named as *refusal* names it."""
+        return cls(refusal.run_id, refusal.document, refusal.field, refusal.reason)
+
+    def __str__(self) -> str:
+        """The run as `solar-challenge web migrate` reports it: the run, the refused document's field and the reason."""
+        return f"run {self.run_id!r}: {_refused_value(self.document, self.field)} {self.reason}"
+
 
 @dataclass(frozen=True)
 class StepResult:
@@ -949,13 +990,27 @@ class RunDocumentStep:
     apply: Callable[[RunType, StoredRunDocuments], StepResult]
 
 
+def _each_document(
+    run_type: RunType, documents: StoredRunDocuments, edit: Callable[[StoredDocument, type], StoredDocument]
+) -> StoredRunDocuments:
+    """*documents*, each replaced by *edit* of it and the dataclass it holds in a run of *run_type*.
+
+    That is the config_type of the type's kind for the config, its summary_type for the summary,
+    and SummaryStatistics for each home summary.
+    """
+    kind = RUN_KINDS[run_type]
+    return StoredRunDocuments(
+        config=edit(documents.config, kind.config_type),
+        summary=edit(documents.summary, kind.summary_type),
+        home_summaries=tuple(edit(each, SummaryStatistics) for each in documents.home_summaries),
+    )
+
+
 def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
     """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
 
-    The config is walked as the config_type of run_type's kind, the summary as its
-    summary_type and each home summary as a SummaryStatistics, each by _without_unknown_keys.
+    Each document is walked as the dataclass _each_document pairs it with, by _without_unknown_keys.
     """
-    kind = RUN_KINDS[run_type]
     dropped: list[DroppedValue] = []
 
     def without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
@@ -967,12 +1022,23 @@ def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> Step
         )
         return replace(document, content=content)
 
-    brought_forward = StoredRunDocuments(
-        config=without_unknown_keys(documents.config, kind.config_type),
-        summary=without_unknown_keys(documents.summary, kind.summary_type),
-        home_summaries=tuple(without_unknown_keys(each, SummaryStatistics) for each in documents.home_summaries),
-    )
+    brought_forward = _each_document(run_type, documents, without_unknown_keys)
     return StepResult(documents=brought_forward, dropped=tuple(dropped))
+
+
+def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
+    """Check that each of *documents* that holds content reads strictly as the dataclass _each_document pairs it with.
+
+    Raises:
+        StoredRunUnreadable: A document does not, as StoredDocument.read refuses it.
+    """
+
+    def read(document: StoredDocument, cls: type) -> StoredDocument:
+        if document.content is not None:
+            document.read(cls)
+        return document
+
+    _each_document(run_type, documents, read)
 
 
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
@@ -1007,4 +1073,39 @@ def documents_in_current_format(run_type: RunType, documents: StoredRunDocuments
 
     It changes none of *documents* and writes nothing; the values the steps drop are not reported.
     """
-    return functools.reduce(lambda current, step: step.apply(run_type, current).documents, RUN_DOCUMENT_STEPS, documents)
+    return _brought_forward(run_type, documents, RUN_DOCUMENT_STEPS)
+
+
+def _brought_forward(
+    run_type: RunType, documents: StoredRunDocuments, steps: Sequence[RunDocumentStep]
+) -> StoredRunDocuments:
+    """*documents*, of a run of type *run_type*, brought forward by each of *steps* in order."""
+    return functools.reduce(lambda current, step: step.apply(run_type, current).documents, steps, documents)
+
+
+def step_run_documents(step: RunDocumentStep, run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """*documents*, of a run of type *run_type* in the format before *step*'s version, brought forward by *step*, one of RUN_DOCUMENT_STEPS.
+
+    The result is checked as the strict reader will read it once every later step has brought it
+    to RUN_FORMAT_VERSION, so a run whose documents no step makes readable is refused before
+    any of it is written. It changes none of *documents* and writes nothing.
+
+    Raises:
+        StoredRunUnreadable: The documents, so brought forward, cannot be read as the run's
+            dataclasses, naming the document and the field.
+    """
+    result = step.apply(run_type, documents)
+    later_steps = RUN_DOCUMENT_STEPS[RUN_DOCUMENT_STEPS.index(step) + 1 :]
+    _check_readable(run_type, _brought_forward(run_type, result.documents, later_steps))
+    return result
+
+
+def write_run_documents(run_dir: Path, documents: Sequence[StoredDocument], format_version: int) -> None:
+    """Write each of *documents*, the JSON documents of the run in *run_dir*, over its file there, then last format.json naming *format_version*.
+
+    Each document's name is its file's path in *run_dir*, as read_run_documents names it, and
+    each file is written whole or not at all, to a temporary file then moved over it.
+    """
+    for document in documents:
+        _write_json(run_dir / document.name, document.content)
+    _write_format_marker(run_dir, format_version)
