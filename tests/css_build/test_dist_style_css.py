@@ -57,14 +57,13 @@ _DIST_FAVICON = _DIST / "favicon.svg"
 _THEME_TOKENS = Path("static", "src", "theme-tokens.json")
 _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
 
-# The built-in palette the recolour test names as the accent, and its 500 shade in Tailwind 3's palette.
+# The built-in palette the recolour test names as the accent.
 _RECOLOURED_ACCENT = "blue"
-_RECOLOURED_ACCENT_500 = "#3b82f6"
 
-# Only so a hung npm fails the tests by name. npm ci downloads every package the lock records, while a run,
-# such as a build, only runs installed ones, so each has its own bound. npm ci's bound and every run's together
-# fit inside the css-build lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml), whose kill would
-# file css-build::nonzero-exit.
+# Only so a hung npm or node fails the tests by name. npm ci downloads every package the lock records, while a
+# run, such as a build or a palette read, only runs installed ones, so each has its own bound. npm ci's bound and
+# every run's together fit inside the css-build lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml),
+# whose kill would file css-build::nonzero-exit.
 _NPM_CI_TIMEOUT_SECS = 240
 _RUN_TIMEOUT_SECS = 40
 
@@ -130,6 +129,17 @@ def _drawn_colours(svg: Path) -> set[str]:
         for attribute in ("fill", "stroke")
         if (colour := element.get(attribute, "none")) != "none"
     }
+
+
+def _built_in_palette_500(palette: str, web_package: Path) -> str:
+    """Return the 500 shade of Tailwind's built-in *palette*, read from the tailwindcss installed in *web_package*."""
+    command = ["node", "--print", f'require("tailwindcss/colors")[{json.dumps(palette)}][500]']
+    result = subprocess.run(command, cwd=web_package, capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECS)
+    assert result.returncode == 0, (
+        f"`{shlex.join(command)}` exited {result.returncode} in a scratch copy of the web package; "
+        f"node's stderr:\n{result.stderr}"
+    )
+    return result.stdout.strip()
 
 
 def _copy_web_package(destination: Path) -> Path:
@@ -218,8 +228,7 @@ def test_an_accent_token_edit_redraws_every_mark_of_the_favicon_in_the_new_accen
     tokens = json.loads(token_file.read_text(encoding="utf-8"))
     assert tokens["tailwind"]["primary"] != _RECOLOURED_ACCENT, (
         f"{_THEME_TOKENS.as_posix()} already names {_RECOLOURED_ACCENT} as the accent, so this recolour would "
-        "prove nothing: name another built-in palette in _RECOLOURED_ACCENT and its 500 shade in "
-        "_RECOLOURED_ACCENT_500"
+        "prove nothing: name another built-in palette in _RECOLOURED_ACCENT"
     )
     tokens["tailwind"]["primary"] = _RECOLOURED_ACCENT
     token_file.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
@@ -227,10 +236,11 @@ def test_an_accent_token_edit_redraws_every_mark_of_the_favicon_in_the_new_accen
     _npm(["run", "build:favicon"], web_package, tmp_path / "npm-cache")
 
     drawn = _drawn_colours(web_package / _DIST_FAVICON)
-    assert drawn == {_RECOLOURED_ACCENT_500}, (
+    accent_500 = _built_in_palette_500(_RECOLOURED_ACCENT, web_package)
+    assert drawn == {accent_500}, (
         f"with {_RECOLOURED_ACCENT} as the accent, the favicon draws {sorted(drawn)}, where every mark must be "
-        f"{_RECOLOURED_ACCENT}-500, {_RECOLOURED_ACCENT_500}: build-favicon.js must draw every mark in the "
-        "theme's primary-500, so that an accent change reaches the browser tab's icon"
+        f"{_RECOLOURED_ACCENT}-500, {accent_500} in the installed tailwindcss: build-favicon.js must draw every "
+        "mark in the theme's primary-500, so that an accent change reaches the browser tab's icon"
     )
 
 
