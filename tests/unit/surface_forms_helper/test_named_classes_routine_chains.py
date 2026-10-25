@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's named_classes for the callable that spells a routine's annotations when it wraps or binds another callable or carries a signature over one, and the errors raised when none is known, one per test.
 
-_typed is defined at module level, where its lambda carries this module's globals. Band, and
-the classes and links that wrap it, are defined at module level too, where a parametrize
-decorator can reach them.
+_typed is defined at module level, where its lambda carries this module's globals.
 """
 
 import datetime
@@ -26,13 +24,13 @@ if TYPE_CHECKING:
     from decimal import Decimal  # noqa: F401
 
 
-def _typed(function: Callable[..., object], *receivers: str) -> Callable[..., object]:
-    """A wrapper of *function*, as functools.wraps records one, given a signature here: *receivers*, then share annotated with the string "Decimal", which this module binds only for type checking."""
+def _typed(function: Callable[..., object], *receivers: str, annotation: object = "Decimal") -> Callable[..., object]:
+    """A wrapper of *function*, as functools.wraps records one, given a signature here: *receivers*, then share annotated with *annotation*, by default the string "Decimal", which this module binds only for type checking."""
     wrapper = functools.wraps(function)(lambda *args: function(*args))
     wrapper.__signature__ = inspect.Signature(
         [
             *(inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in receivers),
-            inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Decimal"),
+            inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation),
         ]
     )
     return wrapper
@@ -56,30 +54,50 @@ _RELAYING_SOURCE = (
 
 
 class Band(enum.Enum):
-    """An Enum that the links below carry a signature over."""
+    """An Enum with a member."""
 
     PEAK = "peak"
 
 
-class BandCaller:
-    """A class whose __call__ wraps Band, as functools.wraps records one, and carries a signature."""
-
-    __call__ = _typed(Band, "receiver")
+class MemberlessBand(enum.Enum):
+    """An Enum with no member."""
 
 
-class BandBuilt:
-    """A class whose __init__ wraps Band, as functools.wraps records one, and carries a signature."""
+class BandFlags(enum.IntFlag):
+    """An Enum of flags."""
 
-    __init__ = _typed(Band, "receiver")
+    PEAK = 1
 
 
-def _typed_partial(function: Callable[..., object]) -> Callable[..., object]:
-    """A functools.partial of *function* given the signature _typed gives a wrapper: share annotated with the string "Decimal"."""
+_ENUM_KINDS = (Band, MemberlessBand, BandFlags)
+
+
+def _typed_partial(function: Callable[..., object], annotation: object) -> Callable[..., object]:
+    """A functools.partial of *function* given the signature _typed gives a wrapper of it, share annotated with *annotation*."""
     partial = functools.partial(function)
-    partial.__signature__ = inspect.Signature(
-        [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation="Decimal")]
-    )
+    partial.__signature__ = _typed(function, annotation=annotation).__signature__
     return partial
+
+
+def _signed_links_over(enum_class: type[enum.Enum], annotation: object) -> dict[str, Callable[..., object]]:
+    """One link of each shape that carries over *enum_class* a signature annotating share with *annotation*, by the shape's name: a functools.partial, a wrapper as functools.wraps records one, a bound method of one, a functools.partial of a callable object whose __call__ is one, and a class whose __init__ is one."""
+
+    class Caller:
+        __call__ = _typed(enum_class, "receiver", annotation=annotation)
+
+    class Initialised:
+        __init__ = _typed(enum_class, "receiver", annotation=annotation)
+
+    return {
+        "partial": _typed_partial(enum_class, annotation),
+        "functools-wraps-wrapper": _typed(enum_class, annotation=annotation),
+        "bound-method": types.MethodType(_typed(enum_class, "receiver", annotation=annotation), object()),
+        "callable-object": functools.partial(Caller()),
+        "constructor": Initialised,
+    }
+
+
+_LINK_SHAPES = tuple(_signed_links_over(Band, int))
 
 
 def test_a_partial_names_the_classes_the_callable_it_wraps_names_each_read_where_that_callable_is_spelled(
@@ -405,34 +423,25 @@ def test_a_signature_a_link_carries_over_a_constructor_defined_in_c_names_the_cl
     assert named_classes(initialising.Initialised) == {decimal.Decimal}
 
 
-def test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with() -> None:
-    signature = inspect.Signature(
-        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
-    )
-    banded = functools.partial(Band)
-    banded.__signature__ = signature
-    wrapped = functools.wraps(Band)(lambda rate: Band(rate))
-    wrapped.__signature__ = signature
-
-    assert named_classes(banded) == {int}
-    assert named_classes(wrapped) == {int}
-
-
-@pytest.mark.parametrize(
-    "obj",
-    [
-        pytest.param(_typed_partial(Band), id="partial"),
-        pytest.param(_typed(Band), id="functools-wraps-wrapper"),
-        pytest.param(types.MethodType(_typed(Band, "receiver"), object()), id="bound-method"),
-        pytest.param(functools.partial(BandCaller()), id="callable-object"),
-        pytest.param(BandBuilt, id="constructor"),
-    ],
-)
-def test_a_string_annotation_in_a_signature_a_link_carries_over_an_enum_raises_type_error_naming_that_enum_and_the_string(
-    obj: Callable[..., object],
+@pytest.mark.parametrize("shape", _LINK_SHAPES)
+@pytest.mark.parametrize("enum_class", _ENUM_KINDS)
+def test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with(
+    enum_class: type[enum.Enum], shape: str
 ) -> None:
-    with pytest.raises(TypeError, match=r"\.Band\b.*\benum\.Enum\b.*'Decimal'"):
-        named_classes(obj)
+    link = _signed_links_over(enum_class, int)[shape]
+
+    assert named_classes(link) == {int}
+
+
+@pytest.mark.parametrize("shape", _LINK_SHAPES)
+@pytest.mark.parametrize("enum_class", _ENUM_KINDS)
+def test_a_string_annotation_in_a_signature_a_link_carries_over_an_enum_raises_type_error_naming_that_enum_and_the_string(
+    enum_class: type[enum.Enum], shape: str
+) -> None:
+    link = _signed_links_over(enum_class, "Decimal")[shape]
+
+    with pytest.raises(TypeError, match=rf"\.{enum_class.__name__}\b.*\benum\.Enum\b.*'Decimal'"):
+        named_classes(link)
 
 
 def test_a_routine_that_wraps_a_callable_object_names_the_classes_its_call_method_names_read_where_that_method_is_spelled(
