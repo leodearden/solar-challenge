@@ -1265,6 +1265,34 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_t
 
 
 @pytest.mark.parametrize(
+    "shape", ["partial", "functools-wraps-wrapper", "bound-method", "partial-of-a-signed-wrapper"]
+)
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_spelled_by_the_signature_one_of_its_links_carries(
+    shape: str,
+) -> None:
+    rate = inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)
+    receiver = inspect.Parameter("receiver", inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    called = CallableGetterDeleter()
+
+    def signed(link: Callable[..., object], *receivers: inspect.Parameter) -> Callable[..., object]:
+        link.__signature__ = inspect.Signature([*receivers, rate])
+        return link
+
+    def wrapper() -> Callable[..., object]:
+        return functools.wraps(called)(lambda *args: called(*args))
+
+    routines = {
+        "partial": signed(functools.partial(called)),
+        "functools-wraps-wrapper": signed(wrapper()),
+        "bound-method": types.MethodType(signed(wrapper(), receiver), object()),
+        "partial-of-a-signed-wrapper": functools.partial(signed(wrapper())),
+    }
+
+    assert surface_form(routines[shape]) == "(rate: int)"
+    assert named_classes(routines[shape]) == {int}
+
+
+@pytest.mark.parametrize(
     ("called", "refusing_its_call"),
     [
         pytest.param(
