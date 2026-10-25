@@ -77,11 +77,6 @@ _AMBER_ROLES = (
         "templates/assistant/chat.html",
     ),
     _amber_role(
-        "the 'running' run-status badge",
-        "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-        "templates/components/macros.html",
-    ),
-    _amber_role(
         "the progress bar of a run that has not completed",
         "bg-amber-500",
         "templates/simulate/partials/progress-tracker.html",
