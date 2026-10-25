@@ -1,6 +1,11 @@
 {
   "tailwind": {
-    "primary": "amber"
+    "primary": "amber",
+    "status": {
+      "running": "amber",
+      "completed": "green",
+      "failed": "red"
+    }
   },
   "chart": {
     "hues": {
