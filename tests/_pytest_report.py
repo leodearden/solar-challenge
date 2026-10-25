@@ -63,10 +63,10 @@ def _tail_start(headers: Sequence[re.Match[str]]) -> int:
 
     The tail holds the sections of _TAIL_TITLES, each at most once and in that
     order, then the stats line, the report's last header line. So it runs back from
-    that line until a header line out of that order: a failure section's, or one
-    that a test's captured output printed, such as the stats line of a nested run.
-    A report whose last header line opens a failure section was cut short in it,
-    so it has no tail.
+    that line until a header line out of that order: a failure section's, a
+    plugin's, or one that a test's captured output printed, such as the stats line
+    of a nested run. A report whose last header line opens a failure section was
+    cut short in it, so it has no tail.
     """
     if not headers or headers[-1]["title"] in _FAILURE_TITLES:
         return len(headers)
