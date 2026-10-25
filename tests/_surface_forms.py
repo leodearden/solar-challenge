@@ -781,24 +781,30 @@ def _unreadable_link(obj: object) -> object | None:
 
     That link is *obj* itself if it is not callable, as no functools.partialmethod or
     functools.singledispatchmethod is, since inspect checks that before it follows any
-    chain. Else it is the end of the chain, as _chain_end follows it, if that is a
-    routine whose class defines __get__ in Python and whose __signature__ is None or
-    absent, which inspect reads as a builtin, by a text signature only a routine defined
-    in C gives.
+    chain. Else it is the end of the chain, as _chain_end follows it, if
+    _is_read_as_builtin finds it.
     """
     if not _is_routine(obj):
         return None
     if not callable(obj):
         return obj
     end = _chain_end(obj, stop=_has_non_none_signature)
-    getter = inspect.getattr_static(type(end), "__get__", None)
-    if (
-        _is_routine(end)
+    return end if _is_read_as_builtin(end) else None
+
+
+def _is_read_as_builtin(obj: object) -> bool:
+    """Whether inspect reads *obj* as a builtin on every admitted minor, by a text signature only a routine defined in C gives: a routine, as _is_routine counts one, whose type defines __get__ in Python, carrying no signature for inspect to read in its place."""
+    getter = inspect.getattr_static(type(obj), "__get__", None)
+    return (
+        _is_routine(obj)
         and isinstance(getter, types.FunctionType)
-        and not _has_non_none_signature(end)
-    ):
-        return end
-    return None
+        and not _has_non_none_signature(obj)
+    )
+
+
+def _is_read_as_builtin_before_3_13(obj: object) -> bool:
+    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _GET_DELETE_DESCRIPTOR_BY_MINOR says: a descriptor _is_get_delete_descriptor finds, carrying no signature for inspect to read in its place."""
+    return _is_get_delete_descriptor(obj) and not _has_non_none_signature(obj)
 
 
 def _unreadable_routine_error(label: str, routine: object, link: object) -> TypeError:
@@ -830,20 +836,25 @@ def _refuse_wrapped_enum(obj: object, end: object) -> None:
         )
 
 
+_GET_DELETE_DESCRIPTOR_BY_MINOR = (
+    "whose type defines __get__ and __delete__ but no __set__: inspect reads it as a method "
+    "descriptor, by a text signature only a routine defined in C gives, on Python 3.11 and "
+    "3.12, and as a data descriptor, through its type's __call__, from 3.13"
+)
+
+
 def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
-    """Raise TypeError naming *obj*, *end* and *end*'s type if *end*, the end of the chain inspect follows from *obj*, is a descriptor _is_get_delete_descriptor finds that carries no signature for inspect to read in its place.
+    """Raise TypeError naming *obj*, *end* and *end*'s type if *end*, the end of the chain inspect follows from *obj*, is a descriptor _is_read_as_builtin_before_3_13 finds.
 
     Such a descriptor is no routine, so it never reaches here as *obj*; a routine that
     wraps one does.
     """
-    if _is_get_delete_descriptor(end) and not _has_non_none_signature(end):
+    if _is_read_as_builtin_before_3_13(end):
         raise TypeError(
-            f"{_label(obj)} wraps {_label(end)}, a {_label(type(end))}, whose type defines "
-            "__get__ and __delete__ but no __set__: inspect reads it as a method descriptor, "
-            "by a text signature only a routine defined in C gives, on Python 3.11 and 3.12, "
-            "and as a data descriptor, through its type's __call__, from 3.13: make the name "
-            "private, wrap a function defined with def, or set a __signature__ that is an "
-            "inspect.Signature on the routine or on what it wraps"
+            f"{_label(obj)} wraps {_label(end)}, a {_label(type(end))}, "
+            f"{_GET_DELETE_DESCRIPTOR_BY_MINOR}: make the name private, wrap a function "
+            "defined with def, or set a __signature__ that is an inspect.Signature on the "
+            "routine or on what it wraps"
         )
 
 
@@ -857,23 +868,26 @@ _C_ROUTINE_KINDS = (
 
 
 def _refuse_minor_dependent_constructor(cls: type) -> None:
-    """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor.
+    """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
-    callable defined in C here if _wrapped_c_callable gives one for it, and carries a
-    __signature__ inspect reads by minor if _refuse_constructor_signature finds one:
+    callable defined in C here if _wrapped_c_callable gives one for it, carries a
+    __signature__ inspect reads by minor if _refuse_constructor_signature finds one, and
+    is read as a builtin if _refuse_constructor_read_as_builtin finds it so, bound as
+    inspect binds it:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it wraps a callable defined in C, is a
-      functools.partial, or carries such a __signature__. inspect reads any other
-      __call__ _metaclass_call gives in their place, so none of the constructors below
-      is then checked;
+      functools.partial, carries such a __signature__ or is read as a builtin. inspect
+      reads any other __call__ _metaclass_call gives in their place, so none of the
+      constructors below is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
     - a functools.partial the holder's own namespace holds as __init__, unless that
       namespace also holds a __new__ not defined in C, which inspect reads first;
-    - that first-read constructor, if it carries such a __signature__;
+    - that first-read constructor, if it carries such a __signature__ or is read as a
+      builtin;
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
@@ -882,6 +896,9 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_signature(cls, type(cls), "__call__", call)
+        _refuse_constructor_read_as_builtin(
+            cls, type(cls), "__call__", _metaclass_call_as_read(cls)
+        )
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
@@ -889,6 +906,7 @@ def _refuse_minor_dependent_constructor(cls: type) -> None:
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_signature(cls, holder, name, constructor)
+    _refuse_constructor_read_as_builtin(cls, holder, name, _constructor_as_read(cls, holder))
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{_label(cls)} is constructed by {_label(holder)}, which is defined in C (a "
@@ -972,6 +990,28 @@ def _refuse_partial_bound_as_method(
             f"{_label(subject)} {verb} {_label(owner)}.{name}, "
             f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
         )
+
+
+def _refuse_constructor_read_as_builtin(
+    cls: type, owner: type, name: str, read: object
+) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name*, and the descriptor that ends the chain inspect follows from *read*, with its type, if inspect reads that descriptor as a builtin on some admitted minor, as _is_read_as_builtin or _is_read_as_builtin_before_3_13 finds; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    end = _chain_end(read, stop=_has_non_none_signature)
+    if _is_read_as_builtin(end):
+        reading = (
+            "whose type defines __get__ in Python but neither __set__ nor __delete__: "
+            "inspect reads it as a method descriptor, by a text signature only a routine "
+            "defined in C gives, on every admitted minor"
+        )
+    elif _is_read_as_builtin_before_3_13(end):
+        reading = _GET_DELETE_DESCRIPTOR_BY_MINOR
+    else:
+        return
+    raise TypeError(
+        f"{_label(cls)} is constructed through {_label(owner)}.{name}, which inspect reads "
+        f"as {_label(end)}, a {_label(type(end))}, {reading}: make the name private, or "
+        f"define {name} with def"
+    )
 
 
 def _refuse_constructor_signature(
