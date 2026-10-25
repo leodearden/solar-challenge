@@ -13,7 +13,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import get_chat_history, save_chat_message
+from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
 from solar_challenge.web.schema import open_database
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
