@@ -27,7 +27,8 @@ from typing import Any
 
 import pytest
 
-from solar_challenge.web.database import CHAT_ROLES, Database, RowRefused, get_chat_history
+from solar_challenge.web.chat_messages import CHAT_ROLES, get_chat_history
+from solar_challenge.web.database import Database, RowRefused
 from solar_challenge.web.presets import PRESET_TYPES, home_presets
 from solar_challenge.web.schema import (
     MIGRATIONS,
