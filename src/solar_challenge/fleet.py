@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterator, Optional, Sequence
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import (
     HomeConfig,
     SimulationResults,
@@ -39,12 +40,12 @@ class FleetConfig:
     def __post_init__(self) -> None:
         """Validate fleet configuration."""
         if not self.homes:
-            raise ValueError("Fleet must have at least one home")
+            raise ConfigurationError("Fleet must have at least one home")
 
         # Validate all homes have compatible timezones
         timezones = {h.location.timezone for h in self.homes}
         if len(timezones) > 1:
-            raise ValueError(
+            raise ConfigurationError(
                 f"All homes must have same timezone. Found: {timezones}"
             )
 
@@ -109,7 +110,7 @@ class FleetConfig:
             == len(battery_capacities_kwh)
             == len(annual_consumptions_kwh)
         ):
-            raise ValueError("All configuration lists must have the same length")
+            raise ConfigurationError("All configuration lists must have the same length")
 
         homes = []
         for i, (pv_kw, bat_kwh, load_kwh) in enumerate(
