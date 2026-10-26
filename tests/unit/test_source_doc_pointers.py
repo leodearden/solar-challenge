@@ -1,11 +1,42 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every path into docs/ that a scanned file names is a file or directory of the tree."""
 
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
+from tests._pointer_scan import utf8_text
+
+_DOC_POINTER = re.compile(r"(?<![\w./-])docs/(?:[\w.-]+/)*[\w.-]*\w")
+
+
+@dataclass(frozen=True)
+class _DocPointer:
+    """A path into docs/: the file naming it, relative to the project root, its line, and the path it names."""
+
+    source: PurePosixPath
+    line: int
+    path: PurePosixPath
+
+    def __str__(self) -> str:
+        return f"{self.source}:{self.line}: {self.path}"
+
+
+def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPointer]:
+    """Return every path into docs/ in the *sources*, POSIX paths relative to *root*, file by file and in text order."""
+    pointers: list[_DocPointer] = []
+    for source in sources:
+        text = utf8_text(root / source)
+        if text is None:
+            continue
+        for match in _DOC_POINTER.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            pointers.append(_DocPointer(source=source, line=line, path=PurePosixPath(match[0])))
+    return pointers
 
 
 @pytest.fixture
