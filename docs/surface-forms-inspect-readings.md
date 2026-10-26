@@ -36,10 +36,10 @@ callable, at the chain's end, is read through the `__call__` that class resolves
 the object, unless the object carries a signature.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries`
 
 ## 3. Read Alike on Every Minor
 
@@ -51,8 +51,8 @@ spelled by the signature it leaves of the callable it wraps. 4.6 says how a part
 type takes `__get__` from a class other than `functools.partial` is read instead.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wraps`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wraps`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routine_spelled_by_the_signature_it_leaves`
 
 ### 3.2 A descriptor whose type defines `__get__` and `__delete__` but no `__set__` is no routine
 
@@ -76,7 +76,7 @@ with its type: on the routine or class itself, on the link of a routine's chain 
 `__call__` included.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
 
 ### 4.2 A routine that wraps an Enum
@@ -90,7 +90,7 @@ raises `TypeError` naming it and that Enum, unless one of the routine's links ca
 signature.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with`
 
 ### 4.3 A routine that wraps a descriptor whose type defines `__get__` and `__delete__` but no `__set__`
@@ -102,9 +102,9 @@ reads it as a data descriptor, through its type's `__call__`. `surface_form` rai
 of the routine's links carries a signature.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_raises_a_type_error_naming_it_that_descriptor_and_its_type`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_spelled_by_the_signature_one_of_its_links_carries`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_raises_a_type_error_naming_it_that_descriptor_and_its_type`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_spelled_by_the_signature_one_of_its_links_carries`
 
 ### 4.4 A routine whose chain ends at an object its class makes callable
 
@@ -131,12 +131,12 @@ to the routine, and names the routine. Three readings of the object differ by mi
   other than `functools.partial` binds by that `__get__` instead, as 4.6 says.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_whose_call_wraps_a_refused_class_raises_the_type_error_naming_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_callable_raises_a_type_error_naming_it_that_object_and_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_overrides_a_call_a_base_defines_in_c_raises_a_type_error_naming_it_that_object_and_that_base`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_call_wraps_a_refused_class_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_callable_raises_a_type_error_naming_it_that_object_and_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_overrides_a_call_a_base_defines_in_c_raises_a_type_error_naming_it_that_object_and_that_base`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
 
 ### 4.5 A class whose constructor inspect reads differently by minor, or cannot read on any
 
@@ -173,9 +173,9 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
 
 ### 4.6 A `functools.partial` whose type takes `__get__` from a class other than `functools.partial`
 
