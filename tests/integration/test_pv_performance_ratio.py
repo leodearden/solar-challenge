@@ -12,7 +12,6 @@ v5_3 TMY for Bristol as PvgisTmy caches it, the entry docs/pv-cell-temperature.m
 measurement read. So these tests reach no network, and run in the per-task verify.
 """
 
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -21,10 +20,9 @@ import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
-from solar_challenge.weather import WeatherCache
+from tests._committed_weather_cache import committed_bristol_tmy
 from tests._scripts import load_script
 
-COMMITTED_WEATHER_CACHE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "weather_cache"
 MCS_PERFORMANCE_RATIO_LOW = 0.76
 MCS_PERFORMANCE_RATIO_HIGH = 0.84
 BRISTOL_YIELD_RELATIVE_TOLERANCE = 0.01
@@ -39,20 +37,7 @@ def pv_performance_ratio() -> ModuleType:
 @pytest.fixture(scope="module")
 def bristol_tmy() -> pd.DataFrame:
     """Bristol's TMY as the weather cache committed under tests/fixtures/weather_cache holds it: PVGIS's, as PvgisTmy caches it."""
-    if not COMMITTED_WEATHER_CACHE_DIR.is_dir():
-        pytest.fail(
-            f"No directory is at {COMMITTED_WEATHER_CACHE_DIR}, where the weather cache holding Bristol's TMY "
-            "is committed: restore it from git, or, if it moved, point COMMITTED_WEATHER_CACHE_DIR at it"
-        )
-    tmy = WeatherCache(cache_dir=COMMITTED_WEATHER_CACHE_DIR).get("tmy", Location.bristol())
-    if tmy is None:
-        pytest.fail(
-            f"WeatherCache reads no Bristol TMY entry in {COMMITTED_WEATHER_CACHE_DIR}, as after a change to "
-            "WeatherCache's keys. With network access to PVGIS, write the entry again with "
-            f'PvgisTmy(WeatherCache(cache_dir=Path("{COMMITTED_WEATHER_CACHE_DIR}"))).get(Location.bristol()), '
-            "delete the old entry's two files, and re-measure as docs/pv-cell-temperature.md §3 records"
-        )
-    return tmy
+    return committed_bristol_tmy()
 
 
 @pytest.fixture(scope="module")

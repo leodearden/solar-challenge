@@ -1,6 +1,7 @@
 """Contract tests of PVGIS's TMY for Bristol, as PvgisTmy returns it.
 
-Each test checks PVGIS's live response, fetched once for the module.
+Each test checks PVGIS's live response, fetched once for the module, and one also checks
+that the TMY committed under tests/fixtures/weather_cache is still that response.
 """
 
 import pytest
@@ -10,6 +11,7 @@ from pvlib.solarposition import get_solarposition
 
 from solar_challenge.location import Location
 from solar_challenge.weather import PvgisTmy
+from tests._committed_weather_cache import REWRITE_THE_COMMITTED_BRISTOL_TMY, committed_bristol_tmy
 
 
 BRISTOL = Location.bristol()
@@ -22,6 +24,21 @@ def bristol_tmy() -> pd.DataFrame:
     It is never read from or written to a weather cache, whose copy may be months old.
     """
     return PvgisTmy(None).get(BRISTOL)
+
+
+def _first_difference(live: pd.DataFrame, committed: pd.DataFrame) -> str:
+    """The column, timestamp and both values where the committed TMY first departs from the live one, or why no value can be named."""
+    if not (live.index.equals(committed.index) and live.columns.equals(committed.columns)):
+        return "Their timestamps or columns differ, so no value is compared"
+    differs = live.ne(committed) & ~(live.isna() & committed.isna())
+    rows, columns = np.nonzero(differs.to_numpy())
+    if rows.size == 0:
+        return "Every value is equal, so they differ in a dtype, a name or the index's freq"
+    row, column = rows[0], columns[0]
+    return (
+        f"{rows.size} of {differs.size} values differ; the first is {live.columns[column]} at {live.index[row]}, "
+        f"{live.iat[row, column]} live and {committed.iat[row, column]} committed"
+    )
 
 
 @pytest.mark.slow
@@ -73,3 +90,17 @@ class TestPVGISTMY:
     def test_tmy_annual_ghi_matches_the_2005_2020_mean(self, bristol_tmy):
         """Bristol's TMY sums to PVGIS's 2005-2020 mean GHI; docs/tmy-irradiation-scaling.md has the figure."""
         assert bristol_tmy["ghi"].sum() / 1000 == pytest.approx(1069.5, rel=0.01)
+
+    def test_the_committed_bristol_tmy_equals_the_live_one(self, bristol_tmy):
+        """The TMY committed under tests/fixtures/weather_cache is PVGIS's live one, exactly, so the year the yield guard measures is the year PvgisTmy gives users."""
+        committed = committed_bristol_tmy()
+        try:
+            pd.testing.assert_frame_equal(bristol_tmy, committed, check_exact=True)
+        except AssertionError as difference:
+            raise AssertionError(
+                "the Bristol TMY committed under tests/fixtures/weather_cache is no longer PVGIS's live one, so the "
+                f"yield guard measures a year PvgisTmy no longer gives users. {REWRITE_THE_COMMITTED_BRISTOL_TMY}, "
+                "then run tests/integration/test_pv_performance_ratio.py, whose yield test names what moves with a "
+                f"new year, and amend the entry's provenance in docs/pv-cell-temperature.md §3\n"
+                f"{_first_difference(bristol_tmy, committed)}\n{difference}"
+            ) from None

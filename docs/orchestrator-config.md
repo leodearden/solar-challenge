@@ -115,8 +115,11 @@ goes to its confirm and is filed, with a broken-probe escalation beside it.
   lane run. The prefix is sized as a generous multiple of the run, not at the run. Its suite
   needs no live service, so it declares no probe.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
-  live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. Its
-  probe asks PVGIS. The `timeout` prefix caps a hung request.
+  live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. One of
+  them also checks that the Bristol TMY committed under `tests/fixtures/weather_cache`, which
+  the per-task verify's yield guard `tests/integration/test_pv_performance_ratio.py` reads, is
+  still PVGIS's live one, so that copy cannot go stale unseen. Its probe asks PVGIS. The
+  `timeout` prefix caps a hung request.
 - **`css-build`.** Rebuilds `static/dist/style.css` in a scratch copy from the committed sources
   and `package-lock.json` (`tests/css_build`), and goes red when the committed file differs,
   for example after an unrebuilt `tailwind.config.js` edit, or when the Tailwind license texts

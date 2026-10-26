@@ -97,6 +97,9 @@ This is a dated record. Re-measure before relying on it.
     2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). Task 1134
     commits that entry as `tests/fixtures/weather_cache/tmy_f8a4df0259c4.csv`; it
     equalled PVGIS's live response on 2026-10-25.
+    `tests/integration/test_pvgis.py::TestPVGISTMY::test_the_committed_bristol_tmy_equals_the_live_one`,
+    which the offline lane's `pvgis` job runs after every merge, fails once the entry no
+    longer does (task 1139).
   - The clear day is `tests/_synthetic_weather.py::synthetic_june_weather` called with `"2024-06-21"`.
   - Each SAPM figure is the same chain with every array's temperature-model parameters
     set back to pvlib's SAPM `open_rack_glass_glass` set. It reproduces main's figures
