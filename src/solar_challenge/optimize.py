@@ -5,24 +5,6 @@ Enumerates homogeneous-install fleet scenarios over discrete PV, battery and
 inverter sizes, ranks them by householder outlay at the solved cost-recovery
 own-use rate, and measures how one-at-a-time assumption changes move that
 rank.  The design is specified in docs/prds/discrete-install-config-sweep.md.
-
-Public API
-----------
-ConfigPoint           — frozen (pv_kwp, battery_kwh, inverter_kw) value object
-ConfigResult          — per-config evaluation result (cost-recovery + baseline economics)
-RankedSweep           — aggregated sweep output (ranked feasible configs + infeasible set)
-enumerate_configs     — cartesian-product enumerator → eager list (small grids)
-iter_configs          — generator variant of enumerate_configs (large grids / streaming)
-run_sweep             — drive all configs through the cost-recovery solve + rank by outlay
-rank                  — pure stable sort over any ConfigResult sequence (5-key ascending)
-feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
-pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
-cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
-SensitivityAxis       — one OAT axis: name, swept values, per-value rankings + top configs
-SensitivityPanel      — aggregated OAT output (axes, baseline_top, rank_stability scalar)
-sensitivity_panel     — OAT assumption sensitivity over the cost-recovery rank
-apply_knob            — copy of a fleet ScenarioConfig with one sensitivity knob set
-SENSITIVITY_BANDS     — board-facing swept values per sensitivity knob (grid services: the rate table's flat column)
 """
 
 from __future__ import annotations

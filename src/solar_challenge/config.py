@@ -3026,7 +3026,7 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
 
 
 # ---------------------------------------------------------------------------
-# Community config parsing  (task γ / task #32)
+# Community config parsing
 # ---------------------------------------------------------------------------
 
 
