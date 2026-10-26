@@ -127,7 +127,7 @@ def run(
         typer.Option(
             "--location", "-l",
             help=(
-                f"Location: a preset, one of {', '.join(LOCATION_PRESETS)}, in any case; "
+                f"Location: a preset (case-insensitive), one of {', '.join(LOCATION_PRESETS)}; "
                 "or 'lat,lon' or 'lat,lon,alt' in decimal degrees and metres, e.g. '51.48,-3.18,10'"
             ),
         ),

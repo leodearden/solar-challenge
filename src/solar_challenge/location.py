@@ -79,7 +79,11 @@ LOCATION_PRESETS: Mapping[str, Location] = MappingProxyType({
 
 
 def parse_location(text: str) -> Location:
-    """The Location *text* names: a LOCATION_PRESETS name, in any case and with surrounding whitespace, or 'lat,lon' or 'lat,lon,alt' in decimal degrees and metres, named 'Custom (lat, lon)', its altitude Location's default when not given.
+    """The Location *text* names: a LOCATION_PRESETS name or 'lat,lon[,alt]' coordinates.
+
+    A preset name is case-insensitive and may carry surrounding whitespace. Coordinates are in
+    decimal degrees and metres; the location they give is named 'Custom (lat, lon)' and, when
+    they omit the altitude, takes Location's default.
 
     Raises:
         ConfigurationError: For any other text, naming location, the text and the accepted
