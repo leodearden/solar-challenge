@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
+from tests._pointer_scan import utf8_text
 from tests._working_tree import WorkingTreePaths
 
 _LINK_TARGET = re.compile(r"\]\((?P<target>[^)\s]+)")
@@ -60,6 +61,20 @@ def _links_in(source: PurePosixPath, text: str) -> list[_Link]:
         for match in _LINK_TARGET.finditer(text)
         if _names_a_path(match["target"])
     ]
+
+
+def _links(root: Path, sources: Iterable[PurePosixPath]) -> list[_Link]:
+    """Return the links whose targets name a path in the *sources*, markdown files relative to *root*, file by file.
+
+    A source that is not UTF-8 text raises ValueError, naming it.
+    """
+    links: list[_Link] = []
+    for source in sources:
+        text = utf8_text(root / source)
+        if text is None:
+            raise ValueError(f"{source} is not UTF-8 text, so its links cannot be read")
+        links.extend(_links_in(source, text))
+    return links
 
 
 def _dangling(tree: WorkingTreePaths, links: Iterable[_Link]) -> list[str]:
