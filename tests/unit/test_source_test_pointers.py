@@ -202,19 +202,16 @@ class _NoSyntaxTree(Enum):
     DOES_NOT_PARSE = "does not parse"
 
 
-_BYTE_ORDER_MARK = "\ufeff"
-
-
 def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
     """Return the syntax tree of the Python file at *path*, or why it has none.
 
-    It is parsed from the file's text as utf8_text reads it, less a leading byte order mark.
+    It is parsed from the file's text as utf8_text reads it.
     """
     text = utf8_text(path)
     if text is None:
         return _NoSyntaxTree.NOT_UTF8
     try:
-        return ast.parse(text.removeprefix(_BYTE_ORDER_MARK))
+        return ast.parse(text)
     except SyntaxError:
         return _NoSyntaxTree.DOES_NOT_PARSE
 
