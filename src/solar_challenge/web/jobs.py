@@ -166,6 +166,14 @@ class JobState:
     created_at: str
 
 
+@dataclass(frozen=True)
+class JobSnapshot:
+    """A job's state at one version: the job's first state, queued, is version 1, and each move of its state takes the next."""
+
+    version: int
+    state: JobState
+
+
 # The event a job's progress stream names: the job progressed, completed or failed. A cancelled job's stream ends
 # with the error event too, as docs/prds/run-store-one-owner.md §3.7 records.
 JobEventType = Literal["progress", "complete", "error"]
@@ -248,13 +256,13 @@ class _Cancellation:
 class _TrackedJob:
     """A job a JobManager tracks.
 
-    The state job_state reports, which only JobManager._move_job writes, the SSE events get_events has not yet
+    The snapshot job_snapshot reads, which only JobManager._move_job replaces, the SSE events get_events has not yet
     yielded, finished_at, the manager's clock reading when the job moved into a terminal status (None until then),
     the job's cancellation, which cancel_run sets when the job's run is deleted, and the executor's future of the
     job once it is queued (None until then), which cancel_run cancels to drop the job from the queue.
     """
 
-    state: JobState
+    snapshot: JobSnapshot
     events: collections.deque[JobEvent] = field(default_factory=lambda: collections.deque(maxlen=100))
     finished_at: float | None = None
     cancellation: _Cancellation = field(default_factory=_Cancellation)
@@ -417,14 +425,7 @@ class JobManager:
         )
 
     def job_state(self, job_id: str) -> JobState | None:
-        """Return the in-memory state of a job this manager tracks.
-
-        A manager tracks only the jobs submitted to it.  It tracks each one
-        until the job finishes, and stops at the first submit made once the
-        job has been finished for longer than _FINISHED_JOB_TTL_SECONDS.  It
-        never reads the RunStorage, so a job it does not track, such as one
-        from before a restart, is unknown here although the job's run remains
-        there.
+        """Return the in-memory state of a job this manager tracks: the state of its job_snapshot.
 
         Args:
             job_id: Unique job identifier.
@@ -432,11 +433,32 @@ class JobManager:
         Returns:
             The job's frozen JobState: its job_id, run_id, status,
             progress_pct, current_step, message and created_at, its run's
-            created_at.  None if this manager does not track the job.
+            created_at.  None if this manager does not track the job, as
+            job_snapshot says.
+        """
+        snapshot = self.job_snapshot(job_id)
+        return None if snapshot is None else snapshot.state
+
+    def job_snapshot(self, job_id: str) -> JobSnapshot | None:
+        """Return the snapshot of a job this manager tracks: its state at that state's version, as stored.
+
+        Reading it changes nothing.  A manager tracks only the jobs submitted
+        to it.  It tracks each one until the job finishes, and stops at the
+        first submit made once the job has been finished for longer than
+        _FINISHED_JOB_TTL_SECONDS.  It never reads the RunStorage, so a job it
+        does not track, such as one from before a restart, is unknown here
+        although the job's run remains there.
+
+        Args:
+            job_id: Unique job identifier.
+
+        Returns:
+            The job's frozen JobSnapshot: its version and its JobState.  None
+            if this manager does not track the job.
         """
         with self._lock:
             job = self._jobs.get(job_id)
-            return None if job is None else job.state
+            return None if job is None else job.snapshot
 
     def get_events(self, job_id: str) -> Generator[JobEvent, None, None]:
         """Yield the events queued for the job's progress stream since the last call, oldest first.
@@ -494,7 +516,7 @@ class JobManager:
                 (
                     job
                     for job in self._jobs.values()
-                    if job.state.run_id == run_id and job.state.status not in TERMINAL_JOB_STATUSES
+                    if job.snapshot.state.run_id == run_id and job.snapshot.state.status not in TERMINAL_JOB_STATUSES
                 ),
                 None,
             )
@@ -554,7 +576,7 @@ class JobManager:
         )
 
         with self._lock:
-            self._jobs[job_id] = _TrackedJob(state=queued)
+            self._jobs[job_id] = _TrackedJob(snapshot=JobSnapshot(1, queued))
 
         return _NewJob(job_id=job_id, run=run)
 
@@ -658,9 +680,9 @@ class JobManager:
         """Move job *job_id* to *to_status* with *message*, as the one writer of a job's state does; return the new state.
 
         The job keeps its progress unless *progress_pct* and *current_step* are given. Under one hold of the lock the
-        move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored, finished_at is stamped when the new
-        status is terminal, and the new state's event is queued, so a reader who sees the new state finds its event
-        queued.
+        move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored in the job's snapshot at the next
+        version, finished_at is stamped when the new status is terminal, and the new state's event is queued, so a
+        reader who sees the new state sees its version and finds its event queued.
 
         Raises:
             RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
@@ -674,18 +696,20 @@ class JobManager:
                     f"job {job_id} moves to {to_status!r}, but its JobManager no longer tracks it; "
                     "a manager tracks each job until it finishes"
                 )
-            check_job_transition(job_id, job.state.run_id, job.state.status, to_status)
-            job.state = replace(
-                job.state,
+            previous = job.snapshot
+            check_job_transition(job_id, previous.state.run_id, previous.state.status, to_status)
+            state = replace(
+                previous.state,
                 status=to_status,
                 message=message,
-                progress_pct=job.state.progress_pct if progress_pct is None else progress_pct,
-                current_step=job.state.current_step if current_step is None else current_step,
+                progress_pct=previous.state.progress_pct if progress_pct is None else progress_pct,
+                current_step=previous.state.current_step if current_step is None else current_step,
             )
+            job.snapshot = JobSnapshot(previous.version + 1, state)
             if to_status in TERMINAL_JOB_STATUSES:
                 job.finished_at = self._clock()
-            job.events.append(JobEvent(_EVENT_TYPE_OF_STATUS[to_status], job.state))
-            return job.state
+            job.events.append(JobEvent(_EVENT_TYPE_OF_STATUS[to_status], state))
+            return state
 
     def _report_cancelled_job(self, job_id: str) -> None:
         """Report job *job_id* cancelled because its run was deleted, at its last progress.
