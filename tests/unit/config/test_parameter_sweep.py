@@ -215,8 +215,8 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
     @pytest.mark.parametrize(
         ("value", "refusal"),
         [
-            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
-            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+            pytest.param(2.5, "household_occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "household_occupants must be a finite number, got True", id="boolean"),
         ],
     )
     def test_a_value_that_is_not_a_whole_number_is_refused_as_load_config_refuses_it(

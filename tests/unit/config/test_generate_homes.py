@@ -986,27 +986,27 @@ class TestGenerateHomesHouseholdOccupants:
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
         [
-            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
-            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
-            pytest.param(True, "Household occupants must be a whole number, got True", id="fixed-boolean"),
+            pytest.param(2.5, "household_occupants must be a whole number, got 2.5", id="fixed-fraction"),
+            pytest.param(0.0, "household_occupants must be between 1 and 10, got 0.0", id="fixed-zero"),
+            pytest.param(True, "household_occupants must be a finite number, got True", id="fixed-boolean"),
             pytest.param(
                 WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
-                "Household occupants must be a whole number, got True",
+                "household_occupants must be a finite number, got True",
                 id="weighted-discrete-boolean",
             ),
             pytest.param(
                 ShuffledPoolDistribution(values=(2, 0), counts=(1, 1)),
-                "Household occupants must be at least 1, got 0",
+                "household_occupants must be between 1 and 10, got 0",
                 id="shuffled-pool-zero",
             ),
             pytest.param(
                 UniformDistribution(min=1e300, max=1e300),
-                "Household occupants seems unrealistic: 1e+300",
+                "household_occupants must be between 1 and 10, got 1e+300",
                 id="uniform-draw-too-large-for-a-count",
             ),
             pytest.param(
                 UniformDistribution(min=-1e300, max=-1e300),
-                "Household occupants must be at least 1, got -1e+300",
+                "household_occupants must be between 1 and 10, got -1e+300",
                 id="uniform-draw-far-below-one",
             ),
         ],

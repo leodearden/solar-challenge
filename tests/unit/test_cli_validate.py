@@ -283,7 +283,7 @@ home:
         [
             pytest.param(
                 "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 2.5}\n",
-                "Household occupants must be a whole number, got 2.5",
+                "household_occupants must be a whole number, got 2.5",
                 id="home-occupants-not-whole",
             ),
             pytest.param(
@@ -293,7 +293,7 @@ home:
             ),
             pytest.param(
                 "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
-                "Household occupants seems unrealistic: 11",
+                "household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
             ),
             pytest.param(
@@ -327,7 +327,7 @@ home:
                 "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
                 "  homes:\n"
                 "    - load: {household_occupants: 2.5}\n",
-                "Household occupants must be a whole number, got 2.5",
+                "household_occupants must be a whole number, got 2.5",
                 id="scenario",
             ),
             pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),

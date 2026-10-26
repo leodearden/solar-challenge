@@ -4,13 +4,13 @@ import dataclasses
 import datetime
 import logging
 import math
-import re
 from collections.abc import Sequence
 from typing import NoReturn
 
 import numpy as np
 import pandas as pd
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.load import (
     DaySimulator,
     HouseholdModel,
@@ -23,6 +23,7 @@ from solar_challenge.load import (
     richardsonpy_household,
     scale_profile_to_energy,
 )
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestLoadConfigBasics:
@@ -78,56 +79,61 @@ class TestLoadConfigValidation:
 
     def test_occupants_unrealistic_high_raises(self):
         """Unrealistically high occupants raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
-            LoadConfig(household_occupants=15)
+        with pytest.raises(ConfigurationError) as exc_info:
+            LoadConfig(household_occupants=11)
+        assert str(exc_info.value) == "household_occupants must be between 1 and 10, got 11"
 
     @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
     def test_an_annual_consumption_that_is_not_finite_is_refused(self, value: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"Annual consumption must be positive and finite, got {value} kWh"),
-        ):
+        with pytest.raises(ConfigurationError) as exc_info:
             LoadConfig(annual_consumption_kwh=value)
+        assert str(exc_info.value) == f"annual_consumption_kwh must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize(
-        ("occupants", "message"),
-        [
-            (math.nan, "Household occupants must be at least 1, got nan"),
-            (-math.inf, "Household occupants must be at least 1, got -inf"),
-            (math.inf, "Household occupants seems unrealistic: inf"),
-        ],
-    )
-    def test_an_occupant_count_that_is_not_finite_is_refused(
-        self, occupants: float, message: str
-    ) -> None:
-        with pytest.raises(ValueError, match=re.escape(message)):
+    @pytest.mark.parametrize("occupants", [math.nan, -math.inf, math.inf])
+    def test_an_occupant_count_that_is_not_finite_is_refused(self, occupants: float) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
             LoadConfig(household_occupants=occupants)
+        assert str(exc_info.value) == f"household_occupants must be a finite number, got {occupants!r}"
 
     @pytest.mark.parametrize(
-        "occupants",
-        [2.5, 7.5, True, pytest.param(np.True_, id="numpy-bool")],
+        ("occupants", "requirement"),
+        [
+            pytest.param(2.5, "a whole number", id="2.5"),
+            pytest.param(7.5, "a whole number", id="7.5"),
+            pytest.param(True, "a finite number", id="True"),
+            pytest.param(np.True_, "a finite number", id="numpy-bool"),
+        ],
     )
     def test_an_occupant_count_that_is_not_a_whole_number_is_refused(
-        self, occupants: object
+        self, occupants: object, requirement: str
     ) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"Household occupants must be a whole number, got {occupants}"),
-        ):
+        """A fraction is refused as not whole, and a bool, Python's or numpy's, as not a finite number."""
+        with pytest.raises(ConfigurationError) as exc_info:
             LoadConfig(household_occupants=occupants)
+        assert str(exc_info.value) == f"household_occupants must be {requirement}, got {occupants!r}"
 
-    @pytest.mark.parametrize(
-        ("occupants", "message"),
-        [
-            (0.5, "Household occupants must be at least 1, got 0.5"),
-            (10.5, "Household occupants seems unrealistic: 10.5"),
-        ],
-    )
-    def test_a_fractional_occupant_count_outside_the_range_is_refused_as_out_of_range(
-        self, occupants: float, message: str
+    @pytest.mark.parametrize("occupants", [0.5, 10.5])
+    def test_a_fractional_occupant_count_is_refused_as_not_whole_wherever_it_lies(
+        self, occupants: float
     ) -> None:
-        with pytest.raises(ValueError, match=re.escape(message)):
+        """The whole-number rule comes before the range, so a fraction outside 1 to 10 is refused as not whole."""
+        with pytest.raises(ConfigurationError) as exc_info:
             LoadConfig(household_occupants=occupants)
+        assert str(exc_info.value) == f"household_occupants must be a whole number, got {occupants!r}"
+
+    @pytest.mark.parametrize("field", ["annual_consumption_kwh", "household_occupants"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_number_that_is_not_finite_is_refused_naming_its_field_and_the_value(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            LoadConfig(**{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_a_whole_number_annual_consumption_is_held_as_the_float_it_equals(self) -> None:
+        consumption = LoadConfig(annual_consumption_kwh=3400).annual_consumption_kwh
+        assert consumption == 3400.0
+        assert type(consumption) is float
 
     @pytest.mark.parametrize(
         "occupants",
@@ -158,18 +164,48 @@ class TestHouseholdOccupantCount:
     @pytest.mark.parametrize(
         ("occupants", "refusal"),
         [
-            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="below-one"),
-            pytest.param(11, "Household occupants seems unrealistic: 11", id="above-ten"),
-            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
-            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+            pytest.param(0.0, "household_occupants must be between 1 and 10, got 0.0", id="below-one"),
+            pytest.param(11, "household_occupants must be between 1 and 10, got 11", id="above-ten"),
+            pytest.param(2.5, "household_occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "household_occupants must be a finite number, got True", id="boolean"),
         ],
     )
     def test_a_count_that_is_not_a_whole_number_from_1_to_10_is_refused_naming_it(
         self, occupants: float, refusal: str
     ) -> None:
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             household_occupant_count(occupants)
         assert str(exc_info.value) == refusal
+
+
+class TestLoadConfigSeed:
+    """LoadConfig reads its seed as a whole number, holding the int it is; None draws fresh entropy."""
+
+    @pytest.mark.parametrize("seed", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_seed_that_is_not_a_finite_number_is_refused_naming_it(self, seed: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            LoadConfig(seed=seed)
+        assert str(exc_info.value) == f"seed must be a finite number, got {seed!r}"
+
+    def test_a_seed_with_a_fractional_part_is_refused_not_truncated(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            LoadConfig(seed=2.5)
+        assert str(exc_info.value) == "seed must be a whole number, got 2.5"
+
+    @pytest.mark.parametrize(
+        "seed",
+        [
+            pytest.param(np.int64(42), id="numpy-int64"),
+            pytest.param(2**53 + 1, id="beyond-a-floats-precision"),
+        ],
+    )
+    def test_an_integer_seed_is_held_as_the_python_int_it_is(self, seed: int | np.int64) -> None:
+        held = LoadConfig(seed=seed).seed
+        assert held == int(seed)
+        assert type(held) is int
+
+    def test_no_seed_stays_none(self) -> None:
+        assert LoadConfig(seed=None).seed is None
 
 
 class TestGenerateLoadProfile:
