@@ -596,8 +596,6 @@ RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a 
 RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 
-_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
-
 _COMPLETED_RUN_STATUS: RunStatus = "completed"
 _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
@@ -619,29 +617,6 @@ class RunStatusConflict(Exception):
         self.run_id = run_id
         self.found = found
         self.wanted = wanted
-
-
-def _run_row_insert() -> str:
-    """The statement inserting a RunRecord, bound by field name, as a new runs row; an id a run already has fails it."""
-    columns = [field.name for field in fields(RunRecord)]
-    column_list = ", ".join(columns)
-    placeholders = ", ".join(f":{column}" for column in columns)
-    return f"INSERT INTO runs ({column_list}) VALUES ({placeholders})"
-
-
-def _run_row_upsert() -> str:
-    """The statement writing a RunRecord, bound by field name, as the runs row under its id.
-
-    It inserts as _run_row_insert's statement does, except that a row already under that id
-    keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes every other column from the record.
-    """
-    rewritten = [field.name for field in fields(RunRecord) if field.name not in _COLUMNS_A_RESAVE_KEEPS]
-    assignments = ", ".join(f"{column} = excluded.{column}" for column in rewritten)
-    return f"{_run_row_insert()} ON CONFLICT(id) DO UPDATE SET {assignments}"
-
-
-_RUN_ROW_INSERT = _run_row_insert()
-_RUN_ROW_UPSERT = _run_row_upsert()
 
 
 def _now() -> str:
@@ -680,6 +655,33 @@ def _ending_values(ending: _RunEnding) -> dict[str, str | None]:
     return {**asdict(ending), "running": UNFINISHED_RUN_STATUS}
 
 
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS, *(column.name for column in fields(_RunEnding)))
+"""The columns of a runs row a save leaves as they are: the run's id and creation time, the labels a user edits in Run History, and the columns a run's ending writes, which only the lifecycle methods write."""
+
+
+def _run_row_insert() -> str:
+    """The statement inserting a RunRecord, bound by field name, as a new runs row; an id a run already has fails it."""
+    columns = [field.name for field in fields(RunRecord)]
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(f":{column}" for column in columns)
+    return f"INSERT INTO runs ({column_list}) VALUES ({placeholders})"
+
+
+def _run_row_upsert() -> str:
+    """The statement writing a RunRecord, bound by field name, as the runs row under its id.
+
+    It inserts as _run_row_insert's statement does, except that a row already under that id
+    keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes every other column from the record.
+    """
+    rewritten = [field.name for field in fields(RunRecord) if field.name not in _COLUMNS_A_RESAVE_KEEPS]
+    assignments = ", ".join(f"{column} = excluded.{column}" for column in rewritten)
+    return f"{_run_row_insert()} ON CONFLICT(id) DO UPDATE SET {assignments}"
+
+
+_RUN_ROW_INSERT = _run_row_insert()
+_RUN_ROW_UPSERT = _run_row_upsert()
+
+
 def _saved_run_row(
     *,
     run_id: str,
@@ -687,33 +689,29 @@ def _saved_run_row(
     run_type: RunType,
     config: dict[str, Any],
     summary: dict[str, Any],
-    status: RunStatus,
-    error_message: str | None,
     created_at: str | None,
     duration_seconds: float | None,
     n_homes: int,
 ) -> RunRecord:
     """The runs row a save writes for the run it stored under *run_id*, its config and summary as JSON text.
 
-    The run is created now unless *created_at* is given, is completed now if its *status* is
-    completed, and has no notes. Now is one time, read once: a run created and completed by the
-    same save has the same time for both.
+    The run is running, with no error and no completion time, as create_run records a run: a
+    save writes no status, which only the lifecycle methods move on. The run is created now
+    unless *created_at* is given, and has no notes.
 
     Raises:
-        ValueError: *name* cannot name a run, as require_run_name refuses it, or *status* is
-            not one of RUN_STATUSES; RunRecord refuses either.
+        ValueError: *name* cannot name a run, as require_run_name refuses it; RunRecord refuses it.
     """
-    now = _now()
     return RunRecord(
         id=run_id,
         name=name,
         type=run_type,
         config_json=json.dumps(config),
         summary_json=json.dumps(summary),
-        status=status,
-        error_message=error_message,
-        created_at=now if created_at is None else created_at,
-        completed_at=now if status == _COMPLETED_RUN_STATUS else None,
+        status=UNFINISHED_RUN_STATUS,
+        error_message=None,
+        created_at=_now() if created_at is None else created_at,
+        completed_at=None,
         duration_seconds=duration_seconds,
         n_homes=n_homes,
         notes=None,
@@ -768,7 +766,8 @@ class RunStorage:
 
         A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names, among
         them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
-        runs keeps the new name when the job's save rewrites its row.
+        runs keeps the new name when the job's save rewrites its row. It also keeps the status,
+        error and completion time the lifecycle methods wrote.
         """
         with self.database.transaction() as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
@@ -778,7 +777,8 @@ class RunStorage:
 
         The run has the *run_type*, *name*, *n_homes* and *created_at* given and no other column:
         no config, summary, error, completion time, duration or notes. It writes no file; the save
-        of the job's results writes the run's files and completes its row.
+        of the job's results writes the run's files and documents, and mark_run_completed then
+        completes the run.
 
         Returns:
             The run's record as written.
@@ -867,17 +867,16 @@ class RunStorage:
         results: SimulationResults,
         summary: SummaryStatistics,
         name: str,
-        status: RunStatus = "completed",
-        error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and upserts metadata into database. A run
-        already stored under run_id keeps the columns of its runs row that
-        _upsert_run_row keeps.
+        saves time series to parquet, and upserts metadata into database. A new
+        runs row is recorded running; a run already stored under run_id keeps the
+        columns of its runs row that _upsert_run_row keeps, among them the status,
+        error and completion time the lifecycle methods wrote.
 
         Args:
             run_id: Unique run identifier
@@ -887,16 +886,13 @@ class RunStorage:
             name: The name of the run when the save records it for the first time. A run
                 already recorded, as a job's submit records it through create_run, keeps its
                 own name, as a re-save keeps a run's labels.
-            status: Run status
-            error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, name cannot name a run, as
-                require_run_name refuses it, or status is not one of RUN_STATUSES. The save
-                has written nothing then.
+            ValueError: If the store refuses run_id, or name cannot name a run, as
+                require_run_name refuses it. The save has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
@@ -909,8 +905,6 @@ class RunStorage:
             run_type="home",
             config=config_document,
             summary=summary_document,
-            status=status,
-            error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=1,
@@ -925,7 +919,6 @@ class RunStorage:
         results: SimulationResults,
         *,
         name: str,
-        status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
@@ -941,7 +934,6 @@ class RunStorage:
             results,
             calculate_summary(results),
             name=name,
-            status=status,
             duration_seconds=duration_seconds,
             created_at=created_at,
         )
@@ -953,17 +945,16 @@ class RunStorage:
         fleet_summary: FleetSummary,
         per_home_summaries: list[SummaryStatistics],
         name: str,
-        status: RunStatus = "completed",
-        error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a fleet simulation run to storage.
 
         Creates directory structure with homes/ subdirectory, saves per-home
-        parquet files, fleet summary JSON, and fleet config JSON. A run already
-        stored under run_id keeps the columns of its runs row that _upsert_run_row
-        keeps.
+        parquet files, fleet summary JSON, and fleet config JSON. A new runs row
+        is recorded running; a run already stored under run_id keeps the columns
+        of its runs row that _upsert_run_row keeps, among them the status, error
+        and completion time the lifecycle methods wrote.
 
         Args:
             run_id: Unique run identifier
@@ -973,17 +964,14 @@ class RunStorage:
             name: The name of the run when the save records it for the first time. A run
                 already recorded, as a job's submit records it through create_run, keeps its
                 own name, as a re-save keeps a run's labels.
-            status: Run status
-            error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
 
         Raises:
             ValueError: If the store refuses run_id, per_home_summaries does not hold one
-                summary per home's results, name cannot name a run, as require_run_name
-                refuses it, or status is not one of RUN_STATUSES. The save has written
-                nothing then.
+                summary per home's results, or name cannot name a run, as require_run_name
+                refuses it. The save has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredFleetRun(
@@ -1001,8 +989,6 @@ class RunStorage:
             run_type="fleet",
             config=config_document,
             summary=summary_document,
-            status=status,
-            error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=len(fleet_results.home_configs),
@@ -1016,7 +1002,6 @@ class RunStorage:
         fleet_results: FleetResults,
         *,
         name: str,
-        status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
@@ -1038,7 +1023,6 @@ class RunStorage:
             aggregate_home_summaries(home_summaries),
             home_summaries,
             name=name,
-            status=status,
             duration_seconds=duration_seconds,
             created_at=created_at,
         )
