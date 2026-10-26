@@ -4,9 +4,14 @@
 Provides a JobManager class that uses a ThreadPoolExecutor to run home and
 fleet simulations in background threads. A job's progress is held in memory
 and streamed through SSE event queues; its run is recorded through the
-manager's RunStorage, running from its submit until the job's save completes
-it or its failure marks it failed. A job whose run is deleted is cancelled
-and records nothing.
+manager's RunStorage, running from its submit until the job completes it, once
+its save has written the run's results, or its failure marks it failed. A job
+reports completed only once its run reads completed. A job whose run is
+deleted is cancelled and records nothing. A job's status moves only along
+LEGAL_JOB_TRANSITIONS, through the manager's one writer of job state, and
+every job the executor is done with is terminal before it stops counting as
+unfinished: a job shutdown drops from the queue fails, and so does its run
+(docs/prds/job-events-and-sse-framing.md §3.4).
 """
 
 import collections
@@ -18,7 +23,8 @@ import uuid
 import weakref
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Generator, Literal, TypeAlias
 
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -48,9 +54,55 @@ _RUNNING_JOB_STATUS: JobStatus = "running"
 _COMPLETED_JOB_STATUS: JobStatus = "completed"
 _FAILED_JOB_STATUS: JobStatus = "failed"
 _CANCELLED_JOB_STATUS: JobStatus = "cancelled"
-_UNFINISHED_JOB_STATUSES: frozenset[JobStatus] = frozenset({_QUEUED_JOB_STATUS, _RUNNING_JOB_STATUS})
 _CANCELLED_JOB_MESSAGE = "Cancelled: its run was deleted"
+_DROPPED_BY_SHUTDOWN_MESSAGE = "Dropped: the server shut down before the job ran"
+_ENDED_WITHOUT_AN_OUTCOME_MESSAGE = "The job ended without reporting an outcome"
 _FINISHED_JOB_TTL_SECONDS = 3600.0
+
+LEGAL_JOB_TRANSITIONS: Mapping[JobStatus, frozenset[JobStatus]] = MappingProxyType(
+    {
+        "queued": frozenset({"running", "failed", "cancelled"}),
+        "running": frozenset({"running", "completed", "failed", "cancelled"}),
+        "completed": frozenset(),
+        "failed": frozenset(),
+        "cancelled": frozenset(),
+    }
+)
+"""The statuses a job's status may move to from each status, the table of docs/prds/job-events-and-sse-framing.md §3.4.
+
+running → running is a progress report. A status with no exits is terminal.
+"""
+
+TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+    status for status, exits in LEGAL_JOB_TRANSITIONS.items() if not exits
+)
+"""The statuses a job never moves on from: those LEGAL_JOB_TRANSITIONS gives no exits."""
+
+
+class IllegalJobTransition(RuntimeError):
+    """A move of a job's status that LEGAL_JOB_TRANSITIONS does not allow; the message names the job, its run, both statuses and the moves the table allows."""
+
+    def __init__(self, job_id: str, run_id: str, from_status: JobStatus, to_status: JobStatus) -> None:
+        exits = sorted(LEGAL_JOB_TRANSITIONS[from_status])
+        allowed = f"only to {', '.join(repr(exit) for exit in exits)}" if exits else "to no status, as it is terminal"
+        super().__init__(
+            f"Job {job_id!r} of run {run_id!r} cannot move from {from_status!r} to {to_status!r}: "
+            f"LEGAL_JOB_TRANSITIONS lets a job move from {from_status!r} {allowed}"
+        )
+        self.job_id = job_id
+        self.run_id = run_id
+        self.from_status = from_status
+        self.to_status = to_status
+
+
+def check_job_transition(job_id: str, run_id: str, from_status: JobStatus, to_status: JobStatus) -> None:
+    """Check that job *job_id* of run *run_id* may move from *from_status* to *to_status*, as LEGAL_JOB_TRANSITIONS says.
+
+    Raises:
+        IllegalJobTransition: The table does not let *from_status* move to *to_status*.
+    """
+    if to_status not in LEGAL_JOB_TRANSITIONS[from_status]:
+        raise IllegalJobTransition(job_id, run_id, from_status, to_status)
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -60,6 +112,14 @@ _active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
 def _random_id() -> str:
     """Return a new random UUID as a string."""
     return str(uuid.uuid4())
+
+
+def _message_of(error: BaseException) -> str:
+    """The message of a job that failed with *error*: str(error), or, when reading it raises an Exception, the error's type and that its message could not be read."""
+    try:
+        return str(error)
+    except Exception:
+        return f"{type(error).__name__}, whose message could not be read"
 
 
 def live_managers() -> "frozenset[JobManager]":
@@ -119,6 +179,12 @@ class JobEvent:
     state: JobState
 
 
+_EVENT_TYPE_OF_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType(
+    {"queued": "progress", "running": "progress", "completed": "complete", "failed": "error", "cancelled": "error"}
+)
+"""The type of the event a job's move into each status queues for its progress stream."""
+
+
 class _JobCancelled(BaseException):
     """Raised at a runner's checkpoint once its job is cancelled.
 
@@ -130,25 +196,27 @@ class _JobCancelled(BaseException):
 class _Cancellation:
     """Whether a job is cancelled, which its run's delete does through JobManager.cancel_run, under a lock of the job's own.
 
-    The job's final save is made under the same lock, which is how contract C8 holds (docs/prds/run-store-one-owner.md
-    §3.7). Lock order: a job's cancellation lock may be held while its JobManager's _lock is taken, never the reverse.
+    The job's completion is made under the same lock: the save of its run, its run marked completed, then the job
+    reported completed. That is how contract C8 holds (docs/prds/run-store-one-owner.md §3.7), and how a job reports
+    completed only once its run reads completed (J3, docs/prds/job-events-and-sse-framing.md §3.4). Lock order: a
+    job's cancellation lock may be held while its JobManager's _lock is taken, never the reverse.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cancelled = False
-        self._saving = False
+        self._completing = False
 
     def cancel(self) -> bool:
-        """Cancel the job, which stops at its runner's next checkpoint, unless its final save has started.
+        """Cancel the job, which stops at its runner's next checkpoint, unless its completion has started.
 
-        A cancel that comes while the save runs waits for it to end.
+        A cancel that comes while the completion runs waits for it to end.
 
         Returns:
-            Whether the job is cancelled: False once its final save has started.
+            Whether the job is cancelled: False once its completion has started.
         """
         with self._lock:
-            if not self._saving:
+            if not self._completing:
                 self._cancelled = True
             return self._cancelled
 
@@ -163,28 +231,27 @@ class _Cancellation:
         if self.is_cancelled:
             raise _JobCancelled()
 
-    def save_unless_cancelled(self, save: _RunSave) -> None:
-        """Make the job's final save, holding the lock across the check that the job is not cancelled and the save.
+    def complete_unless_cancelled(self, complete: Callable[[], None]) -> None:
+        """Make the job's completion, holding the lock across the check that the job is not cancelled and the completion.
 
         Raises:
-            _JobCancelled: The job is cancelled; the save never started then.
+            _JobCancelled: The job is cancelled; the completion never started then.
         """
         with self._lock:
             if self._cancelled:
                 raise _JobCancelled()
-            self._saving = True
-            save()
+            self._completing = True
+            complete()
 
 
 @dataclass
 class _TrackedJob:
     """A job a JobManager tracks.
 
-    The state job_state reports, the SSE events get_events has not yet yielded, the manager's
-    clock reading when the job finished (None while it is queued or running), the job's
-    cancellation, which cancel_run sets when the job's run is deleted, and the executor's future
-    of the job once it is queued (None until then), which cancel_run cancels to drop the job
-    from the queue.
+    The state job_state reports, which only JobManager._move_job writes, the SSE events get_events has not yet
+    yielded, finished_at, the manager's clock reading when the job moved into a terminal status (None until then),
+    the job's cancellation, which cancel_run sets when the job's run is deleted, and the executor's future of the
+    job once it is queued (None until then), which cancel_run cancels to drop the job from the queue.
     """
 
     state: JobState
@@ -200,7 +267,10 @@ class JobManager:
     Uses a ThreadPoolExecutor to run simulations in background threads.
     Each job has an in-memory event queue (collections.deque) for
     streaming progress events via SSE, and a run the manager records
-    through its RunStorage.
+    through its RunStorage. A job's status moves only along
+    LEGAL_JOB_TRANSITIONS (docs/prds/job-events-and-sse-framing.md §3.4),
+    through one writer, _move_job, which refuses any other move with
+    IllegalJobTransition.
 
     Attributes:
         _storage: The RunStorage each job's run is recorded in.
@@ -247,7 +317,8 @@ class JobManager:
     def shutdown(self, wait: bool = False) -> None:
         """Refuse new jobs and drop the jobs still queued.
 
-        Running jobs cannot be interrupted, and the interpreter waits for them
+        Each job it drops reports failed, "Dropped: the server shut down before the job ran", before shutdown
+        returns, and its run is marked failed with that message. Running jobs cannot be interrupted, and the interpreter waits for them
         at exit.  Call this before the interpreter starts exiting: by the time
         atexit hooks run, concurrent.futures has already run every queued job.
 
@@ -259,7 +330,8 @@ class JobManager:
     def wait_until_idle(self, timeout: float) -> bool:
         """Block until no job is queued or running, or until *timeout* seconds have passed.
 
-        A job stops counting once it completes, fails, is cancelled, or is dropped by shutdown.
+        A job stops counting once the executor is done with it, and it is then terminal: completed, failed or
+        cancelled. A job shutdown drops from the queue is failed.
 
         Args:
             timeout: Longest wait in seconds; 0 only checks.
@@ -394,14 +466,14 @@ class JobManager:
         The job reports 'cancelled' and writes nothing to the RunStorage (contract C8, docs/prds/run-store-one-owner.md
         §3.7). A queued job is dropped from the queue and reports cancelled before cancel_run returns. A running job
         stops at its runner's next progress report: a home job once its current simulation returns, a fleet job before
-        its next home. Once the job's final save has started, cancel_run waits for it to end.
+        its next home. Once the job's completion has started, cancel_run waits for it to end.
 
         Args:
             run_id: The id of the run whose job to cancel.
 
         Returns:
             True if the run's job will save nothing; False if this manager has no queued or running job of the run,
-            or the job's final save had already started.
+            or the job's completion had already started.
         """
         job = self._unfinished_job_of_run(run_id)
         if job is None or not job.cancellation.cancel():
@@ -416,13 +488,13 @@ class JobManager:
         return True
 
     def _unfinished_job_of_run(self, run_id: str) -> _TrackedJob | None:
-        """Return the job of run *run_id* this manager tracks whose status is queued or running, or None if it has none."""
+        """Return the job of run *run_id* this manager tracks whose status is not terminal, or None if it has none."""
         with self._lock:
             return next(
                 (
                     job
                     for job in self._jobs.values()
-                    if job.state.run_id == run_id and job.state.status in _UNFINISHED_JOB_STATUSES
+                    if job.state.run_id == run_id and job.state.status not in TERMINAL_JOB_STATUSES
                 ),
                 None,
             )
@@ -487,7 +559,7 @@ class JobManager:
         return _NewJob(job_id=job_id, run=run)
 
     def _schedule(self, job_id: str, run_id: str, job: Callable[[], None]) -> None:
-        """Queue *job* on the thread pool, counting it as unfinished until it completes, fails, is cancelled or is dropped from the queue.
+        """Queue *job* on the thread pool, counting it as unfinished until the executor is done with it and _on_job_done has ended it.
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
@@ -507,48 +579,54 @@ class JobManager:
         future.add_done_callback(functools.partial(self._on_job_done, job_id))
 
     def _on_job_done(self, job_id: str, future: Future[None]) -> None:
-        """Report job *job_id* cancelled if its run's delete dropped it from the queue, or failed if its runner raised, then finish it, even if reporting it raised.
+        """End job *job_id*, whose *future* the executor is done with, then stop counting it as unfinished, even if ending it raised.
 
-        The job therefore reports cancelled or failed before it stops counting as unfinished. Both steps stay in this
-        one callback: the executor runs a callback added after the job finished at once, in the thread that adds it,
-        so two callbacks could run out of order.
+        So every job is terminal before it stops counting (J2, docs/prds/job-events-and-sse-framing.md §3.4). It all
+        stays in this one callback: the executor runs a callback added after the job finished at once, in the thread
+        that adds it, so two callbacks could run out of order.
         """
         try:
-            if future.cancelled():
-                self._report_job_dropped_from_the_queue(job_id)
-            else:
-                self._fail_job_if_its_runner_raised(job_id, future)
-        finally:
-            self._finish_job(job_id)
-
-    def _report_job_dropped_from_the_queue(self, job_id: str) -> None:
-        """Report job *job_id*, which the executor dropped from its queue before it ran, cancelled if its run's delete cancelled it.
-
-        A job shutdown dropped never ran, so it is not failed: it keeps the state it was queued in.
-        """
-        if self._cancellation_of(job_id).is_cancelled:
-            self._report_cancelled_job(job_id)
-
-    def _fail_job_if_its_runner_raised(self, job_id: str, future: Future[None]) -> None:
-        """Fail job *job_id* with the error its runner raised, if it raised one."""
-        error = future.exception()
-        if error is not None:
-            self._fail_job_whose_runner_raised(job_id, error)
-
-    def _finish_job(self, job_id: str) -> None:
-        """Record the clock reading when the executor was done with a job, then stop counting it as unfinished."""
-        try:
-            finished_at = self._clock()
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    raise RuntimeError(
-                        f"job {job_id} finished, but its JobManager no longer tracked it; "
-                        "a manager tracks each job until it finishes"
-                    )
-                job.finished_at = finished_at
+            self._end_job(job_id, future)
         finally:
             self._stop_counting_job()
+
+    def _end_job(self, job_id: str, future: Future[None]) -> None:
+        """Make job *job_id*, whose *future* the executor is done with, terminal, deciding in the order §3.4 gives.
+
+        A job already terminal is left as it is. A job whose cancel flag is set reports cancelled; cancel_run sets the
+        flag before it cancels a queued job's future, whose cancel runs this callback. A job shutdown dropped from the
+        queue fails naming the shutdown, and logs nothing. A job whose runner raised fails with the error's message,
+        the error logged with its traceback. A job whose runner returned without an outcome fails, logged as a defect.
+
+        Raises:
+            RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
+        """
+        state = self.job_state(job_id)
+        if state is None:
+            raise RuntimeError(
+                f"job {job_id} finished, but its JobManager no longer tracked it; "
+                "a manager tracks each job until it finishes"
+            )
+        if state.status in TERMINAL_JOB_STATUSES:
+            return
+        if self._cancellation_of(job_id).is_cancelled:
+            self._report_cancelled_job(job_id)
+        elif future.cancelled():
+            self._fail_job(job_id, _DROPPED_BY_SHUTDOWN_MESSAGE)
+        elif (error := future.exception()) is not None:
+            logger.error(
+                "Job %s of run %s failed with %r, an error that escaped its failure handling",
+                job_id,
+                state.run_id,
+                error,
+                exc_info=error,
+            )
+            self._fail_job(job_id, _message_of(error))
+        else:
+            logger.error(
+                "Job %s of run %s ended without reporting an outcome, a defect in its runner", job_id, state.run_id
+            )
+            self._fail_job(job_id, _ENDED_WITHOUT_AN_OUTCOME_MESSAGE)
 
     def _stop_counting_job(self) -> None:
         """Stop counting one job as unfinished, waking every wait_until_idle caller once none is left."""
@@ -563,78 +641,74 @@ class JobManager:
             self._jobs.pop(job_id, None)
         self._storage.delete_run(run_id)
 
-    def _update_progress(self, job_id: str, pct: float, step: str, message: str) -> None:
-        """Report the running job's progress with its SSE progress event."""
-        state = replace(
-            self._state_of_running_job(job_id),
-            status=_RUNNING_JOB_STATUS,
-            progress_pct=pct,
-            current_step=step,
-            message=message,
-        )
-        self._report_state(JobEvent("progress", state))
-
-    def _state_of_running_job(self, job_id: str) -> JobState:
-        """Return the state of a job this manager is running, which it tracks until the job finishes."""
-        state = self.job_state(job_id)
-        if state is None:
-            raise RuntimeError(
-                f"job {job_id} is running, but its JobManager no longer tracks it; "
-                "a manager tracks each job until it finishes"
-            )
-        return state
-
     def _cancellation_of(self, job_id: str) -> _Cancellation:
         """Return the cancellation of job *job_id*, which this manager tracks."""
         with self._lock:
             return self._jobs[job_id].cancellation
 
-    def _report_state(self, event: JobEvent) -> None:
-        """Make the state *event* carries the state job_state reports for its job, and queue *event*, under one hold of the lock.
+    def _move_job(
+        self,
+        job_id: str,
+        to_status: JobStatus,
+        message: str,
+        *,
+        progress_pct: float | None = None,
+        current_step: str | None = None,
+    ) -> JobState:
+        """Move job *job_id* to *to_status* with *message*, as the one writer of a job's state does; return the new state.
 
-        A reader who sees the new state therefore finds its event queued.
+        The job keeps its progress unless *progress_pct* and *current_step* are given. Under one hold of the lock the
+        move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored, finished_at is stamped when the new
+        status is terminal, and the new state's event is queued, so a reader who sees the new state finds its event
+        queued.
+
+        Raises:
+            RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
+            IllegalJobTransition: LEGAL_JOB_TRANSITIONS does not let the job's status move to *to_status*; nothing
+                has changed then.
         """
         with self._lock:
-            job = self._jobs[event.state.job_id]
-            job.state = event.state
-            job.events.append(event)
-
-    def _report_completed_job(self, job_id: str, message: str) -> None:
-        """Report the state of a job that completed with *message* with its SSE complete event."""
-        state = replace(
-            self._state_of_running_job(job_id),
-            status=_COMPLETED_JOB_STATUS,
-            progress_pct=100.0,
-            current_step="Done",
-            message=message,
-        )
-        self._report_state(JobEvent("complete", state))
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise RuntimeError(
+                    f"job {job_id} moves to {to_status!r}, but its JobManager no longer tracks it; "
+                    "a manager tracks each job until it finishes"
+                )
+            check_job_transition(job_id, job.state.run_id, job.state.status, to_status)
+            job.state = replace(
+                job.state,
+                status=to_status,
+                message=message,
+                progress_pct=job.state.progress_pct if progress_pct is None else progress_pct,
+                current_step=job.state.current_step if current_step is None else current_step,
+            )
+            if to_status in TERMINAL_JOB_STATUSES:
+                job.finished_at = self._clock()
+            job.events.append(JobEvent(_EVENT_TYPE_OF_STATUS[to_status], job.state))
+            return job.state
 
     def _report_cancelled_job(self, job_id: str) -> None:
-        """Report the state of a job cancelled because its run was deleted, at its last progress, with its SSE error event.
+        """Report job *job_id* cancelled because its run was deleted, at its last progress.
 
         It records nothing through the RunStorage: the run's delete removes the run's row.
         """
-        state = replace(
-            self._state_of_running_job(job_id), status=_CANCELLED_JOB_STATUS, message=_CANCELLED_JOB_MESSAGE
-        )
-        self._report_state(JobEvent("error", state))
+        self._move_job(job_id, _CANCELLED_JOB_STATUS, _CANCELLED_JOB_MESSAGE)
 
-    def _record_failed_job(self, job_id: str, message: str) -> None:
-        """Record that a job failed with *message* in its run, then report its state, at its last progress, with its SSE error event."""
-        state = self._failed_state_of_running_job(job_id, message)
-        self._record_failed_run(state)
-        self._report_state(JobEvent("error", state))
+    def _fail_job(self, job_id: str, message: str) -> None:
+        """Report job *job_id* failed with *message*, at its last progress, then record its run failed.
 
-    def _failed_state_of_running_job(self, job_id: str, message: str) -> JobState:
-        """Return the state a job this manager is running reports once it fails with *message*: its last state, failed with *message*."""
-        return replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
+        The job is reported failed first, so nothing its run's row write raises keeps the failure from being
+        reported; the row write is best-effort, as _record_failed_run makes it (docs/prds/job-events-and-sse-framing.md
+        §3.4, and the G7 waiver of §15).
+        """
+        self._record_failed_run(self._move_job(job_id, _FAILED_JOB_STATUS, message))
 
     def _record_failed_run(self, state: JobState) -> None:
         """Mark the run of *state*'s job failed with the job's message, through the RunStorage.
 
-        An Exception that stops it is logged, naming the job, its run and its failure, and not raised, so the job is
-        still reported failed.
+        An Exception that stops it is logged, naming the job, its run and its failure, and not raised: the job is
+        already reported failed. A run it cannot record failed stays running, and RunStorage.fail_interrupted_runs
+        marks it failed when the next server starts.
         """
         try:
             self._storage.mark_run_failed(state.run_id, state.message)
@@ -646,54 +720,44 @@ class JobManager:
                 state.message,
             )
 
-    def _fail_job_whose_runner_raised(self, job_id: str, error: BaseException) -> None:
-        """Fail job *job_id* with *error*, which its runner raised and the runner's own failure handling did not catch.
-
-        Log *error*, record the failure in the job's run, then report the job failed. A run it cannot record failed
-        stays running, and RunStorage.fail_interrupted_runs marks it failed when the next server starts.
-        """
-        state = self._failed_state_of_running_job(job_id, str(error))
-        logger.error(
-            "Job %s of run %s failed with %r, an error that escaped its failure handling",
-            state.job_id,
-            state.run_id,
-            error,
-            exc_info=error,
-        )
-        self._record_failed_run(state)
-        self._report_state(JobEvent("error", state))
-
     def _run_job(
         self,
         job_id: str,
+        run_id: str,
         simulate: Callable[[_ProgressReport], _RunSave],
         success_message: str = "Simulation completed successfully",
     ) -> None:
-        """Run a job's simulation, reporting its progress, then make the save it returns and report its completion; or report its cancellation or its failure.
+        """Run a job's simulation, reporting its progress, then complete the job; or report its cancellation or its failure.
 
-        Each progress report, the 'Starting' one included, is a checkpoint at which a cancelled job stops, and the
-        save is made through _Cancellation.save_unless_cancelled, the one place a job's run is saved. A cancelled
-        job reports cancelled even if its simulation then raises an Exception. Otherwise an Exception the
-        simulation or the save raises fails the job, and its run is recorded failed. An error that is not an
-        Exception, other than _JobCancelled, escapes to _fail_job_if_its_runner_raised, which fails the job.
+        Each progress report, the 'Starting' one included, is a checkpoint at which a cancelled job stops. The
+        completion is made through _Cancellation.complete_unless_cancelled, the one place a job's run is saved: the
+        save the simulation returns writes the results of run *run_id*, the run is marked completed, and only then
+        is the job reported completed. A cancelled job reports cancelled even if its simulation then raises an
+        Exception. Otherwise an Exception the simulation or the completion raises fails the job, and its run is
+        recorded failed, with the message _message_of reads. An error that is not an Exception, other than
+        _JobCancelled, escapes to the done-callback, _on_job_done, which fails the job.
         """
         cancellation = self._cancellation_of(job_id)
 
         def progress(pct: float, step: str, msg: str) -> None:
             cancellation.checkpoint()
-            self._update_progress(job_id, pct, step, msg)
+            self._move_job(job_id, _RUNNING_JOB_STATUS, msg, progress_pct=pct, current_step=step)
+
+        def complete(save: _RunSave) -> None:
+            save()
+            self._storage.mark_run_completed(run_id)
+            self._move_job(job_id, _COMPLETED_JOB_STATUS, success_message, progress_pct=100.0, current_step="Done")
 
         try:
             progress(5.0, "Starting", "Initializing...")
-            cancellation.save_unless_cancelled(simulate(progress))
-            self._report_completed_job(job_id, success_message)
+            cancellation.complete_unless_cancelled(functools.partial(complete, simulate(progress)))
         except _JobCancelled:
             self._report_cancelled_job(job_id)
         except Exception as exc:
             if cancellation.is_cancelled:
                 self._report_cancelled_job(job_id)
             else:
-                self._record_failed_job(job_id, str(exc))
+                self._fail_job(job_id, _message_of(exc))
 
     def _run_home_simulation(
         self,
@@ -709,7 +773,8 @@ class JobManager:
         simulation-specific logic: running the simulation, then returning the
         save of the run from its results through
         RunStorage.save_home_run_from_results, under the name and creation
-        time its submit recorded, which _run_job makes under the job's lock.
+        time its submit recorded, which _run_job makes, then completes the
+        run, under the job's lock.
 
         Args:
             job_id: Unique job identifier.
@@ -732,14 +797,13 @@ class JobManager:
                     config=config,
                     results=results,
                     name=run.name,
-                    status="completed",
                     duration_seconds=time.monotonic() - start_ref,
                     created_at=run.created_at,
                 )
 
             return save
 
-        self._run_job(job_id, simulate, "Simulation completed successfully")
+        self._run_job(job_id, run.id, simulate, "Simulation completed successfully")
 
     def _run_fleet_simulation(
         self,
@@ -755,7 +819,8 @@ class JobManager:
         fleet-specific logic: simulating each home, then returning the save of
         the run from the fleet's results through
         RunStorage.save_fleet_run_from_results, under the name and creation
-        time its submit recorded, which _run_job makes under the job's lock.
+        time its submit recorded, which _run_job makes, then completes the
+        run, under the job's lock.
 
         Args:
             job_id: Unique job identifier.
@@ -782,11 +847,10 @@ class JobManager:
                     run_id=run.id,
                     fleet_results=FleetResults(per_home_results=per_home_results, home_configs=configs),
                     name=run.name,
-                    status="completed",
                     duration_seconds=time.monotonic() - start_ref,
                     created_at=run.created_at,
                 )
 
             return save
 
-        self._run_job(job_id, simulate, "Fleet simulation completed successfully")
+        self._run_job(job_id, run.id, simulate, "Fleet simulation completed successfully")

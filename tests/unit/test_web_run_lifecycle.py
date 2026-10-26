@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the runs-row writes a simulation job's lifecycle makes through RunStorage.
 
-A job's submit creates its run, running; a job that fails marks its run failed; and the next
-server start fails every run a job left running.
+A job's submit creates its run, running; a job that completes marks its run completed, and a
+job that fails marks it failed; and the next server start fails every run a job left running.
+Each lifecycle method moves a run only from 'running': marking completed or failed a run in any
+other status raises RunStatusConflict and leaves the run as it was.
 """
 
 import dataclasses
@@ -15,12 +17,12 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
+from solar_challenge.web.storage import RunQuery, RunRecord, RunStatus, RunStatusConflict, RunStorage
 from solar_challenge.web.stored_runs import RunType
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
-from tests._web_runs import store_home_run
+from tests._web_runs import record_run_status, store_home_run
 
 _CREATED_AT = "2026-10-20T09:00:00+00:00"
 
@@ -43,6 +45,13 @@ def _record(storage: RunStorage, run_id: str) -> RunRecord:
     record = storage.run_record(run_id)
     assert record is not None, f"no run has id {run_id!r}"
     return record
+
+
+def _create_north_roof_run_with_status(storage: RunStorage, status: RunStatus) -> RunRecord:
+    """Create run-1 as _create_north_roof_run does, then move it to *status* as record_run_status moves it; return its record then."""
+    _create_north_roof_run(storage)
+    record_run_status(storage, "run-1", status)
+    return _record(storage, "run-1")
 
 
 def _utc_now() -> datetime:
@@ -126,9 +135,10 @@ class TestCreateRun:
 
         assert storage.run_record("run-1") == stored
 
-    def test_a_created_run_saved_as_a_finished_job_saves_it_is_completed_and_keeps_its_name_and_creation_time(
+    def test_a_created_run_saved_as_a_finished_job_saves_it_stays_running_and_keeps_its_name_and_creation_time(
         self, storage: RunStorage
     ) -> None:
+        """The save writes the run's results, not its status: its job completes it once the save has written them."""
         _create_north_roof_run(storage)
 
         storage.save_home_run_from_results(
@@ -141,14 +151,55 @@ class TestCreateRun:
         )
 
         record = _record(storage, "run-1")
-        assert (record.status, record.name, record.created_at, record.duration_seconds) == (
-            "completed",
+        assert (record.status, record.name, record.created_at, record.duration_seconds, record.completed_at) == (
+            "running",
             "North Roof",
             _CREATED_AT,
             2.0,
+            None,
         )
-        assert record.completed_at is not None
         assert record.summary_json is not None
+
+
+class TestMarkRunCompleted:
+    """Tests for RunStorage.mark_run_completed, which records that a job's run completed."""
+
+    def test_a_running_run_marked_completed_is_completed_now_and_otherwise_as_created(
+        self, storage: RunStorage
+    ) -> None:
+        created = _create_north_roof_run(storage)
+
+        before = _utc_now()
+        storage.mark_run_completed("run-1")
+        after = _utc_now()
+
+        record = _record(storage, "run-1")
+        assert before <= _completion_time(record) <= after
+        assert record == dataclasses.replace(created, status="completed", completed_at=record.completed_at)
+
+    @pytest.mark.parametrize("status", ["completed", "failed"])
+    def test_marking_completed_a_run_that_is_not_running_raises_run_status_conflict_naming_it_and_leaves_it_as_it_was(
+        self, storage: RunStorage, status: RunStatus
+    ) -> None:
+        before = _create_north_roof_run_with_status(storage, status)
+
+        with pytest.raises(RunStatusConflict) as raised:
+            storage.mark_run_completed("run-1")
+
+        conflict = raised.value
+        assert (conflict.run_id, conflict.found, conflict.wanted) == ("run-1", status, "completed")
+        for named in ("run-1", status, "completed"):
+            assert named in str(conflict)
+        assert _record(storage, "run-1") == before
+
+    def test_marking_completed_an_id_no_run_has_raises_run_status_conflict_naming_it_and_writes_nothing(
+        self, storage: RunStorage
+    ) -> None:
+        with pytest.raises(RunStatusConflict, match=re.escape("run-1")) as raised:
+            storage.mark_run_completed("run-1")
+
+        assert (raised.value.run_id, raised.value.found, raised.value.wanted) == ("run-1", None, "completed")
+        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestMarkRunFailed:
@@ -174,6 +225,22 @@ class TestMarkRunFailed:
 
         assert storage.page_runs(RunQuery()).total == 0
 
+    @pytest.mark.parametrize("status", ["completed", "failed"])
+    def test_marking_failed_a_run_that_is_not_running_raises_run_status_conflict_naming_it_and_leaves_it_as_it_was(
+        self, storage: RunStorage, status: RunStatus
+    ) -> None:
+        """A completed run stays completed when a failure is reported after it."""
+        before = _create_north_roof_run_with_status(storage, status)
+
+        with pytest.raises(RunStatusConflict) as raised:
+            storage.mark_run_failed("run-1", "a failure reported after the run ended")
+
+        conflict = raised.value
+        assert (conflict.run_id, conflict.found, conflict.wanted) == ("run-1", status, "failed")
+        for named in ("run-1", status, "failed"):
+            assert named in str(conflict)
+        assert _record(storage, "run-1") == before
+
 
 class TestFailInterruptedRuns:
     """Tests for RunStorage.fail_interrupted_runs, which a server start calls for the runs its jobs left running."""
@@ -197,7 +264,7 @@ class TestFailInterruptedRuns:
     def test_a_completed_run_and_a_failed_run_are_left_as_they_were(self, storage: RunStorage) -> None:
         store_home_run(storage, "completed-run", make_home_config(), make_sim_results(days=1))
         _create_north_roof_run(storage, "failed-run")
-        storage.mark_run_failed("failed-run", "the simulation failed")
+        record_run_status(storage, "failed-run", "failed")
         records_before = [_record(storage, run_id) for run_id in ("completed-run", "failed-run")]
 
         assert storage.fail_interrupted_runs() == 0

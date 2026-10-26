@@ -102,27 +102,16 @@ def test_a_run_saved_from_its_results_is_recorded_with_the_name_duration_and_cre
     ]
 
 
-def test_a_run_saved_from_its_results_without_a_status_is_recorded_as_completed(storage: RunStorage) -> None:
+def test_a_run_saved_from_its_results_is_recorded_running_with_no_completion_time(storage: RunStorage) -> None:
+    """A save writes no status: its job's lifecycle, through RunStorage.mark_run_completed, completes the run."""
     config, results = _a_home()
 
     storage.save_home_run_from_results("home-1", config, results, name="Saved Run")
     storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes(), name="Saved Run")
 
-    assert [
-        (record.status, record.completed_at is not None) for record in _records_of_the_home_and_fleet_runs(storage)
-    ] == [("completed", True), ("completed", True)]
-
-
-def test_a_run_saved_from_its_results_with_a_status_is_recorded_with_it(storage: RunStorage) -> None:
-    config, results = _a_home()
-
-    storage.save_home_run_from_results("home-1", config, results, name="Saved Run", status="failed")
-    storage.save_fleet_run_from_results("fleet-1", _two_unlike_homes(), name="Saved Run", status="running")
-
     assert [(record.status, record.completed_at) for record in _records_of_the_home_and_fleet_runs(storage)] == [
-        ("failed", None),
-        ("running", None),
-    ]
+        ("running", None)
+    ] * 2
 
 
 def test_a_fleet_unpaired_after_construction_is_refused_and_nothing_is_saved(storage: RunStorage) -> None:

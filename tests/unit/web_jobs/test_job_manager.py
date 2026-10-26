@@ -37,6 +37,7 @@ from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
     RecordingSimulation,
+    RunStorageWithGatedCompletion,
     RunStorageWithGatedHomeSaves,
     SaveGate,
     a_failing_simulation,
@@ -59,7 +60,7 @@ def _a_simulation_that_exits(config: HomeConfig, start_date: pd.Timestamp, end_d
 
 
 class _AnErrorWhoseMessageCannotBeRead(BaseException):
-    """An error that is not an Exception and whose message cannot be read, so a job that raised it cannot be reported failed."""
+    """An error that is not an Exception and whose message cannot be read, so a job that raised it is reported failed naming the error's type."""
 
     def __str__(self) -> str:
         raise RuntimeError("the message of this error cannot be read")
@@ -545,7 +546,7 @@ class TestJobManagerAgeLimit:
 
         assert manager.job_state(job_id) is None
 
-    def test_a_job_whose_failure_cannot_be_reported_is_not_tracked_after_a_submit_a_day_after_it_finished(
+    def test_a_job_that_failed_with_an_error_whose_message_cannot_be_read_is_not_tracked_after_a_submit_a_day_after_it_finished(
         self, storage: RunStorage
     ) -> None:
         clock = _ManualClock()
@@ -555,11 +556,13 @@ class TestJobManagerAgeLimit:
             simulate_home=_a_simulation_raising_an_error_whose_message_cannot_be_read,
             clock=clock,
         )
-        job_id = _submit_home_job(manager)
-        assert manager.wait_until_idle(timeout=30)
-        clock.advance(_A_DAY)
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+            clock.advance(_A_DAY)
 
-        _submit_home_job(manager)
+            _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
 
         assert manager.job_state(job_id) is None
 
@@ -673,6 +676,20 @@ class TestJobManagerRuns:
 
         assert (run.status, run.error_message) == ("completed", None)
         assert run.completed_at is not None
+
+    def test_a_job_reports_completed_only_once_its_run_reads_completed(
+        self, storage: RunStorage, save_gate: SaveGate
+    ) -> None:
+        gated = RunStorageWithGatedCompletion(storage.database, storage.data_dir, save_gate)
+        manager = JobManager(gated, max_workers=1, simulate_home=RecordingSimulation())
+        job_id = _submit_home_job(manager)
+        save_gate.wait_until_a_save_waits()
+
+        assert _run_of_job(manager, job_id, storage).status == "completed"
+        assert _status_of(manager, job_id) == "running"
+        save_gate.open()
+        assert manager.wait_until_idle(timeout=30)
+        assert _status_of(manager, job_id) == "completed"
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(
@@ -873,6 +890,32 @@ class TestJobManagerEscapedErrors:
         error = records[0].exc_info[1]
         assert (type(error), str(error)) == (SystemExit, "the simulation exited")
 
+    def test_a_job_whose_error_has_a_message_that_cannot_be_read_is_reported_failed_naming_the_errors_type(
+        self, storage: RunStorage
+    ) -> None:
+        manager = JobManager(
+            storage,
+            max_workers=1,
+            simulate_home=_a_simulation_raising_an_error_whose_message_cannot_be_read,
+            new_id=CountingIds(),
+        )
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+
+        message = "_AnErrorWhoseMessageCannotBeRead, whose message could not be read"
+        state = manager.job_state(job_id)
+        assert state is not None
+        assert (state.status, state.message) == ("failed", message)
+        run = _run_of_job(manager, job_id, storage)
+        assert (run.status, run.error_message) == ("failed", message)
+        assert [(record.levelno, "id-1" in record.getMessage(), "id-2" in record.getMessage()) for record in records] == [
+            (logging.ERROR, True, True)
+        ]
+        assert records[0].exc_info is not None
+        assert type(records[0].exc_info[1]) is _AnErrorWhoseMessageCannotBeRead
+
 
 class TestJobManagerCancelRun:
     """JobManager.cancel_run, which a run's delete calls first: the run's queued or running job is cancelled and saves nothing."""
@@ -1039,7 +1082,7 @@ class TestJobManagerShutdown:
         assert _ids_tracked_by(manager, ids.issued) == []
         assert storage.page_runs(RunQuery()).total == 0
 
-    def test_a_job_dropped_by_shutdown_keeps_the_state_it_was_queued_in_and_logs_no_error(
+    def test_a_job_dropped_by_shutdown_reports_failed_naming_the_shutdown_and_logs_no_error(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage, caplog: pytest.LogCaptureFixture
     ) -> None:
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
@@ -1052,10 +1095,12 @@ class TestJobManagerShutdown:
 
         with caplog.at_level(logging.ERROR):
             manager.shutdown()
+            dropped = replace(queued, status="failed", message="Dropped: the server shut down before the job ran")
+            assert manager.job_state(dropped_job_id) == dropped
+            assert list(manager.get_events(dropped_job_id))[-1] == JobEvent("error", dropped)
             blocking_simulation.release()
             assert manager.wait_until_idle(timeout=30)
 
-        assert manager.job_state(dropped_job_id) == queued
         assert [(record.name, record.getMessage()) for record in caplog.records if record.levelno >= logging.ERROR] == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, storage: RunStorage) -> None:
@@ -1181,7 +1226,7 @@ class TestLiveManagers:
 class TestRecoveryOfInterruptedRuns:
     """Tests for RunStorage.fail_interrupted_runs, which a server start calls, on the runs a JobManager's jobs left."""
 
-    def test_recovery_fails_the_run_of_a_job_dropped_when_its_manager_shut_down(
+    def test_the_run_of_a_job_dropped_when_its_manager_shut_down_is_failed_naming_the_drop_and_recovery_leaves_it_as_it_was(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage
     ) -> None:
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
@@ -1191,10 +1236,10 @@ class TestRecoveryOfInterruptedRuns:
         manager.shutdown()
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
-        assert _run_of_job(manager, dropped_job_id, storage).status == "running"
+        dropped = _run_of_job(manager, dropped_job_id, storage)
+        assert (dropped.status, dropped.error_message) == ("failed", "Dropped: the server shut down before the job ran")
+        assert dropped.completed_at is not None
 
-        storage.fail_interrupted_runs()
+        assert storage.fail_interrupted_runs() == 0
 
-        run = _run_of_job(manager, dropped_job_id, storage)
-        assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
-        assert run.completed_at is not None
+        assert _run_of_job(manager, dropped_job_id, storage) == dropped

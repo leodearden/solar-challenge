@@ -10,6 +10,12 @@ Storage structure:
 
 A save writes the run's documents, then its format.json, then its runs row.
 
+Only the lifecycle methods write a run's status: create_run records a run 'running', and
+mark_run_completed, mark_run_failed and fail_interrupted_runs move it on, each from 'running'
+only. mark_run_completed and mark_run_failed refuse a run in any other status with
+RunStatusConflict, and fail_interrupted_runs leaves it as it was
+(docs/prds/job-events-and-sse-framing.md §3.4).
+
 The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
 and for a step carrying a run-document step, migrate_stored_run_files, which brings every
 stored run's files forward before the step's transaction, and migrate_runs_table_documents,
@@ -590,11 +596,67 @@ RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a 
 RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 
-_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
-
 _COMPLETED_RUN_STATUS: RunStatus = "completed"
 _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
+
+
+class RunStatusConflict(Exception):
+    """A run a lifecycle method of RunStorage cannot move to *wanted*, as a run's status moves only from 'running'.
+
+    found is the status the run's row holds, or None when no run is recorded under run_id. The
+    message names the run, the status found and the status wanted.
+    """
+
+    def __init__(self, run_id: str, found: RunStatus | None, wanted: RunStatus) -> None:
+        held = "no run is recorded under that id" if found is None else f"the run is {found!r}"
+        super().__init__(
+            f"Run {run_id!r} cannot be marked {wanted!r}: a run's status moves only from "
+            f"{UNFINISHED_RUN_STATUS!r}, and {held}"
+        )
+        self.run_id = run_id
+        self.found = found
+        self.wanted = wanted
+
+
+def _now() -> str:
+    """The time now, as the ISO 8601 UTC text a runs row records its times in."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class _RunEnding:
+    """How a run that stops running ends, as its runs row records it: the status it ends in, its error message, None unless it failed, and when it ended."""
+
+    status: RunStatus
+    error_message: str | None
+    completed_at: str
+
+
+def _completed_now() -> _RunEnding:
+    """The ending of a run that completes now."""
+    return _RunEnding(status=_COMPLETED_RUN_STATUS, error_message=None, completed_at=_now())
+
+
+def _failed_now(message: str) -> _RunEnding:
+    """The ending of a run that fails now, with *message* as its error."""
+    return _RunEnding(status=_FAILED_RUN_STATUS, error_message=message, completed_at=_now())
+
+
+_END_RUNNING_RUNS = (
+    "UPDATE runs SET status = :status, error_message = :error_message, completed_at = :completed_at "
+    "WHERE status = :running"
+)
+"""The statement writing a _RunEnding, bound by field name, to every running run, the only status a run moves from; a condition joined with AND narrows the runs it ends."""
+
+
+def _ending_values(ending: _RunEnding) -> dict[str, str | None]:
+    """The values _END_RUNNING_RUNS binds to end the running runs as *ending* says."""
+    return {**asdict(ending), "running": UNFINISHED_RUN_STATUS}
+
+
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS, *(column.name for column in fields(_RunEnding)))
+"""The columns of a runs row a save leaves as they are: the run's id and creation time, the labels a user edits in Run History, and the columns a run's ending writes, which only the lifecycle methods write."""
 
 
 def _run_row_insert() -> str:
@@ -620,11 +682,6 @@ _RUN_ROW_INSERT = _run_row_insert()
 _RUN_ROW_UPSERT = _run_row_upsert()
 
 
-def _now() -> str:
-    """The time now, as the ISO 8601 UTC text a runs row records its times in."""
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _saved_run_row(
     *,
     run_id: str,
@@ -632,33 +689,29 @@ def _saved_run_row(
     run_type: RunType,
     config: dict[str, Any],
     summary: dict[str, Any],
-    status: RunStatus,
-    error_message: str | None,
     created_at: str | None,
     duration_seconds: float | None,
     n_homes: int,
 ) -> RunRecord:
     """The runs row a save writes for the run it stored under *run_id*, its config and summary as JSON text.
 
-    The run is created now unless *created_at* is given, is completed now if its *status* is
-    completed, and has no notes. Now is one time, read once: a run created and completed by the
-    same save has the same time for both.
+    The run is running, with no error and no completion time, as create_run records a run: a
+    save writes no status, which only the lifecycle methods move on. The run is created now
+    unless *created_at* is given, and has no notes.
 
     Raises:
-        ValueError: *name* cannot name a run, as require_run_name refuses it, or *status* is
-            not one of RUN_STATUSES; RunRecord refuses either.
+        ValueError: *name* cannot name a run, as require_run_name refuses it; RunRecord refuses it.
     """
-    now = _now()
     return RunRecord(
         id=run_id,
         name=name,
         type=run_type,
         config_json=json.dumps(config),
         summary_json=json.dumps(summary),
-        status=status,
-        error_message=error_message,
-        created_at=now if created_at is None else created_at,
-        completed_at=now if status == _COMPLETED_RUN_STATUS else None,
+        status=UNFINISHED_RUN_STATUS,
+        error_message=None,
+        created_at=_now() if created_at is None else created_at,
+        completed_at=None,
         duration_seconds=duration_seconds,
         n_homes=n_homes,
         notes=None,
@@ -713,7 +766,8 @@ class RunStorage:
 
         A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names, among
         them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
-        runs keeps the new name when the job's save rewrites its row.
+        runs keeps the new name when the job's save rewrites its row. It also keeps the status,
+        error and completion time the lifecycle methods wrote.
         """
         with self.database.transaction() as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
@@ -723,7 +777,8 @@ class RunStorage:
 
         The run has the *run_type*, *name*, *n_homes* and *created_at* given and no other column:
         no config, summary, error, completion time, duration or notes. It writes no file; the save
-        of the job's results writes the run's files and completes its row.
+        of the job's results writes the run's files and documents, and mark_run_completed then
+        completes the run.
 
         Returns:
             The run's record as written.
@@ -753,41 +808,59 @@ class RunStorage:
             conn.execute(_RUN_ROW_INSERT, asdict(record))
         return record
 
+    def mark_run_completed(self, run_id: str) -> None:
+        """Record that run *run_id* completed: completed now, with no error.
+
+        Raises:
+            RunStatusConflict: The run is not running, or no run is recorded under *run_id*,
+                found None then, as a job never completes a run deleted while it ran (contract
+                C8, docs/prds/run-store-one-owner.md §3.7). Nothing is written then.
+        """
+        ending = _completed_now()
+        found = self._end_running_run(run_id, ending)
+        if found != UNFINISHED_RUN_STATUS:
+            raise RunStatusConflict(run_id, found, ending.status)
+
     def mark_run_failed(self, run_id: str, message: str) -> None:
         """Record that run *run_id* failed with *message*: failed, with *message* as its error, completed now.
 
-        The run is marked failed whatever its status. When no run has that id, nothing is written.
+        When no run has that id, nothing is written: a run deleted while its job ran stays deleted.
+
+        Raises:
+            RunStatusConflict: The run is not running, e.g. it completed; it is left as it was.
         """
-        self._fail_runs("id = :run_id", {"run_id": run_id}, message)
+        ending = _failed_now(message)
+        found = self._end_running_run(run_id, ending)
+        if found is not None and found != UNFINISHED_RUN_STATUS:
+            raise RunStatusConflict(run_id, found, ending.status)
 
     def fail_interrupted_runs(self) -> int:
         """Mark every running run failed, as mark_run_failed marks one, with the message "Interrupted by server restart".
 
         A server calls it when it starts, before it runs any job, so each running run is one whose
-        job an earlier server was running when it stopped.
+        job an earlier server was running when it stopped. A run in any other status is left as it was.
 
         Returns:
             The number of runs it marked failed.
         """
-        return self._fail_runs(
-            "status = :unfinished_status", {"unfinished_status": UNFINISHED_RUN_STATUS}, _INTERRUPTED_BY_RESTART_MESSAGE
-        )
+        ending = _failed_now(_INTERRUPTED_BY_RESTART_MESSAGE)
+        with self.database.transaction() as conn:
+            return conn.execute(_END_RUNNING_RUNS, _ending_values(ending)).rowcount
 
-    def _fail_runs(self, condition: str, condition_values: Mapping[str, str], message: str) -> int:
-        """Mark failed, with *message* as its error and completed now, each run whose row matches the SQL *condition*.
-
-        *condition* binds by name the values *condition_values* holds.
+    def _end_running_run(self, run_id: str, ending: _RunEnding) -> RunStatus | None:
+        """End run *run_id* as *ending* says if it is running, in one transaction; return the status its row held.
 
         Returns:
-            The number of runs it marked failed.
+            UNFINISHED_RUN_STATUS when the run was running and has ended. Otherwise the status
+            its row holds, or None when no run is recorded under *run_id*; nothing has been
+            written then.
         """
         with self.database.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE runs SET status = :failed_status, error_message = :message, completed_at = :completed_at "
-                f"WHERE {condition}",
-                {**condition_values, "failed_status": _FAILED_RUN_STATUS, "message": message, "completed_at": _now()},
-            )
-            return cursor.rowcount
+            ended = conn.execute(f"{_END_RUNNING_RUNS} AND id = :run_id", {**_ending_values(ending), "run_id": run_id})
+            if ended.rowcount == 1:
+                return UNFINISHED_RUN_STATUS
+            record = _record_of_row(conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
+        return None if record is None else record.status
 
     def save_home_run(
         self,
@@ -796,17 +869,16 @@ class RunStorage:
         results: SimulationResults,
         summary: SummaryStatistics,
         name: str,
-        status: RunStatus = "completed",
-        error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and upserts metadata into database. A run
-        already stored under run_id keeps the columns of its runs row that
-        _upsert_run_row keeps.
+        saves time series to parquet, and upserts metadata into database. A new
+        runs row is recorded running; a run already stored under run_id keeps the
+        columns of its runs row that _upsert_run_row keeps, among them the status,
+        error and completion time the lifecycle methods wrote.
 
         Args:
             run_id: Unique run identifier
@@ -816,16 +888,13 @@ class RunStorage:
             name: The name of the run when the save records it for the first time. A run
                 already recorded, as a job's submit records it through create_run, keeps its
                 own name, as a re-save keeps a run's labels.
-            status: Run status
-            error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, name cannot name a run, as
-                require_run_name refuses it, or status is not one of RUN_STATUSES. The save
-                has written nothing then.
+            ValueError: If the store refuses run_id, or name cannot name a run, as
+                require_run_name refuses it. The save has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
@@ -838,8 +907,6 @@ class RunStorage:
             run_type="home",
             config=config_document,
             summary=summary_document,
-            status=status,
-            error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=1,
@@ -854,7 +921,6 @@ class RunStorage:
         results: SimulationResults,
         *,
         name: str,
-        status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
@@ -870,7 +936,6 @@ class RunStorage:
             results,
             calculate_summary(results),
             name=name,
-            status=status,
             duration_seconds=duration_seconds,
             created_at=created_at,
         )
@@ -882,17 +947,16 @@ class RunStorage:
         fleet_summary: FleetSummary,
         per_home_summaries: list[SummaryStatistics],
         name: str,
-        status: RunStatus = "completed",
-        error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
         """Save a fleet simulation run to storage.
 
         Creates directory structure with homes/ subdirectory, saves per-home
-        parquet files, fleet summary JSON, and fleet config JSON. A run already
-        stored under run_id keeps the columns of its runs row that _upsert_run_row
-        keeps.
+        parquet files, fleet summary JSON, and fleet config JSON. A new runs row
+        is recorded running; a run already stored under run_id keeps the columns
+        of its runs row that _upsert_run_row keeps, among them the status, error
+        and completion time the lifecycle methods wrote.
 
         Args:
             run_id: Unique run identifier
@@ -902,17 +966,14 @@ class RunStorage:
             name: The name of the run when the save records it for the first time. A run
                 already recorded, as a job's submit records it through create_run, keeps its
                 own name, as a re-save keeps a run's labels.
-            status: Run status
-            error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
 
         Raises:
             ValueError: If the store refuses run_id, per_home_summaries does not hold one
-                summary per home's results, name cannot name a run, as require_run_name
-                refuses it, or status is not one of RUN_STATUSES. The save has written
-                nothing then.
+                summary per home's results, or name cannot name a run, as require_run_name
+                refuses it. The save has written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredFleetRun(
@@ -930,8 +991,6 @@ class RunStorage:
             run_type="fleet",
             config=config_document,
             summary=summary_document,
-            status=status,
-            error_message=error_message,
             created_at=created_at,
             duration_seconds=duration_seconds,
             n_homes=len(fleet_results.home_configs),
@@ -945,7 +1004,6 @@ class RunStorage:
         fleet_results: FleetResults,
         *,
         name: str,
-        status: RunStatus = "completed",
         duration_seconds: float | None = None,
         created_at: str | None = None,
     ) -> None:
@@ -967,7 +1025,6 @@ class RunStorage:
             aggregate_home_summaries(home_summaries),
             home_summaries,
             name=name,
-            status=status,
             duration_seconds=duration_seconds,
             created_at=created_at,
         )
