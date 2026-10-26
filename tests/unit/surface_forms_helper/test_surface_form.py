@@ -1637,3 +1637,34 @@ def test_a_partial_whose_type_takes_get_from_another_class_but_defines_set_or_ca
         surface_form(functools.partial(GetterPartial(_settled, rate=1)))
         == "(self: object, share: float, *, rate: int = 1) -> None"
     )
+
+
+@pytest.mark.parametrize("kind", [GetterPartial, SettableGetterPartial])
+def test_a_class_or_call_bound_through_a_partial_whose_type_takes_get_from_another_class_raises_a_type_error_naming_that_type_instead_of_the_binding_of_a_partial(
+    kind: type,
+) -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = kind(build, scale=2.0)
+
+    class Calling(type):
+        __call__ = kind(build, scale=2.0)
+
+    class Called(metaclass=Calling):
+        pass
+
+    class CallingObject:
+        __call__ = kind(build, scale=2.0)
+
+    naming_that_type = (
+        rf"a .*\.{kind.__qualname__}, a functools\.partial whose type takes __get__ from a "
+        r"class other than functools\.partial\b"
+    )
+    for routine, site in (
+        (Built, r"\.Built\b.* is constructed through .*\.Built\.__init__, "),
+        (Called, r"\.Called\b.* is constructed through .*\.Calling\.__call__, "),
+        (functools.partial(CallingObject()), r" is read through .*\.CallingObject\.__call__, "),
+    ):
+        with pytest.raises(TypeError, match=site + naming_that_type):
+            surface_form(routine)

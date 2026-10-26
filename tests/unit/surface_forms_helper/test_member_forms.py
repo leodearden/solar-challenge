@@ -27,6 +27,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     CallableGetter,
     GetterPartial,
     Preset,
+    SettableGetterPartial,
     imported_module,
 )
 
@@ -552,3 +553,17 @@ def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_
         member_forms(Meter)
     with pytest.raises(TypeError, match=naming_the_class_the_member_and_its_type):
         named_classes(Meter)
+
+
+def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_set_raises_a_type_error_naming_the_class_the_member_and_that_type() -> None:
+    def settle(self: object, share: float, rate: int) -> None: ...
+
+    class Meter:
+        half = SettableGetterPartial(settle, rate=1)
+
+    with pytest.raises(
+        TypeError,
+        match=r"\.Meter\.half is a .*\.SettableGetterPartial, a functools\.partial whose type "
+        r"takes __get__ from a class other than functools\.partial\b",
+    ):
+        member_forms(Meter)
