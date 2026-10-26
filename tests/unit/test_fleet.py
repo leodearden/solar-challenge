@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import parse_fleet_config
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
@@ -53,7 +54,7 @@ class TestFleetConfigBasics:
 
     def test_requires_at_least_one_home(self):
         """Fleet must have at least one home."""
-        with pytest.raises(ValueError, match="at least one home"):
+        with pytest.raises(ConfigurationError, match="at least one home"):
             FleetConfig(homes=[])
 
     def test_validates_consistent_timezones(self):
@@ -69,7 +70,7 @@ class TestFleetConfigBasics:
             location=Location(latitude=40.7, longitude=-74.0, timezone="America/New_York"),
         )
 
-        with pytest.raises(ValueError, match="timezone"):
+        with pytest.raises(ConfigurationError, match="timezone"):
             FleetConfig(homes=[home1, home2])
 
 
@@ -106,7 +107,7 @@ class TestFleetConfigCreation:
 
     def test_heterogeneous_requires_matching_lengths(self):
         """Heterogeneous config lists must have same length."""
-        with pytest.raises(ValueError, match="same length"):
+        with pytest.raises(ConfigurationError, match="same length"):
             FleetConfig.create_heterogeneous(
                 pv_capacities_kw=[3.0, 4.0],
                 battery_capacities_kwh=[None, 5.0, 5.0],  # Wrong length
