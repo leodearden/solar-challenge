@@ -17,7 +17,7 @@ from dataclasses import InitVar, dataclass
 import pytest
 
 from tests._surface_forms import undeclared_attributes, unset_attributes
-from tests.unit.surface_forms_helper._fixtures import imported_module
+from tests.unit.surface_forms_helper._fixtures import UNREADABLE_ROUTINES, imported_module
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
@@ -157,6 +157,25 @@ def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_u
     assert vars(reading).keys() >= {"scale", "offset", "floor"}
     assert undeclared_attributes(Reading) == {"scale", "offset", "floor"}
     assert undeclared_attributes(Scaled) == {"scale"}
+
+
+@pytest.mark.parametrize(
+    "routine",
+    [
+        *(pytest.param(routine.values[0], id=routine.id) for routine in UNREADABLE_ROUTINES),
+        pytest.param(functools.partial(round, ndigits=1), id="partial"),
+    ],
+)
+def test_a_class_with_a_member_member_forms_refuses_still_has_its_undeclared_attributes_read(
+    routine: object,
+) -> None:
+    class Meter:
+        half = routine
+
+        def __init__(self) -> None:
+            self.reading = 0.0
+
+    assert undeclared_attributes(Meter) == {"reading"}
 
 
 def test_a_class_body_string_annotation_naming_a_name_its_module_does_not_bind_raises_a_name_error_from_undeclared_attributes_and_unset_attributes() -> None:
