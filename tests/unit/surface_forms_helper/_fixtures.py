@@ -6,9 +6,11 @@ Outer and Preset are defined at module level, where a qualified name carries no
 references to resolve. imported_module writes a module and imports it, for the rules
 about the module a name is read in. UNREADABLE_ROUTINES holds a routine of each kind
 whose signature inspect cannot read, each with its kind's name, for the refusal rules.
-GetterPartial is a functools.partial whose type takes __get__ from a class other than
-functools.partial, and SettableGetterPartial one whose type also defines __set__, for
-the rules about how inspect reads and binds such a partial.
+GetterDeleter is a descriptor whose type defines __get__ and __delete__ but no __set__,
+and CallableGetterDeleter a callable one, for the rules about how inspect reads such a
+descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
+other than functools.partial, and SettableGetterPartial one whose type also defines
+__set__, for the rules about how inspect reads and binds such a partial.
 """
 
 import functools
@@ -59,6 +61,21 @@ class NoneSignedCallableGetter(CallableGetter):
 
     def __init__(self, function: Callable[..., object]) -> None:
         self.__wrapped__ = function
+
+
+class GetterDeleter:
+    """A descriptor whose type defines __get__ and __delete__ but no __set__."""
+
+    def __get__(self, instance: object, owner: type) -> int:
+        return 1
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class CallableGetterDeleter(GetterDeleter):
+    """A callable GetterDeleter."""
+
+    def __call__(self, rate: int) -> str: ...
 
 
 class GetterPartial(functools.partial):

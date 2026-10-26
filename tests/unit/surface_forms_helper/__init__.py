@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Rule tests for tests/_surface_forms.py: test_<function>.py pins that public function's rules, one rule per test.
 
-named_classes has more rules than one module holds, so test_named_classes_<family>.py
-splits them by rule family, each module's docstring naming its family. A new rule test
-goes in the module of the function, or the family, whose rule its name states.
+named_classes and surface_form have more rules than one module holds, so
+test_<function>_<family>.py splits each one's rules by rule family, each module's
+docstring naming its family. No test_<function>.py stays beside them, since its name
+would claim rules it does not hold; test_no_module_beside_its_family_modules.py checks
+that. A new rule test goes in the module of the function, or the family, whose rule its
+name states.
+
+docs/surface-forms-inspect-readings.md says how each Python minor reads what these rules
+refuse or read alike, and names the tests that pin each by node-id.
 
 Each test pins one rule, so an edit that lets one minor's own rendering through, drops
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
