@@ -104,7 +104,7 @@ def signature_of(obj: Callable[..., object]) -> inspect.Signature:
 
 
 def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None:
-    """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject* ends."""
+    """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject*, or from the constructor inspect reads for *subject*, a class, ends."""
     _refuse_link_read_as_builtin(subject, link)
     end = _chain_end(link, stop=_has_non_none_signature)
     _refuse_wrapped_enum(subject, end)
@@ -114,9 +114,25 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
         return
     if inspect.isclass(end):
         _refuse_constructor_without_a_portable_form(end)
-    elif callable(end) and not is_routine(end):
-        _refuse_minor_dependent_call(subject, end)
-        _refuse_chain_without_a_portable_form(subject, _call_as_read(end))
+    else:
+        _refuse_call_without_a_portable_form(subject, end)
+
+
+def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
+    """Raise the TypeError for *subject* that _refuse_minor_dependent_call raises for *obj*, else the one _refuse_chain_without_a_portable_form raises at the __call__ _call_as_read gives for it, if _is_read_through_its_call finds *obj*, the end of a chain inspect follows from *subject*, or from the constructor inspect reads for *subject*, a class."""
+    if _is_read_through_its_call(obj):
+        _refuse_minor_dependent_call(subject, obj)
+        _refuse_chain_without_a_portable_form(subject, _call_as_read(obj))
+
+
+def _is_read_through_its_call(obj: object) -> bool:
+    """Whether inspect reads *obj* through the __call__ its type resolves: *obj* is callable, is neither a class nor a routine as is_routine counts one, and carries no inspect.Signature, as _carries_inspect_signature finds one."""
+    return (
+        callable(obj)
+        and not inspect.isclass(obj)
+        and not is_routine(obj)
+        and not _carries_inspect_signature(obj)
+    )
 
 
 def _call_as_read(obj: object) -> object:
@@ -125,7 +141,7 @@ def _call_as_read(obj: object) -> object:
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject* ends, differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
+    """Raise TypeError naming *subject* if inspect reads *obj*, an object its class makes callable at which a chain inspect follows from *subject*, or from the constructor inspect reads for *subject*, a class, ends, differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
     holders = list(namespace_holders(type(obj).__mro__, "__call__"))
     c_holder = next(
         (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
@@ -133,21 +149,22 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
     )
     if c_holder is not None:
         raise TypeError(
-            f"{label_of(subject)} wraps {label_of(obj)}, a {label_of(type(obj))}, whose MRO holds "
-            f"{label_of(c_holder)}.__call__, which is defined in C: from Python 3.13 inspect reads "
-            "a __text_signature__ such a class may give its instances in place of the __call__ "
-            "their type resolves, which it reads on 3.11 and 3.12: make the name private, wrap a "
-            "function defined with def, or set a __signature__ that is an inspect.Signature on "
-            "the routine or on what it wraps"
+            f"{label_of(subject)} is read through {label_of(obj)}, a {label_of(type(obj))}, whose "
+            f"MRO holds {label_of(c_holder)}.__call__, which is defined in C: from Python 3.13 "
+            "inspect reads a __text_signature__ such a class may give its instances in place of "
+            "the __call__ their type resolves, which it reads on 3.11 and 3.12: make the name "
+            "private, put a function defined with def in that object's place, or set a "
+            "__signature__ that is an inspect.Signature on that object or on what is read "
+            "through it"
         )
     text_signature = getattr(obj, "__text_signature__", None)
     if text_signature:
         raise TypeError(
-            f"{label_of(subject)} wraps {label_of(obj)}, a {label_of(type(obj))}, which carries the "
-            f"__text_signature__ {text_signature!r}: inspect reads it in place of the __call__ "
-            "its type resolves from Python 3.13, and reads that __call__ on 3.11 and 3.12: make "
-            "the name private, or set a __signature__ that is an inspect.Signature on the "
-            "routine or on what it wraps"
+            f"{label_of(subject)} is read through {label_of(obj)}, a {label_of(type(obj))}, which "
+            f"carries the __text_signature__ {text_signature!r}: inspect reads it in place of "
+            "the __call__ its type resolves from Python 3.13, and reads that __call__ on 3.11 "
+            "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
+            "on that object or on what is read through it"
         )
     _refuse_partial_bound_as_method(
         subject, "is read through", holders[0], "__call__", vars(holders[0])["__call__"]
@@ -403,26 +420,28 @@ _C_ROUTINE_KINDS = (
 
 
 def _refuse_constructor_without_a_portable_form(cls: type) -> None:
-    """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor, or cannot read it on any.
+    """Raise TypeError naming *cls* and the class holding its constructor if inspect reads that constructor differently by minor, or cannot read it on any; for a constructor read through an object its class makes callable, the TypeError _refuse_call_without_a_portable_form raises for that object, naming *cls*.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
     callable defined in C here if _wrapped_c_callable gives one for it, carries a
-    __signature__ inspect reads by minor if _refuse_constructor_signature finds one, and
-    is read as a builtin if _refuse_constructor_read_as_builtin finds it so, bound as
-    inspect binds it:
+    __signature__ inspect reads by minor if _refuse_constructor_signature finds one, is
+    read as a builtin if _refuse_constructor_read_as_builtin finds it so, bound as
+    inspect binds it, and is read through such an object if the chain inspect follows
+    from it, so bound, ends at one that _is_read_through_its_call finds and
+    _refuse_call_without_a_portable_form refuses:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it wraps a callable defined in C, is a
-      functools.partial, carries such a __signature__ or is read as a builtin. inspect
-      reads any other __call__ _metaclass_call gives in their place, so none of the
-      constructors below is then checked;
+      functools.partial, carries such a __signature__, is read as a builtin or is read
+      through such an object. inspect reads any other __call__ _metaclass_call gives in
+      their place, so none of the constructors below is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
     - a functools.partial the holder's own namespace holds as __init__, unless that
       namespace also holds a __new__ not defined in C, which inspect reads first;
-    - that first-read constructor, if it carries such a __signature__ or is read as a
-      builtin;
+    - that first-read constructor, if it carries such a __signature__, is read as a
+      builtin or is read through such an object;
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
@@ -431,9 +450,9 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_signature(cls, type(cls), "__call__", call)
-        _refuse_constructor_read_as_builtin(
-            cls, type(cls), "__call__", _metaclass_call_as_read(cls)
-        )
+        read = _metaclass_call_as_read(cls)
+        _refuse_constructor_read_as_builtin(cls, type(cls), "__call__", read)
+        _refuse_call_without_a_portable_form(cls, _chain_end(read, stop=_has_non_none_signature))
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
@@ -441,7 +460,9 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_signature(cls, holder, name, constructor)
-    _refuse_constructor_read_as_builtin(cls, holder, name, _constructor_as_read(cls, holder))
+    read = _constructor_as_read(cls, holder)
+    _refuse_constructor_read_as_builtin(cls, holder, name, read)
+    _refuse_call_without_a_portable_form(cls, _chain_end(read, stop=_has_non_none_signature))
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
