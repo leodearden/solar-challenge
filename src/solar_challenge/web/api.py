@@ -6,19 +6,17 @@ streaming progress via SSE, retrieving results, and consolidated history
 and scenarios API endpoints under the /api/ prefix.
 """
 
-import json
+import functools
 import logging
 import math
-import time
 from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date
-from types import MappingProxyType
-from typing import Any, Generator, assert_never
+from typing import Any
 
 import yaml as _yaml
 import pandas as pd
-from flask import Blueprint, Response, jsonify, request, stream_with_context, url_for
+from flask import Blueprint, Response, jsonify, request, url_for
 
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
@@ -34,7 +32,6 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.jobs import JobEvent, JobEventType, JobStatus
 from solar_challenge.web.presets import (
     PresetNameTaken,
     PresetType,
@@ -48,7 +45,7 @@ from solar_challenge.web.presets import (
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
-from solar_challenge.web.sse import HEARTBEAT, event_stream
+from solar_challenge.web.sse import JobStreamPolicy, event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import one_of
@@ -180,46 +177,13 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
     return jsonify(asdict(state)), 200
 
 
-def _job_event_payload(event: JobEvent) -> dict[str, object]:
-    """The fields of *event*'s state that the browser reads for an event of its type, in the order the progress stream sends them."""
-    state = event.state
-    if event.type == "progress":
-        return {
-            "progress_pct": state.progress_pct,
-            "current_step": state.current_step,
-            "message": state.message,
-            "status": state.status,
-        }
-    if event.type == "complete":
-        return {
-            "status": state.status,
-            "progress_pct": state.progress_pct,
-            "current_step": state.current_step,
-            "message": state.message,
-            "run_id": state.run_id,
-        }
-    if event.type == "error":
-        return {"status": state.status, "message": state.message}
-    assert_never(event.type)
-
-
-def _job_event_frame(event: JobEvent) -> str:
-    """The SSE frame the progress stream sends for *event*: named by its type, with its payload as JSON."""
-    return f"event: {event.type}\ndata: {json.dumps(_job_event_payload(event))}\n\n"
-
-
-_FINAL_EVENT_TYPE_BY_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType({
-    "completed": "complete",
-    "failed": "error",
-    "cancelled": "error",
-})
-
-
 @api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
-    """SSE endpoint for streaming job progress events.
+    """Stream the job's snapshots as Server-Sent Events, as web/sse.py's job_progress_frames sends them.
 
-    Sends heartbeat every 2 seconds and streams progress/completion events.
+    A stream sends the job's current state at once and each newer state as the job
+    reports it, and ends with the job. A reopened stream resumes after the version its
+    Last-Event-ID header names.
 
     Args:
         job_id: Unique job identifier.
@@ -228,38 +192,13 @@ def get_job_progress(job_id: str) -> Response:
         text/event-stream response.
     """
     job_manager = get_job_manager()
-
-    def generate_events() -> Generator[str, None, None]:
-        """Generate SSE events for the job."""
-        start_time = time.time()
-        max_duration = 600  # 10 minutes
-        while True:
-            if time.time() - start_time > max_duration:
-                yield "event: error\ndata: {\"error\": \"SSE stream timed out after 10 minutes\"}\n\n"
-                return
-            # Check if job exists
-            state = job_manager.job_state(job_id)
-            if state is None:
-                yield "event: error\ndata: {\"error\": \"Job not found\"}\n\n"
-                return
-
-            # Drain event queue
-            for event in job_manager.get_events(job_id):
-                yield _job_event_frame(event)
-                if event.type == "complete" or event.type == "error":
-                    return
-
-            # The job finished and another stream drained its events
-            final_event_type = _FINAL_EVENT_TYPE_BY_STATUS.get(state.status)
-            if final_event_type is not None:
-                yield _job_event_frame(JobEvent(final_event_type, state))
-                return
-
-            # Send heartbeat
-            yield HEARTBEAT
-            time.sleep(2)
-
-    return event_stream(stream_with_context(generate_events()))
+    return event_stream(
+        job_progress_frames(
+            functools.partial(job_manager.job_snapshot, job_id),
+            last_event_id=parse_last_event_id(request.headers.get("Last-Event-ID")),
+            policy=JobStreamPolicy(),
+        )
+    )
 
 
 @api_bp.route("/jobs/<job_id>/results", methods=["GET"])
