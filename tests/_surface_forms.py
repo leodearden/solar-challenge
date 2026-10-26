@@ -139,8 +139,10 @@ def member_forms(cls: type) -> dict[str, str]:
     functools.partial whose type takes __get__ from a class other than functools.partial
     and defines no __set__, which inspect reads as a builtin on Python 3.11 and 3.12
     alone, raises TypeError naming *cls*, the member and its kind; any other that is a
-    functools.partial, which Python 3.14 binds to the instance as a method and earlier
-    minors call without it, raises TypeError naming *cls*, the member and that binding.
+    functools.partial raises TypeError naming *cls*, the member and its binding: Python
+    3.14 binds a functools.partial to the instance as a method and earlier minors call
+    it without, and no rule reads the binding of a partial whose type takes __get__ from
+    a class other than functools.partial.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 

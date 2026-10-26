@@ -500,12 +500,22 @@ def _refuse_partial_bound_as_method(
     name: str,
     method: object,
 ) -> None:
-    """Raise TypeError saying *subject* *verb* *owner*'s *name*, and stating _PARTIAL_BOUND_BY_MINOR, if *method*, the one *owner* holds as *name* that inspect reads for *subject* and binds through its type's __get__, is a functools.partial."""
+    """Raise TypeError saying *subject* *verb* *owner*'s *name*, and stating the clause _partial_binding_clause gives for *method*, if *method*, the one *owner* holds as *name* that inspect reads for *subject* and binds through its type's __get__, is a functools.partial."""
     if isinstance(method, functools.partial):
         raise TypeError(
             f"{label_of(subject)} {verb} {label_of(owner)}.{name}, "
-            f"{_PARTIAL_BOUND_BY_MINOR}: define {name} with def"
+            f"{_partial_binding_clause(method)}: define {name} with def"
         )
+
+
+def _partial_binding_clause(partial: functools.partial[object]) -> str:
+    """What a message says of how *partial* binds: _PARTIAL_BOUND_BY_MINOR, unless _is_partial_with_its_own_get finds it; then that its type takes __get__ from a class other than functools.partial, a binding no rule here reads, which holds whatever its MRO, __set__ or signature."""
+    if not _is_partial_with_its_own_get(partial):
+        return _PARTIAL_BOUND_BY_MINOR
+    return (
+        f"a {label_of(type(partial))}, a functools.partial whose type takes __get__ from a "
+        "class other than functools.partial, a binding no rule of this helper reads"
+    )
 
 
 def _refuse_constructor_read_as_builtin(
@@ -840,10 +850,10 @@ def is_decorated_dataclass(cls: type) -> bool:
 
 
 def refuse_member_without_a_portable_form(label: str, member: object) -> None:
-    """Raise TypeError for *member*, a class member that *label* names, if no form of it holds on every admitted minor, checking as a routine's chain is checked, then how it binds: the error _refuse_link_read_as_builtin raises if inspect reads a link of *member*'s chain as a builtin on some admitted minor, or cannot read one; else, if *member* is a functools.partial, one that states _PARTIAL_BOUND_BY_MINOR."""
+    """Raise TypeError for *member*, a class member that *label* names, if no form of it holds on every admitted minor, checking as a routine's chain is checked, then how it binds: the error _refuse_link_read_as_builtin raises if inspect reads a link of *member*'s chain as a builtin on some admitted minor, or cannot read one; else, if *member* is a functools.partial, one that states the clause _partial_binding_clause gives for it."""
     _refuse_link_read_as_builtin(member, member, label)
     if isinstance(member, functools.partial):
         raise TypeError(
-            f"{label} is {_PARTIAL_BOUND_BY_MINOR}: make the name private, wrap it in "
+            f"{label} is {_partial_binding_clause(member)}: make the name private, wrap it in "
             "staticmethod, or define it with def"
         )
