@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._hermetic_checkout import init_hermetic_checkout
+from tests._synthetic_checkout import synthetic_checkout, write_file
 from tests._working_tree import working_tree_files
 
 pytestmark = pytest.mark.skipif(
@@ -34,17 +34,13 @@ _PROJECT_FILES_IN_DIRECTORIES_NAMED_LIKE_RUNTIME_ONES = (
 @pytest.fixture
 def checkout(project_root: Path, tmp_path: Path) -> Path:
     """Return a new hermetic git checkout holding a copy of the project's .gitignore."""
-    root = init_hermetic_checkout(tmp_path / "checkout")
-    shutil.copyfile(project_root / ".gitignore", root / ".gitignore")
-    return root
+    return synthetic_checkout(tmp_path / "checkout", {_GITIGNORE: (project_root / _GITIGNORE).read_bytes()})
 
 
 def _write_untracked(checkout: Path, paths: tuple[PurePosixPath, ...]) -> None:
-    """Write a file at each of *paths* in *checkout*, creating its directories, and leave it out of git's index."""
+    """Write a file at each of *paths* in *checkout*, its text its name, and leave it out of git's index."""
     for path in paths:
-        written = checkout / path
-        written.parent.mkdir(parents=True, exist_ok=True)
-        written.write_text(path.name, encoding="utf-8")
+        write_file(checkout, path, path.name)
 
 
 def test_git_lists_none_of_the_state_runs_leave_at_the_root_of_the_checkout(checkout: Path) -> None:
