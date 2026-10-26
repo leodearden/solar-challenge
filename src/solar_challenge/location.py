@@ -2,7 +2,9 @@
 """Location handling for PV system modelling."""
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -65,3 +67,12 @@ class Location:
             raise ConfigurationError(
                 f"timezone must name an IANA time zone, such as 'Europe/London', got {self.timezone!r}"
             ) from unknown
+
+
+LOCATION_PRESETS: Mapping[str, Location] = MappingProxyType({
+    "bristol": Location.bristol(),
+    "london": Location(latitude=51.51, longitude=-0.13, altitude=11.0, name="London, UK"),
+    "edinburgh": Location(latitude=55.95, longitude=-3.19, altitude=47.0, name="Edinburgh, UK"),
+    "manchester": Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester, UK"),
+})
+"""The named locations a location string may give, keyed by lower-case name."""
