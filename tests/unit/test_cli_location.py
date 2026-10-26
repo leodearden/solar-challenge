@@ -89,3 +89,15 @@ def test_the_location_options_help_names_each_preset() -> None:
 
     assert result.exit_code == 0
     assert [preset for preset in LOCATION_PRESETS if preset not in table_text(result.stdout)] == []
+
+
+def test_config_locations_lists_each_preset_with_its_coordinates() -> None:
+    """One table row per preset, in the table's order, and no other; COLUMNS widens the console, which Rich reads at print time, so each row stays on one line."""
+    result = runner.invoke(app, ["config", "locations"], env={"COLUMNS": "200"}, catch_exceptions=False)
+
+    assert result.exit_code == 0
+    rows = [table_text(line) for line in result.stdout.splitlines() if line.startswith("│")]
+    assert rows == [
+        f"{key} {preset.latitude:.2f} {preset.longitude:.2f} {preset.timezone} {preset.altitude:.0f}"
+        for key, preset in LOCATION_PRESETS.items()
+    ]

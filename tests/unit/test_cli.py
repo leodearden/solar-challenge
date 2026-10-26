@@ -232,14 +232,6 @@ class TestConfigCLI:
             f"Unknown template type: {_TEXT_RICH_WOULD_PARSE} Available: home, fleet, scenario"
         )
 
-    def test_config_locations(self) -> None:
-        """Test config locations shows Bristol."""
-        result = runner.invoke(app, ["config", "locations"])
-        assert result.exit_code == 0
-        assert "bristol" in result.stdout.lower()
-        assert "51.45" in result.stdout
-        assert "Europe/London" in result.stdout
-
     def test_config_show_valid_yaml(self) -> None:
         """Test config show with valid YAML file."""
         with tempfile.TemporaryDirectory() as tmpdir:
