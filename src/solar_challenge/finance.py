@@ -336,7 +336,7 @@ class BillBreakdown:
 
         Bare equality, not a tolerance: the identity is exact float addition by
         construction, and the fields must stay ``fields()``-visible for the
-        generic dataclass walk in ``web.stored_runs`` to serialise them, so a
+        generic dataclass walk in ``web.field_tree`` to serialise them, so a
         derived ``@property`` is not an option.
         """
         expected = self.own_use_payment_gbp + self.own_use_vat_gbp

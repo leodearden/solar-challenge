@@ -6,8 +6,8 @@ Two contracts are pinned here:
   ``datetime.time`` object on every call. A re-parse would hand back an equal
   but different object, because ``datetime.time`` objects are not interned.
 * The parsed times are a derived cache, not part of a period's identity. They
-  must stay out of ``dataclasses.fields()``: field-driven serialisers (the
-  JSON run storage in ``web/stored_runs.py``, ``dataclasses.asdict``) cannot
+  must stay out of ``dataclasses.fields()``: field-driven serialisers
+  (``field_tree`` in ``web/field_tree.py``, ``dataclasses.asdict``) cannot
   encode a ``datetime.time`` and would break their round-trip.
 """
 
