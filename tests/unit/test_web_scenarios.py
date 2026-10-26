@@ -35,7 +35,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
-from tests._html_page import chart_figures, element_attributes, element_count, element_ids, texts, texts_after
+from tests._html_page import chart_figures, element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -147,14 +147,6 @@ class TestSweepRoute:
         assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
             ("1", str(MAX_DAYS))
         ]
-
-    def test_sweep_page_has_no_chart_card_that_nothing_draws(self, client: FlaskClient) -> None:
-        """The sweep page holds no sweep-chart card, since no script draws a chart into one.
-
-        Task 835, which draws the sweep's charts, replaces this test.
-        """
-        page = client.get("/scenarios/sweep").get_data(as_text=True)
-        assert "sweep-chart" not in element_ids(page)
 
 
 class TestOldScenarioApiPaths:

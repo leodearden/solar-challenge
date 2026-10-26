@@ -13,8 +13,10 @@ card. No other dashboard source, template or script, calls Plotly.
 
 The chart pages share their other parts through components/macros.html too. Each loads
 Plotly and chart-renderer.js once, through chart_scripts, the one template that names
-them. Each draws its chart tabs through chart_tabs, which selects the first on the server,
-so no chart page template writes tab markup.
+them, and so does the parameter sweep page (/scenarios/sweep), whose script inserts the
+sweep's chart panels once its points finish. Each chart page draws its chart tabs through
+chart_tabs, which selects the first on the server, so no chart page template writes tab
+markup; the sweep page has no chart tabs.
 """
 
 import dataclasses
@@ -112,6 +114,17 @@ _CHART_PAGES = {
     "home": _ChartPage(_home_with_a_battery_results_page, 4),
     "fleet": _ChartPage(_fleet_results_page, 3),
     "compare": _ChartPage(_compare_page, 2),
+}
+
+
+def _sweep_page(app: Flask) -> str:
+    """The parameter sweep page, which has no chart until its script inserts the sweep's panels."""
+    return _page(app, "/scenarios/sweep")
+
+
+_PAGES_LOADING_THE_CHART_SCRIPTS: Mapping[str, Callable[[Flask], str]] = {
+    **{name: chart_page.open for name, chart_page in _CHART_PAGES.items()},
+    "sweep": _sweep_page,
 }
 
 
@@ -229,14 +242,16 @@ def test_a_home_run_of_61_calendar_days_across_the_autumn_fall_back_names_its_61
     )
 
 
-@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+@pytest.mark.parametrize("chart_page", _PAGES_LOADING_THE_CHART_SCRIPTS)
 def test_each_chart_page_loads_plotly_and_the_chart_renderer_once(
     app: Flask, chart_page: str
 ) -> None:
     with app.test_request_context():
         plotly_src = url_for("plotly_js.script")
 
-    sources = [script.get("src") for script in element_attributes(_CHART_PAGES[chart_page].open(app), "script")]
+    sources = [
+        script.get("src") for script in element_attributes(_PAGES_LOADING_THE_CHART_SCRIPTS[chart_page](app), "script")
+    ]
 
     assert (sources.count(plotly_src), sources.count("/static/js/chart-renderer.js")) == (1, 1)
 
