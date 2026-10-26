@@ -253,6 +253,74 @@ def test_a_doc_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
     ]
 
 
+def test_reports_each_section_that_numbers_no_heading_of_its_doc(project: Path) -> None:
+    (project / "docs" / "model.md").write_text(
+        "# 1. Scope\n"
+        "## 2 Inputs\n"
+        "### 2.1. Weather\n"
+        "#### 2.10 Tariffs ####\n"
+        "##### 3.2\n"
+        "## Contract\n"
+        "#4. No space after its marker, so no heading\n"
+        "    ## 5. Indented four spaces, so code, not a heading\n",
+        encoding="utf-8",
+    )
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# docs/model.md §1, docs/model.md §2, docs/model.md §2.1, docs/model.md §2.10 and docs/model.md §3.2\n"
+        "# docs/model.md §2.2\n"
+        "# docs/model.md §3\n"
+        "# docs/model.md §4\n"
+        "# docs/model.md §5\n",
+    )
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:2: docs/model.md §2.2: docs/model.md has no heading numbered 2.2",
+        "src/pkg/module.py:3: docs/model.md §3: docs/model.md has no heading numbered 3",
+        "src/pkg/module.py:4: docs/model.md §4: docs/model.md has no heading numbered 4",
+        "src/pkg/module.py:5: docs/model.md §5: docs/model.md has no heading numbered 5",
+    ]
+
+
+def test_a_line_of_a_fenced_code_block_is_no_heading(project: Path) -> None:
+    (project / "docs" / "model.md").write_text(
+        "```python\n"
+        "## 1. In a backtick fence\n"
+        "```\n"
+        "## 2. After it\n"
+        "  ~~~~\n"
+        "## 3. In a tilde fence of four, indented two spaces\n"
+        "```\n"
+        "~~~\n"
+        "~~~~ text\n"
+        "## 4. Still in it: no backtick, shorter or worded marker closes it\n"
+        "~~~~~\n"
+        "## 5. After it\n",
+        encoding="utf-8",
+    )
+    source = _write_source(
+        project, "src/pkg/module.py", "".join(f"# docs/model.md §{number}\n" for number in range(1, 6))
+    )
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:1: docs/model.md §1: docs/model.md has no heading numbered 1",
+        "src/pkg/module.py:3: docs/model.md §3: docs/model.md has no heading numbered 3",
+        "src/pkg/module.py:4: docs/model.md §4: docs/model.md has no heading numbered 4",
+    ]
+
+
+def test_reports_a_section_after_a_path_that_is_no_markdown_file(project: Path) -> None:
+    (project / "docs" / "data.csv").write_text("# 1. A comment, not a heading\n", encoding="utf-8")
+    source = _write_source(project, "src/pkg/module.py", "# docs/data.csv §1\n# docs/prds §1\n")
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:1: docs/data.csv §1: "
+        "docs/data.csv is not a Markdown file, so it has no heading numbered 1",
+        "src/pkg/module.py:2: docs/prds §1: docs/prds is not a Markdown file, so it has no heading numbered 1",
+    ]
+
+
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = project / "src" / "pkg" / "logo.png"
     logo.parent.mkdir(parents=True)
