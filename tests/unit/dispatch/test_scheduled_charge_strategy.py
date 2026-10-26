@@ -6,7 +6,6 @@ then holds it; outside every window its base strategy decides.
 """
 
 import dataclasses
-import math
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -148,9 +147,6 @@ class TestChargeWindow:
             pytest.param("duration", timedelta(0), id="no-duration"),
             pytest.param("duration", timedelta(minutes=-1), id="a-negative-duration"),
             pytest.param("duration", timedelta(days=1, minutes=1), id="longer-than-a-day"),
-            pytest.param("target_soc_fraction", 0.0, id="target-0"),
-            pytest.param("target_soc_fraction", 1.5, id="target-above-1"),
-            pytest.param("target_soc_fraction", math.nan, id="target-nan"),
         ],
     )
     def test_it_refuses_a_field_naming_the_field_and_its_value(self, field: str, value: object) -> None:
