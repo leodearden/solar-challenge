@@ -21,7 +21,12 @@ web subpackage at any scope (docs/prds/run-store-one-owner.md §4): every table 
 web/schema.py import it (§3.1), so such an import closes a cycle or reaches up the stratum.
 No ALLOWED_FUNCTION_LOCAL_IMPORTS entry exempts one.
 
-All four read import statements only: the lazy loader in solar_challenge/__init__.py
+web/field_tree.py, the stored-run format's field-tree codec, imports no module of
+solar_challenge at any scope: it reads any dataclass through its annotations, so it needs none,
+and web/stored_runs.py imports it (§3.1), so an import of a web module would close a cycle or
+reach up past its one importer.
+
+All five read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
 tests/unit/test_init_lazy_surface.py.
 """
@@ -38,6 +43,7 @@ from tests._declared_dependencies import WEB_SUBPACKAGE
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
 _WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
+_WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 
@@ -190,12 +196,12 @@ def _module_top_imports_into_the_web_subpackage(sites: Iterable[_ImportSite]) ->
     ]
 
 
-def _web_database_imports_of_the_web_subpackage(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
-    """Return the *sites* at which web/database.py imports a module of the web subpackage, at any scope."""
+def _imports_by(importer: str, package: str, sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* at which module *importer* imports *package* or a module beneath it, at any scope."""
     return [
         site
         for site in sites
-        if site.importer == _WEB_DATABASE and _in_package(site.imported, WEB_SUBPACKAGE)
+        if site.importer == importer and _in_package(site.imported, package)
     ]
 
 
@@ -315,7 +321,7 @@ def test_web_database_imports_no_module_of_the_web_subpackage(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
     """web/database.py imports no module of the web subpackage, at any scope."""
-    found = _web_database_imports_of_the_web_subpackage(real_tree_imports)
+    found = _imports_by(_WEB_DATABASE, WEB_SUBPACKAGE, real_tree_imports)
 
     sites = "\n".join(str(site) for site in found)
     assert not found, (
@@ -337,6 +343,38 @@ def test_the_scan_reads_the_imports_of_web_database(
         "test_web_database_imports_no_module_of_the_web_subpackage checks nothing. If the module "
         "was renamed or moved, point _WEB_DATABASE at the module that holds Database and "
         "TableSchema, and update docs/prds/run-store-one-owner.md §3.1 and §4 with it"
+    )
+
+
+def test_web_field_tree_imports_no_module_of_the_package(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """web/field_tree.py imports no module of solar_challenge, at any scope."""
+    found = _imports_by(_WEB_FIELD_TREE, _PACKAGE, real_tree_imports)
+
+    sites = "\n".join(str(site) for site in found)
+    assert not found, (
+        "these import statements of web/field_tree.py import a module of solar_challenge:"
+        f"\n{sites}\n"
+        "field_tree.py is the stored-run format's field-tree codec. It reads any dataclass "
+        "through the class's annotations, so it needs no module of the package, and "
+        "web/stored_runs.py imports it, so an import of a web module closes a cycle or reaches "
+        "up past its one importer (docs/prds/run-store-one-owner.md §3.1). Keep what needs the "
+        "package in web/stored_runs.py, the codec's caller"
+    )
+
+
+def test_the_scan_reads_the_imports_of_web_field_tree(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """The scan reads the import statements of web/field_tree.py, so its leaf rule cannot pass by reading none once the module is renamed or moved."""
+    importers = {site.importer for site in real_tree_imports}
+
+    assert _WEB_FIELD_TREE in importers, (
+        f"the scan of src/solar_challenge read no import statement of {_WEB_FIELD_TREE}, so "
+        "test_web_field_tree_imports_no_module_of_the_package checks nothing. If the "
+        "module was renamed or moved, point _WEB_FIELD_TREE at the module that holds "
+        "read_field_tree, and update docs/prds/run-store-one-owner.md §3.1 with it"
     )
 
 
@@ -686,6 +724,39 @@ def test_the_scan_finds_web_database_imports_of_the_web_subpackage_at_any_scope(
     """The scan finds an import of the web subpackage in web/database.py at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute or relative, the web package itself included. It finds none of a package module outside the subpackage, none of a module merely named web_tools, and none that another web module makes."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
-    found = _web_database_imports_of_the_web_subpackage(_import_sites(src_dir))
+    found = _imports_by(_WEB_DATABASE, WEB_SUBPACKAGE, _import_sites(src_dir))
+
+    assert [(site.imported, site.line) for site in found] == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "from solar_challenge.errors import ConfigurationError\n"
+            "from .. import config\n"
+            "import solar_challenge\n",
+            [("solar_challenge.errors", 1), ("solar_challenge.config", 2), ("solar_challenge", 3)],
+            id="the-package-outside-the-web-subpackage",
+        ),
+        pytest.param(
+            "def read(content):\n    from .stored_runs import StoredRunUnreadable\n",
+            [("solar_challenge.web.stored_runs", 2)],
+            id="the-web-subpackage-in-a-function",
+        ),
+        pytest.param(
+            "import functools\n\nimport pandas as pd\nimport solar_challenge_tools\n",
+            [],
+            id="not-the-package",
+        ),
+    ],
+)
+def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
+    tmp_path: Path, source: str, expected: list[tuple[str, int]]
+) -> None:
+    """The scan finds an import of any module of the package in web/field_tree.py, at any scope, absolute or relative, the package itself included: outside the web subpackage too, where web/database.py's rule finds none. It finds none of a module outside the package."""
+    src_dir = _write_package(tmp_path / "src", {"web/field_tree.py": source})
+
+    found = _imports_by(_WEB_FIELD_TREE, _PACKAGE, _import_sites(src_dir))
 
     assert [(site.imported, site.line) for site in found] == expected
