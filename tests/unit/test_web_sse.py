@@ -38,6 +38,7 @@ from solar_challenge.web.sse import (
     parse_last_event_id,
     sse_frame,
 )
+from tests._manual_clock import ManualClock
 from tests._sse import SseFrame, parse_sse_events
 
 _AWKWARD_TEXT = 'Hel\nlo "wörld"\r\n  done'
@@ -246,19 +247,6 @@ class _ScriptedJob:
         self._current = None
 
 
-class _ManualClock:
-    """Stands in for a JobStreamPolicy's clock: time stands still until advance() moves it on."""
-
-    def __init__(self) -> None:
-        self._now = 0.0
-
-    def __call__(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
-
-
 @pytest.fixture
 def sleeps() -> list[float]:
     """The seconds of each sleep the stream under test took, in order."""
@@ -266,13 +254,13 @@ def sleeps() -> list[float]:
 
 
 @pytest.fixture
-def clock() -> _ManualClock:
+def clock() -> ManualClock:
     """The clock the stream under test times its limit on."""
-    return _ManualClock()
+    return ManualClock()
 
 
 @pytest.fixture
-def policy(sleeps: list[float], clock: _ManualClock) -> JobStreamPolicy:
+def policy(sleeps: list[float], clock: ManualClock) -> JobStreamPolicy:
     """The policy of the stream under test: each sleep is recorded in sleeps, not slept, and its limit is timed on clock."""
     return JobStreamPolicy(sleep=sleeps.append, clock=clock)
 
@@ -386,7 +374,7 @@ def test_a_stream_whose_job_stops_being_tracked_ends_with_the_not_found_frame(po
 
 
 def test_a_stream_open_for_more_than_ten_minutes_sends_the_timed_out_frame_and_ends_without_the_jobs_state(
-    clock: _ManualClock,
+    clock: ManualClock,
 ) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
     stream = job_progress_frames(

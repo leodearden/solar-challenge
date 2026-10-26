@@ -28,6 +28,7 @@ from solar_challenge.web.jobs import (
     shutdown_all_managers,
 )
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
+from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
 from tests._web_app import run_storage_of
@@ -91,19 +92,6 @@ def _released_then_raising(blocking_simulation: BlockingSimulation, error: Calla
         raise error()
 
     return simulate
-
-
-class _ManualClock:
-    """Stands in for a JobManager's clock: time stands still until advance() moves it on."""
-
-    def __init__(self) -> None:
-        self._now = 0.0
-
-    def __call__(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
 
 
 @pytest.fixture
@@ -496,7 +484,7 @@ class TestJobManagerAgeLimit:
     """Tests for how long a JobManager tracks a job: until it finishes, and for a while after."""
 
     def test_a_finished_job_is_still_tracked_at_a_submit_a_minute_after_it_finished(self, storage: RunStorage) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), clock=clock)
         job_id = _submit_home_job(manager)
         assert manager.wait_until_idle(timeout=30)
@@ -507,7 +495,7 @@ class TestJobManagerAgeLimit:
         assert _status_of(manager, job_id) == "completed"
 
     def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(self, storage: RunStorage) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), clock=clock)
         job_id = _submit_home_job(manager)
         assert manager.wait_until_idle(timeout=30)
@@ -520,7 +508,7 @@ class TestJobManagerAgeLimit:
     def test_a_job_that_failed_with_an_error_whose_message_cannot_be_read_is_not_tracked_after_a_submit_a_day_after_it_finished(
         self, storage: RunStorage
     ) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(
             storage,
             max_workers=1,
@@ -540,7 +528,7 @@ class TestJobManagerAgeLimit:
     def test_a_job_that_finished_a_minute_ago_is_still_tracked_though_it_was_submitted_a_day_before(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage
     ) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation, clock=clock)
         job_id = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
@@ -556,7 +544,7 @@ class TestJobManagerAgeLimit:
     def test_a_job_still_running_a_day_after_it_was_submitted_is_still_reported_after_a_later_submit(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
         client = client_using(app, manager)
         job_id = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
@@ -573,7 +561,7 @@ class TestJobManagerAgeLimit:
     def test_the_progress_stream_of_a_job_that_ran_past_a_later_submit_a_day_on_ends_with_its_completion(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        clock = _ManualClock()
+        clock = ManualClock()
         manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
         client = client_using(app, manager)
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
