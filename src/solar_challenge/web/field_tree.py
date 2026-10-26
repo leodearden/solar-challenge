@@ -5,11 +5,12 @@ A field tree is a dataclass's fields as a JSON object, each value in its JSON fo
 as an object, a list or tuple as an array, a dict as an object of its keys, a pd.Timestamp as
 its ISO text. read_field_tree reads one strictly: each JSON value must be one its field's
 annotation can be, and the dataclass built from them must accept them. A key no field has, a
-missing field that has no default, a value of a JSON type its annotation cannot be (an object
-for a dataclass, an array for a sequence, a number but no bool for a number, null only for an
-Optional field, one of a Literal's values), an unknown union tag, or a dataclass that refuses
-its values is refused with a FieldTreeRefused naming the value's dotted path, with [i] for an
-item and None for the root, and the reason. A missing field that has a default takes it.
+missing field that has no default, a value its annotation cannot be (an object for a
+dataclass, an array for a sequence, a number but no bool for an int, such a number a float can
+hold for a float, null only for an Optional field, one of a Literal's values), an unknown union
+tag, or a dataclass that refuses its values is refused with a FieldTreeRefused naming the
+value's dotted path, with [i] for an item and None for the root, and the reason. A missing
+field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
 as an UnknownKey.
 
@@ -98,9 +99,10 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
     """The *cls*, a dataclass, whose field tree *content*, decoded JSON, is, each value read as its field's annotation declares.
 
     Raises:
-        FieldTreeRefused: *content* holds a key no field has, lacks a field that has no
-            default, holds a value of a JSON type its annotation cannot be or an unknown union
-            tag, or a dataclass refuses its values, whose refusal is then the cause.
+        FieldTreeRefused: *content* holds a key no field has; lacks a field that has no
+            default; holds an unknown union tag, or a value its annotation cannot be, as one of
+            another JSON type or, for a float, a number no float can hold; or a dataclass
+            refuses its values, whose refusal is then the cause.
     """
     value = _read(content, cls, None)
     assert isinstance(value, cls)
@@ -331,8 +333,8 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     """*value*, decoded JSON at *path* in its document, read as *annotation*, which _shape found to be a leaf.
 
     Any admits anything as it is. A Literal, bool, int, float and str admit only values of their
-    JSON type; an int or a float is any number but a bool, kept as decoded. A pd.Timestamp is
-    read from its ISO text.
+    JSON type; an int is any number but a bool, and a float any such number a float can hold,
+    each kept as decoded. A pd.Timestamp is read from its ISO text.
 
     Raises:
         FieldTreeRefused: *value* cannot be *annotation*, or *annotation* has no stored form.
@@ -345,8 +347,11 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     elif annotation is bool:
         if isinstance(value, bool):
             return value
-    elif annotation in (int, float):
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+    elif annotation is int:
+        if _is_number(value):
+            return value
+    elif annotation is float:
+        if _is_number(value) and _float_can_hold(value):
             return value
     elif annotation is str:
         if isinstance(value, str):
@@ -360,6 +365,20 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     else:
         raise FieldTreeRefused(path, f"has no stored form: the stored-run format reads no {annotation!r}")
     raise FieldTreeRefused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
+
+
+def _is_number(value: Any) -> bool:
+    """Whether *value*, decoded JSON, is a number: an int or a float, but no bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _float_can_hold(number: int | float) -> bool:
+    """Whether a float can hold *number*, as float() converts it: any float, and any int but one beyond a float's range."""
+    try:
+        float(number)
+    except OverflowError:
+        return False
+    return True
 
 
 def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tuple[Any, tuple[UnknownKey, ...]]:
@@ -445,8 +464,10 @@ def _stored_form(annotation: Any) -> str:
         return " or ".join(_stored_form(arg) for arg in get_args(annotation))
     if annotation is bool:
         return "true or false"
-    if annotation in (int, float):
+    if annotation is int:
         return "a number"
+    if annotation is float:
+        return "a number a float can hold"
     return "a string"
 
 
