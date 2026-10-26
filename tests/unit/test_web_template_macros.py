@@ -2,6 +2,8 @@
 templates whose imports do not match the macros they call.
 """
 
+from collections.abc import Mapping
+
 import pytest
 pytest.importorskip("jinja2")
 from jinja2 import BaseLoader, DictLoader, Environment, PackageLoader, nodes
@@ -59,7 +61,7 @@ def _namespace_aliases(tree: nodes.Template, library: str) -> list[str]:
     ]
 
 
-def _called_names(tree: nodes.Template) -> set[str]:
+def _called_names(tree: nodes.Node) -> set[str]:
     """Names used as a call target, by ``{{ m(...) }}`` and ``{% call m(...) %}`` alike."""
     return {
         call.node.name
@@ -76,6 +78,32 @@ def _called_library_macros(tree: nodes.Template, library: str) -> set[str]:
 
 def _defined_macros(tree: nodes.Template) -> set[str]:
     return {macro.name for macro in tree.find_all(nodes.Macro)}
+
+
+def _unreached_library_macros(
+    templates: Mapping[str, nodes.Template], library: str
+) -> list[str]:
+    """The library's macros that no template reaches, sorted.
+
+    A template reaches a macro it imports by name and calls, and every macro of the
+    library that a reached macro calls.
+    """
+    defined = _defined_macros(templates[library])
+    callees = {
+        macro.name: _called_names(macro) & defined
+        for macro in templates[library].find_all(nodes.Macro)
+    }
+    reached = {
+        macro
+        for tree in templates.values()
+        for macro in _called_library_macros(tree, library)
+    }
+    unexplored = list(reached)
+    while unexplored:
+        newly_reached = callees[unexplored.pop()] - reached
+        reached |= newly_reached
+        unexplored.extend(newly_reached)
+    return sorted(defined - reached)
 
 
 def _bound_names(tree: nodes.Template) -> set[str]:
@@ -150,16 +178,9 @@ def test_a_macro_a_reached_macro_calls_is_reached_but_one_only_an_unreached_macr
 
 
 @pytest.mark.parametrize("library", MACRO_LIBRARIES)
-def test_every_library_macro_is_called_by_some_template(
+def test_every_library_macro_is_reached_from_some_template(
     templates: dict[str, nodes.Template], library: str
 ) -> None:
-    defined = _defined_macros(templates[library])
-    called_somewhere = {
-        macro
-        for tree in templates.values()
-        for macro in _called_library_macros(tree, library)
-    }
-
-    assert sorted(defined - called_somewhere) == [], (
-        f"{library} defines macros no template calls"
+    assert _unreached_library_macros(templates, library) == [], (
+        f"{library} defines macros no template reaches, so they are dead"
     )
