@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every path into docs/ that a scanned file names is a file or directory of the tree.
+"""Every path into docs/ that a scanned file names is in the tree, and each section written right after one is in its doc.
 
 The scanned files are those git lists, tests/ included, outside the _UNSCANNED paths. Those are the records, which
 name docs as they were when written, and the two pointer-gate modules, whose docs/ paths name files of the throwaway
@@ -9,11 +9,19 @@ A pointer is a path rooted at docs/, a file or a directory. It is looked for any
 docstrings and code alike. A file that is not UTF-8 text holds none. The path is looked up in the files git lists and
 the directories holding them, as a fresh clone would hold them, so a file git ignores is not there to point at. A doc
 in another repository is written from that repository's name, as in dark-factory/docs/code-quality.md, so it is not
-rooted at docs/. Only the path is checked: a section named after it, as in docs/<name>.md §3, is not looked up.
+rooted at docs/.
+
+A section written right after the path, as in docs/<name>.md §3.1, must be the number of a heading of that Markdown
+file, here ### 3.1 <title>. Between path and section there may be a closing backtick, a link's closing bracket and its
+target, as in [docs/<name>.md](<name>.md) §3.1, a comma, and white space, a line break included. A number is runs of
+digits joined by dots, and a full stop after it ends its sentence. A heading is an ATX heading outside a fenced code
+block, and its number is the one its text starts with, as 3 in ## 3. <title>. The whole number must match: §3 is not
+the number of ### 3.1 <title>. Only that section is looked up: not one written before the path, as in §3 of
+docs/<name>.md, one named in words, as in §Contract, nor a later one of a list or range, as the §7.4 of §7.3–§7.4.
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -40,6 +48,10 @@ _DOC_POINTER = re.compile(
     """,
     re.VERBOSE,
 )
+
+_FENCE = re.compile(r" {0,3}(?P<fence>`{3,}|~{3,})")
+
+_NUMBERED_HEADING = re.compile(rf" {{0,3}}#{{1,6}}[ \t]+(?P<number>{_SECTION_NUMBER})\.?(?:[ \t]|$)")
 
 
 @dataclass(frozen=True)
@@ -75,13 +87,74 @@ def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPoin
 
 
 def _dangling(root: Path, pointers: Iterable[_DocPointer]) -> list[str]:
-    """Return "<pointer>: <reason>" for each of the *pointers* whose path is not in *root*'s working tree, in their order."""
-    tree = working_tree_paths(root)
-    return [
-        f"{pointer}: {pointer.path} does not exist, or git ignores it"
-        for pointer in pointers
-        if not tree.holds(pointer.path)
-    ]
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
+    tree = _WorkingTree(root)
+    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(tree, pointer)) is not None]
+
+
+class _WorkingTree:
+    """The files and directories of a checkout's working tree, as tests/_working_tree.py::working_tree_paths gives them.
+
+    The headings of each of its Markdown files are read when first asked for, and at most once.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._paths = working_tree_paths(root)
+        self._numbers_by_doc: dict[PurePosixPath, frozenset[str]] = {}
+
+    def holds(self, path: PurePosixPath) -> bool:
+        """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
+        return self._paths.holds(path)
+
+    def heading_numbers(self, path: PurePosixPath) -> frozenset[str] | None:
+        """Return the numbers of the numbered headings of the Markdown file at *path*, or None if the tree holds none there."""
+        if path.suffix != ".md" or path not in self._paths.files:
+            return None
+        if path not in self._numbers_by_doc:
+            self._numbers_by_doc[path] = _heading_numbers((self._root / path).read_text(encoding="utf-8"))
+        return self._numbers_by_doc[path]
+
+
+def _unresolved(tree: _WorkingTree, pointer: _DocPointer) -> str | None:
+    """Return why *pointer* leads to no file, directory or heading in the working *tree*, or None if it leads to one.
+
+    The tree must hold the path. A section after it must be the number of a heading of a Markdown file.
+    """
+    if not tree.holds(pointer.path):
+        return f"{pointer.path} does not exist, or git ignores it"
+    if pointer.section is None:
+        return None
+    numbers = tree.heading_numbers(pointer.path)
+    if numbers is None:
+        return f"{pointer.path} is not a Markdown file, so it has no heading numbered {pointer.section}"
+    if pointer.section not in numbers:
+        return f"{pointer.path} has no heading numbered {pointer.section}"
+    return None
+
+
+def _heading_numbers(text: str) -> frozenset[str]:
+    """Return the number each numbered ATX heading of the Markdown *text* starts with, but for those in a fenced code block."""
+    headings = (_NUMBERED_HEADING.match(line) for line in _lines_outside_fences(text))
+    return frozenset(heading["number"] for heading in headings if heading is not None)
+
+
+def _lines_outside_fences(text: str) -> Iterator[str]:
+    """Yield each line of the Markdown *text* that lies outside its fenced code blocks, the fence lines left out.
+
+    A fence opens on three or more backticks or tildes, after at most three spaces. It closes on a run of the same
+    character, at least as long, with nothing after it but white space.
+    """
+    fence: str | None = None
+    for line in text.splitlines():
+        marker = _FENCE.match(line)
+        if marker is None:
+            if fence is None:
+                yield line
+        elif fence is None:
+            fence = marker["fence"]
+        elif marker["fence"].startswith(fence) and not line[marker.end() :].strip():
+            fence = None
 
 
 def test_every_pointer_from_the_scanned_files_into_docs_resolves(project_root: Path) -> None:
@@ -101,9 +174,10 @@ def test_every_pointer_from_the_scanned_files_into_docs_resolves(project_root: P
     assert dangling == [], "\n".join(
         [
             *dangling,
-            "A renamed or moved doc's pointers must follow it. Name a doc by its path from the project root,"
-            " docs/<name>.md, which this gate resolves, and another repository's doc from that repository's name,"
-            " as in dark-factory/docs/code-quality.md.",
+            "A renamed or moved doc's pointers must follow it, and a renumbered heading's sections must follow the"
+            " heading. Name a doc by its path from the project root, docs/<name>.md, and a section of it by its"
+            " heading's number right after the path, as in docs/<name>.md §3.1; this gate resolves both. Name"
+            " another repository's doc from that repository's name, as in dark-factory/docs/code-quality.md.",
         ]
     )
 
