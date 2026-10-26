@@ -205,6 +205,38 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
     assert page_errors == [], f"Errors on {url}: {page_errors}"
 
 
+# The chart each tab shows, the tab selected on load last.
+_CHART_IDS_BY_TAB = {
+    "Efficiency Ratios": (_RADAR_CHART_ID,),
+    "Energy Totals": (_BAR_CHART_ID,),
+}
+
+
+def test_compare_tabs_each_show_only_their_own_charts(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """Clicking each chart tab selects it alone and shows only its own chart, drawn by Plotly.
+
+    Energy Totals is selected on load, so it is clicked last: only then does its click have to move
+    the selection.
+    """
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
+
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(selected_tab).to_have_accessible_name(tab_name)
+        expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
+
+
 # The themes a legibility check reads the charts in: dark mode on load, switched to dark mode once the
 # first chart is drawn, or light throughout.
 _IN_EACH_THEME = pytest.mark.parametrize(

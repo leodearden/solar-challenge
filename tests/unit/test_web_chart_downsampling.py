@@ -40,7 +40,7 @@ def _with_rising_soc(results: SimulationResults) -> SimulationResults:
 
 def _soc_trace(results: SimulationResults) -> dict[str, Any]:
     """The battery SOC trace that battery_soc_chart draws for *results*."""
-    return traces(battery_soc_chart(results, battery_config=_TEN_KWH_BATTERY))[0]
+    return traces(battery_soc_chart(results, battery_config=_TEN_KWH_BATTERY).content)[0]
 
 
 @pytest.mark.parametrize("steps", [48, 2000])
@@ -74,15 +74,12 @@ def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> No
     base = make_sim_results(days=365)
     year = dataclasses.replace(base, heat_pump_load=pd.Series(0.3, index=base.demand.index))
     fleet = make_fleet_results_of([year])
-    heat_pump_charts = heat_pump_analysis(year)
-    assert heat_pump_charts is not None
-
     figures = {
-        "power_flow_timeline": power_flow_timeline(year),
-        "battery_soc_chart": battery_soc_chart(year, battery_config=_TEN_KWH_BATTERY),
-        "heat_pump_load_profile": heat_pump_charts.load_profile_chart,
-        "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet),
-        "fleet_grid_impact": fleet_grid_impact(fleet),
+        "power_flow_timeline": power_flow_timeline(year).content,
+        "battery_soc_chart": battery_soc_chart(year, battery_config=_TEN_KWH_BATTERY).content,
+        "heat_pump_load_profile": heat_pump_analysis(year)[1].content,
+        "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet).content,
+        "fleet_grid_impact": fleet_grid_impact(fleet).content,
     }
     instants = {
         name: {tuple(trace["x"]) for trace in traces(figure)}

@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Each chart the dashboard builds on the server, on the results pages and on the run
-comparison page (/history/compare), is drawn from the figure its container carries, so
-its page writes each chart's id once.
+comparison page (/history/compare), is drawn from the figure its container carries, or
+says why it has none, so its page writes each chart's id once.
 
-components/macros.html's chart_panel writes a chart's id on its container, with the
-chart's figure in data-chart-figure. static/js/chart-renderer.js draws each container
-that carries one, so no script on the page names a chart's id. A chart whose figure has
-nothing to draw gets no container. No other dashboard source, template or script, calls
-Plotly.
+components/macros.html's chart_panel writes a panel's id on its container, with the
+panel's figure in data-chart-figure, and the container's min-height and the card's heading
+are the figure's own height and title. static/js/chart-renderer.js draws each container
+that carries a figure, so no script on the page names a chart's id. A chart that applies
+to the run but has nothing to draw gets a card that gives the reason, on an element of its
+id; a chart that does not apply, a battery's or a heat pump's to a run without one, gets no
+card. No other dashboard source, template or script, calls Plotly.
 
 The chart pages share their other parts through components/macros.html too. Each loads
 Plotly and chart-renderer.js once, through chart_scripts, the one template that names
@@ -19,7 +21,7 @@ import dataclasses
 import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 import pandas as pd
@@ -37,8 +39,9 @@ from tests._finance_builders import (
     make_home_config,
     make_sim_results,
 )
-from tests._html_page import chart_figures, element_attributes, element_ids, script_texts, texts
+from tests._html_page import chart_figures, element_attributes, element_ids, headings, script_texts, texts_after
 from tests._web_app import run_storage_of
+from tests._steady_runs import steady_run
 from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
@@ -48,6 +51,7 @@ _CHART_PAGE_TEMPLATES = (
     "templates/results/fleet.html",
     "templates/history/compare.html",
 )
+_SANKEY_REASON = "No energy flowed in this run: every flow is 0.01 kWh or less."
 _TAB_MARKUP = (
     'role="tab"',
     "border-primary-500 text-primary-600 dark:text-primary-400",
@@ -111,16 +115,38 @@ _CHART_PAGES = {
 }
 
 
-def _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
-    page: str, chart_ids: set[str]
+def _monthly_reason(days: int) -> str:
+    return f"The monthly summary needs at least 90 days; this run covers {days}."
+
+
+def _seasonal_reason(days: int) -> str:
+    return f"The seasonal comparison needs at least 180 days; this run covers {days}."
+
+
+def _assert_each_panel_is_drawn_or_gives_its_reason(
+    page: str, drawn: set[str], absent: Mapping[str, tuple[str, str]] | None = None
 ) -> None:
-    """The chart containers of *page*, the elements whose id starts with 'chart-', are those of *chart_ids*; each carries a Plotly figure, and no script names one."""
+    """The chart ids of *page*, the element ids starting 'chart-', are those of the panels *drawn* and *absent*, each on one element.
+
+    Each drawn panel's container carries a Plotly figure, its min-height is the figure's layout height, and the
+    figure's layout title is a heading of the page once; no script names a chart id. *absent* gives each absent
+    panel's title and reason, which its card reads in that order.
+    """
+    absences = absent or {}
     figures = chart_figures(page)
-    assert {element_id for element_id in element_ids(page) if element_id.startswith("chart-")} == chart_ids
-    assert set(figures) == chart_ids
+    assert {element_id for element_id in element_ids(page) if element_id.startswith("chart-")} == drawn | set(absences)
+    assert set(figures) == drawn
     assert sorted(chart_id for chart_id, figure in figures.items() if "data" not in json.loads(figure)) == []
+    layouts = {chart_id: json.loads(figure)["layout"] for chart_id, figure in figures.items()}
+    styles = {container["id"]: container.get("style") for container in element_attributes(page, "div") if container.get("id") in figures}
+    assert styles == {chart_id: f"min-height: {layout['height']}px;" for chart_id, layout in layouts.items()}
+    page_headings = headings(page)
+    assert {chart_id: page_headings.count(layout["title"]["text"]) for chart_id, layout in layouts.items()} == dict.fromkeys(layouts, 1)
+    assert {chart_id: texts_after(page, title, 1) for chart_id, (title, _) in absences.items()} == {
+        chart_id: [reason] for chart_id, (_, reason) in absences.items()
+    }
     scripts = script_texts(page)
-    assert sorted(chart_id for chart_id in chart_ids if any(chart_id in script for script in scripts)) == []
+    assert sorted(chart_id for chart_id in drawn | set(absences) if any(chart_id in script for script in scripts)) == []
 
 
 def test_each_chart_on_the_home_results_page_is_drawn_from_the_figure_its_container_carries(
@@ -134,7 +160,7 @@ def test_each_chart_on_the_home_results_page_is_drawn_from_the_figure_its_contai
 
     page = _home_results_page(app, results, BatteryConfig(capacity_kwh=5.0))
 
-    _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
+    _assert_each_panel_is_drawn_or_gives_its_reason(
         page,
         {
             "chart-sankey",
@@ -154,15 +180,8 @@ def test_each_chart_on_the_fleet_results_page_is_drawn_from_the_figure_its_conta
     app: Flask,
 ) -> None:
     """A two-home fleet run draws all five charts, as any saved fleet run does."""
-    fleet = make_fleet_results(n_homes=2, days=1)
-    run_id = str(uuid.uuid4())
-    store_fleet_run(run_storage_of(app), run_id, fleet)
-
-    response = app.test_client().get(f"/results/{run_id}")
-
-    assert response.status_code == 200
-    _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
-        response.get_data(as_text=True),
+    _assert_each_panel_is_drawn_or_gives_its_reason(
+        _fleet_results_page(app),
         {
             "chart-aggregate-timeline",
             "chart-grid-impact",
@@ -177,29 +196,45 @@ def test_each_chart_on_the_compare_page_is_drawn_from_the_figure_its_container_c
     app: Flask,
 ) -> None:
     """Comparing two saved runs draws both charts, the energy totals and the efficiency ratios."""
-    results = make_sim_results(days=1)
-    run_ids = [_saved_home_run(app, results) for _ in range(2)]
-
-    response = app.test_client().get(f"/history/compare?ids={','.join(run_ids)}")
-
-    assert response.status_code == 200
-    _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
-        response.get_data(as_text=True), {"chart-comparison-bar", "chart-comparison-radar"}
+    _assert_each_panel_is_drawn_or_gives_its_reason(
+        _compare_page(app), {"chart-comparison-bar", "chart-comparison-radar"}
     )
 
 
-def test_a_home_run_whose_charts_have_nothing_to_draw_gets_no_container_for_them(
+def test_a_one_day_home_run_with_no_flow_and_no_battery_gives_the_reason_of_each_chart_it_cannot_draw(
     app: Flask,
 ) -> None:
-    """A one-day run with no energy flow and no battery has nothing to draw in its sankey, battery, monthly, seasonal and heat-pump charts; the seasonal chart's card says why instead."""
+    """Its Sankey has no flow to draw, and its monthly and seasonal charts need more days; it has no battery or heat-pump chart."""
     page = _home_results_page(
         app, make_sim_results(self_kwh=0.0, export_kwh=0.0, import_kwh=0.0, days=1)
     )
 
-    _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
-        page, {"chart-daily-balance", "chart-power-flow", "chart-financial"}
+    _assert_each_panel_is_drawn_or_gives_its_reason(
+        page,
+        {"chart-daily-balance", "chart-power-flow", "chart-financial"},
+        {
+            "chart-sankey": ("Energy Flow", _SANKEY_REASON),
+            "chart-monthly": ("Monthly Energy Summary", _monthly_reason(1)),
+            "chart-seasonal": ("Seasonal Comparison", _seasonal_reason(1)),
+        },
     )
-    assert texts(page).count("Seasonal comparison requires at least 180 days of simulation data.") == 1
+
+
+def test_a_home_run_of_61_calendar_days_across_the_autumn_fall_back_names_its_61_days_in_each_reason(
+    app: Flask,
+) -> None:
+    """2024-10-01 to 2024-11-30 elapses 61 days and an hour, which a timedelta would count as 62 days."""
+    page = _home_results_page(app, steady_run("2024-10-01", "2024-11-30"))
+
+    _assert_each_panel_is_drawn_or_gives_its_reason(
+        page,
+        {"chart-daily-balance", "chart-power-flow", "chart-financial"},
+        {
+            "chart-sankey": ("Energy Flow", _SANKEY_REASON),
+            "chart-monthly": ("Monthly Energy Summary", _monthly_reason(61)),
+            "chart-seasonal": ("Seasonal Comparison", _seasonal_reason(61)),
+        },
+    )
 
 
 @pytest.mark.parametrize("chart_page", _CHART_PAGES)

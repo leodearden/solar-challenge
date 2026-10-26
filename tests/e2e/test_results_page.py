@@ -77,6 +77,25 @@ def test_results_tabs_each_show_only_their_own_charts(
         expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
 
 
+def test_results_tabs_of_a_one_day_run_give_the_reason_its_monthly_and_seasonal_charts_are_absent(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """The monthly summary needs 90 days and the seasonal comparison 180, and seeded_home_run covers 1."""
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+
+    for tab_name, chart_id, reason in (
+        ("Battery & Finance", "chart-monthly", "The monthly summary needs at least 90 days; this run covers 1."),
+        ("Analysis", "chart-seasonal", "The seasonal comparison needs at least 180 days; this run covers 1."),
+    ):
+        open_chart_tab(page, tab_name)
+        absence = page.locator(f"#{chart_id}")
+        expect(absence).to_be_visible()
+        expect(absence).to_have_text(reason)
+
+
 # -- Showing every tab logs no errors ---------------------------------------
 
 

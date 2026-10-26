@@ -22,10 +22,11 @@ checks enforce the invariants:
 * No chart outlines its bars: Plotly's default template, which every figure carries,
   outlines each bar in its own plot background colour, #E5ECF6, which no figure draws, so
   every bar trace of every _FIGURES case must set its own outline width to 0.
-* All three of those checks read a figure from every chart builder: each of its cases
-  names the builder it draws with, and a public function of charts.py that no case names
-  fails, so a new builder cannot go unread. A name charts.py imports, such as
-  make_subplots, is not a builder.
+* All three of those checks read the figures of every public function of charts.py, each
+  chart builder and each page's tab assembler: each case names the function it draws with
+  and reads the figure of every panel the function returns, every panel of every tab for an
+  assembler, and a public function that no case names fails, so a new builder cannot go
+  unread. A name charts.py imports, such as make_subplots, is not a builder.
 """
 
 import dataclasses
@@ -43,9 +44,9 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
-from solar_challenge.web.charts import COLOUR_PALETTE
+from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
-from tests._finance_builders import make_fleet_results, make_sim_results
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
 
 
@@ -115,54 +116,69 @@ _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 _TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
 
+def _panels_of(tabs: tuple[ChartTab, ...]) -> tuple[ChartPanel, ...]:
+    """Every panel of *tabs*, tab by tab."""
+    return tuple(panel for tab in tabs for panel in tab.panels)
+
+
 @dataclasses.dataclass(frozen=True)
 class _FigureCase:
-    """A figure the palette checks read: *draw* draws it with *builder*, which it is passed."""
+    """Figures the palette checks read: *draw* draws their panels with *builder*, which it is passed."""
 
     builder: Callable[..., Any]
-    draw: Callable[[Callable[..., Any]], str | None]
+    draw: Callable[[Callable[..., Any]], tuple[ChartPanel, ...]]
 
-    def figure(self) -> str:
-        """The figure's JSON, drawn now, with the palette as it stands."""
-        figure = self.draw(self.builder)
-        assert figure is not None and figure != "{}", (
-            f"{self.builder.__name__} drew no figure, so a check reading the figure would pass vacuously"
+    def figures(self) -> list[str]:
+        """The JSON of each panel's figure, drawn now, with the palette as it stands."""
+        panels = self.draw(self.builder)
+        absent = [panel.dom_id for panel in panels if not isinstance(panel.content, str)]
+        assert panels and absent == [], (
+            f"{self.builder.__name__} drew no figure for {absent or 'any panel'}, so a check reading"
+            " its figures would pass vacuously"
         )
-        return figure
+        return [panel.content for panel in panels if isinstance(panel.content, str)]
 
 
 _FIGURES: dict[str, _FigureCase] = {
-    "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: build(_year())),
+    "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: (build(_year()),)),
     "battery_soc_chart": _FigureCase(
-        charts.battery_soc_chart, lambda build: build(_year(), battery_config=_TEN_KWH_BATTERY)
+        charts.battery_soc_chart, lambda build: (build(_year(), battery_config=_TEN_KWH_BATTERY),)
     ),
-    "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: build(_SUMMARY)),
-    "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: build(_year())),
-    "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: build(_year())),
-    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: build(_year())),
-    "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: build(_year())),
-    "heat_pump_load_profile": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_profile_chart
-    ),
-    "heat_pump_share": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_share_chart
-    ),
+    "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: (build(_SUMMARY),)),
+    "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: (build(_year()),)),
+    "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: (build(_year()),)),
+    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year()),)),
+    "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
+    "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
     "comparison_bar_chart": _FigureCase(
-        charts.comparison_bar_chart, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
+        charts.comparison_bar_chart, lambda build: (build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS),)
     ),
     "comparison_radar": _FigureCase(
-        charts.comparison_radar, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
+        charts.comparison_radar, lambda build: (build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS),)
     ),
-    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_fleet_year())),
-    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_fleet_year())),
-    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),
-    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([_SUMMARY] * 3)),
+    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: (build(_fleet_year()),)),
+    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: (build(_fleet_year()),)),
+    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: (build([_SUMMARY] * 3),)),
+    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: (build([_SUMMARY] * 3),)),
     "fleet_distribution_histograms": _FigureCase(
-        charts.fleet_distribution_histograms, lambda build: build([_SUMMARY] * 3)
+        charts.fleet_distribution_histograms, lambda build: (build([_SUMMARY] * 3),)
     ),
     "sweep_parameter_chart": _FigureCase(
         charts.sweep_parameter_chart,
-        lambda build: build([2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"),
+        lambda build: (build([2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"),),
+    ),
+    "home_results_tabs": _FigureCase(
+        charts.home_results_tabs,
+        lambda build: _panels_of(
+            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_heat_pump(), _SUMMARY)
+        ),
+    ),
+    "fleet_results_tabs": _FigureCase(
+        charts.fleet_results_tabs, lambda build: _panels_of(build(_fleet_year(), [_SUMMARY] * 3))
+    ),
+    "comparison_tabs": _FigureCase(
+        charts.comparison_tabs,
+        lambda build: _panels_of(build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)),
     ),
 }
 
@@ -172,7 +188,12 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
     case: _FigureCase, recolouring: _Recolouring
 ) -> None:
     stale = sorted(
-        colour for colour, rgb in drawn_colours(case.figure()).items() if rgb in recolouring.shipped
+        {
+            colour
+            for figure in case.figures()
+            for colour, rgb in drawn_colours(figure).items()
+            if rgb in recolouring.shipped
+        }
     )
 
     assert stale == [], (
@@ -186,7 +207,9 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
 def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) -> None:
     assert COLOUR_PALETTE, "COLOUR_PALETTE holds no role, so this guard would pass vacuously"
 
-    drawn = {rgb for case in _FIGURES.values() for rgb in drawn_colours(case.figure()).values()}
+    drawn = {
+        rgb for case in _FIGURES.values() for figure in case.figures() for rgb in drawn_colours(figure).values()
+    }
     undrawn = sorted(role for role, substitute in recolouring.substitutes.items() if substitute not in drawn)
 
     assert undrawn == [], (
@@ -207,7 +230,8 @@ def test_no_chart_outlines_its_bars() -> None:
     bars = [
         (case_name, trace["name"], trace.get("marker", {}).get("line", {}).get("width"))
         for case_name, case in _FIGURES.items()
-        for trace in traces(case.figure())
+        for figure in case.figures()
+        for trace in traces(figure)
         if trace["type"] == "bar"
     ]
     assert bars, "no _FIGURES case draws a bar, so this check would pass vacuously"

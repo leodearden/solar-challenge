@@ -1051,7 +1051,7 @@ class TestComparisonCharts:
     """Tests for the comparison chart functions in charts.py."""
 
     def test_comparison_bar_chart_returns_json(self) -> None:
-        """Test comparison_bar_chart returns a non-empty JSON string."""
+        """Test comparison_bar_chart returns a panel of Plotly figure JSON."""
         summaries = [
             {
                 "total_generation_kwh": 100,
@@ -1068,13 +1068,13 @@ class TestComparisonCharts:
                 "total_grid_export_kwh": 50,
             },
         ]
-        result = comparison_bar_chart(summaries, ["Run A", "Run B"])
-        assert result and result != "{}"
+        result = comparison_bar_chart(summaries, ["Run A", "Run B"]).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
 
     def test_comparison_radar_returns_json(self) -> None:
-        """Test comparison_radar returns a non-empty JSON string."""
+        """Test comparison_radar returns a panel of Plotly figure JSON."""
         summaries = [
             {
                 "self_consumption_ratio": 0.6,
@@ -1091,16 +1091,16 @@ class TestComparisonCharts:
                 "total_generation_kwh": 120,
             },
         ]
-        result = comparison_radar(summaries, ["Run A", "Run B"])
-        assert result and result != "{}"
+        result = comparison_radar(summaries, ["Run A", "Run B"]).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
 
     def test_comparison_bar_chart_handles_missing_keys(self) -> None:
         """Test comparison_bar_chart handles summaries with missing keys."""
         summaries = [{"total_generation_kwh": 50}, {}]
-        result = comparison_bar_chart(summaries, ["A", "B"])
-        assert result and result != "{}"
+        result = comparison_bar_chart(summaries, ["A", "B"]).content
+        assert isinstance(result, str)
 
     def test_comparison_radar_handles_zero_generation(self) -> None:
         """Test comparison_radar handles zero generation gracefully."""
@@ -1113,8 +1113,8 @@ class TestComparisonCharts:
                 "total_generation_kwh": 0,
             },
         ]
-        result = comparison_radar(summaries, ["Empty Run"])
-        assert result and result != "{}"
+        result = comparison_radar(summaries, ["Empty Run"]).content
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------

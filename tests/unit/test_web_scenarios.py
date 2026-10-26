@@ -24,7 +24,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import sweep_parameter_chart
+from solar_challenge.web.charts import ChartAbsence, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
@@ -821,14 +821,14 @@ class TestSweepChart:
     """Tests for the sweep_parameter_chart function in charts.py."""
 
     def test_sweep_parameter_chart_returns_json(self) -> None:
-        """Test sweep_parameter_chart returns valid Plotly JSON."""
+        """Test sweep_parameter_chart returns a panel of valid Plotly JSON."""
         result = sweep_parameter_chart(
             [2.0, 4.0, 6.0, 8.0],
             [50.5, 65.3, 72.1, 78.4],
             "PV Capacity (kW)",
             "Self-Consumption (%)",
-        )
-        assert result and result != "{}"
+        ).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
 
@@ -839,14 +839,17 @@ class TestSweepChart:
             [10.0, 25.0, 40.0, 55.0, 70.0],
             "Battery (kWh)",
             "Grid Import (kWh)",
-        )
+        ).content
         # Should have at least the main trace, optimal marker, and trend line
         assert len(traces(result)) >= 2
 
-    def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
-        """Test sweep_parameter_chart returns '{}' with empty inputs."""
-        result = sweep_parameter_chart([], [], "X", "Y")
-        assert result == "{}"
+    def test_sweep_parameter_chart_of_no_points_names_why_its_titled_panel_has_no_figure(self) -> None:
+        panel = sweep_parameter_chart([], [], "PV Capacity (kW)", "Self-Consumption (%)")
+
+        assert (panel.title, panel.content) == (
+            "Self-Consumption (%) vs PV Capacity (kW)",
+            ChartAbsence("The sweep has no points to draw."),
+        )
 
     def test_sweep_parameter_chart_two_points(self) -> None:
         """Test sweep_parameter_chart works with just two data points."""
@@ -855,8 +858,8 @@ class TestSweepChart:
             [20.0, 80.0],
             "Param",
             "Metric",
-        )
-        assert result and result != "{}"
+        ).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
         assert "layout" in parsed
