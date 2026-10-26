@@ -516,6 +516,51 @@ class TestLoadHomeConfig:
         assert home.pv_config.capacity_kw == 4.0
         assert home.battery_config is None
 
+    @pytest.mark.parametrize(
+        ("document", "number_read", "expected"),
+        [
+            pytest.param(
+                'home:\n  pv:\n    capacity_kw: "4"\n',
+                lambda home: home.pv_config.capacity_kw,
+                4.0,
+                id="pv",
+            ),
+            pytest.param(
+                'home:\n  battery:\n    capacity_kwh: "5"\n',
+                lambda home: home.battery_config.capacity_kwh,
+                5.0,
+                id="battery",
+            ),
+            pytest.param(
+                'home:\n  load:\n    household_occupants: "2"\n',
+                lambda home: home.load_config.household_occupants,
+                2,
+                id="load",
+            ),
+            pytest.param(
+                'location:\n  latitude: "51.5"\nhome: {}\n',
+                lambda home: home.location.latitude,
+                51.5,
+                id="location",
+            ),
+        ],
+    )
+    def test_a_quoted_number_in_a_block_reads_as_that_number(
+        self,
+        tmp_path: Path,
+        document: str,
+        number_read: Callable[[HomeConfig], object],
+        expected: object,
+    ) -> None:
+        """A YAML string spelling a number, such as "4", is held as that number in its field's type."""
+        path = tmp_path / "home.yaml"
+        path.write_text(document, encoding="utf-8")
+
+        number = number_read(load_home_config(path))
+
+        assert number == expected
+        assert type(number) is type(expected)
+
 
 class TestParseHomeBlockHeatPumpEV:
     """Tests that parse_home_block honours heat_pump and ev blocks."""
