@@ -450,6 +450,14 @@ home:
                 "'Europe/Londn'",
                 id="location-unknown-time-zone",
             ),
+            pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  heat_pump: {heat_pump_type: ASHP, thermal_capacity_kw: .nan}\n",
+                "thermal_capacity_kw",
+                "nan",
+                id="heat-pump-capacity-nan",
+            ),
         ],
     )
     def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(

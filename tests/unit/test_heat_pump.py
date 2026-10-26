@@ -1,5 +1,6 @@
 """Tests for heat pump configuration and modelling."""
 
+import dataclasses
 import doctest
 import re
 from typing import get_args
@@ -8,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import solar_challenge.heat_pump
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import (
     HeatPumpConfig,
     BASE_TEMPERATURE_C,
@@ -20,6 +22,7 @@ from solar_challenge.heat_pump import (
     heating_degree_deficit_c,
 )
 from solar_challenge.timebase import SimulationWindow
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestHeatPumpConfigBasics:
@@ -80,50 +83,60 @@ class TestHeatPumpConfigDefaults:
 class TestHeatPumpConfigValidation:
     """Test parameter validation."""
 
-    def test_capacity_must_be_positive(self):
+    @pytest.mark.parametrize("thermal_capacity_kw", [0, -5.0])
+    def test_capacity_must_be_positive(self, thermal_capacity_kw):
         """Thermal capacity <= 0 raises error."""
-        with pytest.raises(ValueError, match="capacity must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=0
-            )
-        with pytest.raises(ValueError, match="capacity must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=-5.0
-            )
+        with pytest.raises(ConfigurationError) as exc_info:
+            HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=thermal_capacity_kw)
+        assert str(exc_info.value) == (
+            f"thermal_capacity_kw must be greater than 0 and at most 50, got {thermal_capacity_kw!r}"
+        )
 
     def test_capacity_unrealistic_high_raises(self):
         """Unrealistically high capacity raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=100.0
-            )
+        with pytest.raises(ConfigurationError) as exc_info:
+            HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=100.0)
+        assert str(exc_info.value) == "thermal_capacity_kw must be greater than 0 and at most 50, got 100.0"
 
-    def test_annual_demand_must_be_positive(self):
+    @pytest.mark.parametrize("annual_heat_demand_kwh", [0, -1000.0])
+    def test_annual_demand_must_be_positive(self, annual_heat_demand_kwh):
         """Annual heat demand <= 0 raises error."""
-        with pytest.raises(ValueError, match="demand must be positive"):
+        with pytest.raises(ConfigurationError) as exc_info:
             HeatPumpConfig(
                 heat_pump_type="ASHP",
                 thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=0
+                annual_heat_demand_kwh=annual_heat_demand_kwh,
             )
-        with pytest.raises(ValueError, match="demand must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=-1000.0
-            )
+        assert str(exc_info.value) == (
+            f"annual_heat_demand_kwh must be greater than 0 and at most 50000, got {annual_heat_demand_kwh!r}"
+        )
 
     def test_annual_demand_unrealistic_high_raises(self):
         """Unrealistically high annual demand raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
+        with pytest.raises(ConfigurationError) as exc_info:
             HeatPumpConfig(
                 heat_pump_type="ASHP",
                 thermal_capacity_kw=8.0,
                 annual_heat_demand_kwh=100000.0
             )
+        assert str(exc_info.value) == (
+            "annual_heat_demand_kwh must be greater than 0 and at most 50000, got 100000.0"
+        )
+
+    @pytest.mark.parametrize("field", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_number_that_is_not_finite_is_refused_naming_its_field_and_the_value(self, field, value):
+        """A NaN, an infinity, a bool or a word is refused by name, before any range is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(HeatPumpConfig.default_ashp(), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_whole_numbers_are_held_as_the_floats_they_equal(self):
+        config = HeatPumpConfig("ASHP", 8, 8000)
+        assert config.thermal_capacity_kw == 8.0
+        assert type(config.thermal_capacity_kw) is float
+        assert config.annual_heat_demand_kwh == 8000.0
+        assert type(config.annual_heat_demand_kwh) is float
 
 
 class TestCopCurve:
@@ -188,7 +201,7 @@ class TestHeatPumpTypes:
         ],
     )
     def test_a_type_outside_heat_pump_types_is_refused_naming_every_type(self, call_with_xshp):
-        with pytest.raises(ValueError, match=re.escape("Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'")):
+        with pytest.raises(ConfigurationError, match=re.escape("Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'")):
             call_with_xshp()
 
 
