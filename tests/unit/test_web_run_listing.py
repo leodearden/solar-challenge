@@ -264,6 +264,18 @@ class TestRunHeadline:
             pytest.param(
                 fleet_summary(fleet_self_consumption_ratio=True), "self_consumption_ratio", True, id="fleet-ratio-bool"
             ),
+            pytest.param(
+                home_summary(total_generation_kwh=10**400),
+                "generation_kwh",
+                10**400,
+                id="home-generation-too-large-for-a-float",
+            ),
+            pytest.param(
+                fleet_summary(fleet_self_consumption_ratio=-(10**400)),
+                "self_consumption_ratio",
+                -(10**400),
+                id="fleet-ratio-below-every-float",
+            ),
         ],
     )
     def test_a_summary_whose_headline_figure_is_not_a_finite_number_is_refused_naming_the_figure_and_its_value(
