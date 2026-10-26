@@ -32,8 +32,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
+from tests._synthetic_checkout import synthetic_checkout, write_file
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _MODULES_NAMING_THROWAWAY_DOCS = (
@@ -204,20 +204,7 @@ def test_every_path_the_gate_leaves_unscanned_is_in_the_tree(project_root: Path)
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """Return a git checkout holding docs/guide.md and docs/prds/record.md."""
-    init_hermetic_checkout(tmp_path)
-    docs = tmp_path / "docs"
-    (docs / "prds").mkdir(parents=True)
-    (docs / "guide.md").write_text("# Title\n", encoding="utf-8")
-    (docs / "prds" / "record.md").write_text("# Title\n", encoding="utf-8")
-    return tmp_path
-
-
-def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
-    """Write *text* to *source*, a POSIX path relative to *project*, and return that path."""
-    path = project / source
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    return PurePosixPath(source)
+    return synthetic_checkout(tmp_path, {"docs/guide.md": "# Title\n", "docs/prds/record.md": "# Title\n"})
 
 
 def test_scans_every_file_git_lists_but_the_records_and_the_modules_naming_throwaway_docs(project: Path) -> None:
@@ -238,13 +225,13 @@ def test_scans_every_file_git_lists_but_the_records_and_the_modules_naming_throw
         "tests/unit/test_source_test_pointers.py",
     ]
     for source in [*scanned, *unscanned]:
-        _write_source(project, source, "")
+        write_file(project, source, "")
 
     assert set(scanned_files(project, _UNSCANNED)) == {PurePosixPath(source) for source in scanned}
 
 
 def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> None:
-    module = _write_source(
+    module = write_file(
         project,
         "src/pkg/module.py",
         "# docs/guide.md §3 says why.\n"
@@ -254,7 +241,7 @@ def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> Non
         "# https://example.org/docs/gone.md, readthedocs/gone.md, my-docs/gone.md, site.docs/gone.md\n"
         "# and docs/<name>.md\n",
     )
-    page = _write_source(project, "src/pkg/page.html", "<p>See docs/guide.md.</p>\n")
+    page = write_file(project, "src/pkg/page.html", "<p>See docs/guide.md.</p>\n")
 
     assert [str(pointer) for pointer in _doc_pointers(project, [module, page])] == [
         "src/pkg/module.py:1: docs/guide.md §3",
@@ -265,7 +252,7 @@ def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> Non
 
 
 def test_reads_the_section_written_right_after_a_path(project: Path) -> None:
-    notes = _write_source(
+    notes = write_file(
         project,
         "docs/notes.md",
         "docs/guide.md §3 says why.\n"
@@ -311,13 +298,13 @@ def test_reads_no_section_written_any_other_way(project: Path) -> None:
         "docs/guide.md\n\n§4 after a blank line",
         "# docs/guide.md\n# §4 on a comment line",
     ]
-    notes = _write_source(project, "docs/notes.md", "".join(f"{text}\n" for text in texts))
+    notes = write_file(project, "docs/notes.md", "".join(f"{text}\n" for text in texts))
 
     assert [pointer.section for pointer in _doc_pointers(project, [notes])] == [None] * len(texts)
 
 
 def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_line(project: Path) -> None:
-    source = _write_source(
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# docs/absent.md\n"
@@ -334,11 +321,9 @@ def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_li
 
 
 def test_a_doc_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
-    (project / ".gitignore").write_text("generated/\n", encoding="utf-8")
-    generated = project / "docs" / "generated"
-    generated.mkdir()
-    (generated / "made.md").write_text("# Made\n", encoding="utf-8")
-    source = _write_source(project, "src/pkg/module.py", "# docs/generated/made.md\n# docs/generated\n")
+    write_file(project, ".gitignore", "generated/\n")
+    write_file(project, "docs/generated/made.md", "# Made\n")
+    source = write_file(project, "src/pkg/module.py", "# docs/generated/made.md\n# docs/generated\n")
 
     assert _dangling(project, _doc_pointers(project, [source])) == [
         "src/pkg/module.py:1: docs/generated/made.md: docs/generated/made.md does not exist, or git ignores it",
@@ -347,7 +332,9 @@ def test_a_doc_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
 
 
 def test_reports_each_section_that_numbers_no_heading_of_its_doc(project: Path) -> None:
-    (project / "docs" / "model.md").write_text(
+    write_file(
+        project,
+        "docs/model.md",
         "# 1. Scope\n"
         "## 2 Inputs\n"
         "### 2.1. Weather\n"
@@ -356,9 +343,8 @@ def test_reports_each_section_that_numbers_no_heading_of_its_doc(project: Path) 
         "## Contract\n"
         "#4. No space after its marker, so no heading\n"
         "    ## 5. Indented four spaces, so code, not a heading\n",
-        encoding="utf-8",
     )
-    source = _write_source(
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# docs/model.md §1, docs/model.md §2, docs/model.md §2.1, docs/model.md §2.10 and docs/model.md §3.2\n"
@@ -377,7 +363,9 @@ def test_reports_each_section_that_numbers_no_heading_of_its_doc(project: Path) 
 
 
 def test_a_line_of_a_fenced_code_block_is_no_heading(project: Path) -> None:
-    (project / "docs" / "model.md").write_text(
+    write_file(
+        project,
+        "docs/model.md",
         "```python\n"
         "## 1. In a backtick fence\n"
         "```\n"
@@ -390,9 +378,8 @@ def test_a_line_of_a_fenced_code_block_is_no_heading(project: Path) -> None:
         "## 4. Still in it: no backtick, shorter or worded marker closes it\n"
         "~~~~~\n"
         "## 5. After it\n",
-        encoding="utf-8",
     )
-    source = _write_source(
+    source = write_file(
         project, "src/pkg/module.py", "".join(f"# docs/model.md §{number}\n" for number in range(1, 6))
     )
 
@@ -404,8 +391,8 @@ def test_a_line_of_a_fenced_code_block_is_no_heading(project: Path) -> None:
 
 
 def test_reports_a_section_after_a_path_that_is_no_markdown_file(project: Path) -> None:
-    (project / "docs" / "data.csv").write_text("# 1. A comment, not a heading\n", encoding="utf-8")
-    source = _write_source(project, "src/pkg/module.py", "# docs/data.csv §1\n# docs/prds §1\n")
+    write_file(project, "docs/data.csv", "# 1. A comment, not a heading\n")
+    source = write_file(project, "src/pkg/module.py", "# docs/data.csv §1\n# docs/prds §1\n")
 
     assert _dangling(project, _doc_pointers(project, [source])) == [
         "src/pkg/module.py:1: docs/data.csv §1: "
@@ -415,8 +402,8 @@ def test_reports_a_section_after_a_path_that_is_no_markdown_file(project: Path) 
 
 
 def test_reports_each_section_after_a_markdown_file_that_is_not_utf8_text(project: Path) -> None:
-    (project / "docs" / "latin1.md").write_bytes("# 1. Café\n".encode("latin-1"))
-    source = _write_source(
+    write_file(project, "docs/latin1.md", "# 1. Café\n".encode("latin-1"))
+    source = write_file(
         project, "src/pkg/module.py", "# docs/latin1.md §1\n# docs/latin1.md §2\n# docs/latin1.md has no section\n"
     )
 
@@ -429,8 +416,6 @@ def test_reports_each_section_after_a_markdown_file_that_is_not_utf8_text(projec
 
 
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
-    logo = project / "src" / "pkg" / "logo.png"
-    logo.parent.mkdir(parents=True)
-    logo.write_bytes(b"\x89PNG\xff\xfe docs/absent.md")
+    logo = write_file(project, "src/pkg/logo.png", b"\x89PNG\xff\xfe docs/absent.md")
 
-    assert _doc_pointers(project, [PurePosixPath("src/pkg/logo.png")]) == []
+    assert _doc_pointers(project, [logo]) == []

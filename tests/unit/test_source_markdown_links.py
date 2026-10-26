@@ -22,8 +22,8 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
+from tests._synthetic_checkout import synthetic_checkout
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _ANGLED_TARGET = r"<(?P<angled>[^<>\n]*)>"
@@ -192,16 +192,12 @@ def test_reads_the_links_of_a_utf8_file_and_reports_one_that_is_not_by_its_path(
 
 
 def test_scans_every_markdown_file_git_lists_outside_the_records(tmp_path: Path) -> None:
-    checkout = init_hermetic_checkout(tmp_path / "checkout")
     scanned = [PurePosixPath(path) for path in ["README.md", "guide/intro.md", "src/pkg/LICENSE.md", "tests/notes.md"]]
     unscanned = [
         *(directory / "record.md" for directory in RECORD_DIRECTORIES),
         PurePosixPath("guide/notes.txt"),
         PurePosixPath("src/pkg/module.py"),
     ]
-    for relative_path in [*scanned, *unscanned]:
-        path = checkout / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
+    checkout = synthetic_checkout(tmp_path / "checkout", dict.fromkeys([*scanned, *unscanned], ""))
 
     assert sorted(_markdown_files(checkout)) == sorted(scanned)

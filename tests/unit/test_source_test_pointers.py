@@ -31,8 +31,8 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
-from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
+from tests._synthetic_checkout import synthetic_checkout, write_file
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _UNSCANNED = (PurePosixPath("tests"), *RECORD_DIRECTORIES)
@@ -298,27 +298,19 @@ def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """Return a git checkout whose tests/unit holds notes.txt and test_pointed_at.py, defining tests, a class and a nested one."""
-    init_hermetic_checkout(tmp_path)
-    tests = tmp_path / "tests" / "unit"
-    tests.mkdir(parents=True)
-    (tests / "test_pointed_at.py").write_text(
-        "def test_top(): pass\n"
-        "class TestGroup:\n"
-        "    def test_member(self): pass\n"
-        "    class TestNested:\n"
-        "        def test_deep(self): pass\n",
-        encoding="utf-8",
+    return synthetic_checkout(
+        tmp_path,
+        {
+            "tests/unit/test_pointed_at.py": (
+                "def test_top(): pass\n"
+                "class TestGroup:\n"
+                "    def test_member(self): pass\n"
+                "    class TestNested:\n"
+                "        def test_deep(self): pass\n"
+            ),
+            "tests/unit/notes.txt": "Not Python.\n",
+        },
     )
-    (tests / "notes.txt").write_text("Not Python.\n", encoding="utf-8")
-    return tmp_path
-
-
-def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
-    """Write *text* to *source*, a POSIX path relative to *project*, and return that path."""
-    path = project / source
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    return PurePosixPath(source)
 
 
 def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: Path) -> None:
@@ -332,13 +324,13 @@ def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: P
     }
     unscanned = ["docs/prds/record.md", "docs/research/survey.md", "plans/plan.md", "review/briefing.yaml"]
     for source in [*scanned, *unscanned]:
-        _write_source(project, source, "")
+        write_file(project, source, "")
 
     assert set(scanned_files(project, _UNSCANNED)) == {PurePosixPath(source) for source in scanned}
 
 
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:
-    source = _write_source(
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# Pinned by tests/unit/test_pointed_at.py.\n"
@@ -367,7 +359,7 @@ def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path)
 
 
 def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -> None:
-    source = _write_source(
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# tests/unit/test_absent.py\n"
@@ -396,11 +388,9 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
 
 
 def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
-    (project / ".gitignore").write_text("generated/\n", encoding="utf-8")
-    generated = project / "tests" / "unit" / "generated"
-    generated.mkdir()
-    (generated / "test_made.py").write_text("def test_made(): pass\n", encoding="utf-8")
-    source = _write_source(
+    write_file(project, ".gitignore", "generated/\n")
+    write_file(project, "tests/unit/generated/test_made.py", "def test_made(): pass\n")
+    source = write_file(
         project, "src/pkg/module.py", "# tests/unit/generated/test_made.py::test_made\n# tests/unit/generated\n"
     )
 
@@ -412,8 +402,8 @@ def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None
 
 
 def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: Path) -> None:
-    (project / "tests" / "unit" / "test_latin1.py").write_bytes("def test_top(): pass  # café\n".encode("latin-1"))
-    source = _write_source(
+    write_file(project, "tests/unit/test_latin1.py", "def test_top(): pass  # café\n".encode("latin-1"))
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# tests/unit/test_latin1.py::test_top\n"
@@ -430,10 +420,8 @@ def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: 
 
 
 def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Path) -> None:
-    (project / "tests" / "unit" / "test_broken.py").write_text(
-        "def test_top(): pass\ndef test_broken(:\n", encoding="utf-8"
-    )
-    source = _write_source(
+    write_file(project, "tests/unit/test_broken.py", "def test_top(): pass\ndef test_broken(:\n")
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# tests/unit/test_broken.py::test_top\n"
@@ -450,8 +438,8 @@ def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Pa
 
 
 def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mark(project: Path) -> None:
-    (project / "tests" / "unit" / "test_marked.py").write_text("def test_top(): pass\n", encoding="utf-8-sig")
-    source = _write_source(
+    write_file(project, "tests/unit/test_marked.py", "def test_top(): pass\n".encode("utf-8-sig"))
+    source = write_file(
         project,
         "src/pkg/module.py",
         "# tests/unit/test_marked.py::test_top\n# tests/unit/test_marked.py::test_absent\n",
@@ -464,18 +452,16 @@ def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mar
 
 
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
-    logo = project / "src" / "pkg" / "logo.png"
-    logo.parent.mkdir(parents=True)
-    logo.write_bytes(b"\x89PNG\xff\xfe tests/unit/test_absent.py")
+    logo = write_file(project, "src/pkg/logo.png", b"\x89PNG\xff\xfe tests/unit/test_absent.py")
 
-    pointers = _pointers(project, [PurePosixPath("src/pkg/logo.png")])
+    pointers = _pointers(project, [logo])
 
     assert pointers == []
     assert _dangling(project, pointers) == []
 
 
 def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Path) -> None:
-    source = _write_source(
+    source = write_file(
         project,
         "src/pkg/script.js",
         "// pinned by test_top\n"
@@ -498,7 +484,7 @@ def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Pa
 
 
 def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: Path) -> None:
-    using = _write_source(
+    using = write_file(
         project,
         "src/pkg/app.py",
         "def build(test_config=None):\n"
@@ -508,7 +494,7 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
         '    """\n'
         "    return test_config\n",
     )
-    naming = _write_source(project, "src/pkg/other.py", "# Set test_config first.\ndef build():\n    return None\n")
+    naming = write_file(project, "src/pkg/other.py", "# Set test_config first.\ndef build():\n    return None\n")
 
     assert _pointers(project, [using]) == []
     assert _dangling(project, _pointers(project, [naming])) == [
@@ -518,7 +504,7 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
 
 @pytest.mark.parametrize("suffix", [".yaml", ".yml"])
 def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix: str) -> None:
-    using = _write_source(
+    using = write_file(
         project,
         f"pipeline{suffix}",
         "test_command: pytest\n"
@@ -526,7 +512,7 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix
         "  - name: lint\n"
         "    test_timeout: 60  # test_timeout bounds the job\n",
     )
-    naming = _write_source(project, f"other{suffix}", "# Set test_command first.\nname: lint\n")
+    naming = write_file(project, f"other{suffix}", "# Set test_command first.\nname: lint\n")
 
     assert _pointers(project, [using]) == []
     assert _dangling(project, _pointers(project, [naming])) == [
@@ -535,7 +521,7 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix
 
 
 def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under_any_tag(project: Path) -> None:
-    using = _write_source(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
+    using = write_file(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
 
     assert _pointers(project, [using]) == []
 
@@ -546,7 +532,7 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under
     ids=["python", "yaml"],
 )
 def test_reports_a_python_or_yaml_file_that_does_not_parse_by_its_path(project: Path, source: str, text: str) -> None:
-    broken = _write_source(project, source, text)
+    broken = write_file(project, source, text)
 
     with pytest.raises(ValueError, match=f"^{re.escape(source)} does not parse"):
         _pointers(project, [broken])
