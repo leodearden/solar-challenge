@@ -3,6 +3,9 @@
 
 The classes above the first test are defined at module level, where their qualified
 names carry no '<locals>' and a parametrize decorator can reach them.
+
+docs/surface-forms-inspect-readings.md says how each minor reads what these rules refuse
+or read alike, and names the tests that pin each by node-id.
 """
 
 import collections.abc
@@ -1262,6 +1265,35 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_t
     assert surface_form(functools.partial(Settable())) == "(rate: int) -> str"
     assert surface_form(functools.partial(Getless())) == "(rate: int) -> str"
     assert surface_form(functools.partial(signed)) == "(rate: int)"
+
+
+@pytest.mark.parametrize(
+    "shape", ["partial", "functools-wraps-wrapper", "bound-method", "partial-of-a-signed-wrapper"]
+)
+def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_spelled_by_the_signature_one_of_its_links_carries(
+    shape: str,
+) -> None:
+    rate = inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)
+    receiver = inspect.Parameter("receiver", inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    called = CallableGetterDeleter()
+
+    def signed(link: Callable[..., object], *receivers: inspect.Parameter) -> Callable[..., object]:
+        link.__signature__ = inspect.Signature([*receivers, rate])
+        return link
+
+    def wrapper() -> Callable[..., object]:
+        return functools.wraps(called)(lambda *args: called(*args))
+
+    routine_builders = {
+        "partial": lambda: signed(functools.partial(called)),
+        "functools-wraps-wrapper": lambda: signed(wrapper()),
+        "bound-method": lambda: types.MethodType(signed(wrapper(), receiver), object()),
+        "partial-of-a-signed-wrapper": lambda: functools.partial(signed(wrapper())),
+    }
+    routine = routine_builders[shape]()
+
+    assert surface_form(routine) == "(rate: int)"
+    assert named_classes(routine) == {int}
 
 
 @pytest.mark.parametrize(

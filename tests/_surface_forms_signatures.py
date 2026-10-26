@@ -3,7 +3,9 @@
 
 Both follow the chain and the constructor inspect follows. Of the helper, this module
 imports only tests/_surface_forms_module_lookup.py, as
-tests/unit/test_surface_forms_layers.py checks.
+tests/unit/test_surface_forms_layers.py checks. docs/surface-forms-inspect-readings.md
+says how each minor reads what this module refuses: a new refusal gets a rule test, then
+an entry there.
 """
 
 import abc
