@@ -590,6 +590,10 @@ class TestListRecentRuns:
                 json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
                 id="summary-with-a-key-no-field-has",
             ),
+            pytest.param(
+                json.dumps(dataclasses.asdict(home_summary(total_generation_kwh=10**400))),
+                id="summary-holding-a-generation-no-float-can-hold",
+            ),
         ],
     )
     def test_a_run_whose_summary_cannot_be_read_is_listed_without_figures_with_its_refusal_beside_the_others(

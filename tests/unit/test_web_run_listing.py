@@ -484,6 +484,11 @@ class TestHeadlineFigures:
                 summary_json(home_summary(total_generation_kwh=None)), "total_generation_kwh", id="generation-null"
             ),
             pytest.param(_with_a_retired_key(summary_json(home_summary())), "retired", id="summary-with-a-key-no-field-has"),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                "total_generation_kwh",
+                id="generation-no-float-can-hold",
+            ),
         ],
     )
     def test_a_run_whose_summary_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
@@ -559,6 +564,7 @@ class TestRunTotals:
             pytest.param("{not json", id="summary-not-json"),
             pytest.param(summary_json(fleet_summary(total_generation_kwh=None)), id="generation-null"),
             pytest.param(_with_a_retired_key(summary_json(fleet_summary())), id="summary-with-a-key-no-field-has"),
+            pytest.param(summary_json(fleet_summary(total_generation_kwh=10**400)), id="generation-no-float-can-hold"),
         ],
     )
     def test_a_completed_run_whose_summary_is_damaged_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(

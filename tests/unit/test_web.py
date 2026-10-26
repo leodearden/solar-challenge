@@ -27,6 +27,7 @@ from tests._html_page import (
     texts_after,
 )
 from tests._plotly_figure import annotations_by_text
+from tests._run_summaries import home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import database_of
 from tests._web_runs import store_fleet_run, store_home_run
@@ -213,8 +214,18 @@ class TestDashboardRoute:
         assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
 
-    def test_dashboard_stats_count_a_completed_run_whose_summary_does_not_decode_but_leave_out_its_generation(
-        self, storage: RunStorage, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                id="summary-holds-a-generation-no-float-can-hold",
+            ),
+        ],
+    )
+    def test_dashboard_stats_count_a_completed_run_whose_summary_cannot_be_read_but_leave_out_its_generation(
+        self, storage: RunStorage, client: FlaskClient, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
         """One damaged run does not fail the dashboard: it counts in Total Runs and Homes Simulated, Energy Modelled leaves its generation out, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
         results = make_sinusoidal_sim_results(days=1)
@@ -222,7 +233,7 @@ class TestDashboardRoute:
         _save_fleet_run(storage, "Community Fleet", [results, results])
         damaged_run_id = _save_home_run(storage, "Damaged Roof", results)
         with storage.database.transaction() as conn:
-            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", damaged_run_id))
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, damaged_run_id))
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         response = client.get("/")
