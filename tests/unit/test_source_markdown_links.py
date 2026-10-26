@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 
+from tests._working_tree import WorkingTreePaths
+
 _LINK_TARGET = re.compile(r"\]\((?P<target>[^)\s]+)")
 
 
@@ -95,4 +97,21 @@ def test_resolves_a_target_from_the_linking_files_directory_or_from_the_root_aft
         "../outside.md",
         "guide/my notes.md",
         "guide/intro.md",
+    ]
+
+
+def test_reports_each_link_that_leads_to_no_file_or_directory_of_the_tree_on_its_line() -> None:
+    tree = WorkingTreePaths(
+        files=frozenset(PurePosixPath(path) for path in ["README.md", "guide/intro.md", "guide/setup.md"]),
+        directories=frozenset(PurePosixPath(path) for path in [".", "guide"]),
+    )
+    links = _links_in(
+        PurePosixPath("guide/intro.md"),
+        "[a](setup.md#steps) [b](../guide) [c](..)\n[d](absent.md)\n[e](../../README.md) [f](/guide/absent.md)\n",
+    )
+
+    assert _dangling(tree, links) == [
+        "guide/intro.md:2: absent.md: guide/absent.md does not exist, or git ignores it",
+        "guide/intro.md:3: ../../README.md: ../README.md does not exist, or git ignores it",
+        "guide/intro.md:3: /guide/absent.md: guide/absent.md does not exist, or git ignores it",
     ]
