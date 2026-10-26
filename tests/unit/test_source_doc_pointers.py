@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
-from tests._pointer_scan import utf8_text
+from tests._pointer_scan import scanned_files, utf8_text
 from tests._working_tree import working_tree_paths
 
 _DOC_POINTER = re.compile(r"(?<![\w./-])docs/(?:[\w.-]+/)*[\w.-]*\w")
@@ -50,6 +50,40 @@ def _dangling(root: Path, pointers: Iterable[_DocPointer]) -> list[str]:
     ]
 
 
+def test_every_pointer_from_the_scanned_files_into_docs_resolves(project_root: Path) -> None:
+    pointers = _doc_pointers(project_root, scanned_files(project_root, _UNSCANNED))
+    unscanned = ", ".join(str(path) for path in _UNSCANNED)
+    assert pointers, (
+        f"found no path into docs/ in any file git lists outside the unscanned paths ({unscanned}), so this gate"
+        " would pass vacuously; fix the listing or the grammar"
+    )
+
+    dangling = _dangling(project_root, pointers)
+
+    assert dangling == [], "\n".join(
+        [
+            *dangling,
+            "A renamed or moved doc's pointers must follow it. Name a doc by its path from the project root,"
+            " docs/<name>.md, which this gate resolves, and another repository's doc from that repository's name,"
+            " as in dark-factory/docs/code-quality.md.",
+        ]
+    )
+
+
+def test_every_path_the_gate_leaves_unscanned_is_in_the_tree(project_root: Path) -> None:
+    tree = working_tree_paths(project_root)
+
+    absent = [path for path in _UNSCANNED if not tree.holds(path)]
+
+    assert absent == [], "\n".join(
+        [
+            *(f"{path} is not in the tree, so leaving it unscanned exempts nothing" for path in absent),
+            "Rename or drop each such entry where it is declared: _MODULES_NAMING_THROWAWAY_DOCS in this module, or"
+            " RECORD_DIRECTORIES in tests/_pointer_scan.py.",
+        ]
+    )
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """Return a git checkout holding the docs docs/guide.md and docs/prds/record.md."""
@@ -67,6 +101,29 @@ def _write_source(project: Path, source: str, text: str) -> PurePosixPath:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return PurePosixPath(source)
+
+
+def test_scans_every_file_git_lists_but_the_records_and_the_modules_naming_throwaway_docs(project: Path) -> None:
+    scanned = {
+        "CLAUDE.md",
+        "docs/guide.md",
+        "scripts/measure.py",
+        "src/pkg/module.py",
+        "tests/_helper.py",
+        "tests/unit/test_any.py",
+    }
+    unscanned = [
+        "docs/prds/record.md",
+        "docs/research/survey.md",
+        "plans/plan.md",
+        "review/briefing.yaml",
+        "tests/unit/test_source_doc_pointers.py",
+        "tests/unit/test_source_test_pointers.py",
+    ]
+    for source in [*scanned, *unscanned]:
+        _write_source(project, source, "")
+
+    assert set(scanned_files(project, _UNSCANNED)) == {PurePosixPath(source) for source in scanned}
 
 
 def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> None:
