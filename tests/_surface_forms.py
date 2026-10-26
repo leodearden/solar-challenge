@@ -136,13 +136,9 @@ def member_forms(cls: type) -> dict[str, str]:
     raises TypeError, and a module another of the same name has replaced in sys.modules
     raises LookupError. A public member that no member rule spells and that is a routine
     whose signature inspect cannot read, as surface_form describes one, or a
-    functools.partial whose type takes __get__ from a class other than functools.partial
-    and defines no __set__, if inspect reads it as a builtin on Python 3.11 and 3.12
-    alone, raises TypeError naming *cls*, the member and its kind; any other that is a
-    functools.partial raises TypeError naming *cls*, the member and its binding: Python
-    3.14 binds a functools.partial to the instance as a method and earlier minors call
-    it without, and no rule reads the binding of a partial whose type takes __get__ from
-    a class other than functools.partial.
+    functools.partial, raises TypeError naming *cls*, the member and its kind or
+    binding. docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor
+    reads and binds such a partial.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
