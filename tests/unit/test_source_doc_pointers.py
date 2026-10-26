@@ -10,6 +10,7 @@ import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import utf8_text
+from tests._working_tree import working_tree_paths
 
 _DOC_POINTER = re.compile(r"(?<![\w./-])docs/(?:[\w.-]+/)*[\w.-]*\w")
 
@@ -37,6 +38,16 @@ def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPoin
             line = text.count("\n", 0, match.start()) + 1
             pointers.append(_DocPointer(source=source, line=line, path=PurePosixPath(match[0])))
     return pointers
+
+
+def _dangling(root: Path, pointers: Iterable[_DocPointer]) -> list[str]:
+    """Return "<pointer>: <reason>" for each of the *pointers* whose path is not in *root*'s working tree, in their order."""
+    tree = working_tree_paths(root)
+    return [
+        f"{pointer}: {pointer.path} does not exist, or git ignores it"
+        for pointer in pointers
+        if not tree.holds(pointer.path)
+    ]
 
 
 @pytest.fixture
