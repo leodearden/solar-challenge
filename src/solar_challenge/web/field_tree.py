@@ -14,10 +14,11 @@ without_unknown_keys drops each key the reader would refuse as one no field has,
 as an UnknownKey.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
-object or a leaf, each child with the annotation it is read as and its path. So a new container
-shape is one branch of _shape. A new leaf codec, such as a date or a timedelta, is a branch of
-_read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string. Neither is
-an edit of a second walker.
+object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
+and _stored_form all take the containers stored as an array from _ARRAY_CONTAINERS, so a new such
+container is one entry of it. A new leaf codec, such as a date or a timedelta, is a branch of
+_read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string. Neither
+needs an edit of the drop.
 
 The module imports no solar_challenge module. web/stored_runs.py writes and reads a run's
 documents through it, and its StoredDocument.read maps a FieldTreeRefused to a
@@ -33,6 +34,9 @@ from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_ori
 import pandas as pd
 
 T = TypeVar("T")
+
+_ARRAY_CONTAINERS: tuple[type[Collection[Any]], ...] = (list, tuple)
+"""The containers a field tree stores as an array: field_tree writes each as one, and an annotation of one, as list[X], is read from an array into it."""
 
 
 def field_tree(obj: Any) -> dict[str, Any]:
@@ -58,15 +62,15 @@ def field_tree(obj: Any) -> dict[str, Any]:
 def _field_tree_value(value: Any) -> Any:
     """Emit one value in its JSON-compatible form.
 
-    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string. A list or
-    tuple becomes a list, and a dict keeps its keys, with every item serialized the
-    same way. Anything else, None included, is returned unchanged.
+    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string. A value of one of
+    _ARRAY_CONTAINERS becomes a list, and a dict keeps its keys, with every item serialized
+    the same way. Anything else, None included, is returned unchanged.
     """
     if is_dataclass(value):
         return field_tree(value)
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, _ARRAY_CONTAINERS):
         return [_field_tree_value(item) for item in value]
     if isinstance(value, dict):
         return {key: _field_tree_value(item) for key, item in value.items()}
@@ -131,7 +135,7 @@ class _DataclassObject:
 
 @dataclass(frozen=True)
 class _Array:
-    """An array read as a list or a tuple: the container it is read into, and each of its items."""
+    """An array read into one of _ARRAY_CONTAINERS: that container, and each of its items."""
 
     container: Callable[[Iterable[Any]], Collection[Any]]
     items: tuple[_Child, ...]
@@ -160,14 +164,14 @@ def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
     """*value*, decoded JSON at *path* in its document, in the shape *annotation* reads it as, each child with the annotation it is read as and its path.
 
     Any is a leaf, and so is null where None is a member of a union. A union's other values take
-    the shape of the member _union_member picks. A dataclass reads an object of its fields, a list or
-    tuple an array, a dict an object of its values; any other annotation is a leaf.
+    the shape of the member _member_for picks. A dataclass reads an object of its fields, one of
+    _ARRAY_CONTAINERS an array, a dict an object of its values; any other annotation is a leaf.
 
     Raises:
         FieldTreeRefused: *value* is null and *annotation* admits no null; its members tag
-            themselves and it is no object, or its tag names no member, refused at the tag's path;
-            or it is of a JSON type a dataclass, a sequence or a dict cannot be, or a fixed tuple's
-            array of another length.
+            themselves and it is no object, or its tag is missing or names no member, refused at
+            the tag's path; or it is of a JSON type a dataclass, a sequence or a dict cannot be, or
+            a fixed tuple's array of another length.
     """
     origin = get_origin(annotation)
     if annotation is Any:
@@ -180,7 +184,7 @@ def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
         return _shape(value, _member_for(value, annotation, path), path)
     if isinstance(annotation, type) and is_dataclass(annotation):
         return _dataclass_object(value, annotation, path)
-    if origin in (list, tuple):
+    if origin in _ARRAY_CONTAINERS:
         return _array(value, annotation, path)
     if origin is dict:
         return _mapping(value, annotation, path)
@@ -188,24 +192,27 @@ def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
 
 
 def _member_for(value: Any, union: Any, path: str | None) -> Any:
-    """The member of *union* that *value*, decoded JSON at *path* that is not null, is read as: the one _union_member picks.
+    """The member of *union* that *value*, decoded JSON at *path* that is not null, is read as.
+
+    When the union's non-None members are dataclasses that each tag themselves with the same
+    field, it is the one whose tag is *value*'s; otherwise it is the first non-None member.
 
     Raises:
-        FieldTreeRefused: The members tag themselves and *value* is no object, or its tag names no
-            member, refused at the tag's path from _union_member's ValueError.
+        FieldTreeRefused: The members tag themselves and *value* is no object, or its tag is
+            missing or names no member, refused at the tag's path.
     """
     members = [arg for arg in get_args(union) if arg is not type(None)]
     tag_field = _shared_tag_field(members)
     if tag_field is None:
-        return _union_member(union, value)
+        return next(iter(members), Any)
     if not isinstance(value, dict):
         raise FieldTreeRefused(path, f"is {_json_value(value)}, not an object")
-    try:
-        return _union_member(union, value)
-    except ValueError as unknown_tag:
-        tags = [_tags(each)[tag_field] for each in members]
-        stored = "missing" if tag_field not in value else repr(value[tag_field])
-        raise FieldTreeRefused(_child(path, tag_field), f"is {stored}, not one of {tags}") from unknown_tag
+    tags = [_tags(member)[tag_field] for member in members]
+    stored = value.get(tag_field)
+    if stored not in tags:
+        stored_text = "missing" if tag_field not in value else repr(stored)
+        raise FieldTreeRefused(_child(path, tag_field), f"is {stored_text}, not one of {tags}")
+    return members[tags.index(stored)]
 
 
 def _dataclass_object(value: Any, cls: type, path: str | None) -> _DataclassObject:
@@ -231,7 +238,7 @@ def _dataclass_object(value: Any, cls: type, path: str | None) -> _DataclassObje
 
 
 def _array(value: Any, annotation: Any, path: str | None) -> _Array:
-    """The array *value* read as the list or tuple *annotation* declares: that container, and each item annotated as _item_annotations annotates it.
+    """The array *value* read as *annotation*, whose origin is one of _ARRAY_CONTAINERS: that container, and each item annotated as _item_annotations annotates it.
 
     Raises:
         FieldTreeRefused: *value* is no array, or a fixed tuple's array has another length.
@@ -242,7 +249,7 @@ def _array(value: Any, annotation: Any, path: str | None) -> _Array:
     if item_annotations is None:
         raise FieldTreeRefused(path, f"holds {len(value)} items, not the {len(get_args(annotation))} of a {annotation!r}")
     return _Array(
-        tuple if get_origin(annotation) is tuple else list,
+        get_origin(annotation),
         tuple(
             _Child(item, item_annotation, _item(path, index))
             for index, (item, item_annotation) in enumerate(zip(value, item_annotations, strict=True))
@@ -428,7 +435,7 @@ def _stored_form(annotation: Any) -> str:
     origin = get_origin(annotation)
     if isinstance(annotation, type) and is_dataclass(annotation):
         return f"an object, as a {annotation.__name__} is stored"
-    if origin in (list, tuple):
+    if origin in _ARRAY_CONTAINERS:
         return "an array"
     if origin is dict:
         return "an object"
@@ -453,28 +460,6 @@ def _field_types(cls: type) -> Mapping[str, Any]:
         NameError: An annotation names a type cls's module does not bind.
     """
     return MappingProxyType(get_type_hints(cls))
-
-
-def _union_member(annotation: Any, value: Any) -> Any:
-    """The member of union *annotation* a stored, non-null *value* is rebuilt as.
-
-    When the union's non-None members are dataclasses that each tag themselves with the
-    same field, the member is the one whose tag is *value*'s; otherwise it is the first
-    non-None member.
-
-    Raises:
-        ValueError: For members tagged with a field when no member's tag is *value*'s,
-            naming the field, *value*'s value of it and the members' tags.
-    """
-    members = [arg for arg in get_args(annotation) if arg is not type(None)]
-    tag_field = _shared_tag_field(members)
-    if tag_field is None:
-        return next(iter(members), Any)
-    tags = [_tags(member)[tag_field] for member in members]
-    stored = value.get(tag_field) if isinstance(value, dict) else None
-    if stored not in tags:
-        raise ValueError(f"{tag_field} {stored!r} is not one of {tags}")
-    return members[tags.index(stored)]
 
 
 def _shared_tag_field(members: Sequence[Any]) -> str | None:
@@ -513,7 +498,7 @@ def _item_annotations(sequence_annotation: Any, length: int) -> tuple[Any, ...] 
     """The annotation of each of the *length* items of an array stored as *sequence_annotation*.
 
     A fixed tuple, as tuple[int, int], annotates each item by position, and is None for an array
-    of another length; list[X] and tuple[X, ...] annotate each item X.
+    of another length; any other, as list[X] or tuple[X, ...], annotates each item X.
     """
     args = get_args(sequence_annotation)
     if get_origin(sequence_annotation) is tuple and args and args[-1] is not Ellipsis:
