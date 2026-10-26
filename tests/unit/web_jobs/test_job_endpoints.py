@@ -15,12 +15,14 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
 from tests._fleet_form import valid_distribution_form
 from tests._run_storage_layout import stored_run_dir
+from tests._sse import parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
     RecordingSimulation,
+    RunStorageRefusingCompletion,
     RunStorageWithGatedHomeSaves,
     SaveGate,
     a_failing_simulation,
@@ -222,7 +224,8 @@ def _status_and_name_while_running_and_once_completed(
 class TestASubmittedJobsRunInRunHistory:
     """A submitted job's run shows in Run History from its submit on: running, then completed or failed.
 
-    A run its job left running reads failed once the app is rebuilt on the same store.
+    A job whose run cannot be recorded completed fails, and its run reads failed, never completed. A run
+    its job left running reads failed once the app is rebuilt on the same store.
     """
 
     @pytest.mark.parametrize(
@@ -290,6 +293,25 @@ class TestASubmittedJobsRunInRunHistory:
         run = client.get("/api/history/runs/id-2").get_json()
 
         assert (run["status"], run["error_message"]) == ("failed", "the simulation failed")
+
+    def test_a_job_whose_run_the_database_refuses_to_complete_reports_failed_and_its_run_reads_failed_never_completed(
+        self, app: Flask
+    ) -> None:
+        storage = RunStorageRefusingCompletion(database_of(app), run_storage_of(app).data_dir)
+        manager = JobManager(storage, simulate_home=RecordingSimulation(), new_id=CountingIds())
+        client = client_using(app, manager)
+        assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+        assert manager.wait_until_idle(timeout=30)
+
+        job = client.get("/api/jobs/id-1").get_json()
+        assert (job["status"], job["message"]) == ("failed", "the database refuses to complete runs")
+        run = client.get("/api/history/runs/id-2").get_json()
+        assert (run["status"], run["error_message"]) == ("failed", "the database refuses to complete runs")
+        assert run["completed_at"] is not None
+        frames = parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True))
+        statuses = [frame.data["status"] for frame in frames]
+        assert "completed" not in statuses
+        assert statuses[-1:] == ["failed"]
 
     def test_a_run_its_job_left_running_reads_failed_as_interrupted_once_the_app_is_rebuilt_on_its_store(
         self, tmp_path: Path, blocking_simulation: BlockingSimulation

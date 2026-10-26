@@ -349,7 +349,7 @@ class TestCompletedAtTimestamp:
     """completed_at should be a real timestamp, distinct from created_at."""
 
     def test_completed_at_timestamp(self, storage: RunStorage) -> None:
-        """Save a completed run with a known created_at, verify completed_at differs."""
+        """Save a run with a known created_at and mark it completed, as its job does; verify completed_at differs."""
         config = _make_home_config()
         results = _make_simulation_results()
         summary = _make_summary()
@@ -365,6 +365,7 @@ class TestCompletedAtTimestamp:
             created_at=created_at,
             name="Saved Run",
         )
+        storage.mark_run_completed("ts-test-001")
 
         run = storage.run_record("ts-test-001")
         assert run is not None

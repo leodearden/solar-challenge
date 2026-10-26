@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Stand-ins for the simulation, the id source and the run store a JobManager is given."""
 
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,25 @@ class RunStorageWithGatedHomeSaves(RunStorage):
     ) -> None:
         self._gate.hold()
         super().save_home_run_from_results(run_id, config, results, **save)
+
+
+class RunStorageRefusingCompletion(RunStorage):
+    """Stands in for a JobManager's RunStorage whose database refuses to record a run completed: mark_run_completed raises sqlite3.OperationalError and writes nothing."""
+
+    def mark_run_completed(self, run_id: str) -> None:
+        raise sqlite3.OperationalError("the database refuses to complete runs")
+
+
+class RunStorageWithGatedCompletion(RunStorage):
+    """Stands in for a JobManager's RunStorage: each job's run is marked completed as RunStorage marks it, then the job waits at *gate* until it opens."""
+
+    def __init__(self, database: Database, data_dir: str | Path, gate: SaveGate) -> None:
+        super().__init__(database, data_dir)
+        self._gate = gate
+
+    def mark_run_completed(self, run_id: str) -> None:
+        super().mark_run_completed(run_id)
+        self._gate.hold()
 
 
 class CountingIds:

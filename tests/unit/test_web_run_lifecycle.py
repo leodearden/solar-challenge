@@ -148,9 +148,10 @@ class TestCreateRun:
 
         assert storage.run_record("run-1") == stored
 
-    def test_a_created_run_saved_as_a_finished_job_saves_it_is_completed_and_keeps_its_name_and_creation_time(
+    def test_a_created_run_saved_as_a_finished_job_saves_it_stays_running_and_keeps_its_name_and_creation_time(
         self, storage: RunStorage
     ) -> None:
+        """The save writes the run's results, not its status: its job completes it once the save has written them."""
         _create_north_roof_run(storage)
 
         storage.save_home_run_from_results(
@@ -163,13 +164,13 @@ class TestCreateRun:
         )
 
         record = _record(storage, "run-1")
-        assert (record.status, record.name, record.created_at, record.duration_seconds) == (
-            "completed",
+        assert (record.status, record.name, record.created_at, record.duration_seconds, record.completed_at) == (
+            "running",
             "North Roof",
             _CREATED_AT,
             2.0,
+            None,
         )
-        assert record.completed_at is not None
         assert record.summary_json is not None
 
 

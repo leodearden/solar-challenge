@@ -37,6 +37,7 @@ from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
     RecordingSimulation,
+    RunStorageWithGatedCompletion,
     RunStorageWithGatedHomeSaves,
     SaveGate,
     a_failing_simulation,
@@ -673,6 +674,20 @@ class TestJobManagerRuns:
 
         assert (run.status, run.error_message) == ("completed", None)
         assert run.completed_at is not None
+
+    def test_a_job_reports_completed_only_once_its_run_reads_completed(
+        self, storage: RunStorage, save_gate: SaveGate
+    ) -> None:
+        gated = RunStorageWithGatedCompletion(storage.database, storage.data_dir, save_gate)
+        manager = JobManager(gated, max_workers=1, simulate_home=RecordingSimulation())
+        job_id = _submit_home_job(manager)
+        save_gate.wait_until_a_save_waits()
+
+        assert _run_of_job(manager, job_id, storage).status == "completed"
+        assert _status_of(manager, job_id) == "running"
+        save_gate.open()
+        assert manager.wait_until_idle(timeout=30)
+        assert _status_of(manager, job_id) == "completed"
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(

@@ -123,7 +123,6 @@ class TestHomeRunRoundTrip:
             results=sample_simulation_results,
             summary=sample_summary,
             name="Test Run",
-            status="completed",
             duration_seconds=5.0,
         )
 
@@ -282,7 +281,6 @@ class TestFleetRunRoundTrip:
             fleet_summary=fleet_summary,
             per_home_summaries=per_home_summaries,
             name="Test Fleet",
-            status="completed",
             duration_seconds=10.0,
         )
 
@@ -383,13 +381,12 @@ class TestSavedRunRow:
 
         The config and summary texts are pinned by
         tests/unit/test_web_storage_roundtrip.py::TestPersistedJson, so they are blanked here.
-        A failed run has no completed_at.
+        A save writes no status: a first save records its run running, with no error and no
+        completed_at, as create_run records one.
         """
         saves[kind](
             "saved-run",
             name="North Roof",
-            status="failed",
-            error_message="Simulation diverged",
             duration_seconds=5.0,
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -401,8 +398,8 @@ class TestSavedRunRow:
             type=kind,
             config_json=None,
             summary_json=None,
-            status="failed",
-            error_message="Simulation diverged",
+            status="running",
+            error_message=None,
             created_at="2026-01-01T00:00:00+00:00",
             completed_at=None,
             duration_seconds=5.0,
@@ -423,31 +420,6 @@ class TestSavedRunRow:
         assert storage.page_runs(RunQuery()).total == 0
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
-        """A run saved as completed has the time of the save as its completed_at."""
-        before = datetime.now(timezone.utc)
-        saves[kind]("completed-run", status="completed")
-        after = datetime.now(timezone.utc)
-
-        record = storage.run_record("completed-run")
-        assert record.status == "completed"
-        assert before <= datetime.fromisoformat(record.completed_at) <= after
-
-    @pytest.mark.parametrize("status", [status for status in RUN_STATUSES if status != "completed"])
-    @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_of_a_run_that_is_not_completed_leaves_completed_at_null(
-        self, storage, saves, kind, status
-    ):
-        """A run saved with any status but completed has no completed_at.
-
-        The statuses come from RUN_STATUSES, so a new status is covered without editing the test.
-        """
-        saves[kind]("unfinished-run", status=status)
-
-        record = storage.run_record("unfinished-run")
-        assert (record.status, record.completed_at) == (status, None)
-
-    @pytest.mark.parametrize("kind", ["home", "fleet"])
     def test_a_save_given_no_created_at_is_created_at_the_time_it_saves(self, storage, saves, kind):
         """A run saved with no created_at has the time of the save as its created_at."""
         before = datetime.now(timezone.utc)
@@ -457,16 +429,6 @@ class TestSavedRunRow:
         record = storage.run_record("new-run")
         assert before <= datetime.fromisoformat(record.created_at) <= after
 
-    @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_of_a_completed_run_given_no_created_at_stamps_created_at_and_completed_at_with_the_one_time_it_saves(
-        self, storage, saves, kind
-    ):
-        """A run saved as completed with no created_at was created and completed at the one time of the save."""
-        saves[kind]("new-completed-run", status="completed")
-
-        record = storage.run_record("new-completed-run")
-        assert datetime.fromisoformat(record.created_at) == datetime.fromisoformat(record.completed_at)
-
     @pytest.mark.parametrize(
         ("first", "resave"),
         [
@@ -474,28 +436,26 @@ class TestSavedRunRow:
             pytest.param("home", "fleet", id="home-then-fleet"),
         ],
     )
-    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_the_run_labels(
+    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_the_run_labels_and_the_runs_status_error_and_completion_time(
         self, storage, saves, first, resave
     ):
-        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at and its labels, name and notes.
+        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at, its labels, name and notes, and its status, error and completion time.
 
-        The first save is of the other run type, was completed and created earlier, and its notes
-        and name are set, so it differs from the re-save in every column: each column of the re-saved row
-        shows which save wrote it.
+        The first save is of the other run type and was created earlier, its run was then marked
+        failed through the lifecycle, and its notes and name are set, so it differs from the
+        re-save in every column: each column of the re-saved row shows which save wrote it.
         """
         saves[first](
             "resaved",
             name="First Name",
-            status="completed",
             duration_seconds=120.0,
             created_at="2026-01-01T00:00:00+00:00",
         )
+        storage.mark_run_failed("resaved", "Simulation diverged")
         storage.update_run_labels("resaved", {"name": "Renamed", "notes": "Checked"})
         first_record = storage.run_record("resaved")
         resave_arguments = dict(
             name="Second Name",
-            status="failed",
-            error_message="Simulation diverged",
             duration_seconds=5.0,
             created_at="2026-02-01T00:00:00+00:00",
         )
@@ -510,22 +470,15 @@ class TestSavedRunRow:
         ]
         assert columns_the_saves_share == []
         assert storage.run_record("resaved") == dataclasses.replace(
-            fresh_record, id="resaved", created_at="2026-01-01T00:00:00+00:00", name="Renamed", notes="Checked"
+            fresh_record,
+            id="resaved",
+            created_at="2026-01-01T00:00:00+00:00",
+            name="Renamed",
+            notes="Checked",
+            status="failed",
+            error_message="Simulation diverged",
+            completed_at=first_record.completed_at,
         )
-
-    @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_given_a_status_that_is_not_a_run_status_raises_value_error_naming_it_and_writes_nothing(
-        self, storage, saves, kind
-    ):
-        """A save given a status outside RUN_STATUSES raises ValueError naming the status and the run statuses.
-
-        The save writes no file and no runs row.
-        """
-        with pytest.raises(ValueError, match=re.escape(f"status is 'complete', not one of {list(RUN_STATUSES)}")):
-            saves[kind]("bad-status", status="complete")
-
-        assert list(storage.data_dir.iterdir()) == []
-        assert storage.page_runs(RunQuery()).total == 0
 
 
 class TestDeleteRun:
