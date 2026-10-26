@@ -20,7 +20,7 @@ from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.number_fields import FRACTION, as_finite_float, read_field
+from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
@@ -262,14 +262,8 @@ def _require_valid_peak_hours(peak_hours: Sequence[tuple[int, int]]) -> None:
             )
 
 
-def _require_valid_import_limit(import_limit_kw: float) -> None:
-    """Refuse an import_limit_kw that is not positive.
-
-    Raises:
-        ConfigurationError: Naming import_limit_kw and its value.
-    """
-    if import_limit_kw <= 0:
-        raise ConfigurationError(f"import_limit_kw must be positive, got {import_limit_kw} kW")
+_IMPORT_LIMIT_KW = POSITIVE
+"""The grid import limits, in kW, that PeakShavingStrategyConfig and PeakShavingStrategy admit."""
 
 
 @dataclass(frozen=True)
@@ -306,10 +300,11 @@ class PeakShavingStrategyConfig:
 
     Attributes:
         import_limit_kw: The grid import, in kW, the strategy discharges the battery to keep
-            at or below: positive.
+            at or below: read as a finite number greater than 0, and held as the float read.
 
     Raises:
-        ConfigurationError: If import_limit_kw is not positive, with the refusal
+        ConfigurationError: If import_limit_kw is a bool, is not a finite number, or is not
+            greater than 0, naming import_limit_kw and the value, with the refusal
             PeakShavingStrategy gives.
     """
 
@@ -317,8 +312,8 @@ class PeakShavingStrategyConfig:
     strategy_type: Literal["peak_shaving"] = field(default="peak_shaving", init=False)
 
     def __post_init__(self) -> None:
-        """Refuse import_limit_kw as PeakShavingStrategy does."""
-        _require_valid_import_limit(self.import_limit_kw)
+        """Read import_limit_kw as PeakShavingStrategy does, and hold the float read."""
+        read_field(self, "import_limit_kw", as_finite_float, _IMPORT_LIMIT_KW)
 
 
 DispatchStrategyConfig: TypeAlias = (
@@ -666,14 +661,15 @@ class PeakShavingStrategy(DispatchStrategy):
         """Initialize peak shaving strategy with grid import threshold.
 
         Args:
-            import_limit_kw: Maximum allowed grid import in kW. Battery will
-                discharge to keep grid import at or below this level.
+            import_limit_kw: Maximum allowed grid import in kW, read as a finite number
+                greater than 0, and held as the float read. Battery will discharge to keep
+                grid import at or below this level.
 
         Raises:
-            ConfigurationError: If import_limit_kw is not positive
+            ConfigurationError: If import_limit_kw is a bool, is not a finite number, or is
+                not greater than 0, naming import_limit_kw and the value.
         """
-        _require_valid_import_limit(import_limit_kw)
-        self._import_limit_kw = import_limit_kw
+        self._import_limit_kw = as_finite_float(import_limit_kw, "import_limit_kw", _IMPORT_LIMIT_KW)
 
     def decide_action(
         self,
