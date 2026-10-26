@@ -16,11 +16,6 @@ from solar_challenge.dispatch import (
 from solar_challenge.errors import ConfigurationError
 
 
-def _breaks_the_window_rule(window: tuple[int, int]) -> str:
-    """A pattern matching the refusal of a peak_hours window that breaks 0 <= start < end <= 24, naming the window."""
-    return f"{re.escape('0 <= start < end <= 24')}.*{re.escape(str(window))}"
-
-
 @pytest.fixture
 def standard_tou_strategy():
     """Create a standard TOU strategy with typical peak hours."""
@@ -70,23 +65,37 @@ class TestTOUOptimizedStrategyValidation:
     """Test TOUOptimizedStrategy input validation."""
 
     def test_invalid_peak_hour_range_raises(self):
-        """A peak period past midnight is refused, naming the rule and the period."""
-        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((25, 28))):
+        """A peak period past midnight is refused, naming its start hour and the day's bounds."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape("peak_hours[0][0] must be between 0 and 24, got 25")
+        ):
             TOUOptimizedStrategy(peak_hours=[(25, 28)])
 
     def test_negative_peak_hour_raises(self):
-        """A peak period starting at a negative hour is refused, naming the rule and the period."""
-        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((-1, 5))):
+        """A peak period starting at a negative hour is refused, naming its start hour and the day's bounds."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape("peak_hours[0][0] must be between 0 and 24, got -1")
+        ):
             TOUOptimizedStrategy(peak_hours=[(-1, 5)])
 
     def test_peak_start_after_end_raises(self):
-        """A peak period starting after its end is refused, naming the rule and the period."""
-        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((20, 17))):
+        """A peak period starting after its end is refused, naming the window."""
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (20, 17)"
+            ),
+        ):
             TOUOptimizedStrategy(peak_hours=[(20, 17)])
 
     def test_peak_start_equals_end_raises(self):
-        """A peak period starting at its end is refused, naming the rule and the period."""
-        with pytest.raises(ConfigurationError, match=_breaks_the_window_rule((17, 17))):
+        """A peak period starting at its end is refused, naming the window."""
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (17, 17)"
+            ),
+        ):
             TOUOptimizedStrategy(peak_hours=[(17, 17)])
 
     def test_off_peak_hours_is_refused(self):

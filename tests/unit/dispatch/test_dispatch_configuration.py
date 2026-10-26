@@ -176,25 +176,87 @@ class TestOneValidatorPerRule:
     """A variant and its strategy's constructor refuse the same values with the same ConfigurationError."""
 
     @pytest.mark.parametrize(
-        "peak_hours",
+        ("peak_hours", "message"),
         [
-            pytest.param([], id="no-window"),
-            pytest.param([(25, 28)], id="after-midnight"),
-            pytest.param([(-1, 5)], id="negative-start"),
-            pytest.param([(20, 17)], id="start-after-end"),
-            pytest.param([(17, 17)], id="start-at-end"),
-            pytest.param([(16, 25)], id="end-after-midnight"),
+            pytest.param([], "peak_hours must hold at least one (start, end) window; it is empty", id="no-window"),
+            pytest.param([(25, 28)], "peak_hours[0][0] must be between 0 and 24, got 25", id="after-midnight"),
+            pytest.param([(-1, 5)], "peak_hours[0][0] must be between 0 and 24, got -1", id="negative-start"),
+            pytest.param([(16, 25)], "peak_hours[0][1] must be between 0 and 24, got 25", id="end-after-midnight"),
+            pytest.param(
+                [(20, 17)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (20, 17)",
+                id="start-after-end",
+            ),
+            pytest.param(
+                [(17, 17)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (17, 17)",
+                id="start-at-end",
+            ),
+            pytest.param(
+                [(16, 19, 20)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (16, 19, 20)",
+                id="three-hours",
+            ),
+            pytest.param([16], "peak_hours[0] must be a list of whole numbers, got 16", id="a-bare-hour"),
+            pytest.param(
+                [(7, 9), (16.5, 19)],
+                "peak_hours[1][0] must be a whole number, got 16.5",
+                id="a-fraction-in-the-second-window",
+            ),
         ],
     )
-    def test_invalid_peak_hours_are_refused_alike(self, peak_hours: list[tuple[int, int]]) -> None:
-        refusal = _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=tuple(peak_hours)))
+    def test_invalid_peak_hours_are_refused_alike(self, peak_hours: list[object], message: str) -> None:
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=tuple(peak_hours)))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=list(peak_hours)))
+            == (ConfigurationError, message)
+        )
 
-        assert refusal == _refusal(lambda: TOUOptimizedStrategy(peak_hours=list(peak_hours)))
-        refusal_type, message = refusal
-        assert refusal_type is ConfigurationError
-        assert "peak_hours" in message
-        for start, end in peak_hours:
-            assert f"({start}, {end})" in message
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_an_hour_that_is_not_a_finite_number_is_refused_alike(self, value: object) -> None:
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=((value, 19),)))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=[(value, 19)]))
+            == (ConfigurationError, f"peak_hours[0][0] must be a finite number, got {value!r}")
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param("16-19", id="text"),
+            pytest.param(16, id="an-hour"),
+            pytest.param({16: 19}, id="a-mapping"),
+        ],
+    )
+    def test_peak_hours_that_are_not_a_list_are_refused_alike(self, value: object) -> None:
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=value))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=value))
+            == (ConfigurationError, f"peak_hours must be a list of (start, end) windows, got {value!r}")
+        )
+
+    def test_both_hold_the_windows_as_the_int_pairs_they_read(self) -> None:
+        """A config holds lists of whole floats as int pairs, so it hashes; a strategy acts on the hours it read."""
+        config = TOUOptimizedStrategyConfig(peak_hours=[[16.0, 19.0]])
+        strategy = TOUOptimizedStrategy(peak_hours=[("16", "19")])
+        decisions = [
+            strategy.decide_action(
+                timestamp=datetime(2024, 1, 15, hour, 0),
+                generation_kw=0.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+            for hour in (17, 12)
+        ]
+
+        assert config.peak_hours == ((16, 19),)
+        assert type(config.peak_hours) is tuple
+        assert all(type(window) is tuple for window in config.peak_hours)
+        assert all(type(hour) is int for window in config.peak_hours for hour in window)
+        assert hash(config) == hash(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)))
+        assert [decision.discharge_kw for decision in decisions] == [1.0, 0.0]
 
     @pytest.mark.parametrize("peak_hours", [[(0, 24)], [(7, 9), (17, 20)], [(23, 24)]])
     def test_valid_peak_hours_build_both(self, peak_hours: list[tuple[int, int]]) -> None:

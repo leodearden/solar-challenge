@@ -493,6 +493,16 @@ home:
                 "True",
                 id="battery-peak-shaving-limit-boolean",
             ),
+            pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery:\n"
+                "    capacity_kwh: 5.0\n"
+                "    dispatch_strategy: {strategy_type: tou_optimized, peak_hours: [[16.5, 19]]}\n",
+                "peak_hours[0][0]",
+                "16.5",
+                id="battery-tou-peak-hour-fraction",
+            ),
         ],
     )
     def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(
