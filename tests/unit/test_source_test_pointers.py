@@ -178,10 +178,7 @@ def _mapping_keys(node: yaml.Node) -> Iterator[str]:
 
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
-    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order.
-
-    Each Python file is read and parsed when first pointed into, and at most once.
-    """
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
     tree = working_tree_paths(root)
 
     @functools.cache
