@@ -2,7 +2,8 @@
 """Centralized chart module for the Solar Challenge web dashboard.
 
 Each chart builder returns Plotly figure JSON, made by fig.to_json(); heat_pump_analysis returns
-its two figures as one HeatPumpCharts.
+its two figures as one HeatPumpCharts. ChartPanel, ChartAbsence and ChartTab describe a page's
+charts, and each refuses at construction, naming the field and the value, what no page can draw.
 Charts share layout defaults. COLOUR_PALETTE maps each chart role to its colour, loaded when
 this module is imported from the chart section of the theme token file, static/src/theme-tokens.json.
 Every colour a chart draws is a COLOUR_PALETTE entry, or a translucent form of one made by
@@ -17,12 +18,13 @@ charts agree.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, NamedTuple, TypeVar
+from typing import Any, Final, NamedTuple, NoReturn, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -46,6 +48,72 @@ _SHARED_LAYOUT = dict(
     margin=dict(l=50, r=20, t=40, b=60),
     legend=dict(orientation="h", y=-0.15),
 )
+
+_CHART_DOM_ID = re.compile(r"chart-[a-z0-9-]+")
+_CHART_TAB_KEY = re.compile(r"[a-z_]+")
+
+
+def _refuse(field: str, value: object, rule: str) -> NoReturn:
+    """Raise the ValueError that refuses *value* for *field*, naming both and the *rule* the value breaks."""
+    raise ValueError(f"{field} must be {rule}; got {value!r}")
+
+
+@dataclass(frozen=True)
+class ChartAbsence:
+    """Why a chart that applies to a run has nothing to draw, in one sentence naming the rule and the run's value."""
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            _refuse("ChartAbsence.reason", self.reason, "a sentence, not blank")
+
+
+@dataclass(frozen=True)
+class ChartPanel:
+    """One chart of a page: its element id, the title and height its card and its figure share, and its figure's JSON or the absence that says why it has none."""
+
+    dom_id: str
+    title: str
+    height_px: int
+    content: str | ChartAbsence
+
+    def __post_init__(self) -> None:
+        if not _CHART_DOM_ID.fullmatch(self.dom_id):
+            _refuse("ChartPanel.dom_id", self.dom_id, "'chart-' followed by lower-case letters, digits and hyphens")
+        if not self.title.strip():
+            _refuse("ChartPanel.title", self.title, "a title, not blank")
+        if self.height_px <= 0:
+            _refuse("ChartPanel.height_px", self.height_px, "a height above 0 px")
+        if isinstance(self.content, str) and self.content.strip() in ("", "{}"):
+            _refuse("ChartPanel.content", self.content, "a figure's JSON, neither blank nor an empty object")
+
+    @property
+    def figure_json(self) -> str | None:
+        """The panel's figure JSON, or None when the panel is an absence."""
+        return self.content if isinstance(self.content, str) else None
+
+    @property
+    def absence_reason(self) -> str | None:
+        """Why the panel has no figure, or None when it has one."""
+        return self.content.reason if isinstance(self.content, ChartAbsence) else None
+
+
+@dataclass(frozen=True)
+class ChartTab:
+    """One tab of a page's charts: the key that selects it, its label, and its panels in the order they are drawn."""
+
+    key: str
+    label: str
+    panels: tuple[ChartPanel, ...]
+
+    def __post_init__(self) -> None:
+        if not _CHART_TAB_KEY.fullmatch(self.key):
+            _refuse("ChartTab.key", self.key, "lower-case letters and underscores")
+        if not self.label.strip():
+            _refuse("ChartTab.label", self.label, "a label, not blank")
+        if not self.panels:
+            _refuse("ChartTab.panels", self.panels, "at least one panel")
 
 
 def _with_alpha(colour: str, alpha: float) -> str:
