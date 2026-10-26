@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form, one per test.
 
-The classes above the first test are defined at module level, where their qualified
-names carry no '<locals>' and a parametrize decorator can reach them.
+The classes above the first test, and the functions beside them, are defined at module
+level, where their qualified names carry no '<locals>' and a parametrize decorator can
+reach them.
 
 docs/surface-forms-inspect-readings.md says how each minor reads what these rules refuse
 or read alike, and names the tests that pin each by node-id.
@@ -53,9 +54,11 @@ from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
+    GetterPartial,
     NoneSignedCallableGetter,
     Outer,
     Preset,
+    SettableGetterPartial,
     imported_module,
 )
 
@@ -137,6 +140,70 @@ class UnsignedTextedCall(TextedCall):
     """A TextedCall whose instances also carry a __signature__ of None."""
 
     __signature__ = None
+
+
+def _settled(self: object, share: float, rate: int) -> None: ...
+
+
+class DeletableGetterPartial(GetterPartial):
+    """A GetterPartial whose type also defines __delete__, which inspect before Python 3.13 ignores in counting it a method descriptor."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class GetMixin:
+    """A class that defines __get__, for a functools.partial subclass to take it from."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self
+
+
+class MixedInGetterPartial(GetMixin, functools.partial):
+    """A functools.partial whose type takes __get__ from a base before functools.partial in its MRO."""
+
+
+class PartialFirstGetterPartial(functools.partial, GetMixin):
+    """A functools.partial whose type takes __get__ from a base after functools.partial in its MRO."""
+
+
+class GivingGetterPartial:
+    """A descriptor, no functools.partial, whose __get__ gives a GetterPartial."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> GetterPartial:
+        return GetterPartial(_settled, rate=1)
+
+
+class GetterPartialNew:
+    """A class whose __new__ is a GetterPartial."""
+
+    __new__ = GetterPartial(_settled, rate=1)
+
+
+class GivingGetterPartialInit:
+    """A class whose __init__ is a GivingGetterPartial."""
+
+    __init__ = GivingGetterPartial()
+
+
+class GivingGetterPartialCall:
+    """A class whose __call__ is a GivingGetterPartial."""
+
+    __call__ = GivingGetterPartial()
+
+
+def _with_a_signature_of_none(partial: GetterPartial) -> GetterPartial:
+    partial.__signature__ = None
+    return partial
+
+
+def _with_a_text_signature(partial: GetterPartial) -> GetterPartial:
+    partial.__text_signature__ = "(rate)"
+    return partial
+
+
+def _with_an_instance_attribute(partial: GetterPartial) -> GetterPartial:
+    partial.note = "an attribute, so that a functools.partial of it keeps it as its func"
+    return partial
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -1456,3 +1523,117 @@ def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routi
     def settle(rate: int, share: float) -> str: ...
 
     assert surface_form(Deleting(settle, 1)) == "(share: float) -> str"
+
+
+_NAMED_ITSELF = "^{partial} is a {kind}, "
+_NAMED_AS_A_LINK = " wraps {partial}, a {kind}, "
+
+
+@pytest.mark.parametrize(
+    ("build", "read_in", "naming"),
+    [
+        pytest.param(
+            lambda: GetterPartial(_settled, rate=1),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="getter-partial",
+        ),
+        pytest.param(
+            lambda: DeletableGetterPartial(_settled, rate=1),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="deletable",
+        ),
+        pytest.param(
+            lambda: MixedInGetterPartial(_settled, rate=1),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="mixed-in",
+        ),
+        pytest.param(
+            lambda: PartialFirstGetterPartial(_settled, rate=1),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="partial-first",
+        ),
+        pytest.param(
+            lambda: _with_a_signature_of_none(GetterPartial(_settled, rate=1)),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="signature-of-none",
+        ),
+        pytest.param(
+            lambda: _with_a_text_signature(GetterPartial(_settled, rate=1)),
+            lambda subject: subject,
+            _NAMED_ITSELF,
+            id="text-signature",
+        ),
+        pytest.param(
+            lambda: functools.wraps(GetterPartial(_settled, rate=1))(lambda share: None),
+            lambda subject: subject.__wrapped__,
+            _NAMED_AS_A_LINK,
+            id="functools-wraps",
+        ),
+        pytest.param(
+            lambda: types.MethodType(GetterPartial(_settled, rate=1), object()),
+            lambda subject: subject.__func__,
+            _NAMED_AS_A_LINK,
+            id="bound-method",
+        ),
+        pytest.param(
+            lambda: functools.partial(_with_an_instance_attribute(GetterPartial(_settled, rate=1))),
+            lambda subject: subject.func,
+            _NAMED_AS_A_LINK,
+            id="partial-of-it",
+        ),
+        pytest.param(
+            lambda: GetterPartialNew,
+            lambda subject: subject.__new__,
+            r"\.GetterPartialNew is constructed through .*\.GetterPartialNew\.__new__, "
+            "which inspect reads as {partial}, a {kind}, ",
+            id="new",
+        ),
+        pytest.param(
+            lambda: GivingGetterPartialInit,
+            lambda subject: subject.__init__,
+            r"\.GivingGetterPartialInit is constructed through .*\.GivingGetterPartialInit\.__init__, "
+            "which inspect reads as {partial}, a {kind}, ",
+            id="init-giving-it",
+        ),
+        pytest.param(
+            lambda: functools.partial(GivingGetterPartialCall()),
+            lambda subject: subject.func.__call__,
+            _NAMED_AS_A_LINK,
+            id="call-giving-it",
+        ),
+    ],
+)
+def test_a_partial_whose_type_takes_get_from_another_class_and_defines_no_set_raises_a_type_error_naming_it_and_its_type_wherever_inspect_reads_it(
+    build: Callable[[], object], read_in: Callable[[object], object], naming: str
+) -> None:
+    subject = build()
+    partial = read_in(subject)
+    naming_it_and_its_type = naming.format(
+        partial=re.escape(repr(partial)), kind=rf".*\.{type(partial).__qualname__}"
+    ) + r"a functools\.partial whose type takes __get__ .*\b3\.11 and 3\.12\b.*\bfrom 3\.13\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        surface_form(subject)
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        named_classes(subject)
+
+
+def test_a_partial_whose_type_takes_get_from_another_class_but_defines_set_or_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it() -> None:
+    signed = GetterPartial(_settled, rate=1)
+    signed.__signature__ = inspect.Signature(
+        [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=float)]
+    )
+
+    assert (
+        surface_form(SettableGetterPartial(_settled, rate=1))
+        == "(self: object, share: float, *, rate: int = 1) -> None"
+    )
+    assert surface_form(signed) == "(share: float)"
+    assert (
+        surface_form(functools.partial(GetterPartial(_settled, rate=1)))
+        == "(self: object, share: float, *, rate: int = 1) -> None"
+    )
