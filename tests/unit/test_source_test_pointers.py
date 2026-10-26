@@ -205,13 +205,19 @@ class _NoSyntaxTree(Enum):
     DOES_NOT_PARSE = "does not parse"
 
 
+_BYTE_ORDER_MARK = "\ufeff"
+
+
 def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
-    """Return the syntax tree of the Python file at *path*, from its text as utf8_text reads it, or why it has none."""
+    """Return the syntax tree of the Python file at *path*, or why it has none.
+
+    It is parsed from the file's text as utf8_text reads it, less a leading byte order mark.
+    """
     text = utf8_text(path)
     if text is None:
         return _NoSyntaxTree.NOT_UTF8
     try:
-        return ast.parse(text)
+        return ast.parse(text.removeprefix(_BYTE_ORDER_MARK))
     except SyntaxError:
         return _NoSyntaxTree.DOES_NOT_PARSE
 
@@ -443,6 +449,20 @@ def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Pa
         " tests/unit/test_broken.py does not parse, so it defines no test_top",
         "src/pkg/module.py:2: tests/unit/test_broken.py::TestGroup::test_member:"
         " tests/unit/test_broken.py does not parse, so it defines no TestGroup",
+    ]
+
+
+def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mark(project: Path) -> None:
+    (project / "tests" / "unit" / "test_marked.py").write_text("def test_top(): pass\n", encoding="utf-8-sig")
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_marked.py::test_top\n# tests/unit/test_marked.py::test_absent\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:2: tests/unit/test_marked.py::test_absent:"
+        " tests/unit/test_marked.py defines no test_absent at its top level",
     ]
 
 
