@@ -1,5 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every path into docs/ that a scanned file names is a file or directory of the tree."""
+"""Every path into docs/ that a scanned file names is a file or directory of the tree.
+
+The scanned files are those git lists, tests/ included, outside the _UNSCANNED paths. Those are the records, which
+name docs as they were when written, and the two pointer-gate modules, whose docs/ paths name files of the throwaway
+checkouts their tests build.
+
+A pointer is a path rooted at docs/, a file or a directory. It is looked for anywhere in a file's text, comments,
+docstrings and code alike. A file that is not UTF-8 text holds none. The path is looked up in the files git lists and
+the directories holding them, as a fresh clone would hold them, so a file git ignores is not there to point at. A doc
+in another repository is written from that repository's name, as in dark-factory/docs/code-quality.md, so it is not
+rooted at docs/. Only the path is checked: a section named after it, as in docs/<name>.md §3, is not looked up.
+"""
 
 import re
 from collections.abc import Iterable
@@ -9,8 +20,15 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
-from tests._pointer_scan import scanned_files, utf8_text
+from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
 from tests._working_tree import working_tree_paths
+
+_MODULES_NAMING_THROWAWAY_DOCS = (
+    PurePosixPath("tests/unit/test_source_doc_pointers.py"),
+    PurePosixPath("tests/unit/test_source_test_pointers.py"),
+)
+
+_UNSCANNED = (*RECORD_DIRECTORIES, *_MODULES_NAMING_THROWAWAY_DOCS)
 
 _DOC_POINTER = re.compile(r"(?<![\w./-])docs/(?:[\w.-]+/)*[\w.-]*\w")
 
@@ -86,7 +104,7 @@ def test_every_path_the_gate_leaves_unscanned_is_in_the_tree(project_root: Path)
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """Return a git checkout holding the docs docs/guide.md and docs/prds/record.md."""
+    """Return a git checkout holding docs/guide.md and docs/prds/record.md."""
     init_hermetic_checkout(tmp_path)
     docs = tmp_path / "docs"
     (docs / "prds").mkdir(parents=True)
