@@ -197,7 +197,10 @@ as what a descriptor's `__get__` gives as a class's `__init__` or an object's `_
 and as a class member, which `member_forms` names with its class. A `__set__` its type
 defines lifts the refusal, since 3.11 and 3.12 then read it as a partial too, and so does
 a signature other than `None` it carries: an `inspect.Signature` reads alike, and a string
-or callable meets 4.1. A plain partial of such a partial that holds no instance `__dict__`
+or callable meets 4.1. So does a `__wrapped__` it records, as `functools.update_wrapper`
+records one, unless it also carries a `__signature__` of `None`: every minor follows that
+`__wrapped__` before it reads the partial, as §2 says it follows any wrapper's, and reads
+what the partial wraps. A plain partial of such a partial that holds no instance `__dict__`
 takes its `func` and arguments as its own, so it reads alike.
 
 Where `inspect` binds a partial through its type's `__get__`, as a class's `__init__` or
@@ -221,6 +224,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_no_set_raises_a_type_error_naming_the_class_the_member_and_its_type`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_or_call_bound_through_a_partial_whose_type_takes_get_from_another_class_raises_a_type_error_naming_that_type_instead_of_the_binding_of_a_partial`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_set_raises_a_type_error_naming_the_class_the_member_and_that_type`
+- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_is_spelled_by_the_signature_of_what_it_wraps`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_raises_the_type_error_for_its_binding`
 
 ## 5. When the Admitted Minors Change
 
