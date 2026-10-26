@@ -2,8 +2,9 @@
 """Every page and /api endpoint reading a stored run it cannot rebuild answers alike (B6; D-S19-9 in docs/prds/run-store-one-owner.md).
 
 A page flashes the StoredRunUnreadable's message, which names the run id, the document and
-the field, and redirects; an /api endpoint answers 409 with the message as error and the
-run_id, document and field as data. Neither answers 500.
+the field, and redirects; an /api endpoint, and the sweep page's chart endpoint, POST
+/scenarios/sweep/chart, answer 409 with the message as error and the run_id, document and
+field as data. None answers 500.
 
 Each test saves a current home run as a finished job saves it, then damages one document
 alike in both its copies: the file in the run's directory, which the results page and the
@@ -170,3 +171,17 @@ def test_the_yaml_export_of_a_run_whose_config_cannot_be_read_answers_409_naming
     response = client.get(f"/api/history/runs/{_RUN_ID}/export/yaml")
 
     _assert_refused(response, "runs.config_json", damage.field)
+
+
+@pytest.mark.parametrize("damage", _SUMMARY_DAMAGES)
+def test_the_sweep_charts_of_a_point_whose_summary_cannot_be_read_answer_409_naming_its_column(
+    storage: RunStorage, client: FlaskClient, damage: _Damage
+) -> None:
+    _store_a_damaged_run(storage, damage)
+
+    response = client.post(
+        "/scenarios/sweep/chart",
+        json={"parameter_label": "PV Capacity (kW)", "points": [{"value": 4.0, "run_id": _RUN_ID}]},
+    )
+
+    _assert_refused(response, "runs.summary_json", damage.field)
