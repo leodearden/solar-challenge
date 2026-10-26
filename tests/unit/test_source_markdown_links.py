@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every relative link in a scanned markdown file leads to a file or directory of the tree.
+"""Every inline relative link in a scanned markdown file leads to a file or directory of the tree.
 
 The scanned files are the markdown files, named *.md, that git lists outside RECORD_DIRECTORIES, the records, which link
-files as they were when written. A link is written [text](target) or ![text](target), and a ](target) inside code reads
-as one too. A target is a run without spaces, whose parentheses come in unnested pairs, as in v2_(final).md, or text
-between < and >, which may hold spaces. It names a path unless it is a URL, with a scheme or a host, or names only a
-place in the linking file itself, as #<heading> does. The path resolves as GitHub resolves it: from the linking file's
-directory, or from the project root if it starts with /, with its %-escapes decoded. A #fragment after the path is
-dropped, so only the path is checked. The path is looked up in the files git lists and the directories holding them, as
-a fresh clone would hold them, so a file git ignores is not there to link to. A markdown file that is not UTF-8 text is
-reported by its path, since its links cannot be read.
+files as they were when written. An inline link is written [text](target) or ![text](target), and a ](target) inside
+code reads as one too. A reference definition, [label]: target, and a link in raw HTML are not read. A target is a run
+without spaces, whose parentheses come in unnested pairs, as in v2_(final).md, or text between < and >, which may hold
+spaces. It names a path unless it is a URL, with a scheme or a host, or names only a place in the linking file itself,
+as #<heading> does. The path resolves as GitHub resolves it: from the linking file's directory, or from the project root
+if it starts with /, with its %-escapes decoded. A #fragment after the path is dropped, so only the path is checked. The
+path is looked up in the files git lists and the directories holding them, as a fresh clone would hold them, so a file
+git ignores is not there to link to. A markdown file that is not UTF-8 text is reported by its path, since its links
+cannot be read.
 """
 
 import posixpath
