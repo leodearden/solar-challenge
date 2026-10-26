@@ -2,11 +2,12 @@
 """Tests for web/sse.py: the encoder, the event catalogue and the job progress stream of the dashboard's event streams.
 
 The job progress stream's tests run job_progress_frames on a _ScriptedJob, which stands in
-for a JobManager's job_snapshot, under a JobStreamPolicy that records each sleep instead of
-sleeping and reads a clock that stands still unless the test moves it.
+for a JobManager's job_snapshot, under a JobStreamPolicy that never sleeps: each sleep is
+recorded, or moves the policy's ManualClock on, and the clock stands still otherwise.
 """
 
 import dataclasses
+import math
 import re
 from collections.abc import Iterable, Iterator
 from typing import Any, get_args
@@ -373,14 +374,34 @@ def test_a_stream_whose_job_stops_being_tracked_ends_with_the_not_found_frame(po
     assert list(stream) == [_JOB_NOT_FOUND_FRAME]
 
 
+_TEN_MINUTES = 600.0
+_JUST_OVER_TEN_MINUTES = math.nextafter(_TEN_MINUTES, math.inf)
+"""The first time after ten minutes that a clock reading float seconds can show."""
+
+
+def _a_policy_whose_every_sleep_lasts(seconds: float, clock: ManualClock) -> JobStreamPolicy:
+    """A policy whose every sleep moves *clock* on by *seconds* at once, whatever heartbeat it sleeps for."""
+    return JobStreamPolicy(sleep=lambda _heartbeat_seconds: clock.advance(seconds), clock=clock)
+
+
+def test_a_stream_open_for_exactly_ten_minutes_still_sends_the_jobs_next_state(clock: ManualClock) -> None:
+    job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
+    stream = job_progress_frames(
+        job.snapshot, last_event_id=None, policy=_a_policy_whose_every_sleep_lasts(_TEN_MINUTES, clock)
+    )
+    _next_poll(stream)
+
+    saving = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
+
+    assert _read(_next_poll(stream)) == [_frame_of(saving), HEARTBEAT]
+
+
 def test_a_stream_open_for_more_than_ten_minutes_sends_the_timed_out_frame_and_ends_without_the_jobs_state(
     clock: ManualClock,
 ) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
     stream = job_progress_frames(
-        job.snapshot,
-        last_event_id=None,
-        policy=JobStreamPolicy(sleep=lambda _seconds: clock.advance(601.0), clock=clock),
+        job.snapshot, last_event_id=None, policy=_a_policy_whose_every_sleep_lasts(_JUST_OVER_TEN_MINUTES, clock)
     )
     _next_poll(stream)
 
