@@ -21,9 +21,8 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.jobs import (
     HomeSimulator,
-    JobEvent,
-    JobEventType,
     JobManager,
+    JobSnapshot,
     JobState,
     live_managers,
     shutdown_all_managers,
@@ -121,11 +120,11 @@ class TestJobManagerConstruction:
             JobManager(storage)
 
 
-class TestJobManagerDirect:
-    """Tests for the events a JobManager queues for its jobs, read with get_events."""
+class TestJobManagerSnapshots:
+    """Tests for the snapshot a JobManager keeps of each job: its state at that state's version, read with job_snapshot."""
 
     def test_thread_safety_concurrent_access(self, blocking_simulation: BlockingSimulation, storage: RunStorage) -> None:
-        """Test that concurrent job_state and get_events calls are thread-safe."""
+        """Test that concurrent job_state and job_snapshot calls are thread-safe."""
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
         job_ids = [_submit_home_job(manager) for _ in range(10)]
         blocking_simulation.wait_until_started()
@@ -138,7 +137,7 @@ class TestJobManagerDirect:
                 barrier.wait()
                 for job_id in job_ids:
                     assert manager.job_state(job_id) is not None
-                    list(manager.get_events(job_id))
+                    assert manager.job_snapshot(job_id) is not None
             except Exception as exc:
                 errors.append(exc)
 
@@ -152,57 +151,29 @@ class TestJobManagerDirect:
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
-    def test_get_events_drains_queue(self, blocking_simulation: BlockingSimulation, storage: RunStorage) -> None:
-        """Test that get_events yields each queued event once."""
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
-        job_id = _submit_home_job(manager)
-        blocking_simulation.wait_until_started()
-
-        events = list(manager.get_events(job_id))
-
-        assert [event.state.current_step for event in events] == ["Starting", "Simulating"]
-        assert list(manager.get_events(job_id)) == []
-
-    def test_each_progress_event_carries_the_state_the_job_reported_at_that_step(
+    def test_each_state_a_job_reports_takes_the_next_version(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage
     ) -> None:
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
-        job_id = _submit_home_job(manager)
+        held = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
-        simulating = manager.job_state(job_id)
-        assert simulating is not None
+        queued = _submit_home_job(manager)
 
-        events = list(manager.get_events(job_id))
+        assert manager.job_snapshot(queued) == JobSnapshot(version=1, state=manager.job_state(queued))
+        simulating = manager.job_snapshot(held)
+        assert simulating == JobSnapshot(version=3, state=manager.job_state(held))
+        assert manager.job_snapshot(held) == simulating
 
-        assert events == [
-            JobEvent(
-                "progress",
-                replace(simulating, progress_pct=5.0, current_step="Starting", message="Initializing..."),
-            ),
-            JobEvent("progress", simulating),
-        ]
-
-    @pytest.mark.parametrize(
-        ("simulation", "event_type"),
-        [(RecordingSimulation(), "complete"), (a_failing_simulation, "error")],
-        ids=["completed", "failed"],
-    )
-    def test_a_finished_jobs_last_event_carries_the_state_its_manager_reports(
-        self, simulation: HomeSimulator, event_type: JobEventType, storage: RunStorage
-    ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=simulation)
-        job_id = _submit_home_job(manager)
+        blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
-        state = manager.job_state(job_id)
-        assert state is not None
 
-        assert list(manager.get_events(job_id))[-1] == JobEvent(event_type, state)
+        assert manager.job_snapshot(held) == JobSnapshot(version=5, state=manager.job_state(held))
+        assert manager.job_snapshot(queued) == JobSnapshot(version=5, state=manager.job_state(queued))
 
-    def test_get_events_unknown_job_yields_nothing(self, storage: RunStorage) -> None:
-        """Test that get_events for an unknown job yields no events."""
-        jm = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-        events = list(jm.get_events("nonexistent-job-id"))
-        assert events == []
+    def test_a_job_the_manager_does_not_track_has_no_snapshot(self, storage: RunStorage) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+
+        assert manager.job_snapshot("nonexistent-job-id") is None
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
@@ -749,7 +720,7 @@ class TestJobManagerUnrecordedFailures:
         assert (type(refusal), str(refusal)) == (sqlite3.IntegrityError, "the database refuses failed runs rows")
         assert (type(refusal.__context__), str(refusal.__context__)) == (RuntimeError, "the simulation failed")
 
-    def test_a_job_whose_failure_the_runs_table_refuses_to_record_is_still_reported_failed_with_its_error_event(
+    def test_a_job_whose_failure_the_runs_table_refuses_to_record_is_still_reported_failed(
         self, storage: RunStorage
     ) -> None:
         _refuse_failed_runs_rows(storage)
@@ -761,7 +732,6 @@ class TestJobManagerUnrecordedFailures:
 
         assert state is not None
         assert (state.status, state.message) == ("failed", "the simulation failed")
-        assert list(manager.get_events(job_id))[-1] == JobEvent("error", state)
 
     def test_a_failure_whose_message_sqlite_cannot_store_is_logged_and_still_reported(self, storage: RunStorage) -> None:
         manager = JobManager(
@@ -785,7 +755,7 @@ class TestJobManagerUnrecordedFailures:
         assert [type(record.exc_info[1]) for record in records if record.exc_info] == [UnicodeEncodeError]
         assert _status_of(manager, job_id) == "failed"
 
-    def test_a_job_whose_database_cannot_be_opened_when_it_saves_its_run_is_reported_failed_with_its_error_event(
+    def test_a_job_whose_database_cannot_be_opened_when_it_saves_its_run_is_reported_failed_at_its_save_with_the_databases_error(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage
     ) -> None:
         manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
@@ -804,7 +774,6 @@ class TestJobManagerUnrecordedFailures:
             "Saving",
             "unable to open database file",
         )
-        assert list(manager.get_events(job_id))[-1] == JobEvent("error", failed)
 
     def test_a_job_whose_database_cannot_be_opened_when_it_saves_its_run_is_logged_with_the_failure_it_could_not_record(
         self, blocking_simulation: BlockingSimulation, storage: RunStorage
@@ -828,7 +797,7 @@ class TestJobManagerUnrecordedFailures:
 class TestJobManagerEscapedErrors:
     """Tests for a job whose runner raises an error that the runner's own failure handling does not catch."""
 
-    def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_reported_failed_with_its_error_event(
+    def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_reported_failed_at_the_progress_it_had_reached_as_its_next_state(
         self, storage: RunStorage
     ) -> None:
         manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_that_exits)
@@ -848,14 +817,7 @@ class TestJobManagerEscapedErrors:
             created_at=run.created_at,
         )
         assert manager.job_state(job_id) == failed
-        assert list(manager.get_events(job_id)) == [
-            JobEvent(
-                "progress",
-                replace(failed, status="running", progress_pct=5.0, current_step="Starting", message="Initializing..."),
-            ),
-            JobEvent("progress", replace(failed, status="running", message="Running home simulation...")),
-            JobEvent("error", failed),
-        ]
+        assert manager.job_snapshot(job_id) == JobSnapshot(4, failed)
 
     def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_recorded_failed_in_its_runs_row(
         self, storage: RunStorage
@@ -939,7 +901,6 @@ class TestJobManagerCancelRun:
 
         cancelled = replace(running, status="cancelled", message="Cancelled: its run was deleted")
         assert manager.job_state(job_id) == cancelled
-        assert list(manager.get_events(job_id))[-1] == JobEvent("error", cancelled)
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_cancelled_job_writes_nothing_to_the_run_store(
@@ -980,7 +941,6 @@ class TestJobManagerCancelRun:
 
         cancelled = replace(running, status="cancelled", message="Cancelled: its run was deleted")
         assert manager.job_state(job_id) == cancelled
-        assert list(manager.get_events(job_id))[-1] == JobEvent("error", cancelled)
         assert storage.run_record(created.id) == created
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
@@ -1002,7 +962,6 @@ class TestJobManagerCancelRun:
 
         cancelled = replace(queued, status="cancelled", message="Cancelled: its run was deleted")
         assert manager.job_state(queued_job_id) == cancelled
-        assert list(manager.get_events(queued_job_id)) == [JobEvent("error", cancelled)]
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
         assert len(blocking_simulation.calls) == 1
@@ -1097,7 +1056,6 @@ class TestJobManagerShutdown:
             manager.shutdown()
             dropped = replace(queued, status="failed", message="Dropped: the server shut down before the job ran")
             assert manager.job_state(dropped_job_id) == dropped
-            assert list(manager.get_events(dropped_job_id))[-1] == JobEvent("error", dropped)
             blocking_simulation.release()
             assert manager.wait_until_idle(timeout=30)
 
