@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A mocked JobManager for the /api endpoint tests, installed on tests/unit/conftest.py's app, and a client that requests the mock.
 
-mock_job_manager installs a mock autospecced to JobManager, whose submit, state and event
+mock_job_manager installs a mock autospecced to JobManager, whose submit, state and snapshot
 calls answer at once with canned values, so no test starts a real simulation. client
 requests it, so a test that sends a request runs against the mock unless its module
 defines its own client.
@@ -19,7 +19,7 @@ from unittest.mock import NonCallableMagicMock
 
 import pytest
 
-from solar_challenge.web.jobs import JobEvent, JobState
+from solar_challenge.web.jobs import JobSnapshot, JobState
 from tests._job_manager_double import autospecced_job_manager
 
 if TYPE_CHECKING:
@@ -43,18 +43,16 @@ def mock_job_manager(app: Flask) -> NonCallableMagicMock:
         created_at="2024-06-01T12:00:00+00:00",
     )
     jm.job_state.return_value = running
-    jm.get_events.return_value = iter([
-        JobEvent(
-            "complete",
-            replace(
-                running,
-                status="completed",
-                progress_pct=100.0,
-                current_step="Done",
-                message="Simulation completed successfully",
-            ),
-        )
-    ])
+    jm.job_snapshot.return_value = JobSnapshot(
+        5,
+        replace(
+            running,
+            status="completed",
+            progress_pct=100.0,
+            current_step="Done",
+            message="Simulation completed successfully",
+        ),
+    )
     app.extensions["job_manager"] = jm
     return jm
 

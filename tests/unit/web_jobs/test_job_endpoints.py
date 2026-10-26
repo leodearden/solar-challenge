@@ -1,7 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager."""
+"""Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager.
 
+A progress stream's first chunks are read from the endpoint; its later polls are driven
+through job_progress_frames, the stream the endpoint serves, read poll by poll without
+sleeping between polls.
+"""
+
+import functools
+import itertools
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +22,12 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.weather import WeatherCache
-from solar_challenge.web.jobs import HomeSimulator, JobManager
+from solar_challenge.web.jobs import HomeSimulator, JobManager, JobState
+from solar_challenge.web.sse import HEARTBEAT, JobStreamPolicy, job_progress_frames
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
 from tests._run_storage_layout import stored_run_dir
-from tests._sse import parse_sse_events
+from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
 from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
@@ -94,55 +105,91 @@ class TestSimulateHomeEndpoint:
         assert response.status_code == 400
 
 
-def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskClient:
-    """Return a client of *app* whose JobManager has run one home job through *simulation* to its end.
+def _a_finished_job(
+    app: Flask, simulation: HomeSimulator, endpoint: str, request_body: dict[str, Any]
+) -> tuple[JobManager, FlaskClient]:
+    """Submit *request_body* to *endpoint* through *app* for a new JobManager to run through *simulation* to its end; return the manager and a client of the app.
 
     The job's id is "id-1" and its run's id is "id-2".
     """
     manager = JobManager(run_storage_of(app), simulate_home=simulation, new_id=CountingIds())
     client = client_using(app, manager)
-    assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+    assert client.post(endpoint, json=request_body).status_code == 201
     assert manager.wait_until_idle(timeout=30)
-    return client
+    return manager, client
 
 
-def _client_of_a_finished_fleet_job(app: Flask) -> FlaskClient:
-    """Return a client of *app* whose JobManager has run a fleet job of one home to its end.
+def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskClient:
+    """Return a client of *app* whose JobManager has run one home job through *simulation* to its end.
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(run_storage_of(app), simulate_home=RecordingSimulation(), new_id=CountingIds())
-    client = client_using(app, manager)
-    assert client.post("/api/simulate/fleet", json={"homes": [A_HOME_JOB_REQUEST]}).status_code == 201
-    assert manager.wait_until_idle(timeout=30)
+    _, client = _a_finished_job(app, simulation, "/api/simulate/home", A_HOME_JOB_REQUEST)
     return client
 
 
-def _sse(event: str, data: str) -> str:
-    """Return the SSE message a progress stream sends for *event* with the JSON text *data*."""
-    return f"event: {event}\ndata: {data}\n\n"
+def _a_held_job(app: Flask, blocking_simulation: BlockingSimulation) -> tuple[JobManager, FlaskClient]:
+    """Submit a home job through *app* to a new JobManager of one worker and hold it inside *blocking_simulation*; return the manager and a client of the app.
+
+    The job's id is "id-1" and its run's id is "id-2". A job submitted after it waits in the queue.
+    """
+    manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds())
+    client = client_using(app, manager)
+    assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+    blocking_simulation.wait_until_started()
+    return manager, client
 
 
-_STARTING = _sse(
-    "progress",
-    '{"progress_pct": 5.0, "current_step": "Starting", "message": "Initializing...", "status": "running"}',
-)
-_SIMULATING = _sse(
-    "progress",
-    '{"progress_pct": 20.0, "current_step": "Simulating", "message": "Running home simulation...", "status": "running"}',
-)
-_COMPLETED = _sse(
-    "complete",
-    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
-    ' "message": "Simulation completed successfully", "run_id": "id-2"}',
-)
-_FLEET_COMPLETED = _sse(
-    "complete",
-    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
-    ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
-)
-_FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
-_CANCELLED = _sse("error", '{"status": "cancelled", "message": "Cancelled: its run was deleted"}')
+def _version_of(manager: JobManager, job_id: str) -> int:
+    """The version of the snapshot *manager* keeps of job *job_id*, which it tracks."""
+    snapshot = manager.job_snapshot(job_id)
+    assert snapshot is not None, f"the manager does not track job {job_id}"
+    return snapshot.version
+
+
+_JOB_STATE_KEYS = [field.name for field in fields(JobState)]
+
+
+@contextmanager
+def _progress_stream(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> Iterator[Iterator[str]]:
+    """Open job *job_id*'s progress stream unbuffered, with *last_event_id* as its Last-Event-ID header when given; yield its chunks as the server sends them, and close it on exit.
+
+    A test reads only the chunks it asserts, so a stream that heartbeats until its job ends does not hold the test up.
+    """
+    headers = {} if last_event_id is None else {"Last-Event-ID": last_event_id}
+    response = client.get(f"/api/jobs/{job_id}/progress", headers=headers, buffered=False)
+    try:
+        yield (chunk.decode() for chunk in response.response)
+    finally:
+        response.close()
+
+
+def _first_chunk(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> str:
+    """The first chunk job *job_id*'s progress stream sends, opened as _progress_stream opens it."""
+    with _progress_stream(client, job_id, last_event_id) as chunks:
+        return next(chunks)
+
+
+class _LiveStream:
+    """A progress stream on job *job_id* of *manager*, as the progress endpoint serves it, read here poll by poll without sleeping between polls.
+
+    sent holds each chunk it has sent so far but its heartbeats, a frame each.
+    """
+
+    def __init__(self, manager: JobManager, job_id: str) -> None:
+        self._chunks = job_progress_frames(
+            functools.partial(manager.job_snapshot, job_id),
+            last_event_id=None,
+            policy=JobStreamPolicy(sleep=lambda _seconds: None),
+        )
+        self.sent: list[str] = []
+
+    def poll(self) -> None:
+        """Read the stream's next poll: its chunks up to its next HEARTBEAT, or to its end."""
+        self.sent += itertools.takewhile(lambda chunk: chunk != HEARTBEAT, self._chunks)
+
+    def read_to_its_end(self) -> None:
+        self.sent += [chunk for chunk in self._chunks if chunk != HEARTBEAT]
 
 
 class TestGetJobStatusEndpoint:
@@ -390,7 +437,9 @@ class TestDeletingARunCancelsItsJob:
             "status": "cancelled",
             "message": "Cancelled: its run was deleted",
         }
-        assert client.get("/api/jobs/id-1/progress").get_data(as_text=True) == _STARTING + _SIMULATING + _CANCELLED
+        assert parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True)) == [
+            SseFrame("error", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))
+        ]
 
     def test_a_run_deleted_while_its_job_waits_in_the_queue_is_never_simulated(
         self, app: Flask, blocking_simulation: BlockingSimulation
@@ -403,8 +452,11 @@ class TestDeletingARunCancelsItsJob:
 
         assert client.delete(f"/api/history/runs/{queued['run_id']}").status_code == 200
 
-        assert client.get(f"/api/jobs/{queued['job_id']}").get_json()["status"] == "cancelled"
-        assert client.get(f"/api/jobs/{queued['job_id']}/progress").get_data(as_text=True) == _CANCELLED
+        cancelled = client.get(f"/api/jobs/{queued['job_id']}").get_json()
+        assert cancelled["status"] == "cancelled"
+        assert parse_sse_events(client.get(f"/api/jobs/{queued['job_id']}/progress").get_data(as_text=True)) == [
+            SseFrame("error", cancelled, id=_version_of(manager, queued["job_id"]))
+        ]
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
         assert [config.pv_config.capacity_kw for config, _, _ in blocking_simulation.calls] == [4.0]
@@ -472,86 +524,155 @@ class TestDeletingARunCancelsItsJob:
         assert client.get(f"/api/jobs/{submitted['job_id']}").get_json()["status"] == "completed"
 
 
+_FINISHED_JOBS = [
+    pytest.param(
+        RecordingSimulation(),
+        "/api/simulate/home",
+        A_HOME_JOB_REQUEST,
+        "complete",
+        "Simulation completed successfully",
+        id="home-completed",
+    ),
+    pytest.param(
+        a_failing_simulation, "/api/simulate/home", A_HOME_JOB_REQUEST, "error", "the simulation failed", id="home-failed"
+    ),
+    pytest.param(
+        RecordingSimulation(),
+        "/api/simulate/fleet",
+        {"homes": [A_HOME_JOB_REQUEST]},
+        "complete",
+        "Fleet simulation completed successfully",
+        id="fleet-completed",
+    ),
+]
+"""A finished job's simulation, the endpoint and body that submit it, the event its final frame names, and its final message."""
+
+
 class TestJobProgressEndpoint:
-    """Tests for GET /api/jobs/<id>/progress (SSE)."""
+    """Tests for GET /api/jobs/<id>/progress (SSE): each stream reads its job's snapshot and keeps its own cursor."""
 
-    def test_the_stream_of_a_completed_job_sends_each_progress_event_then_its_completion(self, app: Flask) -> None:
-        client = _client_of_a_finished_job(app, RecordingSimulation())
+    @pytest.mark.parametrize(("simulation", "endpoint", "request_body", "event", "message"), _FINISHED_JOBS)
+    def test_a_finished_jobs_stream_sends_only_its_final_state_named_by_its_status_with_its_version_as_id(
+        self,
+        app: Flask,
+        simulation: HomeSimulator,
+        endpoint: str,
+        request_body: dict[str, Any],
+        event: str,
+        message: str,
+    ) -> None:
+        manager, client = _a_finished_job(app, simulation, endpoint, request_body)
 
-        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        frames = parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True))
 
-        assert stream == "".join(
-            [
-                _STARTING,
-                _SIMULATING,
-                _sse(
-                    "progress",
-                    '{"progress_pct": 90.0, "current_step": "Saving",'
-                    ' "message": "Persisting results to storage...", "status": "running"}',
-                ),
-                _COMPLETED,
-            ]
-        )
+        assert frames == [SseFrame(event, client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))]
+        assert frames[0].data["message"] == message
+        assert list(frames[0].data) == _JOB_STATE_KEYS
 
-    def test_the_stream_of_a_failed_job_sends_each_progress_event_then_its_error(self, app: Flask) -> None:
-        client = _client_of_a_finished_job(app, a_failing_simulation)
+    def test_two_streams_open_at_once_on_a_running_job_each_get_its_current_state_first(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager, client = _a_held_job(app, blocking_simulation)
 
-        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        with _progress_stream(client, "id-1") as first, _progress_stream(client, "id-1") as second:
+            first_chunks = [next(first), next(second)]
 
-        assert stream == _STARTING + _SIMULATING + _FAILED
+        current = SseFrame("progress", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))
+        assert [parse_sse_events(chunk) for chunk in first_chunks] == [[current], [current]]
+        assert first_chunks[0] == first_chunks[1]
+
+    def test_two_live_streams_on_one_job_each_send_every_state_it_holds_at_a_poll(
+        self, app: Flask, blocking_simulation: BlockingSimulation, save_gate: SaveGate
+    ) -> None:
+        storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
+        manager = JobManager(storage, simulate_home=blocking_simulation, new_id=CountingIds())
+        assert client_using(app, manager).post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+        blocking_simulation.wait_until_started()
+        first, second = _LiveStream(manager, "id-1"), _LiveStream(manager, "id-1")
+
+        first.poll()
+        second.poll()
+        blocking_simulation.release()
+        save_gate.wait_until_a_save_waits()
+        first.poll()
+        second.poll()
+        save_gate.open()
+        assert manager.wait_until_idle(timeout=30)
+        first.read_to_its_end()
+        second.read_to_its_end()
+
+        assert first.sent == second.sent
+        frames = parse_sse_events("".join(first.sent))
+        assert [(frame.event, frame.data["current_step"]) for frame in frames] == [
+            ("progress", "Simulating"),
+            ("progress", "Saving"),
+            ("complete", "Done"),
+        ]
+        assert all(earlier.id < later.id for earlier, later in itertools.pairwise(frames))
+        assert [list(frame.data) for frame in frames] == [_JOB_STATE_KEYS] * 3
+
+    def test_a_stream_opened_once_a_job_has_finished_sends_exactly_the_final_frame_a_live_stream_sent(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager, client = _a_held_job(app, blocking_simulation)
+        live = _LiveStream(manager, "id-1")
+        live.poll()
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        live.read_to_its_end()
+        assert [frame.event for frame in parse_sse_events("".join(live.sent))] == ["progress", "complete"]
+
+        assert client.get("/api/jobs/id-1/progress").get_data(as_text=True) == live.sent[-1]
+
+    def test_a_stream_reopened_at_a_running_jobs_version_sends_a_heartbeat_first_not_its_state(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        manager, client = _a_held_job(app, blocking_simulation)
+
+        assert _first_chunk(client, "id-1", last_event_id=str(_version_of(manager, "id-1"))) == HEARTBEAT
 
     @pytest.mark.parametrize(
-        ("simulation", "final_event"),
-        [
-            (RecordingSimulation(), _COMPLETED),
-            (a_failing_simulation, _FAILED),
-        ],
-        ids=["completed", "failed"],
+        "last_event_id_at",
+        [lambda version: None, lambda version: str(version - 1), lambda version: "not-a-version"],
+        ids=["no-header", "an-earlier-version", "not-a-version"],
     )
-    def test_a_stream_opened_after_another_drained_the_events_sends_only_the_final_event(
-        self, app: Flask, simulation: HomeSimulator, final_event: str
+    def test_a_stream_opened_without_the_jobs_version_as_its_last_event_id_sends_the_jobs_current_state_first(
+        self,
+        app: Flask,
+        blocking_simulation: BlockingSimulation,
+        last_event_id_at: Callable[[int], str | None],
     ) -> None:
-        client = _client_of_a_finished_job(app, simulation)
-        client.get("/api/jobs/id-1/progress").get_data()
+        manager, client = _a_held_job(app, blocking_simulation)
+        version = _version_of(manager, "id-1")
 
-        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        first = _first_chunk(client, "id-1", last_event_id=last_event_id_at(version))
 
-        assert stream == final_event
+        assert parse_sse_events(first) == [SseFrame("progress", client.get("/api/jobs/id-1").get_json(), id=version)]
 
-    def test_the_stream_of_a_completed_fleet_job_sends_each_progress_event_then_its_completion(
+    def test_a_finished_jobs_stream_reopened_at_its_final_version_sends_the_same_single_final_frame(
         self, app: Flask
     ) -> None:
-        client = _client_of_a_finished_fleet_job(app)
+        manager, client = _a_finished_job(app, RecordingSimulation(), "/api/simulate/home", A_HOME_JOB_REQUEST)
+        opened = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
-        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        reopened = client.get(
+            "/api/jobs/id-1/progress", headers={"Last-Event-ID": str(_version_of(manager, "id-1"))}
+        ).get_data(as_text=True)
 
-        assert stream == "".join(
-            [
-                _STARTING,
-                _sse(
-                    "progress",
-                    '{"progress_pct": 5.0, "current_step": "Home 1/1",'
-                    ' "message": "Simulating home 1 of 1...", "status": "running"}',
-                ),
-                _sse(
-                    "progress",
-                    '{"progress_pct": 97.0, "current_step": "Saving",'
-                    ' "message": "Persisting fleet results...", "status": "running"}',
-                ),
-                _FLEET_COMPLETED,
-            ]
-        )
+        assert reopened == opened
+        assert [frame.event for frame in parse_sse_events(reopened)] == ["complete"]
 
-    def test_a_stream_opened_after_another_drained_a_fleet_jobs_events_sends_the_fleet_jobs_own_completion(
-        self, app: Flask
+    def test_a_stream_on_a_job_queued_behind_a_running_one_sends_its_queued_state_at_once(
+        self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        client = _client_of_a_finished_fleet_job(app)
-        live_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        manager, client = _a_held_job(app, blocking_simulation)
+        queued = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
 
-        late_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+        first = _first_chunk(client, queued)
 
-        assert late_stream == _FLEET_COMPLETED
-        assert live_stream.endswith(late_stream)
+        state = client.get(f"/api/jobs/{queued}").get_json()
+        assert state["status"] == "queued"
+        assert parse_sse_events(first) == [SseFrame("progress", state, id=_version_of(manager, queued))]
 
 
 class TestJobResultsEndpoint:

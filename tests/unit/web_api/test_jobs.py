@@ -11,7 +11,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import calculate_summary
-from solar_challenge.web.jobs import JobEvent, JobState
+from solar_challenge.web.jobs import JobSnapshot, JobState
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._sse import SseFrame, parse_sse_events
@@ -26,37 +26,7 @@ _A_RUNNING_JOB = JobState(
     message="Running home simulation...",
     created_at="2024-06-01T12:00:00+00:00",
 )
-_A_COMPLETED_JOB = replace(
-    _A_RUNNING_JOB,
-    status="completed",
-    progress_pct=100.0,
-    current_step="Done",
-    message="Simulation completed successfully",
-)
-_A_FAILED_JOB = replace(_A_RUNNING_JOB, status="failed", message="Something went wrong")
 _A_CANCELLED_JOB = replace(_A_RUNNING_JOB, status="cancelled", message="Cancelled: its run was deleted")
-
-_FINAL_EVENTS_AND_THEIR_FRAMES = [
-    pytest.param(
-        JobEvent("complete", _A_COMPLETED_JOB),
-        SseFrame(
-            "complete",
-            {
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Simulation completed successfully",
-                "run_id": "run-running",
-            },
-        ),
-        id="completed",
-    ),
-    pytest.param(
-        JobEvent("error", _A_FAILED_JOB),
-        SseFrame("error", {"status": "failed", "message": "Something went wrong"}),
-        id="failed",
-    ),
-]
 
 
 class TestGetJobStatus:
@@ -87,78 +57,46 @@ class TestGetJobProgress:
     def test_is_served_with_the_event_stream_response_policy(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """The job's queued complete event ends the stream at once, so the body can be read whole."""
-        resp = client.get("/api/jobs/job-home-001/progress")
-        resp.get_data()
-
-        assert resp.status_code == 200
-        assert resp.mimetype == "text/event-stream"
-        assert resp.headers["Cache-Control"] == "no-cache"
-        assert resp.headers["X-Accel-Buffering"] == "no"
+        """The stream is closed unread, so none of its frames is needed."""
+        response = client.get("/api/jobs/job-home-001/progress", buffered=False)
+        try:
+            assert response.status_code == 200
+            assert response.mimetype == "text/event-stream"
+            assert response.headers["Cache-Control"] == "no-cache"
+            assert response.headers["X-Accel-Buffering"] == "no"
+        finally:
+            response.close()
 
     def test_unknown_job_sends_error_event(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Unknown job sends an SSE error event."""
-        mock_job_manager.job_state.return_value = None
-        resp = client.get("/api/jobs/unknown-id/progress")
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.content_type
-        body = resp.get_data(as_text=True)
-        assert parse_sse_events(body) == [SseFrame("error", {"error": "Job not found"})]
-        assert body == 'event: error\ndata: {"error": "Job not found"}\n\n'
+        """Unknown job sends an SSE error event, and nothing after it."""
+        mock_job_manager.job_snapshot.return_value = None
 
-    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
-    def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
-    ) -> None:
-        mock_job_manager.job_state.return_value = final_event.state
-        mock_job_manager.get_events.return_value = iter([JobEvent("progress", _A_RUNNING_JOB), final_event])
+        response = client.get("/api/jobs/unknown-id/progress", buffered=False)
+        try:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.content_type
+            chunks = iter(response.response)
+            assert next(chunks).decode() == 'event: error\ndata: {"error": "Job not found"}\n\n'
+            assert next(chunks, None) is None
+        finally:
+            response.close()
 
-        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
-
-        assert frames == [
-            SseFrame(
-                "progress",
-                {
-                    "progress_pct": 50.0,
-                    "current_step": "Simulating",
-                    "message": "Running home simulation...",
-                    "status": "running",
-                },
-            ),
-            final_frame,
-        ]
-
-    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
-    def test_a_finished_job_whose_events_another_stream_drained_is_sent_the_frame_of_its_final_event(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
-    ) -> None:
-        mock_job_manager.job_state.return_value = final_event.state
-        mock_job_manager.get_events.return_value = iter([])
-
-        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
-
-        assert frames == [final_frame]
-
-    def test_a_cancelled_job_whose_events_another_stream_drained_is_sent_its_final_frame_at_once(
+    def test_a_finished_jobs_snapshot_is_its_one_frame_named_by_its_status_carrying_its_state_with_its_version_as_id(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A cancelled job ends its stream as a failed one does, with an error frame."""
-        mock_job_manager.job_state.return_value = _A_CANCELLED_JOB
-        mock_job_manager.get_events.return_value = iter([])
+        """A cancelled job's frame is the error event, as a failed one's is."""
+        mock_job_manager.job_snapshot.return_value = JobSnapshot(4, _A_CANCELLED_JOB)
 
         response = client.get("/api/jobs/job-running/progress", buffered=False)
         try:
             chunks = iter(response.response)
-            first = next(chunks)
-
-            assert parse_sse_events(first.decode()) == [
-                SseFrame("error", {"status": "cancelled", "message": "Cancelled: its run was deleted"})
-            ]
+            assert parse_sse_events(next(chunks).decode()) == [SseFrame("error", asdict(_A_CANCELLED_JOB), id=4)]
             assert next(chunks, None) is None
         finally:
             response.close()
+        mock_job_manager.job_snapshot.assert_called_with("job-running")
 
 
 class TestGetJobResults:
