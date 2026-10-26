@@ -415,8 +415,9 @@ class RunHeadline:
     """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed.
 
     Raises:
-        ValueError: A figure is not a finite number, e.g. None, a text, a bool, NaN or an
-            infinity; the message names the figure and its value.
+        ValueError: A figure is not a finite number a float can hold, e.g. None, a text, a bool,
+            NaN, an infinity or an int too large for a float; the message names the figure and
+            its value.
     """
 
     generation_kwh: float
@@ -428,9 +429,17 @@ class RunHeadline:
 
 
 def _require_finite_number(figure: str, value: object) -> None:
-    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is a finite int or float; a bool is neither."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number")
+    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is an int or a float that is finite as a float; a bool is neither."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not _is_finite_as_float(value):
+        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number a float can hold")
+
+
+def _is_finite_as_float(number: int | float) -> bool:
+    """Whether *number* is finite as a float: not NaN, not an infinity, and no int too large for a float, for which math.isfinite raises OverflowError."""
+    try:
+        return math.isfinite(number)
+    except OverflowError:
+        return False
 
 
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
@@ -440,8 +449,9 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
     to a run list's (D-S19-8 in docs/prds/run-store-one-owner.md).
 
     Raises:
-        ValueError: The summary's figure for the generation or the ratio is not a finite number,
-            as RunHeadline refuses it.
+        ValueError: The summary's figure for the generation or the ratio is not a finite number
+            a float can hold, e.g. None, a text, a bool, NaN, an infinity or an int too large for
+            a float, as RunHeadline refuses it.
     """
     match summary:
         case SummaryStatistics():
