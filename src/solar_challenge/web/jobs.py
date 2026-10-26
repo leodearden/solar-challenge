@@ -3,18 +3,17 @@
 
 Provides a JobManager class that uses a ThreadPoolExecutor to run home and
 fleet simulations in background threads. A job's progress is held in memory
-and streamed through SSE event queues; its run is recorded through the
-manager's RunStorage, running from its submit until the job completes it, once
-its save has written the run's results, or its failure marks it failed. A job
-reports completed only once its run reads completed. A job whose run is
-deleted is cancelled and records nothing. A job's status moves only along
-LEGAL_JOB_TRANSITIONS, through the manager's one writer of job state, and
-every job the executor is done with is terminal before it stops counting as
-unfinished: a job shutdown drops from the queue fails, and so does its run
-(docs/prds/job-events-and-sse-framing.md §3.4).
+as a versioned JobSnapshot, which its progress streams read; its run is
+recorded through the manager's RunStorage, running from its submit until the
+job completes it, once its save has written the run's results, or its failure
+marks it failed. A job reports completed only once its run reads completed. A
+job whose run is deleted is cancelled and records nothing. A job's status
+moves only along LEGAL_JOB_TRANSITIONS, through the manager's one writer of
+job state, and every job the executor is done with is terminal before it
+stops counting as unfinished: a job shutdown drops from the queue fails, and
+so does its run (docs/prds/job-events-and-sse-framing.md §3.4).
 """
 
-import collections
 import functools
 import logging
 import threading
@@ -25,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Generator, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -174,25 +173,6 @@ class JobSnapshot:
     state: JobState
 
 
-# The event a job's progress stream names: the job progressed, completed or failed. A cancelled job's stream ends
-# with the error event too, as docs/prds/run-store-one-owner.md §3.7 records.
-JobEventType = Literal["progress", "complete", "error"]
-
-
-@dataclass(frozen=True)
-class JobEvent:
-    """An event a JobManager queues for a job's progress stream: its type, and the state the job reported with it."""
-
-    type: JobEventType
-    state: JobState
-
-
-_EVENT_TYPE_OF_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType(
-    {"queued": "progress", "running": "progress", "completed": "complete", "failed": "error", "cancelled": "error"}
-)
-"""The type of the event a job's move into each status queues for its progress stream."""
-
-
 class _JobCancelled(BaseException):
     """Raised at a runner's checkpoint once its job is cancelled.
 
@@ -256,14 +236,13 @@ class _Cancellation:
 class _TrackedJob:
     """A job a JobManager tracks.
 
-    The snapshot job_snapshot reads, which only JobManager._move_job replaces, the SSE events get_events has not yet
-    yielded, finished_at, the manager's clock reading when the job moved into a terminal status (None until then),
-    the job's cancellation, which cancel_run sets when the job's run is deleted, and the executor's future of the
-    job once it is queued (None until then), which cancel_run cancels to drop the job from the queue.
+    The snapshot job_snapshot reads, which only JobManager._move_job replaces, finished_at, the manager's clock
+    reading when the job moved into a terminal status (None until then), the job's cancellation, which cancel_run
+    sets when the job's run is deleted, and the executor's future of the job once it is queued (None until then),
+    which cancel_run cancels to drop the job from the queue.
     """
 
     snapshot: JobSnapshot
-    events: collections.deque[JobEvent] = field(default_factory=lambda: collections.deque(maxlen=100))
     finished_at: float | None = None
     cancellation: _Cancellation = field(default_factory=_Cancellation)
     future: Future[None] | None = None
@@ -273,9 +252,10 @@ class JobManager:
     """Manages background simulation jobs with progress tracking.
 
     Uses a ThreadPoolExecutor to run simulations in background threads.
-    Each job has an in-memory event queue (collections.deque) for
-    streaming progress events via SSE, and a run the manager records
-    through its RunStorage. A job's status moves only along
+    Each job has a versioned in-memory JobSnapshot of its state, which its
+    progress streams read with job_snapshot (web/sse.py's
+    job_progress_frames), and a run the manager records through its
+    RunStorage. A job's status moves only along
     LEGAL_JOB_TRANSITIONS (docs/prds/job-events-and-sse-framing.md §3.4),
     through one writer, _move_job, which refuses any other move with
     IllegalJobTransition.
@@ -459,28 +439,6 @@ class JobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             return None if job is None else job.snapshot
-
-    def get_events(self, job_id: str) -> Generator[JobEvent, None, None]:
-        """Yield the events queued for the job's progress stream since the last call, oldest first.
-
-        Non-blocking: yields all currently queued events and returns.
-
-        Args:
-            job_id: Unique job identifier.
-
-        Yields:
-            Each queued JobEvent: its type, and the state the job reported with it.
-        """
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
-                return
-            # Copy and drain events under the lock to avoid TOCTOU
-            events = list(job.events)
-            job.events.clear()
-
-        for event in events:
-            yield event
 
     def cancel_run(self, run_id: str) -> bool:
         """Cancel the queued or running job of run *run_id*, as the run's delete does before it removes the run.
@@ -681,8 +639,8 @@ class JobManager:
 
         The job keeps its progress unless *progress_pct* and *current_step* are given. Under one hold of the lock the
         move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored in the job's snapshot at the next
-        version, finished_at is stamped when the new status is terminal, and the new state's event is queued, so a
-        reader who sees the new state sees its version and finds its event queued.
+        version, and finished_at is stamped when the new status is terminal, so a reader sees each state with its
+        own version.
 
         Raises:
             RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
@@ -708,7 +666,6 @@ class JobManager:
             job.snapshot = JobSnapshot(previous.version + 1, state)
             if to_status in TERMINAL_JOB_STATUSES:
                 job.finished_at = self._clock()
-            job.events.append(JobEvent(_EVENT_TYPE_OF_STATUS[to_status], state))
             return state
 
     def _report_cancelled_job(self, job_id: str) -> None:
