@@ -10,6 +10,7 @@ truncated or read as 1.
 """
 
 import math
+import numbers
 from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass
 from typing import Any, Final, NoReturn, TypeVar
@@ -88,12 +89,16 @@ def as_finite_float(value: Any, field: str, within: Interval = Interval()) -> fl
 def as_whole_number(value: Any, field: str, within: Interval = Interval()) -> int:
     """Return *value* read by :func:`as_finite_float` as the int it equals, refusing one with a fractional part or one *within* does not admit.
 
+    An integral value, Python's or numpy's, is returned as the int it is, never rounded
+    through a float; any other value is read through float().
+
     Raises:
         ConfigurationError: If :func:`as_finite_float` refuses *value*, it has a fractional
             part, or *within* does not admit it, in that order; the error names *field* and
             *value*, and *within* when it does not admit *value*.
     """
-    whole = whole_number(as_finite_float(value, field))
+    number = as_finite_float(value, field)
+    whole = int(value) if isinstance(value, numbers.Integral) else whole_number(number)
     if whole is None:
         _refuse(field, "a whole number", value)
     return _admitted(whole, within, field, value)
