@@ -2,11 +2,11 @@
 """Tests for PV ageing: calculate_degradation_factor's 1 - age x rate, floored at zero, and apply_degradation's scaling of a generation series by it."""
 
 import math
-import re
 
 import numpy as np
 import pandas as pd
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.pv import apply_degradation, calculate_degradation_factor
 
 
@@ -47,31 +47,28 @@ class TestDegradationFactor:
 
     def test_negative_age_raises(self):
         """Negative system age raises error."""
-        with pytest.raises(ValueError, match="non-negative"):
+        with pytest.raises(ConfigurationError) as exc_info:
             calculate_degradation_factor(-1)
+        assert str(exc_info.value) == "system_age_years must be at least 0, got -1"
 
     @pytest.mark.parametrize("age", [math.nan, math.inf, -math.inf])
     def test_a_non_finite_age_raises(self, age: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"System age must be non-negative and finite, got {age}"),
-        ):
+        with pytest.raises(ConfigurationError) as exc_info:
             calculate_degradation_factor(age)
+        assert str(exc_info.value) == f"system_age_years must be a finite number, got {age!r}"
 
-    def test_invalid_rate_raises(self):
+    @pytest.mark.parametrize("rate", [1.5, -0.1])
+    def test_invalid_rate_raises(self, rate):
         """Invalid degradation rate raises error."""
-        with pytest.raises(ValueError, match="0-1"):
-            calculate_degradation_factor(5, degradation_rate_per_year=1.5)
-        with pytest.raises(ValueError, match="0-1"):
-            calculate_degradation_factor(5, degradation_rate_per_year=-0.1)
+        with pytest.raises(ConfigurationError) as exc_info:
+            calculate_degradation_factor(5, degradation_rate_per_year=rate)
+        assert str(exc_info.value) == f"degradation_rate_per_year must be between 0 and 1, got {rate!r}"
 
     @pytest.mark.parametrize("rate", [math.nan, math.inf, -math.inf])
     def test_a_non_finite_rate_raises(self, rate: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"Degradation rate must be 0-1, got {rate}"),
-        ):
+        with pytest.raises(ConfigurationError) as exc_info:
             calculate_degradation_factor(5, degradation_rate_per_year=rate)
+        assert str(exc_info.value) == f"degradation_rate_per_year must be a finite number, got {rate!r}"
 
     def test_factor_clamped_at_zero(self):
         """Factor can't go below zero."""

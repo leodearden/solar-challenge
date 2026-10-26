@@ -91,18 +91,23 @@ class TestValidateResultsCommand:
         assert "FAIL" in result.output
         assert "5/6 checks passed" in " ".join(result.output.split())
 
-    @pytest.mark.parametrize("pv_kw", ["0", "nan", "inf"])
+    @pytest.mark.parametrize(
+        ("pv_kw", "refusal"),
+        [
+            ("0", "capacity_kw must be greater than 0, got 0.0"),
+            ("nan", "capacity_kw must be a finite number, got nan"),
+            ("inf", "capacity_kw must be a finite number, got inf"),
+        ],
+    )
     def test_a_pv_capacity_that_is_not_positive_and_finite_is_refused(
-        self, tmp_path: Path, pv_kw: str
+        self, tmp_path: Path, pv_kw: str, refusal: str
     ) -> None:
         result = self._validate_results(
             tmp_path, _valid_results_frame(), "--pv-kw", pv_kw
         )
 
         assert result.exit_code == 1
-        assert f"Capacity must be positive and finite, got {float(pv_kw)} kW" in " ".join(
-            result.output.split()
-        )
+        assert refusal in " ".join(result.output.split())
 
     @pytest.mark.parametrize(
         ("column", "required"),
@@ -228,7 +233,7 @@ home:
             )
             result = runner.invoke(app, ["validate", "config", str(config_path)])
             assert result.exit_code == 1
-            assert "must be positive" in result.stdout
+            assert "capacity_kw must be greater than 0" in table_text(result.stdout)
 
     def test_validate_config_invalid_tilt(self) -> None:
         """Test validate config with invalid tilt."""
@@ -244,7 +249,7 @@ home:
             )
             result = runner.invoke(app, ["validate", "config", str(config_path)])
             assert result.exit_code == 1
-            assert "0-90" in result.stdout
+            assert "tilt must be between 0 and 90" in table_text(result.stdout)
 
     def test_validate_config_warning_high_consumption(self) -> None:
         """Test validate config warns about high consumption."""
@@ -303,7 +308,7 @@ home:
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
-                "Tilt must be 0-90 degrees, got 100.0",
+                "tilt must be between 0 and 90, got 100.0",
                 id="fleet-distribution",
             ),
             pytest.param(
@@ -458,6 +463,18 @@ home:
                 "nan",
                 id="heat-pump-capacity-nan",
             ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: true}\n",
+                "capacity_kw",
+                "True",
+                id="pv-capacity-boolean",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0, azimuth: south}\n",
+                "azimuth",
+                "'south'",
+                id="pv-azimuth-word",
+            ),
         ],
     )
     def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(
@@ -581,5 +598,5 @@ home:
         )
 
         assert result.exit_code == 1
-        assert "ERROR Tilt must be 0-90 degrees, got 100.0" in table_text(result.stdout)
+        assert "ERROR tilt must be between 0 and 90, got 100.0" in table_text(result.stdout)
         assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)
