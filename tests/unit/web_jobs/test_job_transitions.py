@@ -4,7 +4,7 @@
 _THE_PRDS_TABLE spells out the table of docs/prds/job-events-and-sse-framing.md §3.4, along
 which a job's status moves: check_job_transition refuses every other move with
 IllegalJobTransition, naming the job, its run and both statuses, and a terminal status has no
-exits.
+exits. The PRD's B6, a job that completed and then fails, is the refused move completed-to-failed.
 """
 
 import itertools
@@ -74,19 +74,4 @@ def test_check_job_transition_refuses_every_other_move_naming_the_job_its_run_an
         to_status,
     )
     for named in ("job-1", "run-1", from_status, to_status):
-        assert named in str(refusal)
-
-
-def test_a_job_that_completed_cannot_then_fail() -> None:
-    with pytest.raises(IllegalJobTransition) as raised:
-        check_job_transition("job-1", "run-1", "completed", "failed")
-
-    refusal = raised.value
-    assert (refusal.job_id, refusal.run_id, refusal.from_status, refusal.to_status) == (
-        "job-1",
-        "run-1",
-        "completed",
-        "failed",
-    )
-    for named in ("job-1", "run-1", "completed", "failed"):
         assert named in str(refusal)
