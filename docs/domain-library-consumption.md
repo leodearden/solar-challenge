@@ -774,6 +774,33 @@ reports such homes as an ERROR row, and the CLI labels a refused
 Consumers that catch `ValueError` need no change for the type; those that
 match message text, or pass such values, change them when they re-pin.
 
+**Unreleased on main** (task 864): `GridChargeConfig`, `TOUOptimizedStrategy`
+and `PeakShavingStrategy`, and the task 786 line's `TOUOptimizedStrategyConfig`
+and `PeakShavingStrategyConfig`, refuse input the 0.5.0 tag accepts, and raise
+`ConfigurationError`, a `ValueError`, naming the field and the value. Each number
+they read, `target_soc_fraction`, `import_limit_kw` and each hour of a
+`peak_hours` window, must be a finite number: a bool, Python's or numpy's, NaN,
+±inf or a value `float()` cannot read is refused as such before its range is
+checked. A peak hour must also be a whole number from 0 to 24, and is named by
+its position, e.g. `peak_hours[1][0]`; each window must be a `(start, end)` pair
+that starts before it ends, and `peak_hours` a list of at least one window. The
+tag accepts e.g. `GridChargeConfig(True)`, `PeakShavingStrategy(float("nan"))`
+and `TOUOptimizedStrategy([(16.5, 19)])`. Each holds what it read:
+`PeakShavingStrategyConfig(3).import_limit_kw` is `3.0`, a numeric string such
+as `"3"` is read as `3.0`, a numpy scalar becomes the Python float it equals, and
+`peak_hours` holds its windows as a tuple of int pairs, its hours read the same
+way, so `TOUOptimizedStrategyConfig([[16.0, 19.0]]).peak_hours` is
+`((16, 19),)`. Messages name the field and the value, e.g. `import_limit_kw must
+be greater than 0, got 0.0`, `peak_hours[0][0] must be between 0 and 24, got 25`
+and `peak_hours[0] must be a (start, end) window that starts before it ends, got
+(20, 17)`; this supersedes the task 786 line's description of those messages.
+`solar-challenge validate config` reports a battery's
+`grid_charging: {target_soc_fraction: true}`, a `peak_shaving` strategy's
+`import_limit_kw: true` and a `tou_optimized` strategy's
+`peak_hours: [[16.5, 19]]` as ERROR rows, where the tag reports such files
+valid. Consumers that catch `ValueError` need no change for the type; those that
+match message text, or pass such values, change them when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
