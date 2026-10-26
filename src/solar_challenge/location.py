@@ -76,3 +76,30 @@ LOCATION_PRESETS: Mapping[str, Location] = MappingProxyType({
     "manchester": Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester, UK"),
 })
 """The named locations a location string may give, keyed by lower-case name."""
+
+
+def parse_location(text: str) -> Location:
+    """The Location *text* names: a LOCATION_PRESETS name, in any case and with surrounding whitespace, or 'lat,lon' or 'lat,lon,alt' in decimal degrees and metres, named 'Custom (lat, lon)', its altitude Location's default when not given.
+
+    Raises:
+        ConfigurationError: For any other text, naming location, the text and the accepted
+            forms; from as_finite_float, for a coordinate that is not a finite number,
+            naming it; from Location, for coordinates outside its range.
+    """
+    preset = LOCATION_PRESETS.get(text.strip().lower())
+    if preset is not None:
+        return preset
+    numbers = text.split(",")
+    if len(numbers) not in (2, 3):
+        raise ConfigurationError(
+            f"location must be one of {', '.join(map(repr, LOCATION_PRESETS))}, "
+            f"or 'lat,lon' or 'lat,lon,alt' coordinates in decimal degrees and metres, got {text!r}"
+        )
+    latitude = as_finite_float(numbers[0], "latitude")
+    longitude = as_finite_float(numbers[1], "longitude")
+    name = f"Custom ({latitude:.2f}, {longitude:.2f})"
+    if len(numbers) == 2:
+        return Location(latitude=latitude, longitude=longitude, name=name)
+    return Location(
+        latitude=latitude, longitude=longitude, altitude=as_finite_float(numbers[2], "altitude"), name=name
+    )
