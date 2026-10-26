@@ -260,12 +260,12 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 
     As in undeclared_attributes, an immutable type raises TypeError naming it before
     anything else is read, a class with no class statement inspect can read raises
-    TypeError naming it when its source is read, a class with a member that member_forms
-    refuses raises the TypeError member_forms raises for it, a write to self whose
-    attribute name the scan cannot read raises TypeError unless *reviewed* holds its text,
-    a text in *reviewed* that is no such write's raises ValueError, and one string given
-    as *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
-    since its names are unknown.
+    TypeError naming it when its source is read, a write to self whose attribute name the
+    scan cannot read raises TypeError unless *reviewed* holds its text, a text in
+    *reviewed* that is no such write's raises ValueError, and one string given as
+    *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
+    since its names are unknown. A class with a member that member_forms refuses raises
+    the TypeError member_forms raises for it.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
