@@ -5,12 +5,16 @@ Feeder, Tap and Tally are defined at module level, where their forward reference
 each other resolve in this module's namespace.
 """
 
+import functools
 import pathlib
+import re
 from dataclasses import dataclass
 from typing import NewType, TypeVar
 
+import pytest
+
 from tests._surface_forms import signature_closure
-from tests.unit.surface_forms_helper._fixtures import Preset
+from tests.unit.surface_forms_helper._fixtures import UNREADABLE_ROUTINES, Preset
 
 
 @dataclass(frozen=True)
@@ -57,3 +61,20 @@ def test_a_signature_closure_follows_the_classes_a_type_variable_or_a_new_type_c
     def supply(feeder: Supplied, preset: PresetId) -> Supplied: ...
 
     assert signature_closure([supply], "tests") == {Feeder, Tap, Tally, Preset}
+
+
+@pytest.mark.parametrize(
+    ("routine", "kind"),
+    [
+        *UNREADABLE_ROUTINES,
+        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
+    ],
+)
+def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
+    routine: object, kind: str
+) -> None:
+    class Meter:
+        half = routine
+
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
+        signature_closure([Meter], "tests")

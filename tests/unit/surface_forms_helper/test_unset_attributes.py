@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's unset_attributes, one per test."""
 
+import functools
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+import pytest
+
 from tests._surface_forms import member_forms, unset_attributes
+from tests.unit.surface_forms_helper._fixtures import UNREADABLE_ROUTINES
 
 
 def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_unset() -> None:
@@ -91,3 +96,20 @@ def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> 
             setattr(self, name, 0.0)
 
     assert unset_attributes(Meter, reviewed={"setattr(self, name, 0.0)"}) == {"reading"}
+
+
+@pytest.mark.parametrize(
+    ("routine", "kind"),
+    [
+        *UNREADABLE_ROUTINES,
+        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
+    ],
+)
+def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
+    routine: object, kind: str
+) -> None:
+    class Meter:
+        half = routine
+
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
+        unset_attributes(Meter)

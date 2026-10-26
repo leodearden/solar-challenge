@@ -212,7 +212,8 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
     Each class found is followed through its own forms, as named_classes reads them, so
     the forms alone decide the set. A class among *roots* is left out by identity,
-    whatever name it goes by, though its forms are followed as a root's.
+    whatever name it goes by, though its forms are followed as a root's. A class with a
+    member that member_forms refuses raises the TypeError member_forms raises for it.
     """
     pending = list(roots)
     root_classes = {root for root in pending if inspect.isclass(root)}
@@ -263,7 +264,8 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     scan cannot read raises TypeError unless *reviewed* holds its text, a text in
     *reviewed* that is no such write's raises ValueError, and one string given as
     *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
-    since its names are unknown.
+    since its names are unknown. A class with a member that member_forms refuses raises
+    the TypeError member_forms raises for it.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
