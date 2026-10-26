@@ -7,8 +7,9 @@ that name tests as they were when written, such as the PRDs and research notes u
 A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
-so a file git ignores is not there to point at. A path in another repository is written from that repository's name,
-as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
+so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
+a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
+repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
@@ -20,9 +21,11 @@ that reads as a test, such as Werkzeug's TestResponse, is written after its modu
 """
 
 import ast
+import functools
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -30,7 +33,7 @@ import yaml
 
 from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
-from tests._working_tree import working_tree_paths
+from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _UNSCANNED = (PurePosixPath("tests"), *RECORD_DIRECTORIES)
 
@@ -176,39 +179,55 @@ def _mapping_keys(node: yaml.Node) -> Iterator[str]:
 
 def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
     """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
-    tree = _WorkingTree(root)
-    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(tree, pointer)) is not None]
+    tree = working_tree_paths(root)
+
+    @functools.cache
+    def syntax_tree_of(path: PurePosixPath) -> ast.Module | _NoSyntaxTree:
+        return _syntax_tree(root / path)
+
+    return [
+        f"{pointer}: {reason}"
+        for pointer in pointers
+        if (reason := _unresolved(tree, syntax_tree_of, pointer)) is not None
+    ]
 
 
-class _WorkingTree:
-    """The files and directories of a checkout's working tree, as tests/_working_tree.py::working_tree_paths gives them.
+class _NoSyntaxTree(Enum):
+    """Why a Python file has no syntax tree to look the names of a pointer up in.
 
-    Each of its Python files is parsed when first asked for, and at most once.
+    A reason for a pointer gives the member's value after the file's path.
     """
 
-    def __init__(self, root: Path) -> None:
-        self._root = root
-        self._paths = working_tree_paths(root)
-        self._modules: dict[PurePosixPath, ast.Module] = {}
-
-    def holds(self, path: PurePosixPath) -> bool:
-        """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
-        return self._paths.holds(path)
-
-    def module(self, path: PurePosixPath) -> ast.Module | None:
-        """Return the syntax tree of the Python file at *path*, or None if the tree holds no Python file there."""
-        if path.suffix != ".py" or path not in self._paths.files:
-            return None
-        if path not in self._modules:
-            self._modules[path] = ast.parse((self._root / path).read_text(encoding="utf-8"))
-        return self._modules[path]
+    NOT_UTF8 = "is not UTF-8 text"
+    DOES_NOT_PARSE = "does not parse"
 
 
-def _unresolved(tree: _WorkingTree, pointer: _Pointer) -> str | None:
+_BYTE_ORDER_MARK = "\ufeff"
+
+
+def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
+    """Return the syntax tree of the Python file at *path*, or why it has none.
+
+    It is parsed from the file's text as utf8_text reads it, less a leading byte order mark.
+    """
+    text = utf8_text(path)
+    if text is None:
+        return _NoSyntaxTree.NOT_UTF8
+    try:
+        return ast.parse(text.removeprefix(_BYTE_ORDER_MARK))
+    except SyntaxError:
+        return _NoSyntaxTree.DOES_NOT_PARSE
+
+
+def _unresolved(
+    tree: WorkingTreePaths,
+    syntax_tree_of: Callable[[PurePosixPath], ast.Module | _NoSyntaxTree],
+    pointer: _Pointer,
+) -> str | None:
     """Return why *pointer* leads to no file, directory or test in the working *tree*, or None if it leads to one.
 
-    It must give a path, with its names joined by ::, and the tree must hold that path. Its names are read from the
-    Python file's syntax tree, and the file is never imported.
+    It must give a path, with its names joined by ::, and the tree must hold that path. Its names are looked up in the
+    syntax tree *syntax_tree_of* gives for the Python file there, and the file is never imported.
     """
     if pointer.path is None:
         return _NAMED_WITHOUT_ITS_NODE_ID
@@ -219,9 +238,11 @@ def _unresolved(tree: _WorkingTree, pointer: _Pointer) -> str | None:
         return f"{pointer.path} does not exist, or git ignores it"
     if not pointer.names:
         return None
-    module = tree.module(pointer.path)
-    if module is None:
+    if pointer.path.suffix != ".py" or pointer.path not in tree.files:
         return f"{pointer.path} is not a Python file, so it defines no {pointer.names[0]}"
+    module = syntax_tree_of(pointer.path)
+    if isinstance(module, _NoSyntaxTree):
+        return f"{pointer.path} {module.value}, so it defines no {pointer.names[0]}"
     return _undefined(pointer.path, pointer.names, module)
 
 
@@ -387,6 +408,58 @@ def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None
         "src/pkg/module.py:1: tests/unit/generated/test_made.py::test_made:"
         " tests/unit/generated/test_made.py does not exist, or git ignores it",
         "src/pkg/module.py:2: tests/unit/generated: tests/unit/generated does not exist, or git ignores it",
+    ]
+
+
+def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: Path) -> None:
+    (project / "tests" / "unit" / "test_latin1.py").write_bytes("def test_top(): pass  # café\n".encode("latin-1"))
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_latin1.py::test_top\n"
+        "# tests/unit/test_latin1.py::TestGroup::test_member\n"
+        "# tests/unit/test_latin1.py names no test\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:1: tests/unit/test_latin1.py::test_top:"
+        " tests/unit/test_latin1.py is not UTF-8 text, so it defines no test_top",
+        "src/pkg/module.py:2: tests/unit/test_latin1.py::TestGroup::test_member:"
+        " tests/unit/test_latin1.py is not UTF-8 text, so it defines no TestGroup",
+    ]
+
+
+def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Path) -> None:
+    (project / "tests" / "unit" / "test_broken.py").write_text(
+        "def test_top(): pass\ndef test_broken(:\n", encoding="utf-8"
+    )
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_broken.py::test_top\n"
+        "# tests/unit/test_broken.py::TestGroup::test_member\n"
+        "# tests/unit/test_broken.py names no test\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:1: tests/unit/test_broken.py::test_top:"
+        " tests/unit/test_broken.py does not parse, so it defines no test_top",
+        "src/pkg/module.py:2: tests/unit/test_broken.py::TestGroup::test_member:"
+        " tests/unit/test_broken.py does not parse, so it defines no TestGroup",
+    ]
+
+
+def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mark(project: Path) -> None:
+    (project / "tests" / "unit" / "test_marked.py").write_text("def test_top(): pass\n", encoding="utf-8-sig")
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_marked.py::test_top\n# tests/unit/test_marked.py::test_absent\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:2: tests/unit/test_marked.py::test_absent:"
+        " tests/unit/test_marked.py defines no test_absent at its top level",
     ]
 
 
