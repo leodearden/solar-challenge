@@ -460,6 +460,18 @@ def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     assert _dangling(project, pointers) == []
 
 
+def test_reads_the_pointers_in_a_python_source_that_starts_with_a_byte_order_mark(project: Path) -> None:
+    source = write_file(
+        project,
+        "src/pkg/marked.py",
+        "# pinned by test_top\ndef build(test_config=None):\n    return test_config\n".encode("utf-8-sig"),
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        f"src/pkg/marked.py:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}"
+    ]
+
+
 def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Path) -> None:
     source = write_file(
         project,

@@ -415,6 +415,15 @@ def test_reports_each_section_after_a_markdown_file_that_is_not_utf8_text(projec
     ]
 
 
+def test_resolves_a_section_after_a_markdown_file_that_starts_with_a_byte_order_mark(project: Path) -> None:
+    write_file(project, "docs/marked.md", "# 1. Intro\n".encode("utf-8-sig"))
+    source = write_file(project, "src/pkg/module.py", "# docs/marked.md §1\n# docs/marked.md §2\n")
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:2: docs/marked.md §2: docs/marked.md has no heading numbered 2",
+    ]
+
+
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = write_file(project, "src/pkg/logo.png", b"\x89PNG\xff\xfe docs/absent.md")
 
