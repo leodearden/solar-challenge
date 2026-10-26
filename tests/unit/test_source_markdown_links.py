@@ -11,10 +11,11 @@ them, so a file git ignores is not there to link to. A markdown file that is not
 since its links cannot be read.
 """
 
+import posixpath
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 _LINK_TARGET = re.compile(r"\]\((?P<target>[^)\s]+)")
 
@@ -29,6 +30,16 @@ class _Link:
 
     def __str__(self) -> str:
         return f"{self.source}:{self.line}: {self.target}"
+
+    @property
+    def path(self) -> PurePosixPath:
+        """The path, relative to the project root, that the target leads to.
+
+        It is normalised lexically, so a target climbing above the root keeps its leading '..'.
+        """
+        written = unquote(urlsplit(self.target).path)
+        base = PurePosixPath() if written.startswith("/") else self.source.parent
+        return PurePosixPath(posixpath.normpath(base / written.lstrip("/")))
 
 
 def _names_a_path(target: str) -> bool:
