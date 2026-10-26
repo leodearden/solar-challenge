@@ -4,9 +4,16 @@ static/js/chart-renderer.js draws from the figure its container carries, so a pa
 each chart's id once. A figure with nothing to draw, None or '{}', gets the card of a
 message instead, or no card. A figure read under a name the page's route never set is
 undefined, and fails the render, naming that name.
+
+A chart is described by the frozen types of solar_challenge.web.charts: a ChartPanel holds
+its id, title, height and content, a figure's JSON or the ChartAbsence that says why there
+is none, and a ChartTab groups panels under a tab. Each refuses, naming the field and the
+value, what the old convention allowed, so a figure of '{}' cannot be constructed.
 """
 
+import dataclasses
 import json
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -16,6 +23,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from jinja2 import UndefinedError
 
+from solar_challenge.web.charts import ChartAbsence, ChartPanel, ChartTab
 from tests._html_page import chart_figures, element_count, element_ids, headings, texts
 
 _FIGURE = json.dumps(
@@ -25,6 +33,79 @@ _FIGURE = json.dumps(
     }
 )
 _NOTHING_TO_DRAW = [pytest.param(None, id="none"), pytest.param("{}", id="empty-object")]
+
+
+def _panel(**fields: Any) -> ChartPanel:
+    """A panel of _FIGURE titled 'Sample Chart', 420 px high, with *fields* in place of those."""
+    return ChartPanel(
+        **{"dom_id": "chart-sample", "title": "Sample Chart", "height_px": 420, "content": _FIGURE, **fields}
+    )
+
+
+def _tab(**fields: Any) -> ChartTab:
+    """A tab 'Overview' of one _panel(), with *fields* in place of those."""
+    return ChartTab(**{"key": "overview", "label": "Overview", "panels": (_panel(),), **fields})
+
+
+_BUILD_WITH: dict[str, Callable[[Any], object]] = {
+    "ChartPanel.dom_id": lambda value: _panel(dom_id=value),
+    "ChartPanel.title": lambda value: _panel(title=value),
+    "ChartPanel.height_px": lambda value: _panel(height_px=value),
+    "ChartPanel.content": lambda value: _panel(content=value),
+    "ChartAbsence.reason": lambda value: _panel(content=ChartAbsence(value)),
+    "ChartTab.key": lambda value: _tab(key=value),
+    "ChartTab.label": lambda value: _tab(label=value),
+    "ChartTab.panels": lambda value: _tab(panels=value),
+}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ChartPanel.content", "{}"),
+        ("ChartPanel.content", ""),
+        ("ChartPanel.content", "   "),
+        ("ChartPanel.dom_id", "Chart 1"),
+        ("ChartPanel.dom_id", "chart_1"),
+        ("ChartPanel.title", ""),
+        ("ChartPanel.title", "  "),
+        ("ChartPanel.height_px", 0),
+        ("ChartPanel.height_px", -5),
+        ("ChartAbsence.reason", ""),
+        ("ChartAbsence.reason", "  "),
+        ("ChartTab.key", "Power Flow"),
+        ("ChartTab.key", ""),
+        ("ChartTab.label", ""),
+        ("ChartTab.panels", ()),
+    ],
+)
+def test_a_chart_type_refuses_a_value_its_field_forbids_naming_the_field_and_the_value(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValueError) as refusal:
+        _BUILD_WITH[field](value)
+
+    message = str(refusal.value)
+    assert field in message and repr(value) in message, message
+
+
+def test_a_panel_of_a_figure_reads_as_the_figure_and_no_absence() -> None:
+    panel = _panel(content=_FIGURE)
+
+    assert (panel.figure_json, panel.absence_reason) == (_FIGURE, None)
+
+
+def test_a_panel_of_an_absence_reads_as_its_reason_and_no_figure() -> None:
+    panel = _panel(content=ChartAbsence("Needs 90 days."))
+
+    assert (panel.figure_json, panel.absence_reason) == (None, "Needs 90 days.")
+
+
+def test_a_panel_is_frozen() -> None:
+    panel = _panel()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        panel.content = ChartAbsence("Needs 90 days.")
 
 
 def test_a_chart_panel_draws_a_card_titled_with_its_title_whose_container_carries_the_figure(
