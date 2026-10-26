@@ -146,9 +146,7 @@ class TestSimulateHomeAPI:
             json={**VALID_HOME_PAYLOAD, "battery_kwh": -1.0},
         )
         assert resp.status_code == 400
-        assert resp.get_json()["error"] == (
-            "battery_kwh must be >= 0 and finite (0 for no battery), got -1.0 kWh"
-        )
+        assert resp.get_json()["error"] == "battery_kwh must be at least 0, got -1.0"
 
     def test_nan_battery_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock

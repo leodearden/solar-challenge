@@ -308,7 +308,7 @@ home:
             ),
             pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
-                "Max charge power must be positive and finite, got -1.0 kW",
+                "max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",
             ),
             pytest.param(

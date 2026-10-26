@@ -945,9 +945,16 @@ class TestValidateSimulation:
         check_names = [r.check_name for r in report.results]
         assert any("battery" in name for name in check_names)
 
-    @pytest.mark.parametrize("battery_capacity_kwh", [math.nan, math.inf, -1.0])
+    @pytest.mark.parametrize(
+        ("battery_capacity_kwh", "requirement"),
+        [
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="inf"),
+            pytest.param(-1.0, "at least 0", id="-1.0"),
+        ],
+    )
     def test_a_battery_capacity_that_is_not_one_is_refused_naming_it(
-        self, battery_capacity_kwh: float
+        self, battery_capacity_kwh: float, requirement: str
     ) -> None:
         """A battery capacity that is negative or not finite is refused naming battery_capacity_kwh, never benchmarked as no battery."""
         results = _create_simulation_results(
@@ -965,8 +972,7 @@ class TestValidateSimulation:
                 target_annual_consumption_kwh=3400,
             )
         assert str(exc_info.value) == (
-            "battery_capacity_kwh must be >= 0 and finite (0 for no battery), "
-            f"got {battery_capacity_kwh} kWh"
+            f"battery_capacity_kwh must be {requirement}, got {battery_capacity_kwh!r}"
         )
 
     def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:

@@ -127,7 +127,13 @@ class TestBatterySOCEfficiencyParsing:
 
     def test_out_of_range_soc_raises_value_error(self) -> None:
         """Out-of-range SOC fractions propagate as ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "min_soc_fraction must be less than max_soc_fraction, "
+                "got min_soc_fraction=0.9 and max_soc_fraction=0.5"
+            ),
+        ):
             _parsed_home(
                 battery={
                     "capacity_kwh": 5.0,

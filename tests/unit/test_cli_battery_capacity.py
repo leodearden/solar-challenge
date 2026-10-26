@@ -64,13 +64,16 @@ def test_home_quick_refuses_a_battery_kwh_that_is_not_a_capacity(value: str) -> 
 
     assert result.exit_code == 1
     assert (
-        f"Invalid value: battery_kwh must be >= 0 and finite (0 for no battery), got {float(value)} kWh"
+        f"Configuration error: battery_kwh must be a finite number, got {float(value)!r}"
         in _stderr_text(result)
     )
 
 
-@pytest.mark.parametrize("value", ["nan", "inf", "-1"])
-def test_home_run_refuses_a_battery_kwh_override_that_is_not_a_capacity(value: str) -> None:
+@pytest.mark.parametrize(
+    ("value", "requirement"),
+    [("nan", "a finite number"), ("inf", "a finite number"), ("-1", "at least 0")],
+)
+def test_home_run_refuses_a_battery_kwh_override_that_is_not_a_capacity(value: str, requirement: str) -> None:
     """`home run --battery-kwh` is refused, naming the option, when it is negative or not finite, instead of removing the file's battery."""
     _write_home_with_battery()
 
@@ -80,7 +83,7 @@ def test_home_run_refuses_a_battery_kwh_override_that_is_not_a_capacity(value: s
 
     assert result.exit_code == 1
     assert (
-        f"Invalid value: --battery-kwh must be >= 0 and finite (0 for no battery), got {float(value)} kWh"
+        f"Configuration error: --battery-kwh must be {requirement}, got {float(value)!r}"
         in _stderr_text(result)
     )
 
