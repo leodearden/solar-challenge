@@ -105,9 +105,7 @@ def signature_of(obj: Callable[..., object]) -> inspect.Signature:
 
 def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None:
     """Raise the TypeError for *subject* that the first refusal below finds at the chain inspect follows from *link*: *subject* itself, or the __call__ _call_as_read gives for an object its class makes callable, at which a chain inspect follows from *subject* ends."""
-    unreadable = _unreadable_link(link)
-    if unreadable is not None:
-        raise _unreadable_routine_error(label_of(subject), subject, unreadable)
+    _refuse_link_read_as_builtin(subject, link)
     end = _chain_end(link, stop=_has_non_none_signature)
     _refuse_wrapped_enum(subject, end)
     _refuse_wrapped_get_delete_descriptor(subject, end)
@@ -225,6 +223,20 @@ def _minor_dependent_signature_clause(signature: object) -> str:
     )
 
 
+def _refuse_link_read_as_builtin(routine: object, link: object, label: str | None = None) -> None:
+    """Raise TypeError for *routine* if inspect reads a link of the chain it follows from *link* as a builtin on some admitted minor, or cannot read one: the partial _partial_read_as_builtin_link finds, which inspect meets before the chain's end, as _partial_read_as_builtin_error says; else the link _unreadable_link finds, as _unreadable_routine_error says.
+
+    *label* names *routine*, else label_of(routine), read only once a link is refused:
+    a routine defined in C, such as str.join, records no __module__ for it to read.
+    """
+    partial = _partial_read_as_builtin_link(link)
+    if partial is not None:
+        raise _partial_read_as_builtin_error(label or label_of(routine), routine, partial)
+    unreadable = _unreadable_link(link)
+    if unreadable is not None:
+        raise _unreadable_routine_error(label or label_of(routine), routine, unreadable)
+
+
 def _unreadable_link(obj: object) -> object | None:
     """The link of the chain inspect follows from *obj* at which it fails to read a signature, if *obj* is a routine whose signature it cannot read; None otherwise.
 
@@ -256,6 +268,33 @@ def _is_read_as_builtin_before_3_13(obj: object) -> bool:
     return is_get_delete_descriptor(obj) and not _has_non_none_signature(obj)
 
 
+def _partial_read_as_builtin_link(obj: object) -> object | None:
+    """The first link of the chain inspect follows from *obj*, as _chain_end follows it, that _is_partial_read_as_builtin_before_3_13 finds before any link that carries a signature other than None, which inspect reads in place of the rest of the chain; None if it finds none."""
+    link = _chain_end(
+        obj,
+        stop=lambda link: _has_non_none_signature(link)
+        or _is_partial_read_as_builtin_before_3_13(link),
+    )
+    return link if _is_partial_read_as_builtin_before_3_13(link) else None
+
+
+def _is_partial_read_as_builtin_before_3_13(obj: object) -> bool:
+    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR says: a functools.partial _is_partial_with_its_own_get finds, whose type defines no __set__, carrying no signature for inspect to read in its place."""
+    return (
+        _is_partial_with_its_own_get(obj)
+        and not hasattr(type(obj), "__set__")
+        and not _has_non_none_signature(obj)
+    )
+
+
+def _is_partial_with_its_own_get(obj: object) -> bool:
+    """Whether *obj* is a functools.partial whose type's MRO, on either side of functools.partial, holds a class other than functools.partial that defines __get__."""
+    return isinstance(obj, functools.partial) and any(
+        holder is not functools.partial
+        for holder in namespace_holders(type(obj).__mro__, "__get__")
+    )
+
+
 def _unreadable_routine_error(label: str, routine: object, link: object) -> TypeError:
     """The error for *routine*, which *label* names and whose signature inspect fails to read at *link*, the link _unreadable_link gives for it."""
     kind = label_of(type(routine))
@@ -268,6 +307,21 @@ def _unreadable_routine_error(label: str, routine: object, link: object) -> Type
         f"{label} is a {kind} that wraps {label_of(link)}, a {label_of(type(link))} whose "
         "signature inspect cannot read, so no form spells it: make the name private, or "
         "define what it wraps with def"
+    )
+
+
+def _partial_read_as_builtin_error(label: str, routine: object, partial: object) -> TypeError:
+    """The error for *routine*, which *label* names, at whose link *partial*, the one _partial_read_as_builtin_link gives for it, inspect reads as _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR says."""
+    kind = label_of(type(partial))
+    if partial is routine:
+        return TypeError(
+            f"{label} is a {kind}, {_PARTIAL_WITH_ITS_OWN_GET_BY_MINOR}: make the name private, "
+            "define it with def, or set a __signature__ that is an inspect.Signature on it"
+        )
+    return TypeError(
+        f"{label} wraps {label_of(partial)}, a {kind}, {_PARTIAL_WITH_ITS_OWN_GET_BY_MINOR}: "
+        "make the name private, wrap a function defined with def, or set a __signature__ "
+        "that is an inspect.Signature on the routine or on what it wraps"
     )
 
 
@@ -295,6 +349,13 @@ _GET_DELETE_DESCRIPTOR_BY_MINOR = (
     "whose type defines __get__ and __delete__ but no __set__: inspect reads it as a method "
     "descriptor, by a text signature only a routine defined in C gives, on Python 3.11 and "
     "3.12, and as a data descriptor, through its type's __call__, from 3.13"
+)
+
+_PARTIAL_WITH_ITS_OWN_GET_BY_MINOR = (
+    "a functools.partial whose type takes __get__ from a class other than functools.partial "
+    "and defines no __set__: inspect reads it as a method descriptor, by a text signature "
+    "only a routine defined in C gives, on Python 3.11 and 3.12, where functools.partial "
+    "defines no __get__, and as a functools.partial, through its func, from 3.13"
 )
 
 
@@ -450,19 +511,29 @@ def _refuse_partial_bound_as_method(
 def _refuse_constructor_read_as_builtin(
     cls: type, owner: type, name: str, read: object
 ) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name*, and the descriptor that ends the chain inspect follows from *read*, with its type, if inspect reads that descriptor as a builtin on some admitted minor, as _is_read_as_builtin or _is_read_as_builtin_before_3_13 finds; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
-    end = _chain_end(read, stop=_has_non_none_signature)
-    if _is_read_as_builtin(end):
-        reading = _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR
-    elif _is_read_as_builtin_before_3_13(end):
-        reading = _GET_DELETE_DESCRIPTOR_BY_MINOR
-    else:
+    """Raise TypeError naming *cls*, *owner*'s *name*, and the link _constructor_link_read_as_builtin finds on the chain inspect follows from *read*, with that link's type and its reading, if it finds one; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    found = _constructor_link_read_as_builtin(read)
+    if found is None:
         return
+    link, reading = found
     raise TypeError(
         f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
-        f"as {label_of(end)}, a {label_of(type(end))}, {reading}: make the name private, or "
+        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
         f"define {name} with def"
     )
+
+
+def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None:
+    """The link of the chain inspect follows from *read*, a constructor as inspect reads it, that inspect reads as a builtin on some admitted minor, with that reading: the partial _partial_read_as_builtin_link finds, which inspect meets before the chain's end; else that end, if _is_read_as_builtin or _is_read_as_builtin_before_3_13 finds it; None if neither is found."""
+    partial = _partial_read_as_builtin_link(read)
+    if partial is not None:
+        return partial, _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR
+    end = _chain_end(read, stop=_has_non_none_signature)
+    if _is_read_as_builtin(end):
+        return end, _GET_ONLY_DESCRIPTOR_ON_EVERY_MINOR
+    if _is_read_as_builtin_before_3_13(end):
+        return end, _GET_DELETE_DESCRIPTOR_BY_MINOR
+    return None
 
 
 def _refuse_constructor_signature(
