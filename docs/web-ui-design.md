@@ -302,6 +302,7 @@ The dashboard's UI colours are the `tailwind` section of the same token file. It
    - Heating load vs degree-days line chart
    - Load share pie chart (heat pump vs base household)
    - Only shown when heat pump is configured
+   - Drawn after the Seasonal Comparison in the Analysis tab, each chart full width below the last, as every tab stacks its charts
 
 ### Fleet Charts
 
