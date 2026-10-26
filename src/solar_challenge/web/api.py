@@ -75,11 +75,12 @@ def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable
 
 
 @api_bp.errorhandler(StoredRunUnreadable)
-def _answer_a_stored_run_that_cannot_be_read(unreadable: StoredRunUnreadable) -> tuple[Response, int]:
+def answer_stored_run_unreadable(unreadable: StoredRunUnreadable) -> tuple[Response, int]:
     """Answer HTTP 409 with the refusal of a stored run that cannot be read, logged as a warning: its message as error, and its run_id, document and field.
 
-    Any endpoint of this blueprint that reads a stored run is answered this way (D-S19-9 in
-    docs/prds/run-store-one-owner.md); field is None when the document as a whole is refused.
+    Any endpoint of this blueprint that reads a stored run is answered this way, and a JSON
+    endpoint of another blueprint answers through it (D-S19-9 in docs/prds/run-store-one-owner.md);
+    field is None when the document as a whole is refused.
     """
     logger.warning("%s", unreadable)
     return jsonify(
