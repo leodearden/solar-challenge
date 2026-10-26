@@ -37,7 +37,7 @@ import pytest
 
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
-    UNREADABLE_ROUTINES,
+    REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     Outer,
     Preset,
     imported_module,
@@ -205,13 +205,7 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
     }
 
 
-@pytest.mark.parametrize(
-    ("routine", "kind"),
-    [
-        *UNREADABLE_ROUTINES,
-        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
-    ],
-)
+@pytest.mark.parametrize(("routine", "kind"), REFUSED_ROUTINE_AND_PARTIAL_MEMBERS)
 def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
     routine: object, kind: str
 ) -> None:

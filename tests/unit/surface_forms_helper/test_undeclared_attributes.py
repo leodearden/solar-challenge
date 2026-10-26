@@ -17,7 +17,7 @@ from dataclasses import InitVar, dataclass
 import pytest
 
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
-from tests.unit.surface_forms_helper._fixtures import UNREADABLE_ROUTINES, imported_module
+from tests.unit.surface_forms_helper._fixtures import REFUSED_ROUTINE_AND_PARTIAL_MEMBERS, imported_module
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
@@ -159,13 +159,7 @@ def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_u
     assert undeclared_attributes(Scaled) == {"scale"}
 
 
-@pytest.mark.parametrize(
-    ("routine", "kind"),
-    [
-        *UNREADABLE_ROUTINES,
-        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
-    ],
-)
+@pytest.mark.parametrize(("routine", "kind"), REFUSED_ROUTINE_AND_PARTIAL_MEMBERS)
 def test_a_class_with_a_member_member_forms_refuses_still_has_its_undeclared_attributes_read(
     routine: object, kind: str
 ) -> None:

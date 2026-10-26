@@ -6,6 +6,8 @@ Outer and Preset are defined at module level, where a qualified name carries no
 references to resolve. imported_module writes a module and imports it, for the rules
 about the module a name is read in. UNREADABLE_ROUTINES holds a routine of each kind
 whose signature inspect cannot read, each with its kind's name, for the refusal rules.
+REFUSED_ROUTINE_AND_PARTIAL_MEMBERS adds a plain functools.partial to those: the members
+that both branches of refuse_member_without_a_portable_form refuse.
 GetterDeleter is a descriptor whose type defines __get__ and __delete__ but no __set__,
 and CallableGetterDeleter a callable one, for the rules about how inspect reads such a
 descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
@@ -114,6 +116,11 @@ UNREADABLE_ROUTINES = (
         "tests.unit.surface_forms_helper._fixtures.NoneSignedCallableGetter",
         id="none-signed-callable-getter",
     ),
+)
+
+REFUSED_ROUTINE_AND_PARTIAL_MEMBERS = (
+    *UNREADABLE_ROUTINES,
+    pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
 )
 
 
