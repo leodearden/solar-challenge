@@ -109,7 +109,7 @@ class TariffPeriod:
 
     # cached_property, not dataclass fields: the parsed times and the minutes they
     # bound go in the instance __dict__ and stay out of fields(). web/field_tree.py's
-    # field_tree and read_field_tree walk fields() and cannot encode a datetime.time
+    # field tree walks fields(), and its JSON form has no encoding for a datetime.time
     # or a frozenset.
     @cached_property
     def _parsed_start(self) -> time:
