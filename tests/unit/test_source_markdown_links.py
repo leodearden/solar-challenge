@@ -3,12 +3,13 @@
 
 The scanned files are the markdown files, named *.md, that git lists outside RECORD_DIRECTORIES, the records, which link
 files as they were when written. A link is written [text](target) or ![text](target), and a ](target) inside code reads
-as one too. Its target names a path unless it is a URL, with a scheme or a host, or names only a place in the linking
-file itself, as #<heading> does. The path resolves as GitHub resolves it: from the linking file's directory, or from the
-project root if it starts with /, with its %-escapes decoded. A #fragment after the path is dropped, so only the path is
-checked. The path is looked up in the files git lists and the directories holding them, as a fresh clone would hold
-them, so a file git ignores is not there to link to. A markdown file that is not UTF-8 text is reported by its path,
-since its links cannot be read.
+as one too. A target is a run without spaces, whose parentheses come in unnested pairs, as in v2_(final).md, or text
+between < and >, which may hold spaces. It names a path unless it is a URL, with a scheme or a host, or names only a
+place in the linking file itself, as #<heading> does. The path resolves as GitHub resolves it: from the linking file's
+directory, or from the project root if it starts with /, with its %-escapes decoded. A #fragment after the path is
+dropped, so only the path is checked. The path is looked up in the files git lists and the directories holding them, as
+a fresh clone would hold them, so a file git ignores is not there to link to. A markdown file that is not UTF-8 text is
+reported by its path, since its links cannot be read.
 """
 
 import posixpath
@@ -24,7 +25,9 @@ from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
-_LINK_TARGET = re.compile(r"\]\((?P<target>[^)\s]+)")
+_ANGLED_TARGET = r"<(?P<angled>[^<>\n]*)>"
+_BARE_TARGET = r"(?P<bare>(?:[^()\s]|\([^()\s]*\))+)"
+_LINK_TARGET = re.compile(rf"\]\((?:{_ANGLED_TARGET}|{_BARE_TARGET})")
 
 
 @dataclass(frozen=True)
@@ -55,13 +58,18 @@ def _names_a_path(target: str) -> bool:
     return not parts.scheme and not parts.netloc and bool(parts.path)
 
 
+def _targets_on(line: str) -> list[str]:
+    """Return the target of each link on *line*, in order: the text in a link's angle brackets, or else its bare run."""
+    return [angled or bare for angled, bare in _LINK_TARGET.findall(line)]
+
+
 def _links_in(source: PurePosixPath, text: str) -> list[_Link]:
     """Return the links in *text*, the content of markdown file *source*, whose targets name a path, in text order."""
     return [
-        _Link(source=source, line=number, target=match["target"])
+        _Link(source=source, line=number, target=target)
         for number, line in enumerate(text.split("\n"), start=1)
-        for match in _LINK_TARGET.finditer(line)
-        if _names_a_path(match["target"])
+        for target in _targets_on(line)
+        if _names_a_path(target)
     ]
 
 
@@ -117,6 +125,8 @@ def test_reads_each_link_target_that_names_a_path_on_its_line() -> None:
         "[`records`](records/) say why.]\n"
         "Not paths: [a URL](https://example.org/guide/setup.md), [mail](mailto:team@example.org),\n"
         "[a host](//example.org/setup.md), [a heading](#intro) and [nothing]().\n"
+        "[A spaced URL](<https://example.org/a b>) and [no target](<>) are no paths either.\n"
+        "Spaces and parentheses: [notes](<my notes.md>), [a release](v2_(final).md) and (see [setup](setup.md)).\n"
     )
 
     links = _links_in(PurePosixPath("guide/intro.md"), text)
@@ -126,6 +136,9 @@ def test_reads_each_link_target_that_names_a_path_on_its_line() -> None:
         "guide/intro.md:2: images/flow.png",
         "guide/intro.md:3: ../src/pkg/module.py#L3",
         "guide/intro.md:4: records/",
+        "guide/intro.md:8: my notes.md",
+        "guide/intro.md:8: v2_(final).md",
+        "guide/intro.md:8: setup.md",
     ]
 
 
