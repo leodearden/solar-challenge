@@ -13,6 +13,8 @@ is refused by the reader at exactly the path where the drop reports it.
 
 import copy
 import json
+import math
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -196,8 +198,32 @@ def test_read_field_tree_gives_a_missing_field_that_has_a_default_its_default() 
     assert read_field_tree(lacking, _EveryShape) == replace(_EVERY, point=_Point(x=1.0, y=0.0), note=None)
 
 
-def test_read_field_tree_reads_any_number_but_a_bool_for_an_int_as_decoded() -> None:
-    assert read_field_tree(_with_value(_TREE, ("count",), 4.5), _EveryShape).count == 4.5
+@pytest.mark.parametrize(
+    "count",
+    [
+        pytest.param(4.5, id="a-fraction"),
+        pytest.param(10**400, id="a-whole-number-no-float-can-hold"),
+    ],
+)
+def test_read_field_tree_reads_any_number_but_a_bool_for_an_int_as_decoded(count: float) -> None:
+    assert read_field_tree(_with_value(_TREE, ("count",), count), _EveryShape).count == count
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(int(sys.float_info.max), id="the-largest-float-s-whole-number"),
+        pytest.param(-int(sys.float_info.max), id="the-lowest-float-s-whole-number"),
+        pytest.param(math.inf, id="infinity"),
+        pytest.param(-math.inf, id="minus-infinity"),
+    ],
+)
+def test_read_field_tree_reads_a_float_field_s_number_a_float_can_hold_as_decoded(value: float) -> None:
+    """Each is at the edge of what a float can hold, so a rule refusing more than float() does refuses one of them."""
+    ratio = read_field_tree(_with_value(_TREE, ("ratio",), value), _EveryShape).ratio
+
+    assert ratio == value
+    assert type(ratio) is type(value)
 
 
 def test_read_field_tree_reads_an_any_field_s_value_as_it_is() -> None:
@@ -237,8 +263,15 @@ _REFUSALS = [
     pytest.param(
         _with_value(_TREE, ("point",), None), "point", "is null, not an object, as a _Point is stored", id="point-null"
     ),
-    pytest.param(_with_value(_TREE, ("ratio",), None), "ratio", "is null, not a number", id="ratio-null"),
-    pytest.param(_with_value(_TREE, ("weights", "w"), None), "weights.w", "is null, not a number", id="weights.w-null"),
+    pytest.param(
+        _with_value(_TREE, ("ratio",), None), "ratio", "is null, not a number a float can hold", id="ratio-null"
+    ),
+    pytest.param(
+        _with_value(_TREE, ("weights", "w"), None),
+        "weights.w",
+        "is null, not a number a float can hold",
+        id="weights.w-null",
+    ),
     pytest.param(
         _with_value(_TREE, ("point",), "big"),
         "point",
@@ -248,9 +281,26 @@ _REFUSALS = [
     pytest.param(_with_value(_TREE, ("pair",), "x"), "pair", "is the string 'x', not an array", id="pair-a-string"),
     pytest.param(_with_value(_TREE, ("by_name",), []), "by_name", "is an array, not an object", id="by_name-an-array"),
     pytest.param(
-        _with_value(_TREE, ("ratio",), "4.0"), "ratio", "is the string '4.0', not a number", id="ratio-a-string"
+        _with_value(_TREE, ("ratio",), "4.0"),
+        "ratio",
+        "is the string '4.0', not a number a float can hold",
+        id="ratio-a-string",
     ),
-    pytest.param(_with_value(_TREE, ("ratio",), True), "ratio", "is true, not a number", id="ratio-true"),
+    pytest.param(
+        _with_value(_TREE, ("ratio",), True), "ratio", "is true, not a number a float can hold", id="ratio-true"
+    ),
+    pytest.param(
+        _with_value(_TREE, ("ratio",), 10**400),
+        "ratio",
+        f"is the number {10**400!r}, not a number a float can hold",
+        id="ratio-a-number-no-float-can-hold",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("weights", "w"), -(10**400)),
+        "weights.w",
+        f"is the number {-(10**400)!r}, not a number a float can hold",
+        id="weights.w-a-number-below-every-float",
+    ),
     pytest.param(_with_value(_TREE, ("flag",), 1), "flag", "is the number 1, not true or false", id="flag-a-number"),
     pytest.param(_with_value(_TREE, ("label",), 5), "label", "is the number 5, not a string", id="label-a-number"),
     pytest.param(

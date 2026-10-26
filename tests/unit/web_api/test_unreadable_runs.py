@@ -54,17 +54,25 @@ def _with_a_retired_figure(document: dict[str, Any]) -> None:
     document["retired_figure"] = 12.5
 
 
+def _with_a_generation_no_float_can_hold(document: dict[str, Any]) -> None:
+    document["total_generation_kwh"] = 10**400
+
+
 def _with_a_big_battery(document: dict[str, Any]) -> None:
     document["battery_config"] = "big"
 
 
 _SUMMARY_LACKS_A_REQUIRED_FIELD = _Damage("summary.json", "summary_json", _without_total_generation_kwh, "total_generation_kwh")
 _SUMMARY_HOLDS_AN_UNKNOWN_KEY = _Damage("summary.json", "summary_json", _with_a_retired_figure, "retired_figure")
+_SUMMARY_HOLDS_A_NUMBER_NO_FLOAT_CAN_HOLD = _Damage(
+    "summary.json", "summary_json", _with_a_generation_no_float_can_hold, "total_generation_kwh"
+)
 _CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE = _Damage("config.json", "config_json", _with_a_big_battery, "battery_config")
 
 _SUMMARY_DAMAGES = [
     pytest.param(_SUMMARY_LACKS_A_REQUIRED_FIELD, id="summary-lacks-a-required-field"),
     pytest.param(_SUMMARY_HOLDS_AN_UNKNOWN_KEY, id="summary-holds-an-unknown-key"),
+    pytest.param(_SUMMARY_HOLDS_A_NUMBER_NO_FLOAT_CAN_HOLD, id="summary-holds-a-number-no-float-can-hold"),
 ]
 _CONFIG_DAMAGES = [pytest.param(_CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE, id="config-holds-a-string-for-a-battery")]
 _DAMAGES = [*_SUMMARY_DAMAGES, *_CONFIG_DAMAGES]

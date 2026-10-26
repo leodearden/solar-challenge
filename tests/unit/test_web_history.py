@@ -357,24 +357,34 @@ class TestRunsAPI:
             logging.WARNING
         ]
 
-    def test_a_run_whose_summary_holds_a_key_no_field_has_lists_no_figures_and_names_why_beside_the_others(
-        self, app: Flask, client: FlaskClient
+    @pytest.mark.parametrize(
+        ("damaged_summary_json", "field"),
+        [
+            pytest.param(
+                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                "retired_figure",
+                id="summary-holds-a-key-no-field-has",
+            ),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                "total_generation_kwh",
+                id="summary-holds-a-generation-no-float-can-hold",
+            ),
+        ],
+    )
+    def test_a_run_whose_summary_cannot_be_read_lists_no_figures_and_names_why_beside_the_others(
+        self, app: Flask, client: FlaskClient, damaged_summary_json: str, field: str
     ) -> None:
-        """The row's unreadable names the run, runs.summary_json and the key, so the list can say why the run shows no figures (the G7 waiver)."""
+        """The row's unreadable names the run, runs.summary_json and the field, so the list can say why the run shows no figures (the G7 waiver)."""
         _insert_test_run(
             app, run_id="readable-run", summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
         )
-        _insert_test_run(app, run_id="retired-key-run")
-        _overwrite(
-            app,
-            "retired-key-run",
-            "summary_json",
-            json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
-        )
+        _insert_test_run(app, run_id="damaged-run")
+        _overwrite(app, "damaged-run", "summary_json", damaged_summary_json)
 
         rows = {row["id"]: row for row in client.get("/api/history/runs").get_json()["runs"]}
 
-        readable, damaged = rows["readable-run"], rows["retired-key-run"]
+        readable, damaged = rows["readable-run"], rows["damaged-run"]
         assert (readable["total_generation_kwh"], readable["self_consumption_ratio"], readable["unreadable"]) == (
             987.65,
             0.37,
@@ -382,7 +392,7 @@ class TestRunsAPI:
         )
         assert (damaged["total_generation_kwh"], damaged["self_consumption_ratio"]) == (None, None)
         unreadable = damaged["unreadable"]
-        assert [text for text in ("'retired-key-run'", "runs.summary_json", "retired_figure") if text not in unreadable] == []
+        assert [text for text in ("'damaged-run'", "runs.summary_json", field) if text not in unreadable] == []
 
     def test_dates_keep_the_runs_created_from_the_first_date_to_the_end_of_the_last(
         self, app: Flask, client: FlaskClient
@@ -995,24 +1005,6 @@ class TestComparisonRoute:
         ]
         assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
 
-    def test_compare_answers_a_server_error_when_a_chart_cannot_be_drawn(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
-        """A comparison chart that cannot be drawn fails the request with the app's 500 page, as a results page's chart does, instead of the page being served without it.
-
-        A stored figure may be any JSON number, so a battery charge too large for a float is read,
-        and the efficiency radar cannot divide it by the generation.
-        """
-        _insert_test_run(app, run_id="cmp-1", name="Compare A")
-        _insert_test_run(app, run_id="cmp-2", name="Compare B", summary=home_summary(total_battery_charge_kwh=10**400))
-        app.config["PROPAGATE_EXCEPTIONS"] = False
-
-        response = client.get("/history/compare?ids=cmp-1,cmp-2")
-
-        assert response.status_code == 500
-        page = response.get_data(as_text=True)
-        assert texts_after(page, "500", 1) == ["Internal Server Error"]
-
     @pytest.mark.parametrize(
         ("damaged_summary_json", "field"),
         [
@@ -1021,6 +1013,11 @@ class TestComparisonRoute:
                 summary_json(home_summary(grid_dependency_ratio=None)),
                 "grid_dependency_ratio",
                 id="summary-holds-null-for-a-ratio",
+            ),
+            pytest.param(
+                summary_json(home_summary(total_battery_charge_kwh=10**400)),
+                "total_battery_charge_kwh",
+                id="summary-holds-a-figure-no-float-can-hold",
             ),
         ],
     )

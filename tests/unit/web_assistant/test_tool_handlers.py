@@ -35,7 +35,7 @@ from solar_challenge.web.stored_runs import StoredRunUnreadable
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
-from tests._run_summaries import fleet_summary, home_summary
+from tests._run_summaries import fleet_summary, home_summary, summary_json
 from tests._web_app import run_storage_of
 from tests._web_job_days import web_job_days
 from tests._web_runs import store_fleet_run
@@ -589,6 +589,10 @@ class TestListRecentRuns:
             pytest.param(
                 json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
                 id="summary-with-a-key-no-field-has",
+            ),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                id="summary-holding-a-generation-no-float-can-hold",
             ),
         ],
     )

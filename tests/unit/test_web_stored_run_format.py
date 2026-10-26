@@ -206,6 +206,38 @@ def test_a_config_value_of_a_type_its_field_cannot_be_is_refused_naming_its_path
     _refusal(storage, _HOME_RUN_ID, "config.json", field)
 
 
+@pytest.mark.parametrize(
+    ("document", "edit", "field"),
+    [
+        pytest.param(
+            "summary.json",
+            _set("total_generation_kwh", value=10**400),
+            "total_generation_kwh",
+            id="a-summary-figure",
+        ),
+        pytest.param(
+            "summary.json",
+            _set("seg_revenue_gbp", value=-(10**400)),
+            "seg_revenue_gbp",
+            id="an-optional-summary-figure-below-every-float",
+        ),
+        pytest.param(
+            "config.json",
+            _set("pv_config", "capacity_kw", value=10**400),
+            "pv_config.capacity_kw",
+            id="a-config-number",
+        ),
+    ],
+)
+def test_a_float_field_holding_a_number_no_float_can_hold_is_refused_naming_its_path(
+    storage: RunStorage, document: str, edit: Edit, field: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    _edit_document(stored_run_dir(storage, _HOME_RUN_ID) / document, edit)
+
+    _refusal(storage, _HOME_RUN_ID, document, field)
+
+
 def test_a_tariff_whose_periods_do_not_tile_the_day_is_refused_naming_the_tariff_caused_by_its_refusal(
     storage: RunStorage,
 ) -> None:
