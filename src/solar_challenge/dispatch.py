@@ -233,6 +233,10 @@ def _grid_power_to_target_kw(
     )
 
 
+_TARGET_SOC_FRACTION = FRACTION
+"""The grid-charge targets, as fractions of the battery's capacity, that GridChargeConfig and ChargeWindow admit."""
+
+
 @dataclass(frozen=True)
 class GridChargeConfig:
     """Configuration for grid-charging (battery arbitrage) mode.
@@ -251,7 +255,7 @@ class GridChargeConfig:
 
     def __post_init__(self) -> None:
         """Read target_soc_fraction, and hold the float read."""
-        read_field(self, "target_soc_fraction", as_finite_float, FRACTION)
+        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
 
 
 _PEAK_WINDOW_HOURS = Interval(0, 24)
@@ -832,8 +836,9 @@ class ChargeWindow:
             'daily'. A window that crosses midnight stays open into the morning after.
         start: The wall-clock time it opens at, on its strategy's zone, so it has no tzinfo.
         duration: How long it stays open: more than nothing, and at most a day.
-        target_soc_fraction: The state of charge it charges to, in (0, 1], as a fraction of
-            the battery capacity decide_action is given.
+        target_soc_fraction: The state of charge it charges to, as a fraction of the battery
+            capacity decide_action is given: greater than 0 and at most 1, held as the float
+            read.
         allow_discharge: Whether the battery may discharge while it is open, down to the target.
 
     Raises:
@@ -847,7 +852,8 @@ class ChargeWindow:
     allow_discharge: bool
 
     def __post_init__(self) -> None:
-        """Refuse a field the window cannot schedule, naming the field and its value."""
+        """Read target_soc_fraction as GridChargeConfig does, then refuse a field the window cannot schedule, naming the field and its value."""
+        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
         if not _are_opening_days(self.days):
             raise ConfigurationError(
                 "ChargeWindow's days are 'daily' or a non-empty frozenset of date.weekday() numbers, "
@@ -861,11 +867,6 @@ class ChargeWindow:
         if not timedelta(0) < self.duration <= _ONE_DAY:
             raise ConfigurationError(
                 f"ChargeWindow's duration is more than 0 and at most a day: got duration={self.duration!r}"
-            )
-        if not 0.0 < self.target_soc_fraction <= 1.0:
-            raise ConfigurationError(
-                "ChargeWindow's target_soc_fraction is in (0, 1]: "
-                f"got target_soc_fraction={self.target_soc_fraction!r}"
             )
 
     def covers(self, moment: datetime) -> bool:
