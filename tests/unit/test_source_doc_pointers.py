@@ -13,11 +13,14 @@ rooted at docs/.
 
 A section written right after the path, as in docs/<name>.md §3.1, must be the number of a heading of that Markdown
 file, here ### 3.1 <title>. Between path and section there may be a closing backtick, a link's closing bracket and its
-target, as in [docs/<name>.md](<name>.md) §3.1, a comma, and white space, a line break included. A number is runs of
-digits joined by dots, and a full stop after it ends its sentence. A heading is an ATX heading outside a fenced code
-block, and its number is the one its text starts with, as 3 in ## 3. <title>. The whole number must match: §3 is not
-the number of ### 3.1 <title>. Only that section is looked up: not one written before the path, as in §3 of
-docs/<name>.md, one named in words, as in §Contract, nor a later one of a list or range, as the §7.4 of §7.3–§7.4.
+target, as in [docs/<name>.md](<name>.md) §3.1, a comma, and white space: spaces and tabs, around one line break at
+most, as a wrapped docstring has. A comment marker after that line break is no white space, so a section wrapped onto
+the next comment line is not read, and nor is one after a blank line. A number is runs of digits joined by dots, and a
+full stop after it ends its sentence. A number with a letter after it, as §3.1a or §3.a, is no section. A heading is
+an ATX heading outside a fenced code block, and its number is the one its text starts with, as 3 in ## 3. <title>. The
+whole number must match: §3 is not the number of ### 3.1 <title>. Only that section is looked up: not one written
+before the path, as in §3 of docs/<name>.md, one named in words, as in §Contract, nor a later one of a list or range,
+as the §7.4 of §7.3–§7.4.
 """
 
 import re
@@ -44,7 +47,11 @@ _DOC_POINTER = re.compile(
     rf"""
     (?<![\w./-])
     (?P<path>docs/(?:[\w.-]+/)*[\w.-]*\w)
-    (?:`?(?:\](?:\([^)\s]*\))?)?,?\s+§(?P<section>{_SECTION_NUMBER})(?!\w))?
+    (?:
+        `?(?:\](?:\([^)\s]*\))?)?,?
+        (?:[ \t]*\r?\n[ \t]*|[ \t]+)
+        §(?P<section>{_SECTION_NUMBER})(?!\.?\w)
+    )?
     """,
     re.VERBOSE,
 )
@@ -269,7 +276,12 @@ def test_reads_the_section_written_right_after_a_path(project: Path) -> None:
         "docs/guide.md, §5\n"
         "docs/guide.md\n"
         "§4, on the next line\n"
-        "docs/guide.md §7.3–§7.4\n",
+        "docs/guide.md §7.3–§7.4\n"
+        "docs/guide.md \n"
+        "        §6.2), as a wrapped docstring indents it\n"
+        "docs/guide.md\r\n"
+        "§8 after a CRLF line break\n"
+        "docs/guide.md\t§9\n",
     )
 
     assert [str(pointer) for pointer in _doc_pointers(project, [notes])] == [
@@ -280,21 +292,29 @@ def test_reads_the_section_written_right_after_a_path(project: Path) -> None:
         "docs/notes.md:5: docs/guide.md §5",
         "docs/notes.md:6: docs/guide.md §4",
         "docs/notes.md:8: docs/guide.md §7.3",
+        "docs/notes.md:9: docs/guide.md §6.2",
+        "docs/notes.md:11: docs/guide.md §8",
+        "docs/notes.md:13: docs/guide.md §9",
     ]
 
 
 def test_reads_no_section_written_any_other_way(project: Path) -> None:
-    notes = _write_source(
-        project,
-        "docs/notes.md",
-        "docs/guide.md §Contract\n"
-        "docs/guide.md §3a\n"
-        "docs/guide.md § 3\n"
-        "docs/guide.md and §3\n"
-        "§3 of docs/guide.md\n",
-    )
+    texts = [
+        "docs/guide.md §Contract",
+        "docs/guide.md §3a",
+        "docs/guide.md §3.1a",
+        "docs/guide.md §2.10b",
+        "docs/guide.md §3.a",
+        "docs/guide.md § 3",
+        "docs/guide.md§3",
+        "docs/guide.md and §3",
+        "§3 of docs/guide.md",
+        "docs/guide.md\n\n§4 after a blank line",
+        "# docs/guide.md\n# §4 on a comment line",
+    ]
+    notes = _write_source(project, "docs/notes.md", "".join(f"{text}\n" for text in texts))
 
-    assert [pointer.section for pointer in _doc_pointers(project, [notes])] == [None, None, None, None, None]
+    assert [pointer.section for pointer in _doc_pointers(project, [notes])] == [None] * len(texts)
 
 
 def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_line(project: Path) -> None:
