@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.finance import (
+    BillDistribution,
     FinanceConfig,
     MultiYearCurve,
     ProjectEconomics,
@@ -696,7 +697,7 @@ class TestProjectEconomicsIRRPayback:
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
+def _make_bill_distribution(multiplier: float = 1.0) -> BillDistribution:
     """Build a synthetic BillDistribution for report tests (CR3 contract)."""
     rep = make_bill_breakdown(
         standing_charge_gbp=219.0 * multiplier,

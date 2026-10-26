@@ -25,6 +25,7 @@ from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
     MultiYearCurve,
+    ProjectEconomics,
     YearPoint,
     _cbs_own_use_kwh,
     bill_distribution,
@@ -705,7 +706,7 @@ class TestFlexLowersSolvedRate:
 def _spreadsheet_economics_cr6(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
-) -> "ProjectEconomics":  # type: ignore[name-defined]
+) -> ProjectEconomics:
     """[FIN]-assumption ProjectEconomics for ``scenario``: make_fin_spreadsheet_curve → project_economics.
 
     Physics-free and network-free.  Capex, debt and debt service depend on the
@@ -729,7 +730,7 @@ class TestThetaStaysGreen:
     RED until wired in step-10 (currently stubs reference θ helpers that need import).
     """
 
-    def _build_theta_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+    def _build_theta_econ(self) -> ProjectEconomics:
         """Build [FIN]-assumption ProjectEconomics via spreadsheet_revenue_curve."""
         scenario = _make_scenario_fin_cr6(n_homes=100)
         return _spreadsheet_economics_cr6(scenario, _make_finance_fin_cr6())

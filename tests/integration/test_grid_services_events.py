@@ -27,7 +27,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import load_config, parse_finance_config
+from solar_challenge.config import ScenarioConfig, load_config, parse_finance_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     FinanceConfig,
@@ -110,7 +110,7 @@ def _synthetic_fleet_results_in_window(homes: list) -> FleetResults:
     return make_fleet_results_of(per_home, homes=homes)
 
 
-def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-defined]
+def _constant_simulate(fr: FleetResults) -> Callable:
     """Return a constant simulate function: (fc, s, e) -> fr (age-independent)."""
     return lambda fc, s, e: fr
 
@@ -126,9 +126,9 @@ def _board_econ_scenario() -> tuple:
 
 
 def _rev_at(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
     finance: FinanceConfig,
-    simulate: "Callable",  # type: ignore[name-defined]
+    simulate: Callable,
     year: int = 0,
 ) -> float:
     """Return fleet_revenue_gbp at a given year from project_multi_year."""
@@ -137,10 +137,10 @@ def _rev_at(
 
 
 def _isolate_gs_component(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
     finance_events: FinanceConfig,
     finance_flat0: FinanceConfig,
-    simulate: "Callable",  # type: ignore[name-defined]
+    simulate: Callable,
     year: int = 0,
 ) -> float:
     """Isolate the grid_services component via the flat-rate-0 delta.

@@ -11,6 +11,7 @@ Field-fill assertion on the YAML literal, then seam verification that the consum
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -108,7 +109,7 @@ def _synthetic_fleet_results(homes: list) -> FleetResults:
     return make_fleet_results_of(per_home, homes=homes)
 
 
-def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-defined]
+def _constant_simulate(fr: FleetResults) -> Callable:
     """Return a constant simulate function: (fc, s, e) -> fr (age-independent)."""
     return lambda fc, s, e: fr
 
@@ -138,7 +139,7 @@ def _board_econ_scenario() -> tuple:
 def _surplus_at(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
-    simulate: "Callable",  # type: ignore[name-defined]
+    simulate: Callable,
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
     curve = project_multi_year(scenario, finance, simulate=simulate)
