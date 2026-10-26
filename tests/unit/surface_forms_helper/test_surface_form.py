@@ -220,6 +220,30 @@ class WrappingGetterPartialNew:
     __new__ = _with_metered_as_wrapped(GetterPartial(_settled, rate=1))
 
 
+def _class_whose_init_is(partial: object) -> type:
+    class Built:
+        __init__ = partial
+
+    return Built
+
+
+def _class_whose_metaclass_call_is(partial: object) -> type:
+    class Calling(type):
+        __call__ = partial
+
+    class Called(metaclass=Calling):
+        pass
+
+    return Called
+
+
+def _partial_of_an_object_whose_call_is(partial: object) -> object:
+    class CallingObject:
+        __call__ = partial
+
+    return functools.partial(CallingObject())
+
+
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
     def f(
         a: int, /, b: str = "x", *args: float, c: bool = True, **kwargs: int
@@ -1656,10 +1680,13 @@ def test_a_partial_whose_type_takes_get_from_another_class_but_defines_set_or_ca
         == "(self: object, share: float, *, rate: int = 1) -> None"
     )
     assert surface_form(signed) == "(share: float)"
-    assert (
-        surface_form(functools.partial(GetterPartial(_settled, rate=1)))
-        == "(self: object, share: float, *, rate: int = 1) -> None"
-    )
+
+
+def test_a_plain_partial_of_a_partial_whose_type_takes_get_from_another_class_and_that_holds_no_instance_dict_is_spelled_by_the_func_and_arguments_it_takes_as_its_own() -> None:
+    plain = functools.partial(GetterPartial(_settled, rate=1))
+
+    assert (plain.func, plain.args, plain.keywords) == (_settled, (), {"rate": 1})
+    assert surface_form(plain) == "(self: object, share: float, *, rate: int = 1) -> None"
 
 
 @pytest.mark.parametrize(
@@ -1699,31 +1726,34 @@ def test_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_i
 
 
 @pytest.mark.parametrize("kind", [GetterPartial, SettableGetterPartial])
+@pytest.mark.parametrize(
+    ("build", "site"),
+    [
+        pytest.param(
+            _class_whose_init_is,
+            r"\.Built\b.* is constructed through .*\.Built\.__init__, ",
+            id="init",
+        ),
+        pytest.param(
+            _class_whose_metaclass_call_is,
+            r"\.Called\b.* is constructed through .*\.Calling\.__call__, ",
+            id="metaclass-call",
+        ),
+        pytest.param(
+            _partial_of_an_object_whose_call_is,
+            r" is read through .*\.CallingObject\.__call__, ",
+            id="object-call",
+        ),
+    ],
+)
 def test_a_class_or_call_bound_through_a_partial_whose_type_takes_get_from_another_class_raises_a_type_error_naming_that_type_instead_of_the_binding_of_a_partial(
-    kind: type,
+    build: Callable[[object], object], site: str, kind: type
 ) -> None:
-    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
-
-    class Built:
-        __init__ = kind(build, scale=2.0)
-
-    class Calling(type):
-        __call__ = kind(build, scale=2.0)
-
-    class Called(metaclass=Calling):
-        pass
-
-    class CallingObject:
-        __call__ = kind(build, scale=2.0)
+    def settle(self: object, rate: int, scale: float = 1.0) -> None: ...
 
     naming_that_type = (
         rf"a .*\.{kind.__qualname__}, a functools\.partial whose type takes __get__ from a "
-        r"class other than functools\.partial\b"
+        r"class other than functools\.partial, a binding no rule"
     )
-    for routine, site in (
-        (Built, r"\.Built\b.* is constructed through .*\.Built\.__init__, "),
-        (Called, r"\.Called\b.* is constructed through .*\.Calling\.__call__, "),
-        (functools.partial(CallingObject()), r" is read through .*\.CallingObject\.__call__, "),
-    ):
-        with pytest.raises(TypeError, match=site + naming_that_type):
-            surface_form(routine)
+    with pytest.raises(TypeError, match=site + naming_that_type):
+        surface_form(build(kind(settle, scale=2.0)))
