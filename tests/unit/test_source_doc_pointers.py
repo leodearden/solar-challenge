@@ -75,6 +75,10 @@ def test_every_pointer_from_the_scanned_files_into_docs_resolves(project_root: P
         f"found no path into docs/ in any file git lists outside the unscanned paths ({unscanned}), so this gate"
         " would pass vacuously; fix the listing or the grammar"
     )
+    assert any(pointer.section is not None for pointer in pointers), (
+        "found no section written right after a path into docs/ in any file git lists outside the unscanned paths"
+        f" ({unscanned}), so the section check would pass vacuously; fix the listing or the grammar"
+    )
 
     dangling = _dangling(project_root, pointers)
 
@@ -157,11 +161,50 @@ def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> Non
     page = _write_source(project, "src/pkg/page.html", "<p>See docs/guide.md.</p>\n")
 
     assert [str(pointer) for pointer in _doc_pointers(project, [module, page])] == [
-        "src/pkg/module.py:1: docs/guide.md",
+        "src/pkg/module.py:1: docs/guide.md §3",
         "src/pkg/module.py:2: docs/prds/record.md",
         "src/pkg/module.py:3: docs/prds",
         "src/pkg/page.html:1: docs/guide.md",
     ]
+
+
+def test_reads_the_section_written_right_after_a_path(project: Path) -> None:
+    notes = _write_source(
+        project,
+        "docs/notes.md",
+        "docs/guide.md §3 says why.\n"
+        "`docs/guide.md` §3.1.\n"
+        "[docs/guide.md](guide.md) §2\n"
+        "[`docs/prds/record.md`](prds/record.md) §10.2's\n"
+        "docs/guide.md, §5\n"
+        "docs/guide.md\n"
+        "§4, on the next line\n"
+        "docs/guide.md §7.3–§7.4\n",
+    )
+
+    assert [str(pointer) for pointer in _doc_pointers(project, [notes])] == [
+        "docs/notes.md:1: docs/guide.md §3",
+        "docs/notes.md:2: docs/guide.md §3.1",
+        "docs/notes.md:3: docs/guide.md §2",
+        "docs/notes.md:4: docs/prds/record.md §10.2",
+        "docs/notes.md:5: docs/guide.md §5",
+        "docs/notes.md:6: docs/guide.md §4",
+        "docs/notes.md:8: docs/guide.md §7.3",
+    ]
+
+
+def test_reads_no_section_written_any_other_way(project: Path) -> None:
+    notes = _write_source(
+        project,
+        "docs/notes.md",
+        "docs/guide.md §Contract\n"
+        "docs/guide.md §3a\n"
+        "docs/guide.md § 3\n"
+        "docs/guide.md and §3\n"
+        "§3 of docs/guide.md\n",
+    )
+
+    assert [pointer.section for pointer in _doc_pointers(project, [notes])] == [None, None, None, None, None]
 
 
 def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_line(project: Path) -> None:
@@ -176,7 +219,7 @@ def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_li
 
     assert _dangling(project, _doc_pointers(project, [source])) == [
         "src/pkg/module.py:1: docs/absent.md: docs/absent.md does not exist, or git ignores it",
-        "src/pkg/module.py:3: docs/prds/absent.md: docs/prds/absent.md does not exist, or git ignores it",
+        "src/pkg/module.py:3: docs/prds/absent.md §2: docs/prds/absent.md does not exist, or git ignores it",
         "src/pkg/module.py:4: docs/absent: docs/absent does not exist, or git ignores it",
     ]
 
