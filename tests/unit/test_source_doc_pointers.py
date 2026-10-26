@@ -18,13 +18,15 @@ most, as a wrapped docstring has. A comment marker after that line break is no w
 the next comment line is not read, and nor is one after a blank line. A number is runs of digits joined by dots, and a
 full stop after it ends its sentence. A number with a letter after it, as §3.1a or §3.a, is no section. A heading is
 an ATX heading outside a fenced code block, and its number is the one its text starts with, as 3 in ## 3. <title>. The
-whole number must match: §3 is not the number of ### 3.1 <title>. Only that section is looked up: not one written
-before the path, as in §3 of docs/<name>.md, one named in words, as in §Contract, nor a later one of a list or range,
-as the §7.4 of §7.3–§7.4.
+whole number must match: §3 is not the number of ### 3.1 <title>. A Markdown file that is not UTF-8 text has no
+headings to read, so a section after it is reported. Only that section is looked up: not one written before the path,
+as in §3 of docs/<name>.md, one named in words, as in §Contract, nor a later one of a list or range, as the §7.4 of
+§7.3–§7.4.
 """
 
+import functools
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -32,7 +34,7 @@ import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
-from tests._working_tree import working_tree_paths
+from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _MODULES_NAMING_THROWAWAY_DOCS = (
     PurePosixPath("tests/unit/test_source_doc_pointers.py"),
@@ -94,47 +96,43 @@ def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPoin
 
 
 def _dangling(root: Path, pointers: Iterable[_DocPointer]) -> list[str]:
-    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
-    tree = _WorkingTree(root)
-    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(tree, pointer)) is not None]
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order.
 
-
-class _WorkingTree:
-    """The files and directories of a checkout's working tree, as tests/_working_tree.py::working_tree_paths gives them.
-
-    The headings of each of its Markdown files are read when first asked for, and at most once.
+    The headings of each Markdown file are read when first asked for, and at most once.
     """
+    tree = working_tree_paths(root)
 
-    def __init__(self, root: Path) -> None:
-        self._root = root
-        self._paths = working_tree_paths(root)
-        self._numbers_by_doc: dict[PurePosixPath, frozenset[str]] = {}
+    @functools.cache
+    def heading_numbers_of(path: PurePosixPath) -> frozenset[str] | None:
+        text = utf8_text(root / path)
+        return None if text is None else _heading_numbers(text)
 
-    def holds(self, path: PurePosixPath) -> bool:
-        """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
-        return self._paths.holds(path)
-
-    def heading_numbers(self, path: PurePosixPath) -> frozenset[str] | None:
-        """Return the numbers of the numbered headings of the Markdown file at *path*, or None if the tree holds none there."""
-        if path.suffix != ".md" or path not in self._paths.files:
-            return None
-        if path not in self._numbers_by_doc:
-            self._numbers_by_doc[path] = _heading_numbers((self._root / path).read_text(encoding="utf-8"))
-        return self._numbers_by_doc[path]
+    return [
+        f"{pointer}: {reason}"
+        for pointer in pointers
+        if (reason := _unresolved(tree, heading_numbers_of, pointer)) is not None
+    ]
 
 
-def _unresolved(tree: _WorkingTree, pointer: _DocPointer) -> str | None:
+def _unresolved(
+    tree: WorkingTreePaths,
+    heading_numbers_of: Callable[[PurePosixPath], frozenset[str] | None],
+    pointer: _DocPointer,
+) -> str | None:
     """Return why *pointer* leads to no file, directory or heading in the working *tree*, or None if it leads to one.
 
-    The tree must hold the path. A section after it must be the number of a heading of a Markdown file.
+    The tree must hold the path. A section after it must be the number of a heading of a Markdown file, and
+    *heading_numbers_of* gives the numbers of a Markdown file's headings, or None if the file is not UTF-8 text.
     """
     if not tree.holds(pointer.path):
         return f"{pointer.path} does not exist, or git ignores it"
     if pointer.section is None:
         return None
-    numbers = tree.heading_numbers(pointer.path)
-    if numbers is None:
+    if pointer.path.suffix != ".md" or pointer.path not in tree.files:
         return f"{pointer.path} is not a Markdown file, so it has no heading numbered {pointer.section}"
+    numbers = heading_numbers_of(pointer.path)
+    if numbers is None:
+        return f"{pointer.path} is not UTF-8 text, so it has no heading numbered {pointer.section}"
     if pointer.section not in numbers:
         return f"{pointer.path} has no heading numbered {pointer.section}"
     return None
@@ -412,6 +410,20 @@ def test_reports_a_section_after_a_path_that_is_no_markdown_file(project: Path) 
         "src/pkg/module.py:1: docs/data.csv §1: "
         "docs/data.csv is not a Markdown file, so it has no heading numbered 1",
         "src/pkg/module.py:2: docs/prds §1: docs/prds is not a Markdown file, so it has no heading numbered 1",
+    ]
+
+
+def test_reports_each_section_after_a_markdown_file_that_is_not_utf8_text(project: Path) -> None:
+    (project / "docs" / "latin1.md").write_bytes("# 1. Café\n".encode("latin-1"))
+    source = _write_source(
+        project, "src/pkg/module.py", "# docs/latin1.md §1\n# docs/latin1.md §2\n# docs/latin1.md has no section\n"
+    )
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:1: docs/latin1.md §1: "
+        "docs/latin1.md is not UTF-8 text, so it has no heading numbered 1",
+        "src/pkg/module.py:2: docs/latin1.md §2: "
+        "docs/latin1.md is not UTF-8 text, so it has no heading numbered 2",
     ]
 
 
