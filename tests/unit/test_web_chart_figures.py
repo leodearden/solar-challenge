@@ -8,19 +8,26 @@ chart's figure in data-chart-figure. static/js/chart-renderer.js draws each cont
 that carries one, so no script on the page names a chart's id. A chart whose figure has
 nothing to draw gets no container. No other dashboard source, template or script, calls
 Plotly.
+
+The chart pages share their other parts through components/macros.html too. Each loads
+Plotly and chart-renderer.js once, through chart_scripts, the one template that names
+them. Each draws its chart tabs through chart_tabs, which selects the first on the server,
+so no chart page template writes tab markup.
 """
 
 import dataclasses
 import json
 import re
 import uuid
+from collections.abc import Callable
+from typing import NamedTuple
 
 import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
 
-from flask import Flask
+from flask import Flask, url_for
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults
@@ -30,12 +37,22 @@ from tests._finance_builders import (
     make_home_config,
     make_sim_results,
 )
-from tests._html_page import chart_figures, element_ids, script_texts, texts
+from tests._html_page import chart_figures, element_attributes, element_ids, script_texts, texts
 from tests._web_app import run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
 _PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
+_CHART_PAGE_TEMPLATES = (
+    "templates/results/home.html",
+    "templates/results/fleet.html",
+    "templates/history/compare.html",
+)
+_TAB_MARKUP = (
+    'role="tab"',
+    "border-primary-500 text-primary-600 dark:text-primary-400",
+    "border-transparent text-slate-500",
+)
 
 
 def _saved_home_run(
@@ -47,16 +64,51 @@ def _saved_home_run(
     return run_id
 
 
+def _page(app: Flask, path: str) -> str:
+    """The page *app* answers at *path*, which it must answer 200."""
+    response = app.test_client().get(path)
+
+    assert response.status_code == 200
+    return response.get_data(as_text=True)
+
+
 def _home_results_page(
     app: Flask, results: SimulationResults, battery_config: BatteryConfig | None = None
 ) -> str:
     """The results page of a run of *results*, saved to *app*'s store for a make_home_config home with *battery_config*'s battery."""
-    run_id = _saved_home_run(app, results, battery_config)
+    return _page(app, f"/results/{_saved_home_run(app, results, battery_config)}")
 
-    response = app.test_client().get(f"/results/{run_id}")
 
-    assert response.status_code == 200
-    return response.get_data(as_text=True)
+def _home_with_a_battery_results_page(app: Flask) -> str:
+    """The results page of a saved one-day run of a home with a 5 kWh battery."""
+    return _home_results_page(app, make_sim_results(days=1), BatteryConfig(capacity_kwh=5.0))
+
+
+def _fleet_results_page(app: Flask) -> str:
+    """The results page of a saved one-day run of a two-home fleet."""
+    run_id = str(uuid.uuid4())
+    store_fleet_run(run_storage_of(app), run_id, make_fleet_results(n_homes=2, days=1))
+    return _page(app, f"/results/{run_id}")
+
+
+def _compare_page(app: Flask) -> str:
+    """The page comparing two saved one-day home runs."""
+    run_ids = [_saved_home_run(app, make_sim_results(days=1)) for _ in range(2)]
+    return _page(app, f"/history/compare?ids={','.join(run_ids)}")
+
+
+class _ChartPage(NamedTuple):
+    """A chart page, opened in a test app by *open*, and how many chart tabs it has."""
+
+    open: Callable[[Flask], str]
+    tab_count: int
+
+
+_CHART_PAGES = {
+    "home": _ChartPage(_home_with_a_battery_results_page, 4),
+    "fleet": _ChartPage(_fleet_results_page, 3),
+    "compare": _ChartPage(_compare_page, 2),
+}
 
 
 def _assert_each_chart_is_drawn_from_the_figure_its_container_carries(
@@ -148,6 +200,59 @@ def test_a_home_run_whose_charts_have_nothing_to_draw_gets_no_container_for_them
         page, {"chart-daily-balance", "chart-power-flow", "chart-financial"}
     )
     assert texts(page).count("Seasonal comparison requires at least 180 days of simulation data.") == 1
+
+
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+def test_each_chart_page_loads_plotly_and_the_chart_renderer_once(
+    app: Flask, chart_page: str
+) -> None:
+    with app.test_request_context():
+        plotly_src = url_for("plotly_js.script")
+
+    sources = [script.get("src") for script in element_attributes(_CHART_PAGES[chart_page].open(app), "script")]
+
+    assert (sources.count(plotly_src), sources.count("/static/js/chart-renderer.js")) == (1, 1)
+
+
+def test_only_components_macros_html_names_the_chart_scripts() -> None:
+    naming = sorted(
+        template
+        for template, source in dashboard_template_sources().items()
+        if "plotly_js.script" in source or "js/chart-renderer.js" in source
+    )
+
+    assert naming == ["templates/components/macros.html"], (
+        "Only components/macros.html's chart_scripts writes the tags that load Plotly and"
+        " chart-renderer.js; a chart page calls chart_scripts()"
+    )
+
+
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+def test_each_chart_pages_tabs_are_tabs_whose_selection_the_server_draws(
+    app: Flask, chart_page: str
+) -> None:
+    opened = _CHART_PAGES[chart_page]
+    tabs = [
+        button
+        for button in element_attributes(opened.open(app), "button")
+        if button.get("role") == "tab"
+    ]
+
+    assert [tab.get("aria-selected") for tab in tabs] == ["true"] + ["false"] * (opened.tab_count - 1)
+
+
+def test_no_chart_page_template_writes_tab_markup() -> None:
+    sources = dashboard_template_sources()
+
+    written = {
+        template: [markup for markup in _TAB_MARKUP if markup in sources[template]]
+        for template in _CHART_PAGE_TEMPLATES
+    }
+
+    assert written == dict.fromkeys(_CHART_PAGE_TEMPLATES, []), (
+        "A chart page draws its tabs through components/macros.html's chart_tabs, the one"
+        " home of the tab markup"
+    )
 
 
 def test_no_dashboard_source_but_chart_renderer_js_calls_plotly() -> None:
