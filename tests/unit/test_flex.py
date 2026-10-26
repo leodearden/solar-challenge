@@ -52,25 +52,25 @@ class TestFlexibilityValueBand:
         """Assigning name raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.name = "other"  # noqa: no assignment to frozen field
+            band.name = "other"
 
     def test_time_shift_gbp_is_immutable(self):
         """Assigning time_shift_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.time_shift_gbp = 999.0  # noqa: no assignment to frozen field
+            band.time_shift_gbp = 999.0
 
     def test_grid_services_per_kw_gbp_is_immutable(self):
         """Assigning grid_services_per_kw_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.grid_services_per_kw_gbp = 0.0  # noqa: no assignment to frozen field
+            band.grid_services_per_kw_gbp = 0.0
 
     def test_total_gbp_is_immutable(self):
         """Assigning total_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.total_gbp = 0.0  # noqa: no assignment to frozen field
+            band.total_gbp = 0.0
 
     # --- validation: negative monetary fields ---
 

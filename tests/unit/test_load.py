@@ -412,7 +412,6 @@ class TestHouseholdSizeParameter:
 
     def test_occupants_above_five_extrapolated(self):
         """Occupants > 5 extrapolate from 5-person baseline."""
-        config_5 = LoadConfig(household_occupants=5)
         config_7 = LoadConfig(household_occupants=7)
 
         # Each extra person adds 400 kWh

@@ -20,6 +20,7 @@ from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
+    YearPoint,
     _annualise_physics,
     _seg_export_income_gbp,
     householder_bill,
@@ -124,7 +125,7 @@ class TestProjectMultiYearRevenue:
         """
         fr = make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
-        def year_0(self_consumption_override: float | None) -> "YearPoint":  # type: ignore[name-defined]
+        def year_0(self_consumption_override: float | None) -> YearPoint:
             scenario, finance = self._make_revenue_scenario(
                 n_homes=1, self_consumption_override=self_consumption_override
             )

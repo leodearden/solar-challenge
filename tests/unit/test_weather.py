@@ -150,7 +150,7 @@ class TestWeatherCache:
     def test_cache_directory_created(self, temp_cache_dir):
         """Cache directory is created if it doesn't exist."""
         new_cache_dir = temp_cache_dir / "new_cache"
-        cache = WeatherCache(cache_dir=new_cache_dir)
+        WeatherCache(cache_dir=new_cache_dir)
         assert new_cache_dir.exists()
 
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):

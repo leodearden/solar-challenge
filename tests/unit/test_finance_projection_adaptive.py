@@ -11,13 +11,18 @@ from __future__ import annotations
 import dataclasses
 import math
 import warnings
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
 from tests._finance_builders import make_fleet_results, make_home_config
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.fleet import FleetConfig, FleetResults
 
 
 def _make_curved_simulate(curvature: float = 0.35) -> Callable:
@@ -30,7 +35,7 @@ def _make_curved_simulate(curvature: float = 0.35) -> Callable:
     BASE_SC = 12_000.0
     BASE_EXP = 3_000.0
 
-    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
         factor = math.exp(-curvature * mean_age)
@@ -51,7 +56,7 @@ def _make_seg_income_simulate(seg_income_at_age_0_gbp: float) -> Callable:
     that varies with age.
     """
 
-    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
         return make_fleet_results(

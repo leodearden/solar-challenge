@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.finance import (
     BillBreakdown,
+    BillDistribution,
     FinanceConfig,
     _cbs_own_use_kwh,
     bill,
@@ -782,7 +783,7 @@ class TestBillDistribution:
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
+def _make_bill_distribution(multiplier: float = 1.0) -> BillDistribution:
     """Build a synthetic BillDistribution for report rendering tests (CR3 contract).
 
     Uses the default _make_summary fixture values (retail 23p, own_use 15p):
