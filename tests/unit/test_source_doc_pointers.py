@@ -251,7 +251,8 @@ def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> Non
         'DOC = "docs/prds/record.md"\n'
         "# The records are under docs/prds.\n"
         "# Not rooted at docs/: src/docs/gone.md, ../docs/gone.md, dark-factory/docs/code-quality.md,\n"
-        "# https://example.org/docs/gone.md, readthedocs/gone.md and docs/<name>.md\n",
+        "# https://example.org/docs/gone.md, readthedocs/gone.md, my-docs/gone.md, site.docs/gone.md\n"
+        "# and docs/<name>.md\n",
     )
     page = _write_source(project, "src/pkg/page.html", "<p>See docs/guide.md.</p>\n")
 
