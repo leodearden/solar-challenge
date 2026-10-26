@@ -29,7 +29,7 @@ import pytest
 import yaml
 
 from tests._hermetic_checkout import init_hermetic_checkout
-from tests._working_tree import working_tree_files
+from tests._working_tree import working_tree_files, working_tree_paths
 
 _UNSCANNED = tuple(
     PurePosixPath(directory) for directory in ("tests", "docs/prds", "docs/research", "plans", "review")
@@ -199,24 +199,23 @@ def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
 
 
 class _WorkingTree:
-    """The files of a checkout's working tree, as tests/_working_tree.py lists them, and the directories holding them.
+    """The files and directories of a checkout's working tree, as tests/_working_tree.py::working_tree_paths gives them.
 
     Each of its Python files is parsed when first asked for, and at most once.
     """
 
     def __init__(self, root: Path) -> None:
         self._root = root
-        self._files = frozenset(working_tree_files(root))
-        self._directories = frozenset(directory for file in self._files for directory in file.parents)
+        self._paths = working_tree_paths(root)
         self._modules: dict[PurePosixPath, ast.Module] = {}
 
     def holds(self, path: PurePosixPath) -> bool:
         """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
-        return path in self._files or path in self._directories
+        return self._paths.holds(path)
 
     def module(self, path: PurePosixPath) -> ast.Module | None:
         """Return the syntax tree of the Python file at *path*, or None if the tree holds no Python file there."""
-        if path.suffix != ".py" or path not in self._files:
+        if path.suffix != ".py" or path not in self._paths.files:
             return None
         if path not in self._modules:
             self._modules[path] = ast.parse((self._root / path).read_text(encoding="utf-8"))
