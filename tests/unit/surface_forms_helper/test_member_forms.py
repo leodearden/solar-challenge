@@ -25,6 +25,7 @@ from tests._surface_forms import (
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
+    GetterPartial,
     Preset,
     imported_module,
 )
@@ -535,3 +536,19 @@ def test_a_partial_member_wrapped_in_staticmethod_is_spelled_staticmethod_then_t
         half = staticmethod(functools.partial(settle, rate=1))
 
     assert member_forms(Meter) == {"half": "staticmethod (share: float, *, rate: int = 1) -> None"}
+
+
+def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_no_set_raises_a_type_error_naming_the_class_the_member_and_its_type() -> None:
+    def settle(self: object, share: float, rate: int) -> None: ...
+
+    class Meter:
+        half = GetterPartial(settle, rate=1)
+
+    naming_the_class_the_member_and_its_type = (
+        r"\.Meter\.half is a .*\.GetterPartial, a functools\.partial whose type takes __get__ "
+        r".*\b3\.11 and 3\.12\b.*\bfrom 3\.13\b"
+    )
+    with pytest.raises(TypeError, match=naming_the_class_the_member_and_its_type):
+        member_forms(Meter)
+    with pytest.raises(TypeError, match=naming_the_class_the_member_and_its_type):
+        named_classes(Meter)
