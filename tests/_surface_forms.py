@@ -258,8 +258,6 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies, and each named tuple field its instances read from the tuple, which holds every field.
 
-    member_forms says which named tuple fields instances read from the tuple.
-
     As in undeclared_attributes, an immutable type raises TypeError naming it before
     anything else is read, a class with no class statement inspect can read raises
     TypeError naming it when its source is read, a write to self whose attribute name the
