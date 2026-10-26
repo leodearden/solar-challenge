@@ -3,6 +3,9 @@
 
 The classes above the first test are defined at module level, where their qualified
 names carry no '<locals>' and a parametrize decorator can reach them.
+
+docs/surface-forms-inspect-readings.md says how each minor reads what these rules refuse
+or read alike, and names the tests that pin each by node-id.
 """
 
 import collections.abc
