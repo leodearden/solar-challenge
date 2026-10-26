@@ -20,7 +20,8 @@ tests that pin what `surface_form` does. Each `TypeError` also states its own ca
 reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
-as §6 says. A new refusal gets its rule test first, then its entry here.
+and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. A new
+refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -46,7 +47,8 @@ Pinned by:
 
 `inspect.isroutine` counts a `functools.partial` as a routine on 3.14, and not on 3.11,
 3.12 or 3.13. `surface_form` counts one on every minor, as 3.14 does, so a partial is
-spelled by the signature it leaves of the callable it wraps.
+spelled by the signature it leaves of the callable it wraps. 4.6 says how a partial whose
+type takes `__get__` from a class other than `functools.partial` is read instead.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wraps`
@@ -125,7 +127,8 @@ to the routine, and names the routine. Three readings of the object differ by mi
   object as a method, so its first parameter goes, while 3.11 to 3.13 call it without the
   object, 3.13 warning `FutureWarning`. 3.14 binds a signature that partial carries the
   same way, so that signature does not lift the refusal. `surface_form` raises `TypeError`
-  naming the routine and that `__call__`.
+  naming the routine and that `__call__`. A partial whose type takes `__get__` from a class
+  other than `functools.partial` binds by that `__get__` instead, as 4.6 says.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine`
@@ -145,7 +148,9 @@ signature. `signature_of`'s docstring in `tests/_surface_forms_signatures.py` po
 list of the constructors refused, in the order they are checked. A constructor can meet
 the readings of 4.1 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
 held as `__init__` or as a metaclass `__call__`, dropping its first parameter, and 3.11 to
-3.13 do not, 3.13 warning `FutureWarning`. The other readings are:
+3.13 do not, 3.13 warning `FutureWarning`; 4.6 says how a partial whose type takes
+`__get__` from a class other than `functools.partial` is refused there and as `__new__`.
+The other readings are:
 
 - A constructor that wraps a callable defined in C, as `functools.wraps(object.__new__)`
   records one: 3.11 and 3.12 read the wrapper through that callable, as
@@ -172,14 +177,60 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
 
+### 4.6 A `functools.partial` whose type takes `__get__` from a class other than `functools.partial`
+
+3.11 and 3.12 check whether an object is a method descriptor, one whose type has a
+`__get__` and no `__set__`, before they check for a `functools.partial`, and
+`functools.partial` defines no `__get__` before 3.13. So a partial whose type takes
+`__get__` from another class, its own or a base on either side of `functools.partial` in
+its MRO, and defines no `__set__`, reads there as a method descriptor, by a text signature
+only a routine defined in C gives: by its `__text_signature__` if it carries one, else
+with `ValueError`. A `__delete__` does not change that, since `inspect.ismethoddescriptor`
+ignores it before 3.13, nor does a `__signature__` of `None`. 3.13 counts no partial as a
+method descriptor, and 3.14 checks for a partial first, so both read it through its
+`func`.
+
+`surface_form` raises `TypeError` naming such a partial and its type wherever `inspect`
+reads it: passed directly; as a link of a routine's chain, through `functools.wraps`, a
+bound method or a plain partial that keeps it as its `func`; as a class's `__new__`, or
+as what a descriptor's `__get__` gives as a class's `__init__` or an object's `__call__`;
+and as a class member, which `member_forms` names with its class. A `__set__` its type
+defines lifts the refusal, since 3.11 and 3.12 then read it as a partial too, and so does
+a signature other than `None` it carries: an `inspect.Signature` reads alike, and a string
+or callable meets 4.1. A plain partial of such a partial that holds no instance `__dict__`
+takes its `func` and arguments as its own, so it reads alike.
+
+Where `inspect` binds a partial through its type's `__get__`, as a class's `__init__` or
+metaclass `__call__`, as the `__call__` an object's class resolves, or as a member, a
+partial whose type takes `__get__` from a class other than `functools.partial` raises
+`TypeError` naming its type, whatever its `__set__` or signature, in place of 4.4's and
+4.5's clause, which says how `functools.partial`'s own `__get__` binds. How it binds
+depends on the `__get__` its type resolves, which no rule reads. 3.11.15, 3.11.17 and
+3.12.3 bind a constructor and a `__call__` through that `__get__`, with
+`inspect._descriptor_get`, as 3.13 and 3.14 do. So a partial whose type defines `__set__`
+and a `__get__` that binds it as a method reads alike on every minor there, and one whose
+type defines no `__set__` still reads as a method descriptor on 3.11 and 3.12. A subclass
+that lists `functools.partial` before the class it takes `__get__` from resolves
+`functools.partial`'s own from 3.13, through which 3.13 calls it without the instance and
+3.14 binds it. A member that 3.11 and 3.12 read as a method descriptor is refused with that
+reading.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_whose_type_takes_get_from_another_class_and_defines_no_set_raises_a_type_error_naming_it_and_its_type_wherever_inspect_reads_it`
+- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_partial_whose_type_takes_get_from_another_class_but_defines_set_or_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_no_set_raises_a_type_error_naming_the_class_the_member_and_its_type`
+- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_class_or_call_bound_through_a_partial_whose_type_takes_get_from_another_class_raises_a_type_error_naming_that_type_instead_of_the_binding_of_a_partial`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_defines_set_raises_a_type_error_naming_the_class_the_member_and_that_type`
+
 ## 5. When the Admitted Minors Change
 
 On a newly admitted minor, re-measure each reading here (§6) and run the rule tests. An
 entry whose readings no longer differ among the admitted minors no longer needs its
-refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4 and the
-first listed in 4.5 differ only between 3.11 and 3.12 on one side and 3.13 and 3.14 on the
-other, so they rest on 3.11 and 3.12 alone. Whether to lift one is for the task that
-changes `requires-python`.
+refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, the first
+listed in 4.5 and the reading 4.6 refuses where `inspect` reads a partial differ only
+between 3.11 and 3.12 on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and
+3.12 alone. 4.6's refusal where a partial is bound rests on no minor: it names a binding
+no rule reads. Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 
