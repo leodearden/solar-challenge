@@ -20,8 +20,9 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from tests._pointer_scan import utf8_text
-from tests._working_tree import WorkingTreePaths
+from tests._hermetic_checkout import init_hermetic_checkout
+from tests._pointer_scan import RECORD_DIRECTORIES, utf8_text
+from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _LINK_TARGET = re.compile(r"\]\((?P<target>[^)\s]+)")
 
@@ -80,6 +81,26 @@ def _links(root: Path, sources: Iterable[PurePosixPath]) -> list[_Link]:
 def _dangling(tree: WorkingTreePaths, links: Iterable[_Link]) -> list[str]:
     """Return "<link>: <reason>" for each of the *links* whose path the working *tree* does not hold, in their order."""
     return [f"{link}: {link.path} does not exist, or git ignores it" for link in links if not tree.holds(link.path)]
+
+
+def test_every_relative_link_in_the_scanned_markdown_files_resolves(project_root: Path) -> None:
+    links = _links(project_root, _markdown_files(project_root))
+    records = ", ".join(str(directory) for directory in RECORD_DIRECTORIES)
+    assert links, (
+        f"found no link naming a path in any markdown file git lists outside the records ({records}), so this gate"
+        " would pass vacuously; fix the listing or the grammar"
+    )
+
+    dangling = _dangling(working_tree_paths(project_root), links)
+
+    assert dangling == [], "\n".join(
+        [
+            *dangling,
+            "A renamed or moved file's links must follow it. Write a link's target relative to the linking file's"
+            " directory, as in [the losses](pv-system-losses.md) from one doc to another, or"
+            " [its test](../tests/unit/test_pv.py) from a doc to the code.",
+        ]
+    )
 
 
 def test_reads_each_link_target_that_names_a_path_on_its_line() -> None:
@@ -148,3 +169,19 @@ def test_reads_the_links_of_a_utf8_file_and_reports_one_that_is_not_by_its_path(
     assert [str(link) for link in _links(tmp_path, [PurePosixPath("guide/intro.md")])] == ["guide/intro.md:1: setup.md"]
     with pytest.raises(ValueError, match=r"^guide/latin\.md is not UTF-8 text"):
         _links(tmp_path, [PurePosixPath("guide/intro.md"), PurePosixPath("guide/latin.md")])
+
+
+def test_scans_every_markdown_file_git_lists_outside_the_records(tmp_path: Path) -> None:
+    checkout = init_hermetic_checkout(tmp_path / "checkout")
+    scanned = [PurePosixPath(path) for path in ["README.md", "guide/intro.md", "src/pkg/LICENSE.md", "tests/notes.md"]]
+    unscanned = [
+        *(directory / "record.md" for directory in RECORD_DIRECTORIES),
+        PurePosixPath("guide/notes.txt"),
+        PurePosixPath("src/pkg/module.py"),
+    ]
+    for relative_path in [*scanned, *unscanned]:
+        path = checkout / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    assert sorted(_markdown_files(checkout)) == sorted(scanned)
