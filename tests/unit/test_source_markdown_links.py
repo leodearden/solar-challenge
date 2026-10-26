@@ -15,8 +15,10 @@ import posixpath
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
+
+import pytest
 
 from tests._working_tree import WorkingTreePaths
 
@@ -121,3 +123,13 @@ def test_reports_each_link_that_leads_to_no_file_or_directory_of_the_tree_on_its
         "guide/intro.md:3: ../../README.md: ../README.md does not exist, or git ignores it",
         "guide/intro.md:3: /guide/absent.md: guide/absent.md does not exist, or git ignores it",
     ]
+
+
+def test_reads_the_links_of_a_utf8_file_and_reports_one_that_is_not_by_its_path(tmp_path: Path) -> None:
+    (tmp_path / "guide").mkdir()
+    (tmp_path / "guide" / "intro.md").write_text("See [setup](setup.md).\n", encoding="utf-8")
+    (tmp_path / "guide" / "latin.md").write_bytes(b"Caf\xe9: [setup](setup.md)\n")
+
+    assert [str(link) for link in _links(tmp_path, [PurePosixPath("guide/intro.md")])] == ["guide/intro.md:1: setup.md"]
+    with pytest.raises(ValueError, match=r"^guide/latin\.md is not UTF-8 text"):
+        _links(tmp_path, [PurePosixPath("guide/intro.md"), PurePosixPath("guide/latin.md")])
