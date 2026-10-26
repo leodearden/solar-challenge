@@ -1,15 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Location handling for PV system modelling."""
 
+import math
 from dataclasses import dataclass
 from typing import ClassVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import Interval, as_finite_float, read_field
 
 
 @dataclass(frozen=True)
 class Location:
     """Geographic location for solar modelling.
 
-    Frozen dataclass ensures immutability and hashability.
+    Frozen dataclass ensures immutability and hashability. Construction reads latitude,
+    longitude and altitude as finite numbers inside their ranges and holds them as floats,
+    and refuses a timezone zoneinfo does not know, each with a ConfigurationError.
 
     Attributes:
         latitude: Latitude in decimal degrees (positive = North)
@@ -48,10 +55,13 @@ class Location:
         )
 
     def __post_init__(self) -> None:
-        """Validate location parameters."""
-        if not -90 <= self.latitude <= 90:
-            raise ValueError(f"Latitude must be between -90 and 90, got {self.latitude}")
-        if not -180 <= self.longitude <= 180:
-            raise ValueError(f"Longitude must be between -180 and 180, got {self.longitude}")
-        if self.altitude < -500:
-            raise ValueError(f"Altitude below -500m is invalid, got {self.altitude}")
+        """Read each number setting, then refuse a time zone zoneinfo does not know."""
+        read_field(self, "latitude", as_finite_float, Interval(-90, 90))
+        read_field(self, "longitude", as_finite_float, Interval(-180, 180))
+        read_field(self, "altitude", as_finite_float, Interval(-500, math.inf))
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError, TypeError) as unknown:
+            raise ConfigurationError(
+                f"timezone must name an IANA time zone, such as 'Europe/London', got {self.timezone!r}"
+            ) from unknown
