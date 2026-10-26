@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.location import Location
+from solar_challenge.location import LOCATION_PRESETS, Location
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
@@ -169,3 +169,17 @@ class TestLocationTimeZone:
     )
     def test_each_time_zone_in_use_is_known(self, timezone: str) -> None:
         assert Location(51, -2, timezone=timezone).timezone == timezone
+
+
+class TestLocationPresets:
+    """The named locations parse_location reads."""
+
+    def test_the_presets_are_bristol_london_edinburgh_and_manchester(self) -> None:
+        assert list(LOCATION_PRESETS) == ["bristol", "london", "edinburgh", "manchester"]
+
+    def test_the_bristol_preset_is_location_bristol(self) -> None:
+        assert LOCATION_PRESETS["bristol"] == Location.bristol()
+
+    def test_the_presets_cannot_be_changed(self) -> None:
+        with pytest.raises(TypeError):
+            LOCATION_PRESETS["cardiff"] = Location(51.48, -3.18)  # type: ignore[index]
