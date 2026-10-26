@@ -8,8 +8,8 @@ A pointer is a path rooted at tests/, optionally followed by the ::<Class> and :
 tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
 file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
 so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
-a pointer naming a test in a Python file that is not UTF-8 text is reported. A path in another repository is written
-from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
+a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
+repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
 A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
 prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
@@ -202,6 +202,7 @@ class _NoSyntaxTree(Enum):
     """
 
     NOT_UTF8 = "is not UTF-8 text"
+    DOES_NOT_PARSE = "does not parse"
 
 
 def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
@@ -209,7 +210,10 @@ def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
     text = utf8_text(path)
     if text is None:
         return _NoSyntaxTree.NOT_UTF8
-    return ast.parse(text)
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        return _NoSyntaxTree.DOES_NOT_PARSE
 
 
 def _unresolved(
