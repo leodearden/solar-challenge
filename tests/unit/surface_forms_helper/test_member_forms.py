@@ -567,3 +567,19 @@ def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_
         r"takes __get__ from a class other than functools\.partial\b",
     ):
         member_forms(Meter)
+
+
+def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_raises_the_type_error_for_its_binding() -> None:
+    def settle(self: object, share: float, rate: int) -> None: ...
+
+    def metered(self: object, share: float) -> None: ...
+
+    class Meter:
+        half = functools.update_wrapper(GetterPartial(settle, rate=1), metered)
+
+    with pytest.raises(
+        TypeError,
+        match=r"\.Meter\.half is a .*\.GetterPartial, a functools\.partial whose type takes "
+        r"__get__ from a class other than functools\.partial, a binding no rule",
+    ):
+        member_forms(Meter)

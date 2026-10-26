@@ -145,6 +145,9 @@ class UnsignedTextedCall(TextedCall):
 def _settled(self: object, share: float, rate: int) -> None: ...
 
 
+def _metered(self: object, share: float) -> None: ...
+
+
 class DeletableGetterPartial(GetterPartial):
     """A GetterPartial whose type also defines __delete__, which inspect before Python 3.13 ignores in counting it a method descriptor."""
 
@@ -204,6 +207,17 @@ def _with_a_text_signature(partial: GetterPartial) -> GetterPartial:
 def _with_an_instance_attribute(partial: GetterPartial) -> GetterPartial:
     partial.note = "an attribute, so that a functools.partial of it keeps it as its func"
     return partial
+
+
+def _with_metered_as_wrapped(partial: GetterPartial) -> GetterPartial:
+    functools.update_wrapper(partial, _metered)
+    return partial
+
+
+class WrappingGetterPartialNew:
+    """A class whose __new__ is a GetterPartial that records _metered as __wrapped__."""
+
+    __new__ = _with_metered_as_wrapped(GetterPartial(_settled, rate=1))
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -1526,6 +1540,7 @@ def test_a_functools_partial_subclass_whose_type_defines_delete_is_still_a_routi
 
 
 _NAMED_ITSELF = "^{partial} is a {kind}, "
+_NAMED_AS_WHAT_IT_WRAPS = r"^.*\._metered is a {kind}, "
 _NAMED_AS_A_LINK = " wraps {partial}, a {kind}, "
 
 
@@ -1567,6 +1582,14 @@ _NAMED_AS_A_LINK = " wraps {partial}, a {kind}, "
             lambda subject: subject,
             _NAMED_ITSELF,
             id="text-signature",
+        ),
+        pytest.param(
+            lambda: _with_a_signature_of_none(
+                _with_metered_as_wrapped(GetterPartial(_settled, rate=1))
+            ),
+            lambda subject: subject,
+            _NAMED_AS_WHAT_IT_WRAPS,
+            id="wrapped-with-a-signature-of-none",
         ),
         pytest.param(
             lambda: functools.wraps(GetterPartial(_settled, rate=1))(lambda share: None),
@@ -1637,6 +1660,42 @@ def test_a_partial_whose_type_takes_get_from_another_class_but_defines_set_or_ca
         surface_form(functools.partial(GetterPartial(_settled, rate=1)))
         == "(self: object, share: float, *, rate: int = 1) -> None"
     )
+
+
+@pytest.mark.parametrize(
+    ("build", "form"),
+    [
+        pytest.param(
+            lambda: _with_metered_as_wrapped(GetterPartial(_settled, rate=1)),
+            "(self: object, share: float) -> None",
+            id="itself",
+        ),
+        pytest.param(
+            lambda: functools.wraps(_with_metered_as_wrapped(GetterPartial(_settled, rate=1)))(
+                lambda share: None
+            ),
+            "(self: object, share: float) -> None",
+            id="functools-wraps",
+        ),
+        pytest.param(
+            lambda: types.MethodType(
+                _with_metered_as_wrapped(GetterPartial(_settled, rate=1)), object()
+            ),
+            "(share: float) -> None",
+            id="bound-method",
+        ),
+        pytest.param(
+            lambda: functools.partial(_with_metered_as_wrapped(GetterPartial(_settled, rate=1))),
+            "(self: object, share: float) -> None",
+            id="partial-of-it",
+        ),
+        pytest.param(lambda: WrappingGetterPartialNew, "(share: float) -> None", id="new"),
+    ],
+)
+def test_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_is_spelled_by_the_signature_of_what_it_wraps(
+    build: Callable[[], object], form: str
+) -> None:
+    assert surface_form(build()) == form
 
 
 @pytest.mark.parametrize("kind", [GetterPartial, SettableGetterPartial])
