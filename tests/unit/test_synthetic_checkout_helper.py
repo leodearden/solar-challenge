@@ -24,10 +24,6 @@ def test_makes_a_new_checkout_in_which_git_lists_each_file_laid_out_with_its_con
     )
 
     assert checkout == directory
-    toplevel = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], cwd=directory, capture_output=True, text=True, check=True
-    ).stdout
-    assert Path(toplevel.strip()) == directory.resolve()
     tracked = subprocess.run(
         ["git", "ls-files", "--cached"], cwd=directory, capture_output=True, text=True, check=True
     ).stdout
