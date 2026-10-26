@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_runs.py, which saves runs to a RunStorage as a finished simulation job saves them."""
+"""Unit tests for tests/_web_runs.py, which seeds runs in a RunStorage as simulation jobs leave them."""
 
 from pathlib import Path
 
@@ -15,7 +15,7 @@ from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RUN_STATUSES, RunStatus, RunStorage
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_stores import empty_run_storage
-from tests._web_runs import store_fleet_run, store_home_run
+from tests._web_runs import record_run_status, store_fleet_run, store_home_run
 
 
 @pytest.fixture
@@ -150,17 +150,36 @@ def test_a_stored_home_run_is_recorded_as_a_completed_home_run_with_the_given_na
     )
 
 
+def _lifecycle_of(storage: RunStorage, run_id: str) -> tuple[RunStatus | None, bool, str | None]:
+    """The lifecycle columns of run *run_id*: its status, whether it has a completion time, and its error message."""
+    record = storage.run_record(run_id)
+    assert record is not None, f"no run has id {run_id!r}"
+    return record.status, record.completed_at is not None, record.error_message
+
+
+def _lifecycle_a_job_leaves(status: RunStatus) -> tuple[RunStatus, bool, str | None]:
+    """The lifecycle columns, as _lifecycle_of reads them, of a run its job's lifecycle left *status*.
+
+    A run that ended has a completion time, and a failed one the error its job failed with.
+    """
+    return status, status != "running", "the simulation failed" if status == "failed" else None
+
+
 @pytest.mark.parametrize("status", RUN_STATUSES)
 def test_a_stored_home_run_is_recorded_with_the_status_it_is_given_as_its_jobs_lifecycle_records_it(
     storage: RunStorage, status: RunStatus
 ) -> None:
-    """A run that ended has a completion time, and a failed one the error its job failed with."""
     store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1), status=status)
 
-    record = storage.run_record("home-1")
-    assert record is not None
-    assert (record.status, record.completed_at is not None, record.error_message) == (
-        status,
-        status != "running",
-        "the simulation failed" if status == "failed" else None,
-    )
+    assert _lifecycle_of(storage, "home-1") == _lifecycle_a_job_leaves(status)
+
+
+@pytest.mark.parametrize("status", RUN_STATUSES)
+def test_a_run_created_as_a_jobs_submit_creates_it_is_moved_to_the_status_it_is_given_as_its_jobs_lifecycle_moves_it(
+    storage: RunStorage, status: RunStatus
+) -> None:
+    storage.create_run("run-1", run_type="home", name="North Roof", n_homes=1, created_at="2024-06-01T09:00:00+00:00")
+
+    record_run_status(storage, "run-1", status)
+
+    assert _lifecycle_of(storage, "run-1") == _lifecycle_a_job_leaves(status)

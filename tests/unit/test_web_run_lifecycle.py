@@ -12,7 +12,6 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import assert_never
 
 import pytest
 
@@ -23,7 +22,7 @@ from solar_challenge.web.stored_runs import RunType
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
-from tests._web_runs import store_home_run
+from tests._web_runs import record_run_status, store_home_run
 
 _CREATED_AT = "2026-10-20T09:00:00+00:00"
 
@@ -49,21 +48,9 @@ def _record(storage: RunStorage, run_id: str) -> RunRecord:
 
 
 def _create_north_roof_run_with_status(storage: RunStorage, status: RunStatus) -> RunRecord:
-    """Create run-1 as _create_north_roof_run does, then move it to *status* as its job's lifecycle moves it; return its record then.
-
-    A run created running needs no move; mark_run_completed completes it, and mark_run_failed
-    fails it with "the simulation failed".
-    """
+    """Create run-1 as _create_north_roof_run does, then move it to *status* as record_run_status moves it; return its record then."""
     _create_north_roof_run(storage)
-    match status:
-        case "running":
-            pass
-        case "completed":
-            storage.mark_run_completed("run-1")
-        case "failed":
-            storage.mark_run_failed("run-1", "the simulation failed")
-        case _:
-            assert_never(status)
+    record_run_status(storage, "run-1", status)
     return _record(storage, "run-1")
 
 
@@ -277,7 +264,7 @@ class TestFailInterruptedRuns:
     def test_a_completed_run_and_a_failed_run_are_left_as_they_were(self, storage: RunStorage) -> None:
         store_home_run(storage, "completed-run", make_home_config(), make_sim_results(days=1))
         _create_north_roof_run(storage, "failed-run")
-        storage.mark_run_failed("failed-run", "the simulation failed")
+        record_run_status(storage, "failed-run", "failed")
         records_before = [_record(storage, run_id) for run_id in ("completed-run", "failed-run")]
 
         assert storage.fail_interrupted_runs() == 0
