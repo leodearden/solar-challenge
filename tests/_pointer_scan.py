@@ -4,7 +4,8 @@
 A pointer gate checks that the paths the scanned files name are in the tree. It scans every file git lists in the
 checkout, as tests/_working_tree.py's working_tree_files lists them, except the paths it leaves unscanned. Among those
 are RECORD_DIRECTORIES, which hold the records: they name files as they were when written, so a pointer from one is
-history, not a claim about the tree. A file that is not UTF-8 text holds no pointer.
+history, not a claim about the tree. A file that is not UTF-8 text holds no pointer, and a UTF-8 file's leading byte
+order mark is no part of its text.
 
 Usage::
 
@@ -28,8 +29,8 @@ def scanned_files(checkout: Path, unscanned: Collection[PurePosixPath]) -> list[
 
 
 def utf8_text(path: Path) -> str | None:
-    """Return the text of the file at *path*, or None if it is not UTF-8."""
+    """Return the text of the file at *path*, less a leading byte order mark, or None if it is not UTF-8."""
     try:
-        return path.read_bytes().decode("utf-8")
+        return path.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError:
         return None
