@@ -227,9 +227,13 @@ class TestOneValidatorPerRule:
             pytest.param("16-19", id="text"),
             pytest.param(16, id="an-hour"),
             pytest.param({16: 19}, id="a-mapping"),
+            pytest.param({(16, 19)}, id="a-set"),
+            pytest.param(((16, 19) for _ in range(1)), id="a-generator"),
+            pytest.param(np.array([[16, 19]]), id="an-array"),
         ],
     )
     def test_peak_hours_that_are_not_a_list_are_refused_alike(self, value: object) -> None:
+        """A list of windows is a list or a tuple, the containers the strategy and its config declare: any other iterable is refused."""
         assert (
             _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=value))
             == _refusal(lambda: TOUOptimizedStrategy(peak_hours=value))
