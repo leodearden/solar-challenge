@@ -155,17 +155,31 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
-    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: through a bound method's __func__, else the callables a wrapper records as __wrapped__, as _unwrapped follows them, else a functools.partial's func, ending early at the first object *stop* holds of."""
+    """The end of the chain inspect follows from *obj*, the callable whose own signature it reads: the last link _links_inspect_reads gives for *stop*."""
+    *_, end = _links_inspect_reads(obj, stop)
+    return end
+
+
+def _links_inspect_reads(obj: object, stop: Callable[[object], bool]) -> Iterator[object]:
+    """The links of the chain inspect follows from *obj* that it reads as the callables they are, in order: each functools.partial whose func it follows, then the chain's end, ending early at the first link *stop* holds of.
+
+    A bound method, whose __func__ inspect follows, and a wrapper, whose __wrapped__ it
+    follows as _unwrapped follows it, are passed through and never given: inspect reads
+    neither.
+    """
     if not callable(obj):
-        return obj
+        yield obj
+        return
     if isinstance(obj, types.MethodType):
-        return _chain_end(obj.__func__, stop)
+        yield from _links_inspect_reads(obj.__func__, stop)
+        return
     unwrapped = _unwrapped(obj, stop)
     if unwrapped is not obj:
-        return _chain_end(unwrapped, stop)
+        yield from _links_inspect_reads(unwrapped, stop)
+        return
+    yield obj
     if isinstance(obj, functools.partial) and not stop(obj):
-        return _chain_end(obj.func, stop)
-    return obj
+        yield from _links_inspect_reads(obj.func, stop)
 
 
 _ABSENT = object()
@@ -269,17 +283,22 @@ def _is_read_as_builtin_before_3_13(obj: object) -> bool:
 
 
 def _partial_read_as_builtin_link(obj: object) -> object | None:
-    """The first link of the chain inspect follows from *obj*, as _chain_end follows it, that _is_partial_read_as_builtin_before_3_13 finds before any link that carries a signature other than None, which inspect reads in place of the rest of the chain; None if it finds none."""
-    link = _chain_end(
-        obj,
-        stop=lambda link: _has_non_none_signature(link)
-        or _is_partial_read_as_builtin_before_3_13(link),
-    )
-    return link if _is_partial_read_as_builtin_before_3_13(link) else None
+    """The first link inspect reads on the chain it follows from *obj*, of those _links_inspect_reads gives up to the first that carries a signature other than None, that _is_partial_read_as_builtin_before_3_13 finds; None if none does.
+
+    For that stop, _unwrapped stops following __wrapped__ only where inspect does, at a
+    link that carries a __signature__, so a partial that records __wrapped__ and carries
+    none is read through what it wraps.
+    """
+    links = _links_inspect_reads(obj, _has_non_none_signature)
+    return next(filter(_is_partial_read_as_builtin_before_3_13, links), None)
 
 
 def _is_partial_read_as_builtin_before_3_13(obj: object) -> bool:
-    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR says: a functools.partial _is_partial_with_its_own_get finds, whose type defines no __set__, carrying no signature for inspect to read in its place."""
+    """Whether inspect reads *obj* as a builtin on Python 3.11 and 3.12 alone, as _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR says: a functools.partial _is_partial_with_its_own_get finds, whose type defines no __set__, carrying no signature for inspect to read in its place.
+
+    It is asked of a link inspect reads as the callable it is, as _links_inspect_reads
+    gives one, never of a wrapper whose __wrapped__ inspect follows instead.
+    """
     return (
         _is_partial_with_its_own_get(obj)
         and not hasattr(type(obj), "__set__")
