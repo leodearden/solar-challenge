@@ -58,8 +58,9 @@ def _names_a_path(target: str) -> bool:
 def _links_in(source: PurePosixPath, text: str) -> list[_Link]:
     """Return the links in *text*, the content of markdown file *source*, whose targets name a path, in text order."""
     return [
-        _Link(source=source, line=text.count("\n", 0, match.start()) + 1, target=match["target"])
-        for match in _LINK_TARGET.finditer(text)
+        _Link(source=source, line=number, target=match["target"])
+        for number, line in enumerate(text.split("\n"), start=1)
+        for match in _LINK_TARGET.finditer(line)
         if _names_a_path(match["target"])
     ]
 
