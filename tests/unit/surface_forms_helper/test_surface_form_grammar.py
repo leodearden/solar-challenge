@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's surface_form, one per test.
+"""The rules of tests/_surface_forms.py's surface_form for how an annotation is spelled by its construct, and an object by its kind, one per test.
 
-The classes above the first test, and the functions beside them, are defined at module
-level, where their qualified names carry no '<locals>' and a parametrize decorator can
-reach them.
-
-docs/surface-forms-inspect-readings.md says how each minor reads what these rules refuse
-or read alike, and names the tests that pin each by node-id.
+Wrapper is defined at module level, where its qualified name carries no '<locals>'.
 """
 
 import collections.abc
@@ -303,7 +298,7 @@ def test_an_annotated_is_spelled_with_its_metadata_reprs() -> None:
 def test_an_annotation_no_construct_reads_raises_a_type_error_naming_it_and_its_type() -> None:
     def f(preset: Wrapper[Preset]) -> None: ...
 
-    naming_it_and_its_type = r"Wrapper\[Preset\].*\btests\.unit\.surface_forms_helper\.test_surface_form\.Wrapper\b"
+    naming_it_and_its_type = r"Wrapper\[Preset\].*\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.Wrapper\b"
     with pytest.raises(TypeError, match=naming_it_and_its_type):
         surface_form(f)
     with pytest.raises(TypeError, match=naming_it_and_its_type):

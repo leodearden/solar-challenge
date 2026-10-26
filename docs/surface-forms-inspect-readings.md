@@ -62,7 +62,7 @@ Pinned by:
 spelled by its type's qualified name.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_surface_form.py::test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant_spelled_by_its_type_qualified_name`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant_spelled_by_its_type_qualified_name`
 
 ## 4. Refused
 

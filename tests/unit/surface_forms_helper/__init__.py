@@ -8,6 +8,9 @@ would claim rules it does not hold; test_no_module_beside_its_family_modules.py 
 that. A new rule test goes in the module of the function, or the family, whose rule its
 name states.
 
+docs/surface-forms-inspect-readings.md says how each Python minor reads what these rules
+refuse or read alike, and names the tests that pin each by node-id.
+
 Each test pins one rule, so an edit that lets one minor's own rendering through, drops
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
 of turning the frozen-surface lock red on one interpreter or blind to a real change.
