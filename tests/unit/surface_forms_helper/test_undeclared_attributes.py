@@ -16,7 +16,7 @@ from dataclasses import InitVar, dataclass
 
 import pytest
 
-from tests._surface_forms import undeclared_attributes, unset_attributes
+from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
 from tests.unit.surface_forms_helper._fixtures import UNREADABLE_ROUTINES, imported_module
 
 
@@ -160,14 +160,14 @@ def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_u
 
 
 @pytest.mark.parametrize(
-    "routine",
+    ("routine", "kind"),
     [
-        *(pytest.param(routine.values[0], id=routine.id) for routine in UNREADABLE_ROUTINES),
-        pytest.param(functools.partial(round, ndigits=1), id="partial"),
+        *UNREADABLE_ROUTINES,
+        pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
     ],
 )
 def test_a_class_with_a_member_member_forms_refuses_still_has_its_undeclared_attributes_read(
-    routine: object,
+    routine: object, kind: str
 ) -> None:
     class Meter:
         half = routine
@@ -175,6 +175,8 @@ def test_a_class_with_a_member_member_forms_refuses_still_has_its_undeclared_att
         def __init__(self) -> None:
             self.reading = 0.0
 
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
+        member_forms(Meter)
     assert undeclared_attributes(Meter) == {"reading"}
 
 
