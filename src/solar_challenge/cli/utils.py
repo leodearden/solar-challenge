@@ -47,7 +47,8 @@ from solar_challenge.config import load_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSummary, simulate_fleet
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.location import Location
+from solar_challenge.location import parse_location
+from solar_challenge.scenario_writer import location_block
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
@@ -100,52 +101,6 @@ class CliFleetSimulator:
     simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
 
-def parse_location(location_str: str) -> Location:
-    """Parse location from string.
-
-    Accepts:
-    - 'bristol' (case-insensitive preset)
-    - 'lat,lon' format (e.g., '51.45,-2.58')
-    - 'lat,lon,altitude' format (e.g., '51.45,-2.58,11')
-
-    Args:
-        location_str: Location string to parse
-
-    Returns:
-        Location object
-
-    Raises:
-        ValueError: If location string is invalid
-    """
-    location_lower = location_str.lower().strip()
-
-    if location_lower == "bristol":
-        return Location.bristol()
-
-    # Try parsing as coordinates
-    parts = location_str.split(",")
-    if len(parts) < 2:
-        raise ValueError(
-            f"Invalid location format: '{location_str}'. "
-            "Use 'bristol' or 'lat,lon' format."
-        )
-
-    try:
-        lat = float(parts[0].strip())
-        lon = float(parts[1].strip())
-        alt = float(parts[2].strip()) if len(parts) > 2 else 0.0
-        return Location(
-            latitude=lat,
-            longitude=lon,
-            altitude=alt,
-            name=f"Custom ({lat:.2f}, {lon:.2f})",
-        )
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid coordinates in '{location_str}': {e}"
-        ) from e
-
-
 def load_config_with_overrides(
     config_path: Optional[Path],
     pv_kw: Optional[float] = None,
@@ -161,7 +116,8 @@ def load_config_with_overrides(
         pv_kw: Override PV capacity
         battery_kwh: Override battery capacity
         consumption_kwh: Override annual consumption
-        location_str: Override location string
+        location_str: Override location, a location in location.parse_location's grammar:
+            a preset name or 'lat,lon[,alt]'
         system_losses: Override PV system losses, set as the home's pv: block system_losses
             key, which PVConfig range-checks
 
@@ -169,8 +125,9 @@ def load_config_with_overrides(
         Config dict with overrides applied
 
     Raises:
-        ValueError: From has_battery, naming --battery-kwh, if battery_kwh is
-            negative or not finite
+        ConfigurationError: From has_battery, naming --battery-kwh, if battery_kwh is
+            negative or not finite; and from location.parse_location, for a location_str
+            it refuses
     """
     if config_path is not None:
         config = load_config(config_path)
@@ -202,14 +159,7 @@ def load_config_with_overrides(
         config["home"]["load"]["annual_consumption_kwh"] = consumption_kwh
 
     if location_str is not None:
-        loc = parse_location(location_str)
-        config["location"] = {
-            "latitude": loc.latitude,
-            "longitude": loc.longitude,
-            "timezone": loc.timezone,
-            "altitude": loc.altitude,
-            "name": loc.name,
-        }
+        config["location"] = location_block(parse_location(location_str))
 
     return config
 

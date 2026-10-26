@@ -23,7 +23,7 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import parse_home_block, parse_location_block, parse_seg_rate
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
+from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
@@ -126,7 +126,10 @@ def run(
         Optional[str],
         typer.Option(
             "--location", "-l",
-            help="Location preset or 'lat,lon' (e.g., 'bristol' or '51.45,-2.58')",
+            help=(
+                f"Location: a preset (case-insensitive), one of {', '.join(LOCATION_PRESETS)}; "
+                "or 'lat,lon' or 'lat,lon,alt' in decimal degrees and metres, e.g. '51.48,-3.18,10'"
+            ),
         ),
     ] = None,
     system_losses: Annotated[

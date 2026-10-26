@@ -79,7 +79,7 @@ The source lives in `src/solar_challenge/` with a setuptools build (`pyproject.t
 
 The simulation flows through these core modules:
 
-1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W)
+1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W); owns the named presets (`LOCATION_PRESETS`) and the location-string grammar, a preset name or 'lat,lon[,alt]' (`parse_location`), which the CLI's `--location` reads. The web does not read them yet: until task 933 moves it onto them, it keeps its own copy of the presets, in `web/request_boundary.py`'s `LOCATION_PRESETS` and the option lists of the home, builder and sweep templates, and its own 'lat,lon' grammar (`resolve_location`).
 2. **`weather.py`** — Fetches PVGIS's TMY (v5_3) via pvlib and scales its irradiance to PVGIS's 2005-2020 mean annual GHI (`docs/tmy-irradiation-scaling.md`); caches the result to disk (MD5-keyed by location)
 3. **`pv.py`** — Models PV generation using pvlib, its cells at NOCT-SAM's temperature from each module's own NOCT and efficiency (`docs/pv-cell-temperature.md`), less PVWatts v5's default system losses on each array's DC power (`docs/pv-system-losses.md`); a set `module_efficiency` or `temperature_coefficient` derives the module from its template (`docs/pv-module-settings.md`); interpolates hourly output to 1-minute resolution
 4. **`load.py`** — Generates household consumption profiles scaled to an annual total (the simulator's own default by household size, `OFGEM_TDCV_BY_OCCUPANTS`, unless set explicitly); stochastic mode via richardsonpy (UK CREST model, a core dependency), with a defensive fallback to the deterministic Elexon Profile Class 1 shape

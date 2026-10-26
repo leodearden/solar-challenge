@@ -17,7 +17,7 @@ from solar_challenge.cli.utils import (
     print_success,
 )
 from solar_challenge.config import load_config
-from solar_challenge.location import Location
+from solar_challenge.location import LOCATION_PRESETS
 
 app = typer.Typer(help="Configuration management commands")
 
@@ -253,7 +253,7 @@ def template(
 @app.command()
 @handle_errors
 def locations() -> None:
-    """List known locations and custom location format.
+    """List the location presets --location accepts, and its coordinate form.
 
     Shows built-in location presets and explains how to specify
     custom locations.
@@ -267,24 +267,23 @@ def locations() -> None:
     table.add_column("Timezone")
     table.add_column("Altitude (m)")
 
-    # Bristol
-    bristol = Location.bristol()
-    table.add_row(
-        "bristol",
-        f"{bristol.latitude:.2f}",
-        f"{bristol.longitude:.2f}",
-        bristol.timezone,
-        f"{bristol.altitude:.0f}",
-    )
+    for name, preset in LOCATION_PRESETS.items():
+        table.add_row(
+            name,
+            f"{preset.latitude:.2f}",
+            f"{preset.longitude:.2f}",
+            preset.timezone,
+            f"{preset.altitude:.0f}",
+        )
 
     console.print(table)
 
     console.print("\n[bold]Custom Location Format[/bold]\n")
     console.print("Use the --location option with coordinates:\n")
     console.print("  [cyan]--location 'lat,lon'[/cyan]")
-    console.print("  Example: --location '51.50,-0.12'  (London)\n")
+    console.print("  Example: --location '51.48,-3.18'  (Cardiff)\n")
     console.print("  [cyan]--location 'lat,lon,altitude'[/cyan]")
-    console.print("  Example: --location '51.50,-0.12,11'\n")
+    console.print("  Example: --location '51.48,-3.18,10'\n")
 
     console.print("[bold]In Config Files[/bold]\n")
     console.print("  location:")

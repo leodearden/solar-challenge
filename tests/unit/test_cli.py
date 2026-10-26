@@ -5,6 +5,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 from unittest.mock import Mock
 
 import pandas as pd
@@ -27,7 +28,6 @@ from solar_challenge.cli.utils import (
     create_summary_table,
     error_console,
     handle_errors,
-    parse_location,
     print_error,
     print_info,
     print_report,
@@ -37,8 +37,10 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.location import parse_location
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache, WeatherDataError
+from tests._cli_fleet_simulator import invoke_cli
 from tests._cli_table_text import table_text
 from tests._seeded_tmy import ClearJuneDays
 
@@ -230,14 +232,6 @@ class TestConfigCLI:
             f"Unknown template type: {_TEXT_RICH_WOULD_PARSE} Available: home, fleet, scenario"
         )
 
-    def test_config_locations(self) -> None:
-        """Test config locations shows Bristol."""
-        result = runner.invoke(app, ["config", "locations"])
-        assert result.exit_code == 0
-        assert "bristol" in result.stdout.lower()
-        assert "51.45" in result.stdout
-        assert "Europe/London" in result.stdout
-
     def test_config_show_valid_yaml(self) -> None:
         """Test config show with valid YAML file."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -292,6 +286,11 @@ home:
         assert f"home.name {_TEXT_RICH_WOULD_PARSE}" in rows
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
+
+
+def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, end: object) -> NoReturn:
+    """A fleet simulator that raises a ValueError that is not a ConfigurationError, as a defect would."""
+    raise ValueError("a plain ValueError raised while the fleet simulates")
 
 
 class TestErrorHandling:
@@ -392,32 +391,33 @@ class TestErrorHandling:
         assert " ".join(result.stderr.split()) == f"Configuration error: {refusal}"
 
     @pytest.mark.parametrize(
-        ("argv", "error_line_start"),
+        ("blocks", "error_line"),
         [
             pytest.param(
-                ("optimize", "configs", "scenario.yaml"),
-                "Configuration error: No 'finance:' block found in the scenario file.",
+                {},
+                "Configuration error: No 'finance:' block found in the scenario file. "
+                "Add a finance: block with at least standing_charge_pence_per_day.",
                 id="configuration-error",
             ),
             pytest.param(
-                ("home", "run", "--location", "51.0,abc"),
-                "Invalid value: Invalid coordinates in '51.0,abc'",
+                {"finance": {"standing_charge_pence_per_day": 28.0}},
+                "Invalid value: a plain ValueError raised while the fleet simulates",
                 id="other-value-error",
             ),
         ],
     )
     def test_a_refusal_and_any_other_value_error_print_different_labels(
-        self, argv: tuple[str, ...], error_line_start: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, blocks: dict[str, object], error_line: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`optimize configs` on a one-home scenario with no finance block raises a ConfigurationError, and `home run` at a location whose longitude is not a number raises a plain ValueError. Each exits 1, printing nothing on stdout, and its stderr starts with its own label. It raises nothing."""
+        """`finance run` on a one-home scenario, its fleet simulated by _simulate_raising_a_plain_value_error. With no finance: block, the command refuses with a ConfigurationError before it simulates; with one, the simulator's plain ValueError reaches the command. Each exits 1 with nothing on stdout, and stderr ends with the error under its own label."""
         monkeypatch.chdir(tmp_path)
-        self._write_one_home_scenario()
+        self._write_one_home_scenario(**blocks)
 
-        result = runner.invoke(app, list(argv), catch_exceptions=False)
+        result = invoke_cli(["finance", "run", "scenario.yaml"], _simulate_raising_a_plain_value_error)
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert " ".join(result.stderr.split()).startswith(error_line_start)
+        assert " ".join(result.stderr.split()).endswith(error_line)
 
     @pytest.mark.parametrize(
         ("error_type", "label"),
@@ -571,44 +571,6 @@ class TestCLIOutputFormats:
                 assert isinstance(parsed, dict)
 
 
-class TestLocationParsing:
-    """Tests for location parsing in CLI."""
-
-    def test_parse_bristol_preset(self) -> None:
-        """Test parsing 'bristol' preset."""
-        loc = parse_location("bristol")
-        assert loc.latitude == 51.45
-        assert loc.longitude == -2.58
-
-    def test_parse_bristol_case_insensitive(self) -> None:
-        """Test parsing 'BRISTOL' is case-insensitive."""
-        loc = parse_location("BRISTOL")
-        assert loc.latitude == 51.45
-
-    def test_parse_lat_lon(self) -> None:
-        """Test parsing lat,lon format."""
-        loc = parse_location("51.50,-0.12")
-        assert loc.latitude == 51.50
-        assert loc.longitude == -0.12
-
-    def test_parse_lat_lon_altitude(self) -> None:
-        """Test parsing lat,lon,altitude format."""
-        loc = parse_location("51.50,-0.12,25")
-        assert loc.latitude == 51.50
-        assert loc.longitude == -0.12
-        assert loc.altitude == 25.0
-
-    def test_parse_invalid_location(self) -> None:
-        """Test parsing invalid location raises error."""
-        with pytest.raises(ValueError, match="Invalid location"):
-            parse_location("invalid")
-
-    def test_parse_invalid_coordinates(self) -> None:
-        """Test parsing invalid coordinates raises error."""
-        with pytest.raises(ValueError, match="Invalid coordinates"):
-            parse_location("abc,def")
-
-
 class TestCreateSummaryTableTitle:
     """Tests that create_summary_table prints its title exactly as given, in Rich's table-title style."""
 
@@ -759,7 +721,7 @@ home:
     def test_home_run_location_option_reaches_home_config(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, weather_cache: WeatherCache
     ) -> None:
-        """``--location`` places the simulated home where parse_location puts it."""
+        """``--location`` places the simulated home where location.parse_location puts it."""
         edinburgh = parse_location("55.95,-3.19")
         weather_cache.put(_JUNE_DAYS.hourly_weather(), "tmy", edinburgh)
 
