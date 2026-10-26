@@ -75,7 +75,7 @@ from tests._dashboard_databases import (
 )
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
-from tests._run_stores import empty_run_storage
+from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_home_run
@@ -344,7 +344,7 @@ def test_migrate_store_names_each_run_with_no_name_as_a_job_given_none_names_it_
 
     migrate_store(legacy_store, legacy_store.parent)
 
-    record = RunStorage(open_database(legacy_store), tmp_path).run_record(run_id)
+    record = run_storage_over(open_database(legacy_store)).run_record(run_id)
     assert record is not None
     assert asdict(record) == {**row_before, "name": name}
 
@@ -386,7 +386,7 @@ def test_migrate_store_names_a_nameless_run_whose_config_does_not_decode_as_its_
 
     migrate_store(legacy_store, legacy_store.parent)
 
-    assert RunStorage(open_database(legacy_store), tmp_path).run_name("legacy-damaged") == RUN_KINDS[
+    assert run_storage_over(open_database(legacy_store)).run_name("legacy-damaged") == RUN_KINDS[
         run_type
     ].default_name(())
     warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
@@ -405,7 +405,7 @@ def test_migrate_store_names_a_nameless_run_stored_before_the_dispatch_union_aft
 
     migrate_store(legacy_store, legacy_store.parent)
 
-    assert RunStorage(open_database(legacy_store), legacy_store.parent).run_name("legacy-pre-union") == "North Roof"
+    assert run_storage_over(open_database(legacy_store)).run_name("legacy-pre-union") == "North Roof"
 
 
 def test_migrate_store_applies_no_step_to_a_store_at_the_schema_version_and_writes_nothing_to_it(
@@ -574,7 +574,7 @@ def test_migrate_store_keeps_a_named_run_of_no_type_with_no_type(legacy_store: P
 
     migrate_store(legacy_store, legacy_store.parent)
 
-    record = RunStorage(open_database(legacy_store), tmp_path).run_record("legacy-untyped-named")
+    record = run_storage_over(open_database(legacy_store)).run_record("legacy-untyped-named")
     assert record is not None
     assert (record.name, record.type) == ("Untyped Run", None)
 
@@ -594,7 +594,7 @@ def legacy_run_ids(store_at_version_1: Path) -> dict[str, str]:
 
 def _run_dir(database_path: Path, run_id: str) -> Path:
     """The directory of run *run_id*'s files in the store whose database file is *database_path*, its run files in that file's directory."""
-    return stored_run_dir(RunStorage(Database(database_path), database_path.parent), run_id)
+    return stored_run_dir(run_storage_over(Database(database_path)), run_id)
 
 
 def _files_of(run_dir: Path) -> dict[str, bytes]:
@@ -640,7 +640,7 @@ def _edit_runs_document(database_path: Path, run_id: str, column: str, edit: Edi
 
 def _storage_of(database_path: Path) -> RunStorage:
     """The RunStorage of the store at SCHEMA_VERSION whose database file is *database_path*, its run files in that file's directory."""
-    return RunStorage(open_database(database_path), database_path.parent)
+    return run_storage_over(open_database(database_path))
 
 
 def test_migrate_store_brings_a_store_at_version_1_to_the_schema_version_reporting_no_value_of_the_legacy_runs(

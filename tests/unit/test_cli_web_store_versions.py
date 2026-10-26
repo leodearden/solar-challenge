@@ -31,7 +31,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
-from solar_challenge.web.storage import RunQuery, RunStorage
+from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.store_lock import acquire_store_lock
 from solar_challenge.web.stored_runs import StoredHomeRun
 from tests._dashboard_databases import (
@@ -42,6 +42,7 @@ from tests._dashboard_databases import (
 )
 from tests._html_page import headings
 from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import run_storage_over
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_app import release_store_lock, run_storage_of
 
@@ -121,7 +122,7 @@ def test_web_migrate_brings_a_legacy_store_to_the_schema_version_reporting_each_
         assert named in result.stdout, (named, result.stdout)
     assert schema_of(legacy_store) == schema_of(open_database(tmp_path / "fresh.db").path)
     assert "jobs" not in {name for object_type, name, _, _ in schema_of(legacy_store) if object_type == "table"}
-    storage = RunStorage(open_database(legacy_store), legacy_store.parent)
+    storage = run_storage_over(open_database(legacy_store))
     assert storage.run_name("legacy-nameless-home") == "North Roof"
     assert storage.run_name("legacy-nameless-fleet") == "Fleet Simulation"
 
@@ -262,7 +263,7 @@ def _install_a_copy_editing_its_summary(tmp_path: Path, run_id: str, edit_summar
     """Install a copy of the pre_469_home fixture as run *run_id* in the store under tmp_path/.solar-challenge, its summary.json edited by *edit_summary*; return *run_id*."""
     database = _store_database(tmp_path)
     install_stored_run_fixture("pre_469_home", Database(database), database.parent, run_id=run_id)
-    summary_path = stored_run_dir(RunStorage(Database(database), database.parent), run_id) / "summary.json"
+    summary_path = stored_run_dir(run_storage_over(Database(database)), run_id) / "summary.json"
     summary = json.loads(summary_path.read_text())
     edit_summary(summary)
     summary_path.write_text(json.dumps(summary, indent=2))
@@ -299,7 +300,7 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
 ) -> None:
     """A directory in the place of a run's format.json stands in for a file the step cannot write, e.g. on a full disk."""
     database = _store_database(tmp_path)
-    marker = stored_run_dir(RunStorage(Database(database), database.parent), legacy_run_ids["legacy_fleet"]) / "format.json"
+    marker = stored_run_dir(run_storage_over(Database(database)), legacy_run_ids["legacy_fleet"]) / "format.json"
     marker.mkdir()
 
     result = _web(tmp_path, "migrate")
