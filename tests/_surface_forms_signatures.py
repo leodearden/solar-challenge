@@ -840,10 +840,8 @@ def is_decorated_dataclass(cls: type) -> bool:
 
 
 def refuse_member_without_a_portable_form(label: str, member: object) -> None:
-    """Raise TypeError for *member*, a class member that *label* names, if no form of it holds on every admitted minor: the error _unreadable_routine_error gives if it is a routine whose signature inspect cannot read, as _unreadable_link finds one, else, if it is a functools.partial, one that states _PARTIAL_BOUND_BY_MINOR."""
-    link = _unreadable_link(member)
-    if link is not None:
-        raise _unreadable_routine_error(label, member, link)
+    """Raise TypeError for *member*, a class member that *label* names, if no form of it holds on every admitted minor, checking as a routine's chain is checked, then how it binds: the error _refuse_link_read_as_builtin raises if inspect reads a link of *member*'s chain as a builtin on some admitted minor, or cannot read one; else, if *member* is a functools.partial, one that states _PARTIAL_BOUND_BY_MINOR."""
+    _refuse_link_read_as_builtin(member, member, label)
     if isinstance(member, functools.partial):
         raise TypeError(
             f"{label} is {_PARTIAL_BOUND_BY_MINOR}: make the name private, wrap it in "
