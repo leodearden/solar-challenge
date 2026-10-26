@@ -564,7 +564,7 @@ def test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_and_
     with pytest.raises(
         TypeError,
         match=r"\.Meter\.half is a .*\.SettableGetterPartial, a functools\.partial whose type "
-        r"takes __get__ from a class other than functools\.partial\b",
+        r"takes __get__ from a class other than functools\.partial, a binding no rule",
     ):
         member_forms(Meter)
 
