@@ -244,7 +244,7 @@ class TestOmittedAndNullKeys:
     the dataclass declares none, and a key written as null reads as absent; test_component_blocks.py
     sweeps every key of every table. Two nulls are kept gaps, each owned by a task: a null home
     dispatch_strategy is held as None (task 787), and a null grid_charging target_soc_fraction is
-    refused by GridChargeConfig itself (tasks 864 and 866).
+    refused by GridChargeConfig itself (task 866).
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -309,7 +309,7 @@ class TestOmittedAndNullKeys:
         assert _parsed_home(dispatch_strategy=None).dispatch_strategy is None
 
     def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
-        """Kept gap, tasks 864 and 866's: the null reaches GridChargeConfig, whose refusal names neither key nor block."""
+        """Kept gap, task 866's: the null reaches GridChargeConfig, whose refusal names its key but not its block."""
         grid_charging = {"target_soc_fraction": None}
 
         assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == _refusal(

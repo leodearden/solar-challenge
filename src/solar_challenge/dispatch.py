@@ -20,6 +20,7 @@ from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import FRACTION, as_finite_float, read_field
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
@@ -231,17 +232,19 @@ class GridChargeConfig:
 
     Attributes:
         target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+            expressed as a fraction of usable capacity: a finite number greater than 0
+            and at most 1, held as the float read. Defaults to 0.9.
+
+    Raises:
+        ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
+            is outside that range, naming target_soc_fraction and the value.
     """
 
     target_soc_fraction: float = 0.9
 
     def __post_init__(self) -> None:
-        """Validate grid-charge configuration."""
-        if not (0 < self.target_soc_fraction <= 1):
-            raise ConfigurationError(
-                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
-            )
+        """Read target_soc_fraction, and hold the float read."""
+        read_field(self, "target_soc_fraction", as_finite_float, FRACTION)
 
 
 def _require_valid_peak_hours(peak_hours: Sequence[tuple[int, int]]) -> None:
