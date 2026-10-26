@@ -390,6 +390,24 @@ def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None
     ]
 
 
+def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: Path) -> None:
+    (project / "tests" / "unit" / "test_latin1.py").write_bytes("def test_top(): pass  # café\n".encode("latin-1"))
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_latin1.py::test_top\n"
+        "# tests/unit/test_latin1.py::TestGroup::test_member\n"
+        "# tests/unit/test_latin1.py names no test\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:1: tests/unit/test_latin1.py::test_top:"
+        " tests/unit/test_latin1.py is not UTF-8 text, so it defines no test_top",
+        "src/pkg/module.py:2: tests/unit/test_latin1.py::TestGroup::test_member:"
+        " tests/unit/test_latin1.py is not UTF-8 text, so it defines no TestGroup",
+    ]
+
+
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = project / "src" / "pkg" / "logo.png"
     logo.parent.mkdir(parents=True)
