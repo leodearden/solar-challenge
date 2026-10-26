@@ -21,6 +21,7 @@ import pytest
 
 pytest.importorskip("flask")
 
+import plotly.graph_objects as go
 from flask import Flask
 from jinja2 import UndefinedError
 
@@ -65,6 +66,8 @@ _BUILD_WITH: dict[str, Callable[[Any], object]] = {
         ("ChartPanel.content", "{}"),
         ("ChartPanel.content", ""),
         ("ChartPanel.content", "   "),
+        ("ChartPanel.content", None),
+        pytest.param("ChartPanel.content", go.Figure(), id="ChartPanel.content-go.Figure"),
         ("ChartPanel.dom_id", "Chart 1"),
         ("ChartPanel.dom_id", "chart_1"),
         ("ChartPanel.title", ""),

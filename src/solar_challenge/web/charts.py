@@ -90,6 +90,8 @@ class ChartPanel:
             _refuse("ChartPanel.title", self.title, "a title, not blank")
         if self.height_px <= 0:
             _refuse("ChartPanel.height_px", self.height_px, "a height above 0 px")
+        if not isinstance(self.content, (str, ChartAbsence)):
+            _refuse("ChartPanel.content", self.content, "a figure's JSON or a ChartAbsence")
         if isinstance(self.content, str) and self.content.strip() in ("", "{}"):
             _refuse("ChartPanel.content", self.content, "a figure's JSON, neither blank nor an empty object")
 
