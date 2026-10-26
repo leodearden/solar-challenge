@@ -1,17 +1,21 @@
 """Tests for EV charging configuration and profile generation."""
 
+import dataclasses
 import itertools
 from collections.abc import Iterator
 
 import numpy as np
 import pandas as pd
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import (
     EVConfig,
     EVChargerType,
     SmartChargingMode,
     generate_ev_charging_profile,
 )
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+from tests._whole_number_forms import whole_number_forms
 
 # June has no clock change, so a profile's positional minutes are its wall-clock minutes.
 FIRST_DAY = pd.Timestamp("2024-06-21")
@@ -121,40 +125,72 @@ class TestEVConfigValidation:
 
     def test_invalid_charger_type_raises(self):
         """Invalid charger type raises error."""
-        with pytest.raises(ValueError, match="Charger type"):
+        with pytest.raises(ConfigurationError, match="Charger type"):
             EVConfig(charger_type="50kW", arrival_hour=18)
-        with pytest.raises(ValueError, match="Charger type"):
+        with pytest.raises(ConfigurationError, match="Charger type"):
             EVConfig(charger_type="invalid", arrival_hour=18)
+        with pytest.raises(ConfigurationError, match="Charger type"):
+            EVConfig("9kW", 18)
 
-    def test_arrival_hour_must_be_valid(self):
+    @pytest.mark.parametrize("arrival_hour", [-1, 24])
+    def test_arrival_hour_must_be_valid(self, arrival_hour):
         """Arrival hour must be 0-23."""
-        with pytest.raises(ValueError, match="Arrival hour"):
-            EVConfig(charger_type="7kW", arrival_hour=-1)
-        with pytest.raises(ValueError, match="Arrival hour"):
-            EVConfig(charger_type="7kW", arrival_hour=24)
+        with pytest.raises(ConfigurationError) as exc_info:
+            EVConfig(charger_type="7kW", arrival_hour=arrival_hour)
+        assert str(exc_info.value) == f"arrival_hour must be between 0 and 23, got {arrival_hour}"
 
-    def test_departure_hour_must_be_valid(self):
+    @pytest.mark.parametrize("departure_hour", [-1, 24])
+    def test_departure_hour_must_be_valid(self, departure_hour):
         """Departure hour must be 0-23."""
-        with pytest.raises(ValueError, match="Departure hour"):
-            EVConfig(charger_type="7kW", arrival_hour=18, departure_hour=-1)
-        with pytest.raises(ValueError, match="Departure hour"):
-            EVConfig(charger_type="7kW", arrival_hour=18, departure_hour=24)
+        with pytest.raises(ConfigurationError) as exc_info:
+            EVConfig(charger_type="7kW", arrival_hour=18, departure_hour=departure_hour)
+        assert str(exc_info.value) == f"departure_hour must be between 0 and 23, got {departure_hour}"
 
-    def test_required_charge_must_be_positive(self):
+    @pytest.mark.parametrize("required_charge_kwh", [0, -10])
+    def test_required_charge_must_be_positive(self, required_charge_kwh):
         """Required charge must be positive."""
-        with pytest.raises(ValueError, match="must be positive"):
-            EVConfig(charger_type="7kW", arrival_hour=18, required_charge_kwh=0)
-        with pytest.raises(ValueError, match="must be positive"):
-            EVConfig(charger_type="7kW", arrival_hour=18, required_charge_kwh=-10)
+        with pytest.raises(ConfigurationError) as exc_info:
+            EVConfig(charger_type="7kW", arrival_hour=18, required_charge_kwh=required_charge_kwh)
+        assert str(exc_info.value) == (
+            f"required_charge_kwh must be greater than 0 and at most 100, got {required_charge_kwh}"
+        )
 
     def test_required_charge_unrealistic_high_raises(self):
         """Unrealistically high required charge raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
+        with pytest.raises(ConfigurationError) as exc_info:
             EVConfig(charger_type="7kW", arrival_hour=18, required_charge_kwh=150)
+        assert str(exc_info.value) == "required_charge_kwh must be greater than 0 and at most 100, got 150"
+
+    @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_an_hour_that_is_not_a_finite_number_is_refused_naming_it_and_the_value(self, field, value):
+        """A NaN, an infinity, a bool or a word is refused by name, before the hour's range is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(EVConfig("7kW"), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
+    def test_an_hour_with_a_fractional_part_is_refused_not_truncated(self, field):
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(EVConfig("7kW"), **{field: 17.5})
+        assert str(exc_info.value) == f"{field} must be a whole number, got 17.5"
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_required_charge_that_is_not_a_finite_number_is_refused_naming_it_and_the_value(self, value):
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(EVConfig("7kW"), required_charge_kwh=value)
+        assert str(exc_info.value) == f"required_charge_kwh must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
+    @pytest.mark.parametrize("value", whole_number_forms(18))
+    def test_an_hour_given_as_another_form_of_a_whole_number_is_held_as_that_int(self, field, value):
+        hour = getattr(dataclasses.replace(EVConfig("7kW"), **{field: value}), field)
+        assert hour == 18
+        assert type(hour) is int
 
     def test_invalid_smart_charging_mode_raises(self):
         """Invalid smart charging mode raises error."""
-        with pytest.raises(ValueError, match="Smart charging mode"):
+        with pytest.raises(ConfigurationError, match="Smart charging mode"):
             EVConfig(
                 charger_type="7kW",
                 arrival_hour=18,
@@ -165,7 +201,7 @@ class TestEVConfigValidation:
         """Insufficient time to charge raises error."""
         # 3.6kW charger, arrive 6am, depart 7am = 1 hour
         # 1 hour * 3.6kW = 3.6 kWh max, but requesting 35 kWh
-        with pytest.raises(ValueError, match="Cannot deliver"):
+        with pytest.raises(ConfigurationError, match="Cannot deliver"):
             EVConfig(
                 charger_type="3.6kW",
                 arrival_hour=6,
