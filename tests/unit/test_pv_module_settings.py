@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.pv import (
     PVConfig,
     create_pv_system,
@@ -101,7 +102,7 @@ class TestASettingOutsideItsDomainIsRefused:
         ],
     )
     def test_naming_the_field_and_its_value(self, field: str, value: float) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             dataclasses.replace(PVConfig(capacity_kw=4.0), **{field: value})
 
         message = str(refusal.value)
@@ -132,7 +133,7 @@ class TestATemperatureCoefficientNeedsAModuleFormThatTakesIt:
     def test_a_module_in_neither_form_is_refused_naming_the_keys_of_each(
         self, module: Callable[[], dict[str, float]]
     ) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             PVConfig(
                 capacity_kw=4.0,
                 temperature_coefficient=-0.004,

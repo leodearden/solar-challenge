@@ -204,9 +204,16 @@ class TestGenerateHomesFromDistribution:
         assert len(with_battery) > 0
         assert len(without_battery) > 0
 
-    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -1.0])
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "requirement"),
+        [
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="inf"),
+            pytest.param(-1.0, "at least 0", id="-1.0"),
+        ],
+    )
     def test_a_sampled_battery_capacity_that_is_not_one_is_refused_naming_it(
-        self, capacity_kwh: float
+        self, capacity_kwh: float, requirement: str
     ) -> None:
         """A sampled battery capacity that is negative or not finite is refused naming battery.capacity_kwh, never read as no battery."""
         config = FleetDistributionConfig(
@@ -221,20 +228,23 @@ class TestGenerateHomesFromDistribution:
 
         with pytest.raises(ValueError) as exc_info:
             generate_homes_from_distribution(config, Location.bristol())
-        assert str(exc_info.value) == (
-            f"battery.capacity_kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
-        )
+        assert str(exc_info.value) == f"battery.capacity_kwh must be {requirement}, got {capacity_kwh!r}"
 
-    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -1.0])
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "requirement"),
+        [
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="inf"),
+            pytest.param(-1.0, "at least 0", id="-1.0"),
+        ],
+    )
     def test_a_fixed_battery_capacity_that_is_not_one_is_refused_before_any_home_is_generated(
-        self, capacity_kwh: float
+        self, capacity_kwh: float, requirement: str
     ) -> None:
         """A fixed battery capacity that is negative or not finite is refused when the battery distribution is configured, naming battery.capacity_kwh."""
         with pytest.raises(ValueError) as exc_info:
             BatteryDistributionConfig(capacity_kwh=capacity_kwh)
-        assert str(exc_info.value) == (
-            f"battery.capacity_kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
-        )
+        assert str(exc_info.value) == f"battery.capacity_kwh must be {requirement}, got {capacity_kwh!r}"
 
     def test_a_sampled_null_or_zero_battery_capacity_is_no_battery(self) -> None:
         """A null or 0 sampled battery capacity is no battery, and every other home has the battery it sampled."""
@@ -986,27 +996,27 @@ class TestGenerateHomesHouseholdOccupants:
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
         [
-            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
-            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
-            pytest.param(True, "Household occupants must be a whole number, got True", id="fixed-boolean"),
+            pytest.param(2.5, "household_occupants must be a whole number, got 2.5", id="fixed-fraction"),
+            pytest.param(0.0, "household_occupants must be between 1 and 10, got 0.0", id="fixed-zero"),
+            pytest.param(True, "household_occupants must be a finite number, got True", id="fixed-boolean"),
             pytest.param(
                 WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
-                "Household occupants must be a whole number, got True",
+                "household_occupants must be a finite number, got True",
                 id="weighted-discrete-boolean",
             ),
             pytest.param(
                 ShuffledPoolDistribution(values=(2, 0), counts=(1, 1)),
-                "Household occupants must be at least 1, got 0",
+                "household_occupants must be between 1 and 10, got 0",
                 id="shuffled-pool-zero",
             ),
             pytest.param(
                 UniformDistribution(min=1e300, max=1e300),
-                "Household occupants seems unrealistic: 1e+300",
+                "household_occupants must be between 1 and 10, got 1e+300",
                 id="uniform-draw-too-large-for-a-count",
             ),
             pytest.param(
                 UniformDistribution(min=-1e300, max=-1e300),
-                "Household occupants must be at least 1, got -1e+300",
+                "household_occupants must be between 1 and 10, got -1e+300",
                 id="uniform-draw-far-below-one",
             ),
         ],

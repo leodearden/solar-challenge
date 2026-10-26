@@ -16,20 +16,19 @@ from pvlib.modelchain import ModelChain
 from pvlib.pvsystem import Array, FixedMount, PVSystem
 from scipy.optimize import brentq  # type: ignore[import-untyped]  # debt: ticket tkt_0RW2C1V353XH8BQP3ZRB7SMERG
 
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    FRACTION,
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    Interval,
+    as_finite_float,
+    read_field,
+)
+
 if TYPE_CHECKING:
     from solar_challenge.location import Location
-
-
-def _require_valid_degradation_inputs(
-    system_age_years: float, degradation_rate_per_year: float
-) -> None:
-    """Refuse an age or annual rate outside the linear degradation model's domain."""
-    if not 0 <= system_age_years < math.inf:
-        raise ValueError(
-            f"System age must be non-negative and finite, got {system_age_years}"
-        )
-    if not 0 <= degradation_rate_per_year <= 1:
-        raise ValueError(f"Degradation rate must be 0-1, got {degradation_rate_per_year}")
 
 
 _TRANSMITTANCE_ABSORPTANCE = 0.9
@@ -37,6 +36,20 @@ _TRANSMITTANCE_ABSORPTANCE = 0.9
 
 _STEEPEST_TEMPERATURE_COEFFICIENT_PER_K = -0.01
 """The steepest temperature coefficient of maximum power a PVConfig sets: -1 %/K, steeper than every CECMod row's modelled one (docs/pv-module-settings.md)."""
+
+_SETTABLE_MODULE_EFFICIENCY = Interval(0, _TRANSMITTANCE_ABSORPTANCE, low_open=True, high_open=True)
+"""The module efficiencies a PVConfig sets: above 0 and below NOCT-SAM's transmittance-absorptance, at which a cell no longer heats (docs/pv-module-settings.md)."""
+
+_SETTABLE_TEMPERATURE_COEFFICIENT_PER_K = Interval(
+    _STEEPEST_TEMPERATURE_COEFFICIENT_PER_K, 0, high_open=True
+)
+"""The temperature coefficients of maximum power a PVConfig sets, per K: from the steepest to below 0."""
+
+_SYSTEM_AGE_YEARS = NON_NEGATIVE
+"""The system ages, in years, that PVConfig and calculate_degradation_factor admit."""
+
+_DEGRADATION_RATE_PER_YEAR = UNIT_INTERVAL
+"""The annual degradation rates, as fractions of rated capacity, that PVConfig and calculate_degradation_factor admit."""
 
 _PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
 
@@ -56,42 +69,17 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
     return _CEC_SINGLE_DIODE_MODULE_KEYS <= module_params.keys()
 
 
-def _require_settable_module_efficiency(efficiency: Optional[float]) -> None:
-    """Refuse a set module efficiency outside (0, _TRANSMITTANCE_ABSORPTANCE), at which NOCT-SAM no longer heats a cell."""
-    if efficiency is not None and not 0 < efficiency < _TRANSMITTANCE_ABSORPTANCE:
-        raise ValueError(
-            "module_efficiency must be above 0 and below NOCT-SAM's "
-            f"{_TRANSMITTANCE_ABSORPTANCE} transmittance-absorptance, at which a cell no "
-            f"longer heats; got {efficiency}"
-        )
-
-
 def _require_module_form_taking_temperature_coefficient(
     module_params: Mapping[str, float], coefficient: float
 ) -> None:
     """Refuse a module in neither form a temperature coefficient derives: CEC single-diode, whose Adjust it solves, or PVWatts, whose gamma_pdc it sets."""
     if not (_is_cec_single_diode_module(module_params) or _is_pvwatts_module(module_params)):
-        raise ValueError(
+        raise ConfigurationError(
             f"temperature_coefficient={coefficient} needs module parameters in CEC "
             f"single-diode form ({', '.join(sorted(_CEC_SINGLE_DIODE_MODULE_KEYS))}), whose "
             f"Adjust it solves, or in PVWatts form ({', '.join(sorted(_PVWATTS_MODULE_KEYS))}), "
             "whose gamma_pdc it sets; the module is in neither"
         )
-
-
-def _require_settable_temperature_coefficient(
-    coefficient: Optional[float], custom_module_params: Optional[Mapping[str, float]]
-) -> None:
-    """Refuse a set temperature coefficient outside [_STEEPEST_TEMPERATURE_COEFFICIENT_PER_K, 0) per K, or on custom module parameters in a form that cannot take it."""
-    if coefficient is None:
-        return
-    if not _STEEPEST_TEMPERATURE_COEFFICIENT_PER_K <= coefficient < 0:
-        raise ValueError(
-            "temperature_coefficient must be from "
-            f"{_STEEPEST_TEMPERATURE_COEFFICIENT_PER_K} per K to below 0; got {coefficient}"
-        )
-    if custom_module_params is not None:
-        _require_module_form_taking_temperature_coefficient(custom_module_params, coefficient)
 
 
 PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
@@ -101,6 +89,9 @@ PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
 @dataclass(frozen=True)
 class PVConfig:
     """Configuration for a photovoltaic system.
+
+    Construction reads every number setting as a finite number inside its range and holds
+    it as a float, each refusal a ConfigurationError naming the field and the value.
 
     Attributes:
         capacity_kw: Rated DC capacity in kilowatts
@@ -165,29 +156,26 @@ class PVConfig:
     system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
-        """Validate PV configuration parameters."""
-        if not 0 < self.capacity_kw < math.inf:
-            raise ValueError(f"Capacity must be positive and finite, got {self.capacity_kw} kW")
-        if not 0 <= self.azimuth <= 360:
-            raise ValueError(f"Azimuth must be 0-360 degrees, got {self.azimuth}")
-        if not 0 <= self.tilt <= 90:
-            raise ValueError(f"Tilt must be 0-90 degrees, got {self.tilt}")
-        _require_settable_module_efficiency(self.module_efficiency)
-        _require_settable_temperature_coefficient(
-            self.temperature_coefficient, self.custom_module_params
+        """Read each number setting, then refuse a set temperature coefficient on custom module parameters that cannot take it."""
+        read_field(self, "capacity_kw", as_finite_float, POSITIVE)
+        read_field(self, "azimuth", as_finite_float, Interval(0, 360))
+        read_field(self, "tilt", as_finite_float, Interval(0, 90))
+        read_field(self, "module_efficiency", as_finite_float, _SETTABLE_MODULE_EFFICIENCY, optional=True)
+        read_field(
+            self,
+            "temperature_coefficient",
+            as_finite_float,
+            _SETTABLE_TEMPERATURE_COEFFICIENT_PER_K,
+            optional=True,
         )
-        if not 0 < self.inverter_efficiency <= 1:
-            raise ValueError(
-                f"Inverter efficiency must be (0, 1], got {self.inverter_efficiency}"
-            )
-        if self.inverter_capacity_kw is not None and not 0 < self.inverter_capacity_kw < math.inf:
-            raise ValueError(
-                f"Inverter capacity must be positive and finite, got {self.inverter_capacity_kw} kW"
-            )
-        _require_valid_degradation_inputs(self.system_age_years, self.degradation_rate_per_year)
-        if not 0 <= self.system_losses < 1:
-            raise ValueError(
-                f"System losses must be a fraction in [0, 1), got {self.system_losses}"
+        read_field(self, "inverter_efficiency", as_finite_float, FRACTION)
+        read_field(self, "inverter_capacity_kw", as_finite_float, POSITIVE, optional=True)
+        read_field(self, "system_age_years", as_finite_float, _SYSTEM_AGE_YEARS)
+        read_field(self, "degradation_rate_per_year", as_finite_float, _DEGRADATION_RATE_PER_YEAR)
+        read_field(self, "system_losses", as_finite_float, Interval(0, 1, high_open=True))
+        if self.temperature_coefficient is not None and self.custom_module_params is not None:
+            _require_module_form_taking_temperature_coefficient(
+                self.custom_module_params, self.temperature_coefficient
             )
 
     @property
@@ -1047,7 +1035,8 @@ def calculate_degradation_factor(
         Year 10: 0.95 (95%)
 
     Raises:
-        ValueError: If system_age_years is negative or not finite, or the rate is outside 0-1
+        ConfigurationError: As PVConfig refuses its system_age_years or
+            degradation_rate_per_year, naming the argument and its value
 
     Example:
         >>> calculate_degradation_factor(0)
@@ -1055,10 +1044,11 @@ def calculate_degradation_factor(
         >>> calculate_degradation_factor(10, 0.005)
         0.95
     """
-    _require_valid_degradation_inputs(system_age_years, degradation_rate_per_year)
+    age = as_finite_float(system_age_years, "system_age_years", _SYSTEM_AGE_YEARS)
+    rate = as_finite_float(degradation_rate_per_year, "degradation_rate_per_year", _DEGRADATION_RATE_PER_YEAR)
 
     # Linear degradation: factor = 1 - (age * rate)
-    factor = 1.0 - (system_age_years * degradation_rate_per_year)
+    factor = 1.0 - (age * rate)
 
     # Clamp to minimum of 0 (can't have negative generation)
     return max(0.0, factor)

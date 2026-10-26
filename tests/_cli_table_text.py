@@ -6,7 +6,7 @@ Usage::
     from tests._cli_table_text import table_text
 
     result = runner.invoke(app, ["validate", "config", "config.yaml"])
-    assert "ERROR Tilt must be 0-90 degrees, got 100.0" in table_text(result.stdout)
+    assert "ERROR tilt must be between 0 and 90, got 100.0" in table_text(result.stdout)
 """
 
 

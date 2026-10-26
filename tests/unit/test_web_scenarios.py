@@ -266,7 +266,7 @@ class TestScenarioAPI:
             pytest.param(
                 (),
                 {"location_preset": "custom", "latitude": 95, "longitude": -2.2, "altitude": 38.0},
-                "Latitude must be between -90 and 90",
+                "latitude must be between -90 and 90",
                 id="custom latitude out of range",
             ),
             pytest.param((), {"export_rate": 0.15}, "export_rate", id="unread export_rate"),

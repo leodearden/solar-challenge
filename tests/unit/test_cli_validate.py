@@ -91,18 +91,23 @@ class TestValidateResultsCommand:
         assert "FAIL" in result.output
         assert "5/6 checks passed" in " ".join(result.output.split())
 
-    @pytest.mark.parametrize("pv_kw", ["0", "nan", "inf"])
+    @pytest.mark.parametrize(
+        ("pv_kw", "refusal"),
+        [
+            ("0", "capacity_kw must be greater than 0, got 0.0"),
+            ("nan", "capacity_kw must be a finite number, got nan"),
+            ("inf", "capacity_kw must be a finite number, got inf"),
+        ],
+    )
     def test_a_pv_capacity_that_is_not_positive_and_finite_is_refused(
-        self, tmp_path: Path, pv_kw: str
+        self, tmp_path: Path, pv_kw: str, refusal: str
     ) -> None:
         result = self._validate_results(
             tmp_path, _valid_results_frame(), "--pv-kw", pv_kw
         )
 
         assert result.exit_code == 1
-        assert f"Capacity must be positive and finite, got {float(pv_kw)} kW" in " ".join(
-            result.output.split()
-        )
+        assert refusal in " ".join(result.output.split())
 
     @pytest.mark.parametrize(
         ("column", "required"),
@@ -228,7 +233,7 @@ home:
             )
             result = runner.invoke(app, ["validate", "config", str(config_path)])
             assert result.exit_code == 1
-            assert "must be positive" in result.stdout
+            assert "capacity_kw must be greater than 0" in table_text(result.stdout)
 
     def test_validate_config_invalid_tilt(self) -> None:
         """Test validate config with invalid tilt."""
@@ -244,7 +249,7 @@ home:
             )
             result = runner.invoke(app, ["validate", "config", str(config_path)])
             assert result.exit_code == 1
-            assert "0-90" in result.stdout
+            assert "tilt must be between 0 and 90" in table_text(result.stdout)
 
     def test_validate_config_warning_high_consumption(self) -> None:
         """Test validate config warns about high consumption."""
@@ -283,7 +288,7 @@ home:
         [
             pytest.param(
                 "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 2.5}\n",
-                "Household occupants must be a whole number, got 2.5",
+                "household_occupants must be a whole number, got 2.5",
                 id="home-occupants-not-whole",
             ),
             pytest.param(
@@ -293,7 +298,7 @@ home:
             ),
             pytest.param(
                 "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
-                "Household occupants seems unrealistic: 11",
+                "household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
             ),
             pytest.param(
@@ -303,12 +308,12 @@ home:
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
-                "Tilt must be 0-90 degrees, got 100.0",
+                "tilt must be between 0 and 90, got 100.0",
                 id="fleet-distribution",
             ),
             pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
-                "Max charge power must be positive and finite, got -1.0 kW",
+                "max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",
             ),
             pytest.param(
@@ -327,7 +332,7 @@ home:
                 "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
                 "  homes:\n"
                 "    - load: {household_occupants: 2.5}\n",
-                "Household occupants must be a whole number, got 2.5",
+                "household_occupants must be a whole number, got 2.5",
                 id="scenario",
             ),
             pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),
@@ -434,6 +439,55 @@ home:
         text = table_text(result.stdout)
         assert "ERROR" in text
         assert names_as_a_word(text[text.index("ERROR"):], named)
+
+    @pytest.mark.parametrize(
+        ("document", "field", "value_repr"),
+        [
+            pytest.param(
+                "location: {altitude: .nan}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "altitude",
+                "nan",
+                id="location-altitude-nan",
+            ),
+            pytest.param(
+                "location: {timezone: Europe/Londn}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "timezone",
+                "'Europe/Londn'",
+                id="location-unknown-time-zone",
+            ),
+            pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  heat_pump: {heat_pump_type: ASHP, thermal_capacity_kw: .nan}\n",
+                "thermal_capacity_kw",
+                "nan",
+                id="heat-pump-capacity-nan",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: true}\n",
+                "capacity_kw",
+                "True",
+                id="pv-capacity-boolean",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0, azimuth: south}\n",
+                "azimuth",
+                "'south'",
+                id="pv-azimuth-word",
+            ),
+        ],
+    )
+    def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(
+        self, tmp_path: Path, document: str, field: str, value_repr: str
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert names_as_a_word(error_row, field)
+        assert names_as_a_word(error_row, value_repr)
 
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -544,5 +598,5 @@ home:
         )
 
         assert result.exit_code == 1
-        assert "ERROR Tilt must be 0-90 degrees, got 100.0" in table_text(result.stdout)
+        assert "ERROR tilt must be between 0 and 90, got 100.0" in table_text(result.stdout)
         assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)

@@ -108,9 +108,7 @@ class TestConfigPoint:
         """A NaN or infinite battery_kwh is refused naming it, never read as a battery or as none."""
         with pytest.raises(ValueError) as exc_info:
             ConfigPoint(pv_kwp=4.0, battery_kwh=value, inverter_kw=3.68)
-        assert str(exc_info.value) == (
-            f"battery_kwh must be >= 0 and finite (0 for no battery), got {value} kWh"
-        )
+        assert str(exc_info.value) == f"battery_kwh must be a finite number, got {value!r}"
 
 
 class TestEnumerateContract:

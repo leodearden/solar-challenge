@@ -7,40 +7,55 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    FRACTION,
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    as_finite_float,
+    read_field,
+)
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
-def _validate_soc_and_efficiency(
-    min_soc: float,
-    max_soc: float,
-    charge_eff: float,
-    discharge_eff: float,
-) -> None:
-    """Validate SOC limits and per-direction efficiency values.
+def _read_soc_limits_and_efficiencies(instance: object) -> None:
+    """Read *instance*'s SOC limits, each from 0 to 1, and its per-direction efficiencies, each above 0 and at most 1.
 
-    This is the single source of truth for these bounds.
-
-    Args:
-        min_soc: Minimum SOC fraction (must satisfy 0 <= min_soc < max_soc <= 1)
-        max_soc: Maximum SOC fraction
-        charge_eff: Charging efficiency (must satisfy 0 < charge_eff <= 1)
-        discharge_eff: Discharging efficiency (must satisfy 0 < discharge_eff <= 1)
+    The one home of these four bounds, shared by BatteryConfig and a Battery's
+    _SocLimitsAndEfficiencies.
 
     Raises:
-        ValueError: If any argument is out of range.
+        ConfigurationError: If a value is not a finite number inside its bounds, naming
+            its field and the value.
     """
-    if not 0 <= min_soc < max_soc <= 1:
-        raise ValueError(f"Invalid SOC limits: min={min_soc}, max={max_soc}")
-    if not 0 < charge_eff <= 1:
-        raise ValueError(f"Charge efficiency must be (0, 1], got {charge_eff}")
-    if not 0 < discharge_eff <= 1:
-        raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
+    read_field(instance, "min_soc_fraction", as_finite_float, UNIT_INTERVAL)
+    read_field(instance, "max_soc_fraction", as_finite_float, UNIT_INTERVAL)
+    read_field(instance, "charge_efficiency", as_finite_float, FRACTION)
+    read_field(instance, "discharge_efficiency", as_finite_float, FRACTION)
 
 
-def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> None:
-    """Refuse a battery's maximum *direction* power *kw* unless it is positive and finite."""
-    if not 0 < kw < math.inf:
-        raise ValueError(f"Max {direction} power must be positive and finite, got {kw} kW")
+def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: float) -> None:
+    """Refuse SOC limits whose minimum is not below their maximum, naming both."""
+    if not min_soc_fraction < max_soc_fraction:
+        raise ConfigurationError(
+            "min_soc_fraction must be less than max_soc_fraction, got "
+            f"min_soc_fraction={min_soc_fraction!r} and max_soc_fraction={max_soc_fraction!r}"
+        )
+
+
+_POWER_LIMIT_KW = POSITIVE
+"""The maximum charge and discharge powers, in kW, that BatteryConfig and require_valid_power_limit admit."""
+
+
+def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> float:
+    """Return a battery's maximum *direction* power *kw* read as BatteryConfig reads its max_<direction>_kw.
+
+    Raises:
+        ConfigurationError: If *kw* is not a positive finite number, naming
+            max_<direction>_kw and *kw*.
+    """
+    return as_finite_float(kw, f"max_{direction}_kw", _POWER_LIMIT_KW)
 
 
 def _require_valid_request(
@@ -58,18 +73,19 @@ def _require_valid_request(
         )
 
 
-def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
-    """Refuse a battery capacity setting unless it is >= 0 and finite; 0 means no battery."""
-    if not 0 <= capacity_kwh < math.inf:
-        raise ValueError(
-            f"{setting} must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
-        )
+def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> float:
+    """Return a battery capacity setting read as a finite number at least 0; 0 means no battery.
+
+    Raises:
+        ConfigurationError: If *capacity_kwh* is not a finite number at least 0, naming
+            *setting* and *capacity_kwh*.
+    """
+    return as_finite_float(capacity_kwh, setting, NON_NEGATIVE)
 
 
 def has_battery(capacity_kwh: float, setting: str) -> bool:
-    """Whether a battery capacity setting asks for a battery (> 0); an invalid one is refused."""
-    require_valid_capacity_setting(capacity_kwh, setting)
-    return capacity_kwh > 0
+    """Whether a battery capacity setting, read by require_valid_capacity_setting, asks for a battery (> 0); an invalid one is refused."""
+    return require_valid_capacity_setting(capacity_kwh, setting) > 0
 
 
 def compute_soh(
@@ -118,6 +134,10 @@ def compute_soh(
 @dataclass(frozen=True)
 class BatteryConfig:
     """Configuration for a battery storage system.
+
+    Construction reads every number setting as a finite number inside its range and
+    holds it as a float, then refuses SOC limits whose minimum is not below their
+    maximum, each with a ConfigurationError.
 
     Attributes:
         capacity_kwh: Total energy capacity in kilowatt-hours
@@ -177,50 +197,21 @@ class BatteryConfig:
     soh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate battery configuration parameters."""
-        if not 0 < self.capacity_kwh < math.inf:
-            raise ValueError(
-                f"Capacity must be positive and finite, got {self.capacity_kwh} kWh"
-            )
-        require_valid_power_limit(self.max_charge_kw, "charge")
-        require_valid_power_limit(self.max_discharge_kw, "discharge")
+        """Read each number setting, then refuse SOC limits out of order and derive the per-direction efficiencies from a set round-trip one."""
+        read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
+        read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
+        read_field(self, "max_discharge_kw", as_finite_float, _POWER_LIMIT_KW)
+        _read_soc_limits_and_efficiencies(self)
+        read_field(self, "efficiency", as_finite_float, FRACTION, optional=True)
+        read_field(self, "system_age_years", as_finite_float, NON_NEGATIVE)
+        read_field(self, "calendar_fade_rate_per_year", as_finite_float, NON_NEGATIVE)
+        read_field(self, "cycle_fade_per_equivalent_full_cycle", as_finite_float, NON_NEGATIVE)
+        read_field(self, "soh_floor", as_finite_float, FRACTION)
+        read_field(self, "soh", as_finite_float, FRACTION, optional=True)
+        _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
         if self.efficiency is not None:
-            if not 0 < self.efficiency <= 1:
-                raise ValueError(
-                    f"Round-trip efficiency must be (0, 1], got {self.efficiency}"
-                )
             object.__setattr__(self, "charge_efficiency", math.sqrt(self.efficiency))
             object.__setattr__(self, "discharge_efficiency", math.sqrt(self.efficiency))
-
-        _validate_soc_and_efficiency(
-            self.min_soc_fraction,
-            self.max_soc_fraction,
-            self.charge_efficiency,
-            self.discharge_efficiency,
-        )
-
-        if not 0 <= self.system_age_years < math.inf:
-            raise ValueError(
-                f"system_age_years must be >= 0 and finite, got {self.system_age_years}"
-            )
-        if not 0 <= self.calendar_fade_rate_per_year < math.inf:
-            raise ValueError(
-                f"calendar_fade_rate_per_year must be >= 0 and finite, "
-                f"got {self.calendar_fade_rate_per_year}"
-            )
-        if not 0 <= self.cycle_fade_per_equivalent_full_cycle < math.inf:
-            raise ValueError(
-                f"cycle_fade_per_equivalent_full_cycle must be >= 0 and finite, "
-                f"got {self.cycle_fade_per_equivalent_full_cycle}"
-            )
-        if not 0 < self.soh_floor <= 1:
-            raise ValueError(
-                f"soh_floor must be in (0, 1], got {self.soh_floor}"
-            )
-        if self.soh is not None and not 0 < self.soh <= 1:
-            raise ValueError(
-                f"soh override must be in (0, 1], got {self.soh}"
-            )
 
     @property
     def nominal_usable_capacity_kwh(self) -> float:
@@ -252,12 +243,8 @@ class _SocLimitsAndEfficiencies:
     discharge_efficiency: float
 
     def __post_init__(self) -> None:
-        _validate_soc_and_efficiency(
-            self.min_soc_fraction,
-            self.max_soc_fraction,
-            self.charge_efficiency,
-            self.discharge_efficiency,
-        )
+        _read_soc_limits_and_efficiencies(self)
+        _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
 
 
 class Battery:
@@ -266,7 +253,8 @@ class Battery:
     Tracks current SOC and enforces charge/discharge limits. Its SOC limits and
     efficiencies can be reassigned after construction, as a device's settings can.
     An assignment is checked against the bounds construction checks for these four
-    values: one that breaks them raises ValueError and leaves the battery unchanged.
+    values: one that breaks them raises a ConfigurationError, which is a ValueError,
+    and leaves the battery unchanged.
     A new SOC limit is not checked against the current SOC and may move past it.
     While the SOC is below min_soc_kwh, discharge() moves no energy and returns
     0.0; while it is above max_soc_kwh, charge() does the same.

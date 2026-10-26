@@ -9,6 +9,8 @@ from typing import TypeAlias
 import numpy as np
 import pandas as pd
 
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number, read_field
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 _MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
@@ -49,9 +51,17 @@ _PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
 """Each mode's preferred charging windows, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times."""
 
 
+_HOUR_OF_DAY = Interval(0, 23)
+
+
 @dataclass(frozen=True)
 class EVConfig:
     """Configuration for electric vehicle charging.
+
+    Construction reads the hours as whole numbers and the required charge as a finite
+    number, and holds what it read. It refuses a value outside its range, an unknown
+    charger type or smart charging mode, or a charge the stay cannot deliver, with a
+    ConfigurationError.
 
     Attributes:
         charger_type: Charger power rating (3.6kW, 7kW, or 22kW)
@@ -71,44 +81,23 @@ class EVConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate EV configuration parameters."""
+        """Read each number setting, then refuse an unknown charger type or mode, or a charge the stay cannot deliver."""
+        read_field(self, "arrival_hour", as_whole_number, _HOUR_OF_DAY)
+        read_field(self, "departure_hour", as_whole_number, _HOUR_OF_DAY)
+        read_field(self, "required_charge_kwh", as_finite_float, Interval(0, 100, low_open=True))
+
         # Validate charger_type
         valid_charger_types = ["3.6kW", "7kW", "22kW"]
         if self.charger_type not in valid_charger_types:
-            raise ValueError(
+            raise ConfigurationError(
                 f"Charger type must be one of {valid_charger_types}, "
                 f"got '{self.charger_type}'"
-            )
-
-        # Validate arrival_hour
-        if not 0 <= self.arrival_hour <= 23:
-            raise ValueError(
-                f"Arrival hour must be 0-23, got {self.arrival_hour}"
-            )
-
-        # Validate departure_hour
-        if not 0 <= self.departure_hour <= 23:
-            raise ValueError(
-                f"Departure hour must be 0-23, got {self.departure_hour}"
-            )
-
-        # Validate required_charge_kwh
-        if self.required_charge_kwh <= 0:
-            raise ValueError(
-                f"Required charge must be positive, got {self.required_charge_kwh} kWh"
-            )
-
-        # Check for unrealistically high charging requirement
-        if self.required_charge_kwh > 100:
-            raise ValueError(
-                f"Required charge seems unrealistic: {self.required_charge_kwh} kWh "
-                "(typical UK EV battery is 40-75 kWh)"
             )
 
         # Validate smart_charging_mode
         valid_modes = ["none", "solar", "off_peak"]
         if self.smart_charging_mode not in valid_modes:
-            raise ValueError(
+            raise ConfigurationError(
                 f"Smart charging mode must be one of {valid_modes}, "
                 f"got '{self.smart_charging_mode}'"
             )
@@ -119,7 +108,7 @@ class EVConfig:
         max_charge_kwh = charger_power_kw * available_hours
 
         if self.required_charge_kwh > max_charge_kwh:
-            raise ValueError(
+            raise ConfigurationError(
                 f"Cannot deliver {self.required_charge_kwh} kWh with {self.charger_type} "
                 f"charger in {available_hours:.1f} hours (max: {max_charge_kwh:.1f} kWh). "
                 "Either reduce required_charge_kwh or adjust arrival/departure hours."

@@ -160,9 +160,16 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
             pytest.param(BatteryConfig(capacity_kwh=5.0), id="battery"),
         ],
     )
-    @pytest.mark.parametrize("value", [math.nan, math.inf, -1.0])
+    @pytest.mark.parametrize(
+        ("value", "requirement"),
+        [
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="inf"),
+            pytest.param(-1.0, "at least 0", id="-1.0"),
+        ],
+    )
     def test_a_value_that_is_not_a_capacity_is_refused_naming_the_parameter(
-        self, value: float, battery: BatteryConfig | None
+        self, value: float, requirement: str, battery: BatteryConfig | None
     ) -> None:
         scenario = ScenarioConfig(
             name="battery sweep",
@@ -179,9 +186,7 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
 
         with pytest.raises(ValueError) as exc_info:
             next(sweep)
-        assert str(exc_info.value) == (
-            f"battery_capacity_kwh must be >= 0 and finite (0 for no battery), got {value} kWh"
-        )
+        assert str(exc_info.value) == f"battery_capacity_kwh must be {requirement}, got {value!r}"
 
 
 class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
@@ -215,8 +220,8 @@ class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
     @pytest.mark.parametrize(
         ("value", "refusal"),
         [
-            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
-            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
+            pytest.param(2.5, "household_occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "household_occupants must be a finite number, got True", id="boolean"),
         ],
     )
     def test_a_value_that_is_not_a_whole_number_is_refused_as_load_config_refuses_it(

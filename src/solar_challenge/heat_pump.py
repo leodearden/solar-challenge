@@ -9,6 +9,8 @@ from typing import Literal, get_args
 
 import pandas as pd
 
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import Interval, as_finite_float, read_field
 from solar_challenge.timebase import SimulationWindow
 
 
@@ -51,9 +53,9 @@ COP_CURVES: Mapping[HeatPumpType, CopCurve] = MappingProxyType({
 
 
 def _refuse_unknown_heat_pump_type(heat_pump_type: object) -> None:
-    """Raise ValueError, naming HEAT_PUMP_TYPES, unless heat_pump_type is one of them."""
+    """Raise ConfigurationError, naming HEAT_PUMP_TYPES, unless heat_pump_type is one of them."""
     if heat_pump_type not in HEAT_PUMP_TYPES:
-        raise ValueError(f"Heat pump type must be one of {HEAT_PUMP_TYPES}, got {heat_pump_type!r}")
+        raise ConfigurationError(f"Heat pump type must be one of {HEAT_PUMP_TYPES}, got {heat_pump_type!r}")
 
 
 # Base temperature for heating degree day calculations
@@ -136,7 +138,7 @@ def calculate_cop(heat_pump_type: HeatPumpType, outdoor_temp_c: float) -> float:
         Coefficient of Performance (dimensionless, typically 2-5)
 
     Raises:
-        ValueError: If heat_pump_type is not one of HEAT_PUMP_TYPES, naming them
+        ConfigurationError: If heat_pump_type is not one of HEAT_PUMP_TYPES, naming them
     """
     _refuse_unknown_heat_pump_type(heat_pump_type)
     return COP_CURVES[heat_pump_type].cop(outdoor_temp_c)
@@ -159,29 +161,10 @@ class HeatPumpConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate heat pump configuration parameters."""
-        # Validate heat pump type
+        """Read each number setting, then refuse a type outside HEAT_PUMP_TYPES."""
+        read_field(self, "thermal_capacity_kw", as_finite_float, Interval(0, 50, low_open=True))
+        read_field(self, "annual_heat_demand_kwh", as_finite_float, Interval(0, 50000, low_open=True))
         _refuse_unknown_heat_pump_type(self.heat_pump_type)
-
-        # Validate thermal capacity
-        if self.thermal_capacity_kw <= 0:
-            raise ValueError(
-                f"Thermal capacity must be positive, got {self.thermal_capacity_kw} kW"
-            )
-        if self.thermal_capacity_kw > 50:
-            raise ValueError(
-                f"Thermal capacity seems unrealistic for domestic use: {self.thermal_capacity_kw} kW"
-            )
-
-        # Validate annual heat demand
-        if self.annual_heat_demand_kwh <= 0:
-            raise ValueError(
-                f"Annual heat demand must be positive, got {self.annual_heat_demand_kwh} kWh"
-            )
-        if self.annual_heat_demand_kwh > 50000:
-            raise ValueError(
-                f"Annual heat demand seems unrealistic for domestic use: {self.annual_heat_demand_kwh} kWh"
-            )
 
     @classmethod
     def default_ashp(cls) -> "HeatPumpConfig":

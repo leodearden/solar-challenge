@@ -334,6 +334,22 @@ class TestAsWholeNumber:
         assert as_whole_number(-(10**15), "x") == -(10**15)
 
     @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(2**53 + 1, id="python-int"),
+            pytest.param(np.int64(2**62 + 1), id="numpy-int64"),
+            pytest.param(np.uint64(2**64 - 1), id="numpy-uint64"),
+        ],
+    )
+    def test_an_integer_beyond_a_floats_precision_is_read_as_itself(
+        self, value: int | np.integer[Any]
+    ) -> None:
+        """An integer, Python's or numpy's, is returned as the int it is, never rounded through a float."""
+        number = as_whole_number(value, "seed")
+        assert number == int(value)
+        assert type(number) is int
+
+    @pytest.mark.parametrize(
         "value", [pytest.param(2.5, id="float"), pytest.param("2.5", id="numeric-string")]
     )
     def test_a_number_with_a_fractional_part_is_refused_naming_the_field_and_the_value(
