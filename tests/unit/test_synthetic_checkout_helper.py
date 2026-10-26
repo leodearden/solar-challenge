@@ -64,7 +64,7 @@ def test_write_file_adds_a_file_beside_those_laid_out_and_returns_its_path(tmp_p
     checkout = synthetic_checkout(tmp_path / "checkout", {"src/pkg/module.py": "VALUE = 1\n"})
 
     page = write_file(checkout, "src/pkg/page.html", "<p>Page</p>\n")
-    notes = write_file(checkout, "src/pkg/deeper/notes.txt", b"\xff\xfe")
+    notes = write_file(checkout, PurePosixPath("src/pkg/deeper/notes.txt"), b"\xff\xfe")
 
     assert page == PurePosixPath("src/pkg/page.html")
     assert notes == PurePosixPath("src/pkg/deeper/notes.txt")

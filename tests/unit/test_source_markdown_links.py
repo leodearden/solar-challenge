@@ -198,6 +198,6 @@ def test_scans_every_markdown_file_git_lists_outside_the_records(tmp_path: Path)
         PurePosixPath("guide/notes.txt"),
         PurePosixPath("src/pkg/module.py"),
     ]
-    checkout = synthetic_checkout(tmp_path / "checkout", {str(path): "" for path in [*scanned, *unscanned]})
+    checkout = synthetic_checkout(tmp_path / "checkout", dict.fromkeys([*scanned, *unscanned], ""))
 
     assert sorted(_markdown_files(checkout)) == sorted(scanned)

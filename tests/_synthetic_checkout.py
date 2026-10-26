@@ -18,10 +18,10 @@ from pathlib import Path, PurePosixPath
 from tests._hermetic_checkout import init_hermetic_checkout
 
 
-def synthetic_checkout(directory: Path, files: Mapping[str, str | bytes]) -> Path:
+def synthetic_checkout(directory: Path, files: Mapping[str | PurePosixPath, str | bytes]) -> Path:
     """Make *directory* a new hermetic git checkout holding *files*, and return it.
 
-    Each of *files* maps a POSIX path relative to *directory* to the content write_file writes there.
+    Each of *files* maps a path in *directory* to its content, both as write_file takes them.
     """
     checkout = init_hermetic_checkout(directory)
     for path, content in files.items():
@@ -29,7 +29,7 @@ def synthetic_checkout(directory: Path, files: Mapping[str, str | bytes]) -> Pat
     return checkout
 
 
-def write_file(checkout: Path, path: str, content: str | bytes) -> PurePosixPath:
+def write_file(checkout: Path, path: str | PurePosixPath, content: str | bytes) -> PurePosixPath:
     """Write *content* to *path*, a POSIX path relative to *checkout*, making its missing directories; return *path*.
 
     Text is written as UTF-8, and bytes as they are. An absolute *path*, or one holding a '..', is refused with
