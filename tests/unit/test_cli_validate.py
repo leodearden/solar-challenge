@@ -483,6 +483,16 @@ home:
                 "True",
                 id="battery-grid-charging-target-boolean",
             ),
+            pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery:\n"
+                "    capacity_kwh: 5.0\n"
+                "    dispatch_strategy: {strategy_type: peak_shaving, import_limit_kw: true}\n",
+                "import_limit_kw",
+                "True",
+                id="battery-peak-shaving-limit-boolean",
+            ),
         ],
     )
     def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(

@@ -9,6 +9,7 @@ ConfigurationError: one validator per rule, at both entry points.
 
 import dataclasses
 import typing
+from datetime import datetime
 from typing import Any, Callable
 
 import numpy as np
@@ -205,10 +206,40 @@ class TestOneValidatorPerRule:
         refusal = _refusal(lambda: PeakShavingStrategyConfig(import_limit_kw=import_limit_kw))
 
         assert refusal == _refusal(lambda: PeakShavingStrategy(import_limit_kw=import_limit_kw))
-        refusal_type, message = refusal
-        assert refusal_type is ConfigurationError
-        assert "import_limit_kw" in message
-        assert str(import_limit_kw) in message
+        assert refusal == (ConfigurationError, f"import_limit_kw must be greater than 0, got {import_limit_kw!r}")
+
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word"), pytest.param(None, id="null")]
+    )
+    def test_a_limit_that_is_not_a_finite_number_is_refused_alike(self, value: object) -> None:
+        assert (
+            _refusal(lambda: PeakShavingStrategyConfig(import_limit_kw=value))
+            == _refusal(lambda: PeakShavingStrategy(import_limit_kw=value))
+            == (ConfigurationError, f"import_limit_kw must be a finite number, got {value!r}")
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(2, id="whole-number"),
+            pytest.param("2.0", id="quoted"),
+            pytest.param(np.float64(2.0), id="numpy"),
+        ],
+    )
+    def test_both_hold_the_limit_as_the_float_they_read(self, value: object) -> None:
+        """Of a 3 kW shortfall, the strategy sheds the 1 kW over its 2 kW limit."""
+        held = PeakShavingStrategyConfig(import_limit_kw=value).import_limit_kw
+        decision = PeakShavingStrategy(import_limit_kw=value).decide_action(
+            timestamp=datetime(2024, 1, 15, 17, 0),
+            generation_kw=0.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+        assert held == 2.0
+        assert type(held) is float
+        assert decision.discharge_kw == 1.0
 
     def test_a_positive_limit_builds_both(self) -> None:
         assert PeakShavingStrategyConfig(import_limit_kw=0.1).import_limit_kw == 0.1
