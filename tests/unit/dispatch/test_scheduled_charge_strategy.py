@@ -6,7 +6,6 @@ then holds it; outside every window its base strategy decides.
 """
 
 import dataclasses
-import math
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -28,6 +27,7 @@ from solar_challenge.dispatch import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep
 from solar_challenge.tariff import TariffConfig
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _NIGHTLY = ChargeWindow("daily", time(0, 30), timedelta(hours=7), 0.9, allow_discharge=False)
 """Every night from 00:30 for 7 hours, to 0.9 of the battery's capacity, holding at the target."""
@@ -147,9 +147,6 @@ class TestChargeWindow:
             pytest.param("duration", timedelta(0), id="no-duration"),
             pytest.param("duration", timedelta(minutes=-1), id="a-negative-duration"),
             pytest.param("duration", timedelta(days=1, minutes=1), id="longer-than-a-day"),
-            pytest.param("target_soc_fraction", 0.0, id="target-0"),
-            pytest.param("target_soc_fraction", 1.5, id="target-above-1"),
-            pytest.param("target_soc_fraction", math.nan, id="target-nan"),
         ],
     )
     def test_it_refuses_a_field_naming_the_field_and_its_value(self, field: str, value: object) -> None:
@@ -172,6 +169,24 @@ class TestChargeWindow:
     )
     def test_it_builds_at_each_edge_it_admits(self, field: str, value: object) -> None:
         assert getattr(dataclasses.replace(_NIGHTLY, **{field: value}), field) == value
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word"), 0.0, 1.5])
+    def test_it_refuses_a_target_as_grid_charge_config_does(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as window_refusal:
+            dataclasses.replace(_NIGHTLY, target_soc_fraction=value)
+        with pytest.raises(ConfigurationError) as config_refusal:
+            GridChargeConfig(target_soc_fraction=value)
+
+        assert str(window_refusal.value) == str(config_refusal.value)
+
+    @pytest.mark.parametrize(
+        ("value", "held"), [pytest.param(1, 1.0, id="whole-number"), pytest.param("0.5", 0.5, id="quoted")]
+    )
+    def test_it_holds_its_target_as_the_float_it_reads(self, value: object, held: float) -> None:
+        target = dataclasses.replace(_NIGHTLY, target_soc_fraction=value).target_soc_fraction
+
+        assert target == held
+        assert type(target) is float
 
     @pytest.mark.parametrize(
         ("moment", "covered"),

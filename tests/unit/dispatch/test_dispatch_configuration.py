@@ -9,8 +9,10 @@ ConfigurationError: one validator per rule, at both entry points.
 
 import dataclasses
 import typing
+from datetime import datetime
 from typing import Any, Callable
 
+import numpy as np
 import pytest
 
 from solar_challenge.battery import BatteryConfig
@@ -25,6 +27,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _EXAMPLES = (
     SelfConsumptionStrategyConfig(),
@@ -134,10 +137,35 @@ class TestGridChargeConfig:
     def test_a_target_in_0_to_1_is_kept(self, target: float) -> None:
         assert GridChargeConfig(target_soc_fraction=target).target_soc_fraction == target
 
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word"), pytest.param(None, id="null")]
+    )
+    def test_a_target_that_is_not_a_finite_number_is_refused_naming_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            GridChargeConfig(target_soc_fraction=value)
+
+        assert str(refusal.value) == f"target_soc_fraction must be a finite number, got {value!r}"
+
     @pytest.mark.parametrize("target", [0.0, -0.1, 1.5])
-    def test_a_target_outside_0_to_1_is_refused(self, target: float) -> None:
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+    def test_a_target_outside_0_to_1_is_refused_naming_its_bounds(self, target: float) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
             GridChargeConfig(target_soc_fraction=target)
+
+        assert str(refusal.value) == f"target_soc_fraction must be greater than 0 and at most 1, got {target!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "held"),
+        [
+            pytest.param(1, 1.0, id="whole-number"),
+            pytest.param("0.5", 0.5, id="quoted"),
+            pytest.param(np.float64(0.8), 0.8, id="numpy"),
+        ],
+    )
+    def test_it_holds_the_target_as_the_float_it_reads(self, value: object, held: float) -> None:
+        target = GridChargeConfig(target_soc_fraction=value).target_soc_fraction
+
+        assert target == held
+        assert type(target) is float
 
     def test_it_refuses_a_field_assignment(self) -> None:
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -148,25 +176,91 @@ class TestOneValidatorPerRule:
     """A variant and its strategy's constructor refuse the same values with the same ConfigurationError."""
 
     @pytest.mark.parametrize(
-        "peak_hours",
+        ("peak_hours", "message"),
         [
-            pytest.param([], id="no-window"),
-            pytest.param([(25, 28)], id="after-midnight"),
-            pytest.param([(-1, 5)], id="negative-start"),
-            pytest.param([(20, 17)], id="start-after-end"),
-            pytest.param([(17, 17)], id="start-at-end"),
-            pytest.param([(16, 25)], id="end-after-midnight"),
+            pytest.param([], "peak_hours must hold at least one (start, end) window; it is empty", id="no-window"),
+            pytest.param([(25, 28)], "peak_hours[0][0] must be between 0 and 24, got 25", id="after-midnight"),
+            pytest.param([(-1, 5)], "peak_hours[0][0] must be between 0 and 24, got -1", id="negative-start"),
+            pytest.param([(16, 25)], "peak_hours[0][1] must be between 0 and 24, got 25", id="end-after-midnight"),
+            pytest.param(
+                [(20, 17)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (20, 17)",
+                id="start-after-end",
+            ),
+            pytest.param(
+                [(17, 17)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (17, 17)",
+                id="start-at-end",
+            ),
+            pytest.param(
+                [(16, 19, 20)],
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (16, 19, 20)",
+                id="three-hours",
+            ),
+            pytest.param([16], "peak_hours[0] must be a list of whole numbers, got 16", id="a-bare-hour"),
+            pytest.param(
+                [(7, 9), (16.5, 19)],
+                "peak_hours[1][0] must be a whole number, got 16.5",
+                id="a-fraction-in-the-second-window",
+            ),
         ],
     )
-    def test_invalid_peak_hours_are_refused_alike(self, peak_hours: list[tuple[int, int]]) -> None:
-        refusal = _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=tuple(peak_hours)))
+    def test_invalid_peak_hours_are_refused_alike(self, peak_hours: list[object], message: str) -> None:
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=tuple(peak_hours)))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=list(peak_hours)))
+            == (ConfigurationError, message)
+        )
 
-        assert refusal == _refusal(lambda: TOUOptimizedStrategy(peak_hours=list(peak_hours)))
-        refusal_type, message = refusal
-        assert refusal_type is ConfigurationError
-        assert "peak_hours" in message
-        for start, end in peak_hours:
-            assert f"({start}, {end})" in message
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_an_hour_that_is_not_a_finite_number_is_refused_alike(self, value: object) -> None:
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=((value, 19),)))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=[(value, 19)]))
+            == (ConfigurationError, f"peak_hours[0][0] must be a finite number, got {value!r}")
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param("16-19", id="text"),
+            pytest.param(16, id="an-hour"),
+            pytest.param({16: 19}, id="a-mapping"),
+            pytest.param({(16, 19)}, id="a-set"),
+            pytest.param(((16, 19) for _ in range(1)), id="a-generator"),
+            pytest.param(np.array([[16, 19]]), id="an-array"),
+        ],
+    )
+    def test_peak_hours_that_are_not_a_list_are_refused_alike(self, value: object) -> None:
+        """A list of windows is a list or a tuple, the containers the strategy and its config declare: any other iterable is refused."""
+        assert (
+            _refusal(lambda: TOUOptimizedStrategyConfig(peak_hours=value))
+            == _refusal(lambda: TOUOptimizedStrategy(peak_hours=value))
+            == (ConfigurationError, f"peak_hours must be a list of (start, end) windows, got {value!r}")
+        )
+
+    def test_both_hold_the_windows_as_the_int_pairs_they_read(self) -> None:
+        """A config holds lists of whole floats as int pairs, so it hashes; a strategy acts on the hours it read."""
+        config = TOUOptimizedStrategyConfig(peak_hours=[[16.0, 19.0]])
+        strategy = TOUOptimizedStrategy(peak_hours=[("16", "19")])
+        decisions = [
+            strategy.decide_action(
+                timestamp=datetime(2024, 1, 15, hour, 0),
+                generation_kw=0.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+            for hour in (17, 12)
+        ]
+
+        assert config.peak_hours == ((16, 19),)
+        assert type(config.peak_hours) is tuple
+        assert all(type(window) is tuple for window in config.peak_hours)
+        assert all(type(hour) is int for window in config.peak_hours for hour in window)
+        assert hash(config) == hash(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)))
+        assert [decision.discharge_kw for decision in decisions] == [1.0, 0.0]
 
     @pytest.mark.parametrize("peak_hours", [[(0, 24)], [(7, 9), (17, 20)], [(23, 24)]])
     def test_valid_peak_hours_build_both(self, peak_hours: list[tuple[int, int]]) -> None:
@@ -178,10 +272,40 @@ class TestOneValidatorPerRule:
         refusal = _refusal(lambda: PeakShavingStrategyConfig(import_limit_kw=import_limit_kw))
 
         assert refusal == _refusal(lambda: PeakShavingStrategy(import_limit_kw=import_limit_kw))
-        refusal_type, message = refusal
-        assert refusal_type is ConfigurationError
-        assert "import_limit_kw" in message
-        assert str(import_limit_kw) in message
+        assert refusal == (ConfigurationError, f"import_limit_kw must be greater than 0, got {import_limit_kw!r}")
+
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word"), pytest.param(None, id="null")]
+    )
+    def test_a_limit_that_is_not_a_finite_number_is_refused_alike(self, value: object) -> None:
+        assert (
+            _refusal(lambda: PeakShavingStrategyConfig(import_limit_kw=value))
+            == _refusal(lambda: PeakShavingStrategy(import_limit_kw=value))
+            == (ConfigurationError, f"import_limit_kw must be a finite number, got {value!r}")
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(2, id="whole-number"),
+            pytest.param("2.0", id="quoted"),
+            pytest.param(np.float64(2.0), id="numpy"),
+        ],
+    )
+    def test_both_hold_the_limit_as_the_float_they_read(self, value: object) -> None:
+        """Of a 3 kW shortfall, the strategy sheds the 1 kW over its 2 kW limit."""
+        held = PeakShavingStrategyConfig(import_limit_kw=value).import_limit_kw
+        decision = PeakShavingStrategy(import_limit_kw=value).decide_action(
+            timestamp=datetime(2024, 1, 15, 17, 0),
+            generation_kw=0.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+        assert held == 2.0
+        assert type(held) is float
+        assert decision.discharge_kw == 1.0
 
     def test_a_positive_limit_builds_both(self) -> None:
         assert PeakShavingStrategyConfig(import_limit_kw=0.1).import_limit_kw == 0.1

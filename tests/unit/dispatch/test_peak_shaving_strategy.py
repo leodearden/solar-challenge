@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for PeakShavingStrategy, which discharges the battery only to hold grid import at its limit and grid-charges it in cheap periods."""
 
+import re
 from datetime import datetime
 
 import pytest
@@ -64,12 +65,12 @@ class TestPeakShavingStrategyValidation:
 
     def test_zero_import_limit_raises(self):
         """Zero import limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
+        with pytest.raises(ConfigurationError, match=re.escape("import_limit_kw must be greater than 0, got 0.0")):
             PeakShavingStrategy(import_limit_kw=0.0)
 
     def test_negative_import_limit_raises(self):
         """Negative import limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
+        with pytest.raises(ConfigurationError, match=re.escape("import_limit_kw must be greater than 0, got -1.0")):
             PeakShavingStrategy(import_limit_kw=-1.0)
 
     def test_negative_generation_raises(self, standard_peak_shaving_strategy):

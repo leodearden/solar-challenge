@@ -11,7 +11,7 @@ build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -20,6 +20,14 @@ from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    FRACTION,
+    POSITIVE,
+    Interval,
+    as_finite_float,
+    as_whole_numbers,
+    read_field,
+)
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
@@ -225,48 +233,65 @@ def _grid_power_to_target_kw(
     )
 
 
+_TARGET_SOC_FRACTION = FRACTION
+"""The grid-charge targets, as fractions of the battery's capacity, that GridChargeConfig and ChargeWindow admit."""
+
+
 @dataclass(frozen=True)
 class GridChargeConfig:
     """Configuration for grid-charging (battery arbitrage) mode.
 
     Attributes:
         target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+            expressed as a fraction of usable capacity: a finite number greater than 0
+            and at most 1, held as the float read. Defaults to 0.9.
+
+    Raises:
+        ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
+            is outside that range, naming target_soc_fraction and the value.
     """
 
     target_soc_fraction: float = 0.9
 
     def __post_init__(self) -> None:
-        """Validate grid-charge configuration."""
-        if not (0 < self.target_soc_fraction <= 1):
-            raise ConfigurationError(
-                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
-            )
+        """Read target_soc_fraction, and hold the float read."""
+        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
 
 
-def _require_valid_peak_hours(peak_hours: Sequence[tuple[int, int]]) -> None:
-    """Refuse peak_hours unless it holds at least one (start, end) window, each with 0 <= start < end <= 24.
-
-    Raises:
-        ConfigurationError: Naming peak_hours, and the first window that breaks the rule.
-    """
-    if not peak_hours:
-        raise ConfigurationError("peak_hours must hold at least one (start, end) window; it is empty")
-    for start, end in peak_hours:
-        if not 0 <= start < end <= 24:
-            raise ConfigurationError(
-                f"peak_hours windows must satisfy 0 <= start < end <= 24, got ({start}, {end})"
-            )
+_PEAK_WINDOW_HOURS = Interval(0, 24)
+"""The hours a peak window starts and ends at, from 0, the midnight that begins the day, to 24, the one that ends it."""
 
 
-def _require_valid_import_limit(import_limit_kw: float) -> None:
-    """Refuse an import_limit_kw that is not positive.
+def _as_hour_window(value: object, field: str, within: Interval) -> tuple[int, int]:
+    """Return *value*, a window, read as the (start, end) pair of whole hours *within* admits that starts before it ends, each hour named {field}[{j}].
 
     Raises:
-        ConfigurationError: Naming import_limit_kw and its value.
+        ConfigurationError: If as_whole_numbers refuses *value* or one of its hours, or if
+            *value* is not a (start, end) pair that starts before it ends, naming *field*
+            and *value*.
     """
-    if import_limit_kw <= 0:
-        raise ConfigurationError(f"import_limit_kw must be positive, got {import_limit_kw} kW")
+    hours = as_whole_numbers(value, field, within)
+    if len(hours) != 2 or not hours[0] < hours[1]:
+        raise ConfigurationError(f"{field} must be a (start, end) window that starts before it ends, got {value!r}")
+    return (hours[0], hours[1])
+
+
+def _as_hour_windows(value: object, field: str, within: Interval) -> tuple[tuple[int, int], ...]:
+    """Return *value*, a list of at least one window, as the tuple of its windows, each read by _as_hour_window as {field}[{i}].
+
+    Raises:
+        ConfigurationError: If *value* is not a list or tuple, or is empty, naming *field*;
+            or if _as_hour_window refuses a window.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise ConfigurationError(f"{field} must be a list of (start, end) windows, got {value!r}")
+    if not value:
+        raise ConfigurationError(f"{field} must hold at least one (start, end) window; it is empty")
+    return tuple(_as_hour_window(window, f"{field}[{index}]", within) for index, window in enumerate(value))
+
+
+_IMPORT_LIMIT_KW = POSITIVE
+"""The grid import limits, in kW, that PeakShavingStrategyConfig and PeakShavingStrategy admit."""
 
 
 @dataclass(frozen=True)
@@ -282,19 +307,23 @@ class TOUOptimizedStrategyConfig:
 
     Attributes:
         peak_hours: The (start, end) hours of the peak periods the strategy discharges the
-            battery in: at least one, each with 0 <= start < end <= 24.
+            battery in: a list of at least one window, each a pair of whole hours from 0 to
+            24 that starts before it ends, held as a tuple of int pairs.
 
     Raises:
-        ConfigurationError: If peak_hours breaks that rule, with the refusal
-            TOUOptimizedStrategy gives.
+        ConfigurationError: With the refusal TOUOptimizedStrategy gives, if peak_hours is
+            not a list of at least one window; if an hour is a bool, is not a finite whole
+            number, or is outside 0 to 24, naming it peak_hours[i][j] and the value; or if
+            a window is not a (start, end) pair that starts before it ends, naming it
+            peak_hours[i] and the window.
     """
 
     peak_hours: tuple[tuple[int, int], ...]
     strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
 
     def __post_init__(self) -> None:
-        """Refuse peak_hours as TOUOptimizedStrategy does."""
-        _require_valid_peak_hours(self.peak_hours)
+        """Read peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
+        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS)
 
 
 @dataclass(frozen=True)
@@ -303,10 +332,11 @@ class PeakShavingStrategyConfig:
 
     Attributes:
         import_limit_kw: The grid import, in kW, the strategy discharges the battery to keep
-            at or below: positive.
+            at or below: read as a finite number greater than 0, and held as the float read.
 
     Raises:
-        ConfigurationError: If import_limit_kw is not positive, with the refusal
+        ConfigurationError: If import_limit_kw is a bool, is not a finite number, or is not
+            greater than 0, naming import_limit_kw and the value, with the refusal
             PeakShavingStrategy gives.
     """
 
@@ -314,8 +344,8 @@ class PeakShavingStrategyConfig:
     strategy_type: Literal["peak_shaving"] = field(default="peak_shaving", init=False)
 
     def __post_init__(self) -> None:
-        """Refuse import_limit_kw as PeakShavingStrategy does."""
-        _require_valid_import_limit(self.import_limit_kw)
+        """Read import_limit_kw as PeakShavingStrategy does, and hold the float read."""
+        read_field(self, "import_limit_kw", as_finite_float, _IMPORT_LIMIT_KW)
 
 
 DispatchStrategyConfig: TypeAlias = (
@@ -519,17 +549,18 @@ class TOUOptimizedStrategy(DispatchStrategy):
         """Initialize TOU-optimized strategy with tariff period definitions.
 
         Args:
-            peak_hours: List of (start_hour, end_hour) tuples defining peak periods,
-                at least one, each with 0 <= start_hour < end_hour <= 24. For
-                example, [(17, 20)] represents peak period from 5 PM to 8 PM.
-                Every hour outside these ranges is off-peak.
+            peak_hours: List of (start_hour, end_hour) windows defining peak periods: at
+                least one, each a pair of whole hours from 0 to 24 that starts before it
+                ends, held as a tuple of int pairs. For example, [(17, 20)] represents
+                peak period from 5 PM to 8 PM. Every hour outside these ranges is off-peak.
 
         Raises:
-            ConfigurationError: If peak_hours holds no period, or a period
-                breaks 0 <= start_hour < end_hour <= 24
+            ConfigurationError: If peak_hours is not a list of at least one window; if an
+                hour is a bool, is not a finite whole number, or is outside 0 to 24, naming
+                it peak_hours[i][j] and the value; or if a window is not a (start, end)
+                pair that starts before it ends, naming it peak_hours[i] and the window.
         """
-        _require_valid_peak_hours(peak_hours)
-        self._peak_hours = peak_hours
+        self._peak_hours = _as_hour_windows(peak_hours, "peak_hours", _PEAK_WINDOW_HOURS)
 
     def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
         """Determine tariff period for given timestamp.
@@ -663,14 +694,15 @@ class PeakShavingStrategy(DispatchStrategy):
         """Initialize peak shaving strategy with grid import threshold.
 
         Args:
-            import_limit_kw: Maximum allowed grid import in kW. Battery will
-                discharge to keep grid import at or below this level.
+            import_limit_kw: Maximum allowed grid import in kW, read as a finite number
+                greater than 0, and held as the float read. Battery will discharge to keep
+                grid import at or below this level.
 
         Raises:
-            ConfigurationError: If import_limit_kw is not positive
+            ConfigurationError: If import_limit_kw is a bool, is not a finite number, or is
+                not greater than 0, naming import_limit_kw and the value.
         """
-        _require_valid_import_limit(import_limit_kw)
-        self._import_limit_kw = import_limit_kw
+        self._import_limit_kw = as_finite_float(import_limit_kw, "import_limit_kw", _IMPORT_LIMIT_KW)
 
     def decide_action(
         self,
@@ -804,8 +836,9 @@ class ChargeWindow:
             'daily'. A window that crosses midnight stays open into the morning after.
         start: The wall-clock time it opens at, on its strategy's zone, so it has no tzinfo.
         duration: How long it stays open: more than nothing, and at most a day.
-        target_soc_fraction: The state of charge it charges to, in (0, 1], as a fraction of
-            the battery capacity decide_action is given.
+        target_soc_fraction: The state of charge it charges to, as a fraction of the battery
+            capacity decide_action is given: greater than 0 and at most 1, held as the float
+            read.
         allow_discharge: Whether the battery may discharge while it is open, down to the target.
 
     Raises:
@@ -819,7 +852,8 @@ class ChargeWindow:
     allow_discharge: bool
 
     def __post_init__(self) -> None:
-        """Refuse a field the window cannot schedule, naming the field and its value."""
+        """Read target_soc_fraction as GridChargeConfig does, then refuse a field the window cannot schedule, naming the field and its value."""
+        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
         if not _are_opening_days(self.days):
             raise ConfigurationError(
                 "ChargeWindow's days are 'daily' or a non-empty frozenset of date.weekday() numbers, "
@@ -833,11 +867,6 @@ class ChargeWindow:
         if not timedelta(0) < self.duration <= _ONE_DAY:
             raise ConfigurationError(
                 f"ChargeWindow's duration is more than 0 and at most a day: got duration={self.duration!r}"
-            )
-        if not 0.0 < self.target_soc_fraction <= 1.0:
-            raise ConfigurationError(
-                "ChargeWindow's target_soc_fraction is in (0, 1]: "
-                f"got target_soc_fraction={self.target_soc_fraction!r}"
             )
 
     def covers(self, moment: datetime) -> bool:
