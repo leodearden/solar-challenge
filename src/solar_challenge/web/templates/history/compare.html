@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_panel, chart_scripts, chart_tabs, run_type_badge %}
+{% from "components/macros.html" import chart_scripts, chart_tabs, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -91,20 +91,7 @@
 
 {# Tabbed chart area #}
 <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Charts</h2>
-{% call chart_tabs([
-    {'key': 'bar', 'label': 'Energy Totals'},
-    {'key': 'radar', 'label': 'Efficiency Ratios'},
-]) %}
-    {# Bar chart #}
-    <div x-show="activeTab === 'bar'">
-        {{ chart_panel('chart-comparison-bar', 'Energy Totals Comparison', charts.get('bar'), '450px', empty_message='No chart data available.') }}
-    </div>
-
-    {# Radar chart #}
-    <div x-show="activeTab === 'radar'" x-cloak>
-        {{ chart_panel('chart-comparison-radar', 'Efficiency Ratios', charts.get('radar'), '450px', empty_message='No chart data available.') }}
-    </div>
-{% endcall %}
+{{ chart_tabs(tabs) }}
 
 {# Back link #}
 <div class="mt-6">

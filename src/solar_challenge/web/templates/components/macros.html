@@ -74,20 +74,18 @@
 {% endmacro %}
 
 
-{# The titled card of the chart static/js/chart-renderer.js draws from figure, in the chrome colours it reads from the container's style; a figure with nothing to draw gets empty_message's card, or none #}
-{% macro chart_panel(id, title, figure, min_height, empty_message='') %}
-{% if figure is undefined %}
-{{ figure() }}{# calling an undefined raises the UndefinedError that names it #}
-{% elif figure and figure != '{}' %}
+{# The titled card of a charts.ChartPanel: the container static/js/chart-renderer.js draws its figure in, in the chrome colours it reads from the container's style, or the reason it has none #}
+{% macro chart_panel(panel) %}
 <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
     <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ title }}</h3>
+        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ panel.title }}</h3>
     </div>
-    <div id="{{ id }}" class="w-full text-slate-800 dark:text-slate-200 [--chart-grid:theme(colors.slate.200)] dark:[--chart-grid:theme(colors.slate.700)]" style="min-height: {{ min_height }};" data-chart-figure="{{ figure }}"></div>
+    {% if panel.figure_json is not none %}
+    <div id="{{ panel.dom_id }}" class="w-full text-slate-800 dark:text-slate-200 [--chart-grid:theme(colors.slate.200)] dark:[--chart-grid:theme(colors.slate.700)]" style="min-height: {{ panel.height_px }}px;" data-chart-figure="{{ panel.figure_json }}"></div>
+    {% else %}
+    <p id="{{ panel.dom_id }}" class="p-6 text-sm text-slate-500 dark:text-slate-400">{{ panel.absence_reason }}</p>
+    {% endif %}
 </div>
-{% elif empty_message %}
-{% call card() %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>{% endcall %}
-{% endif %}
 {% endmacro %}
 
 
@@ -96,24 +94,36 @@
 {% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300' %}
 
 
-{# A page's chart tabs: tabs lists the key and label of each tab, the first tab opens, and caller() renders the panels, each shown while activeTab is its tab's key. tests/e2e/test_chart_tab_colours.py says why the bar's :class is an object #}
+{# The chart tabs' bar: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_chart_tab_colours.py says why its :class is an object #}
+{% macro tab_bar(tabs, model='activeTab') %}
+<div class="border-b border-slate-200 dark:border-slate-700 mb-6">
+    <nav class="-mb-px flex space-x-6" aria-label="Chart tabs" role="tablist">
+        {% for tab in tabs %}
+        <button
+            @click='{{ model }} = {{ tab.key | tojson }}'
+            class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
+            :class='{ {{ _selected_tab_classes | tojson }}: {{ model }} === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: {{ model }} !== {{ tab.key | tojson }} }'
+            role="tab"
+            aria-selected="{{ 'true' if loop.first else 'false' }}"
+            :aria-selected='{{ model }} === {{ tab.key | tojson }}'
+        >{{ tab.label }}</button>
+        {% endfor %}
+    </nav>
+</div>
+{% endmacro %}
+
+
+{# A page's charts.ChartTab tabs: their tab_bar, the first tab open, then each tab's panels, shown while activeTab is its key #}
 {% macro chart_tabs(tabs) %}
 <div x-data='{ activeTab: {{ tabs[0].key | tojson }} }' class="mb-8">
-    <div class="border-b border-slate-200 dark:border-slate-700 mb-6">
-        <nav class="-mb-px flex space-x-6" aria-label="Chart tabs" role="tablist">
-            {% for tab in tabs %}
-            <button
-                @click='activeTab = {{ tab.key | tojson }}'
-                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
-                :class='{ {{ _selected_tab_classes | tojson }}: activeTab === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: activeTab !== {{ tab.key | tojson }} }'
-                role="tab"
-                aria-selected="{{ 'true' if loop.first else 'false' }}"
-                :aria-selected='activeTab === {{ tab.key | tojson }}'
-            >{{ tab.label }}</button>
-            {% endfor %}
-        </nav>
+    {{ tab_bar(tabs) }}
+    {% for tab in tabs %}
+    <div x-show='activeTab === {{ tab.key | tojson }}'{% if not loop.first %} x-cloak{% endif %} class="space-y-6">
+        {% for panel in tab.panels %}
+        {{ chart_panel(panel) }}
+        {% endfor %}
     </div>
-    {{ caller() }}
+    {% endfor %}
 </div>
 {% endmacro %}
 

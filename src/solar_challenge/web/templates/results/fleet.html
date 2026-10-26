@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import chart_panel, chart_scripts, chart_tabs, stat_card %}
+{% from "components/macros.html" import chart_scripts, chart_tabs, stat_card %}
 
 {% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
 
@@ -26,28 +26,7 @@
 </div>
 
 {# ===== Tabbed Chart Display ===== #}
-{% call chart_tabs([
-    {'key': 'aggregate', 'label': 'Aggregate'},
-    {'key': 'per_home', 'label': 'Per-Home'},
-    {'key': 'distributions', 'label': 'Distributions'},
-]) %}
-    {# ===== Tab 1: Aggregate ===== #}
-    <div x-show="activeTab === 'aggregate'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-aggregate-timeline', 'Fleet Aggregate Power Flow', charts.aggregate_timeline, '500px') }}
-        {{ chart_panel('chart-grid-impact', 'Net Grid Impact', charts.grid_impact, '450px') }}
-    </div>
-
-    {# ===== Tab 2: Per-Home ===== #}
-    <div x-show="activeTab === 'per_home'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-heatmap', 'Per-Home Energy Metrics', charts.heatmap, '450px') }}
-        {{ chart_panel('chart-box-plots', 'Energy Metrics Distribution', charts.box_plots, '450px') }}
-    </div>
-
-    {# ===== Tab 3: Distributions ===== #}
-    <div x-show="activeTab === 'distributions'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-distribution-histograms', 'Fleet Distribution Histograms', charts.distribution_histograms, '400px', empty_message='No distribution data available.') }}
-    </div>
-{% endcall %}
+{{ chart_tabs(tabs) }}
 
 {# ===== Action Buttons ===== #}
 <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">

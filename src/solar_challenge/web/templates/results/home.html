@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import chart_panel, chart_scripts, chart_tabs, stat_card %}
+{% from "components/macros.html" import chart_scripts, chart_tabs, stat_card %}
 
 {% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
 
@@ -31,41 +31,7 @@
 </div>
 
 {# ===== Tabbed Chart Display ===== #}
-{% call chart_tabs([
-    {'key': 'overview', 'label': 'Overview'},
-    {'key': 'power_flow', 'label': 'Power Flow'},
-    {'key': 'battery_finance', 'label': 'Battery & Finance'},
-    {'key': 'analysis', 'label': 'Analysis'},
-]) %}
-    {# ===== Tab 1: Overview ===== #}
-    <div x-show="activeTab === 'overview'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-sankey', 'Energy Flow', charts.sankey, '450px') }}
-        {{ chart_panel('chart-daily-balance', 'Daily Energy Balance', charts.daily_balance, '420px') }}
-    </div>
-
-    {# ===== Tab 2: Power Flow ===== #}
-    <div x-show="activeTab === 'power_flow'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-power-flow', 'Power Flow Timeline', charts.power_flow, '500px') }}
-    </div>
-
-    {# ===== Tab 3: Battery & Finance ===== #}
-    <div x-show="activeTab === 'battery_finance'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-battery-soc', 'Battery State of Charge', charts.battery_soc, '400px') }}
-        {{ chart_panel('chart-financial', 'Financial Breakdown', charts.financial, '420px') }}
-        {{ chart_panel('chart-monthly', 'Monthly Summary', charts.monthly, '420px') }}
-    </div>
-
-    {# ===== Tab 4: Analysis ===== #}
-    <div x-show="activeTab === 'analysis'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-seasonal', 'Seasonal Comparison', charts.seasonal, '420px', empty_message='Seasonal comparison requires at least 180 days of simulation data.') }}
-        {% if charts.heat_pump %}
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {{ chart_panel('chart-hp-load-share', 'Heat Pump Load Share', charts.heat_pump.load_share_chart, '400px') }}
-            {{ chart_panel('chart-hp-load-profile', 'Heat Pump Load Profile', charts.heat_pump.load_profile_chart, '400px') }}
-        </div>
-        {% endif %}
-    </div>
-{% endcall %}
+{{ chart_tabs(tabs) }}
 
 {# ===== Action Buttons ===== #}
 <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">

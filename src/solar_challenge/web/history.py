@@ -18,7 +18,7 @@ from flask import (
     url_for,
 )
 
-from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
+from solar_challenge.web.charts import comparison_tabs
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -87,13 +87,8 @@ def compare_page() -> str | Response:
 
     summaries = [r.get("summary", {}) for r in runs]
     labels = [r.get("name", f"Run {i+1}") for i, r in enumerate(runs)]
-    charts = {
-        "bar": comparison_bar_chart(summaries, labels),
-        "radar": comparison_radar(summaries, labels),
-    }
-
     return str(render_template(
         "history/compare.html",
         runs=runs,
-        charts=charts,
+        tabs=comparison_tabs(summaries, labels),
     ))

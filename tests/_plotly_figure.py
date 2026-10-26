@@ -22,15 +22,15 @@ Usage::
         traces_by_name,
     )
 
-    assert traces(charts.fleet_heatmap(summaries))[0]["y"] == ["Home 1", "Home 2"]
-    assert traces_by_name(charts.financial_breakdown(results))["Daily Cost"]["y"] == [2.88, 2.88]
-    assert annotation_texts(charts.financial_breakdown(unpriced_results)) == [
+    assert traces(charts.fleet_heatmap(summaries).content)[0]["y"] == ["Home 1", "Home 2"]
+    assert traces_by_name(charts.financial_breakdown(results).content)["Daily Cost"]["y"] == [2.88, 2.88]
+    assert annotation_texts(charts.financial_breakdown(unpriced_results).content) == [
         "No tariff configured — cost and revenue tracking unavailable"
     ]
-    soc_chart = charts.battery_soc_chart(results, BatteryConfig(capacity_kwh=10.0))
+    soc_chart = charts.battery_soc_chart(results, BatteryConfig(capacity_kwh=10.0)).content
     assert annotations_by_text(soc_chart)["Min SOC"]["y"] == 1.0
 
-    figure = charts.sankey_diagram(summary)
+    figure = charts.sankey_diagram(summary).content
     assert sankey_link_values(figure)[("Grid", "Battery")] == 2.0
     assert opaque(sankey_link_colours(figure)[("Grid", "Demand")]) == COLOUR_PALETTE["grid_import"]
     assert sankey_node_colours(figure)["Battery"] == COLOUR_PALETTE["battery_charge"]
