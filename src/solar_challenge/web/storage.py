@@ -10,6 +10,12 @@ Storage structure:
 
 A save writes the run's documents, then its format.json, then its runs row.
 
+Only the lifecycle methods write a run's status: create_run records a run 'running', and
+mark_run_completed, mark_run_failed and fail_interrupted_runs move it on, each from 'running'
+only. mark_run_completed and mark_run_failed refuse a run in any other status with
+RunStatusConflict, and fail_interrupted_runs leaves it as it was
+(docs/prds/job-events-and-sse-framing.md §3.4).
+
 The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
 and for a step carrying a run-document step, migrate_stored_run_files, which brings every
 stored run's files forward before the step's transaction, and migrate_runs_table_documents,
@@ -597,6 +603,24 @@ _FAILED_RUN_STATUS: RunStatus = "failed"
 _INTERRUPTED_BY_RESTART_MESSAGE = "Interrupted by server restart"
 
 
+class RunStatusConflict(Exception):
+    """A run a lifecycle method of RunStorage cannot move to *wanted*, as a run's status moves only from 'running'.
+
+    found is the status the run's row holds, or None when no run is recorded under run_id. The
+    message names the run, the status found and the status wanted.
+    """
+
+    def __init__(self, run_id: str, found: RunStatus | None, wanted: RunStatus) -> None:
+        held = "no run is recorded under that id" if found is None else f"the run is {found!r}"
+        super().__init__(
+            f"Run {run_id!r} cannot be marked {wanted!r}: a run's status moves only from "
+            f"{UNFINISHED_RUN_STATUS!r}, and {held}"
+        )
+        self.run_id = run_id
+        self.found = found
+        self.wanted = wanted
+
+
 def _run_row_insert() -> str:
     """The statement inserting a RunRecord, bound by field name, as a new runs row; an id a run already has fails it."""
     columns = [field.name for field in fields(RunRecord)]
@@ -623,6 +647,37 @@ _RUN_ROW_UPSERT = _run_row_upsert()
 def _now() -> str:
     """The time now, as the ISO 8601 UTC text a runs row records its times in."""
     return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class _RunEnding:
+    """How a run that stops running ends, as its runs row records it: the status it ends in, its error message, None unless it failed, and when it ended."""
+
+    status: RunStatus
+    error_message: str | None
+    completed_at: str
+
+
+def _completed_now() -> _RunEnding:
+    """The ending of a run that completes now."""
+    return _RunEnding(status=_COMPLETED_RUN_STATUS, error_message=None, completed_at=_now())
+
+
+def _failed_now(message: str) -> _RunEnding:
+    """The ending of a run that fails now, with *message* as its error."""
+    return _RunEnding(status=_FAILED_RUN_STATUS, error_message=message, completed_at=_now())
+
+
+_END_RUNNING_RUNS = (
+    "UPDATE runs SET status = :status, error_message = :error_message, completed_at = :completed_at "
+    "WHERE status = :running"
+)
+"""The statement writing a _RunEnding, bound by field name, to every running run, the only status a run moves from; a condition joined with AND narrows the runs it ends."""
+
+
+def _ending_values(ending: _RunEnding) -> dict[str, str | None]:
+    """The values _END_RUNNING_RUNS binds to end the running runs as *ending* says."""
+    return {**asdict(ending), "running": UNFINISHED_RUN_STATUS}
 
 
 def _saved_run_row(
@@ -753,41 +808,57 @@ class RunStorage:
             conn.execute(_RUN_ROW_INSERT, asdict(record))
         return record
 
+    def mark_run_completed(self, run_id: str) -> None:
+        """Record that run *run_id* completed: completed now, with no error.
+
+        Raises:
+            RunStatusConflict: The run is not running, or no run is recorded under *run_id*,
+                found None then, as a job never completes a run deleted while it ran (contract
+                C8, docs/prds/run-store-one-owner.md §3.7). Nothing is written then.
+        """
+        conflict = self._end_running_run(run_id, _completed_now())
+        if conflict is not None:
+            raise conflict
+
     def mark_run_failed(self, run_id: str, message: str) -> None:
         """Record that run *run_id* failed with *message*: failed, with *message* as its error, completed now.
 
-        The run is marked failed whatever its status. When no run has that id, nothing is written.
+        When no run has that id, nothing is written: a run deleted while its job ran stays deleted.
+
+        Raises:
+            RunStatusConflict: The run is not running, e.g. it completed; it is left as it was.
         """
-        self._fail_runs("id = :run_id", {"run_id": run_id}, message)
+        conflict = self._end_running_run(run_id, _failed_now(message))
+        if conflict is not None and conflict.found is not None:
+            raise conflict
 
     def fail_interrupted_runs(self) -> int:
         """Mark every running run failed, as mark_run_failed marks one, with the message "Interrupted by server restart".
 
         A server calls it when it starts, before it runs any job, so each running run is one whose
-        job an earlier server was running when it stopped.
+        job an earlier server was running when it stopped. A run in any other status is left as it was.
 
         Returns:
             The number of runs it marked failed.
         """
-        return self._fail_runs(
-            "status = :unfinished_status", {"unfinished_status": UNFINISHED_RUN_STATUS}, _INTERRUPTED_BY_RESTART_MESSAGE
-        )
+        ending = _failed_now(_INTERRUPTED_BY_RESTART_MESSAGE)
+        with self.database.transaction() as conn:
+            return conn.execute(_END_RUNNING_RUNS, _ending_values(ending)).rowcount
 
-    def _fail_runs(self, condition: str, condition_values: Mapping[str, str], message: str) -> int:
-        """Mark failed, with *message* as its error and completed now, each run whose row matches the SQL *condition*.
-
-        *condition* binds by name the values *condition_values* holds.
+    def _end_running_run(self, run_id: str, ending: _RunEnding) -> RunStatusConflict | None:
+        """End run *run_id* as *ending* says if it is running, in one transaction.
 
         Returns:
-            The number of runs it marked failed.
+            None when the run was running and has ended. Otherwise the RunStatusConflict naming
+            the status its row holds, found None when no run is recorded under *run_id*; nothing
+            has been written then.
         """
         with self.database.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE runs SET status = :failed_status, error_message = :message, completed_at = :completed_at "
-                f"WHERE {condition}",
-                {**condition_values, "failed_status": _FAILED_RUN_STATUS, "message": message, "completed_at": _now()},
-            )
-            return cursor.rowcount
+            ended = conn.execute(f"{_END_RUNNING_RUNS} AND id = :run_id", {**_ending_values(ending), "run_id": run_id})
+            if ended.rowcount == 1:
+                return None
+            row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return RunStatusConflict(run_id, None if row is None else row["status"], ending.status)
 
     def save_home_run(
         self,
