@@ -30,19 +30,33 @@ _MODULES_NAMING_THROWAWAY_DOCS = (
 
 _UNSCANNED = (*RECORD_DIRECTORIES, *_MODULES_NAMING_THROWAWAY_DOCS)
 
-_DOC_POINTER = re.compile(r"(?<![\w./-])docs/(?:[\w.-]+/)*[\w.-]*\w")
+_SECTION_NUMBER = r"\d+(?:\.\d+)*"
+
+_DOC_POINTER = re.compile(
+    rf"""
+    (?<![\w./-])
+    (?P<path>docs/(?:[\w.-]+/)*[\w.-]*\w)
+    (?:`?(?:\](?:\([^)\s]*\))?)?,?\s+§(?P<section>{_SECTION_NUMBER})(?!\w))?
+    """,
+    re.VERBOSE,
+)
 
 
 @dataclass(frozen=True)
 class _DocPointer:
-    """A path into docs/: the file naming it, relative to the project root, its line, and the path it names."""
+    """A path into docs/: the file naming it, relative to the project root, its line, the path it names and its section.
+
+    The section is the number written right after the path, as 3.1 in docs/<name>.md §3.1, or None if none is.
+    """
 
     source: PurePosixPath
     line: int
     path: PurePosixPath
+    section: str | None
 
     def __str__(self) -> str:
-        return f"{self.source}:{self.line}: {self.path}"
+        pointer = f"{self.source}:{self.line}: {self.path}"
+        return pointer if self.section is None else f"{pointer} §{self.section}"
 
 
 def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPointer]:
@@ -54,7 +68,9 @@ def _doc_pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_DocPoin
             continue
         for match in _DOC_POINTER.finditer(text):
             line = text.count("\n", 0, match.start()) + 1
-            pointers.append(_DocPointer(source=source, line=line, path=PurePosixPath(match[0])))
+            pointers.append(
+                _DocPointer(source=source, line=line, path=PurePosixPath(match["path"]), section=match["section"])
+            )
     return pointers
 
 
