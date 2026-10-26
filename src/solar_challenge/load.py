@@ -4,7 +4,6 @@
 import contextlib
 import datetime
 import logging
-import math
 import os
 import random
 import threading
@@ -16,8 +15,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from solar_challenge.number_fields import POSITIVE, Interval, as_finite_float, as_whole_number, read_field
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, SimulationWindow
-from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
@@ -39,6 +38,9 @@ OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
 }
 
 
+_HOUSEHOLD_OCCUPANTS = Interval(1, 10)
+
+
 def household_occupant_count(occupants: float) -> int:
     """Return *occupants* as the household occupant count a LoadConfig holds, a whole number from 1 to 10.
 
@@ -48,17 +50,10 @@ def household_occupant_count(occupants: float) -> int:
     gives the plain int it equals.
 
     Raises:
-        ValueError: If *occupants* is below 1 or above 10, or is not a whole number; a
-            bool, Python's or numpy's, is not one.
+        ConfigurationError: If *occupants* is not a whole number from 1 to 10, naming
+            household_occupants; a bool, Python's or numpy's, is not one.
     """
-    if not occupants >= 1:
-        raise ValueError(f"Household occupants must be at least 1, got {occupants}")
-    if occupants > 10:
-        raise ValueError(f"Household occupants seems unrealistic: {occupants}")
-    whole_occupants = whole_number(occupants)
-    if whole_occupants is None:
-        raise ValueError(f"Household occupants must be a whole number, got {occupants}")
-    return whole_occupants
+    return as_whole_number(occupants, "household_occupants", _HOUSEHOLD_OCCUPANTS)
 
 
 @dataclass(frozen=True)
@@ -68,14 +63,16 @@ class LoadConfig:
     Attributes:
         annual_consumption_kwh: Target annual electricity consumption in kWh.
             If not specified and household_occupants is set, derived from OFGEM_TDCV_BY_OCCUPANTS.
-        household_occupants: Number of household occupants, held to the rule
-            household_occupant_count states. Affects consumption and profile shape.
+        household_occupants: Number of household occupants, read by the rule
+            household_occupant_count states and held as the int it is. Affects
+            consumption and profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
             Set False to force the deterministic Elexon Profile Class 1 shape.
-        seed: Seed of the stochastic profile: any int reproduces its profile, and
-            None draws fresh entropy on each call
+        seed: Seed of the stochastic profile, read as a whole number and held as the
+            int it is: any int reproduces its profile, and None draws fresh entropy on
+            each call
     """
 
     annual_consumption_kwh: Optional[float] = None
@@ -87,16 +84,10 @@ class LoadConfig:
     seed: Optional[int] = None  # Seed for reproducible stochastic profiles
 
     def __post_init__(self) -> None:
-        """Validate load configuration parameters."""
-        object.__setattr__(
-            self, "household_occupants", household_occupant_count(self.household_occupants)
-        )
-
-        # Validate annual_consumption if provided
-        if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
-            raise ValueError(
-                f"Annual consumption must be positive and finite, got {self.annual_consumption_kwh} kWh"
-            )
+        """Read each number setting."""
+        read_field(self, "annual_consumption_kwh", as_finite_float, POSITIVE, optional=True)
+        read_field(self, "household_occupants", as_whole_number, _HOUSEHOLD_OCCUPANTS)
+        read_field(self, "seed", as_whole_number, optional=True)
 
     def get_annual_consumption(self) -> float:
         """Get annual consumption, deriving from occupants if not explicitly set.
