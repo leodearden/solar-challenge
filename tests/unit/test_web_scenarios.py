@@ -24,7 +24,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import sweep_parameter_chart
+from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
@@ -32,7 +32,8 @@ from solar_challenge.web.simulation_params import MAX_DAYS
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
-from tests._plotly_figure import traces
+from tests._plotly_figure import traces_by_name
+from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
 
 
@@ -818,62 +819,92 @@ class TestBuilderScenarioYaml:
         assert "latitude" in response.get_json()["error"]
 
 
+_PV_CAPACITY = "PV Capacity (kW)"
+
+# The three metrics' bests fall at three different values, and grid import's highest (2.0) is not
+# its lowest (4.0). The ratios are exact in binary, so their percentages are exactly 50, 37.5 and 25.
+_THREE_POINTS = (
+    SweepPoint(
+        2.0, home_summary(total_generation_kwh=72.0, self_consumption_ratio=0.5, total_grid_import_kwh=12.0)
+    ),
+    SweepPoint(
+        4.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        6.0, home_summary(total_generation_kwh=144.0, self_consumption_ratio=0.25, total_grid_import_kwh=6.0)
+    ),
+)
+
+_SWEEP_PANEL_HEADINGS = [
+    ("chart-sweep-generation", "Generation (kWh) vs PV Capacity (kW)"),
+    ("chart-sweep-self-consumption", "Self-Consumption (%) vs PV Capacity (kW)"),
+    ("chart-sweep-grid-import", "Grid Import (kWh) vs PV Capacity (kW)"),
+]
+
+
+def _figure(panel: ChartPanel) -> str:
+    """*panel*'s figure JSON, failing the test when the panel is an absence."""
+    assert panel.figure_json is not None, f"{panel.dom_id} drew no figure: {panel.absence_reason}"
+    return panel.figure_json
+
+
 class TestSweepChart:
-    """Tests for the sweep_parameter_chart function in charts.py."""
+    """sweep_panels draws one panel per SweepMetric, each through sweep_parameter_chart, from a sweep's finished points."""
 
-    def test_sweep_parameter_chart_returns_json(self) -> None:
-        """Test sweep_parameter_chart returns a panel of valid Plotly JSON."""
-        result = sweep_parameter_chart(
-            [2.0, 4.0, 6.0, 8.0],
-            [50.5, 65.3, 72.1, 78.4],
-            "PV Capacity (kW)",
-            "Self-Consumption (%)",
-        ).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
+    def test_sweep_panels_draw_one_panel_per_metric_in_member_order(self) -> None:
+        panels = sweep_panels(_PV_CAPACITY, _THREE_POINTS)
 
-    def test_sweep_parameter_chart_has_traces(self) -> None:
-        """Test sweep_parameter_chart includes main, optimal, and trend traces."""
-        result = sweep_parameter_chart(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            [10.0, 25.0, 40.0, 55.0, 70.0],
-            "Battery (kWh)",
-            "Grid Import (kWh)",
-        ).content
-        # Should have at least the main trace, optimal marker, and trend line
-        assert len(traces(result)) >= 2
+        assert [(panel.dom_id, panel.title) for panel in panels] == _SWEEP_PANEL_HEADINGS
+        assert [panel.dom_id for panel in panels] == [metric.dom_id for metric in SweepMetric]
+
+    def test_each_sweep_panel_draws_its_metric_at_each_swept_value_beside_the_optimal_point_and_the_trend(
+        self,
+    ) -> None:
+        drawn = []
+        for panel in sweep_panels(_PV_CAPACITY, _THREE_POINTS):
+            by_name = traces_by_name(_figure(panel))
+            names = list(by_name)
+            drawn.append((names, by_name[names[0]]["x"], by_name[names[0]]["y"]))
+
+        assert drawn == [
+            (["Generation (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [72.0, 108.0, 144.0]),
+            (["Self-Consumption (%)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [50.0, 37.5, 25.0]),
+            (["Grid Import (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [12.0, 3.0, 6.0]),
+        ]
 
     @pytest.mark.parametrize(
-        ("param_values", "metric_values"),
-        [pytest.param([], [], id="no-points"), pytest.param([4.0], [65.3], id="one-point")],
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 6.0, 144.0, id="generation-at-its-highest"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 2.0, 50.0, id="self-consumption-at-its-highest"),
+            pytest.param(SweepMetric.GRID_IMPORT, 4.0, 3.0, id="grid-import-at-its-lowest"),
+        ],
     )
-    def test_sweep_parameter_chart_of_fewer_than_two_points_names_the_rule_and_the_sweeps_points_in_its_titled_panel(
-        self, param_values: list[float], metric_values: list[float]
+    def test_sweep_parameter_chart_marks_the_optimal_point_by_its_metrics_direction(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
     ) -> None:
-        panel = sweep_parameter_chart(param_values, metric_values, "PV Capacity (kW)", "Self-Consumption (%)")
+        optimal = traces_by_name(_figure(sweep_parameter_chart(_PV_CAPACITY, _THREE_POINTS, metric)))["Optimal"]
 
-        assert (panel.title, panel.absence_reason) == (
-            "Self-Consumption (%) vs PV Capacity (kW)",
-            sweep_reason(len(param_values)),
-        )
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
 
-    def test_sweep_parameter_chart_refuses_metric_values_that_are_not_one_per_parameter_value(self) -> None:
-        with pytest.raises(
-            ValueError,
-            match=r"metric_values must be one value per parameter value, 3 of them; got \[50\.5, 65\.3\]",
-        ):
-            sweep_parameter_chart([2.0, 4.0, 6.0], [50.5, 65.3], "PV Capacity (kW)", "Self-Consumption (%)")
+    @pytest.mark.parametrize(
+        "points", [pytest.param((), id="no-points"), pytest.param(_THREE_POINTS[1:2], id="one-point")]
+    )
+    def test_sweep_panels_of_fewer_than_two_points_name_the_rule_and_the_sweeps_points_in_each_titled_panel(
+        self, points: tuple[SweepPoint, ...]
+    ) -> None:
+        panels = sweep_panels(_PV_CAPACITY, points)
 
-    def test_sweep_parameter_chart_two_points(self) -> None:
-        """Test sweep_parameter_chart works with just two data points."""
-        result = sweep_parameter_chart(
-            [1.0, 10.0],
-            [20.0, 80.0],
-            "Param",
-            "Metric",
-        ).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
-        assert "layout" in parsed
+        assert [(panel.dom_id, panel.title, panel.absence_reason) for panel in panels] == [
+            (dom_id, title, sweep_reason(len(points))) for dom_id, title in _SWEEP_PANEL_HEADINGS
+        ]
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
+    def test_a_sweep_point_refuses_a_value_that_is_not_finite(self, value: float) -> None:
+        with pytest.raises(ValueError, match=r"SweepPoint\.value"):
+            SweepPoint(value, home_summary())
+
+    @pytest.mark.parametrize("label", ["", "   "], ids=["empty", "spaces"])
+    def test_sweep_parameter_chart_refuses_a_blank_parameter_label(self, label: str) -> None:
+        with pytest.raises(ValueError, match="parameter_label"):
+            sweep_parameter_chart(label, _THREE_POINTS, SweepMetric.GENERATION)

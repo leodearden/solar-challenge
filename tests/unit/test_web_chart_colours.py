@@ -112,6 +112,7 @@ _SUMMARY = SummaryStatistics(
     net_cost_gbp=0.0,
     total_grid_charge_kwh=4.0,
 )
+_SWEEP_POINTS = tuple(charts.SweepPoint(value, _SUMMARY) for value in (2.0, 4.0, 6.0))
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 _TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
@@ -165,8 +166,9 @@ _FIGURES: dict[str, _FigureCase] = {
     ),
     "sweep_parameter_chart": _FigureCase(
         charts.sweep_parameter_chart,
-        lambda build: (build([2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"),),
+        lambda build: (build("PV Capacity (kW)", _SWEEP_POINTS, charts.SweepMetric.GENERATION),),
     ),
+    "sweep_panels": _FigureCase(charts.sweep_panels, lambda build: build("PV Capacity (kW)", _SWEEP_POINTS)),
     "home_results_tabs": _FigureCase(
         charts.home_results_tabs,
         lambda build: _panels_of(
