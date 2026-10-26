@@ -256,7 +256,7 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 
 
 def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies, and each named tuple field its instances read from the tuple, which holds every field.
 
     As in undeclared_attributes, an immutable type raises TypeError naming it before
     anything else is read, a class with no class statement inspect can read raises
@@ -278,7 +278,12 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """
     _refuse_immutable_type(cls)
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
-    return declared - _attributes_set_on_self(cls, reviewed) - _defaulted_fields(cls)
+    return (
+        declared
+        - _attributes_set_on_self(cls, reviewed)
+        - _defaulted_fields(cls)
+        - _fields_read_from_the_tuple(cls)
+    )
 
 
 class _Spelling(str):
@@ -607,8 +612,10 @@ def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
     return issubclass(cls, tuple) and hasattr(cls, "_fields")
 
 
-def _fields_read_from_the_tuple(cls: type[typing.NamedTuple]) -> set[str]:
-    """The names of the named tuple *cls*'s fields that its instances read from the tuple: each that no class in *cls*'s MRO binds before the class typing.NamedTuple or collections.namedtuple made, which binds each field's descriptor beside _fields; a value bound earlier hides the field."""
+def _fields_read_from_the_tuple(cls: type) -> set[str]:
+    """The names of *cls*'s named tuple fields that its instances read from the tuple: each that no class in *cls*'s MRO binds before the class typing.NamedTuple or collections.namedtuple made, which binds each field's descriptor beside _fields; a value bound earlier hides the field; none if *cls* is no named tuple."""
+    if not _is_named_tuple(cls):
+        return set()
     return {
         name
         for name in cls._fields
