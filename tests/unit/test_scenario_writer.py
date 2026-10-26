@@ -28,8 +28,6 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.ev import EVConfig
-from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location

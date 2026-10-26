@@ -173,7 +173,7 @@ def test_built_wheel_is_typed(built_wheel: Path) -> None:
         "and that pyproject.toml has:\n\n"
         "    [tool.setuptools.package-data]\n"
         '    solar_challenge = ["py.typed"]\n\n'
-        f"Wheel members:\n" + "\n".join(f"  {n}" for n in sorted(names))
+        "Wheel members:\n" + "\n".join(f"  {n}" for n in sorted(names))
     )
 
 

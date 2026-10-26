@@ -66,7 +66,6 @@ def _create_valid_demand(
     peak = np.where((hour >= 17) & (hour <= 21), 1.5, 0.5)
 
     # Scale to annual consumption
-    days = len(index) / (24 * 60)
     daily_target = annual_kwh / 365
     raw_demand = base + peak * 0.7
 
