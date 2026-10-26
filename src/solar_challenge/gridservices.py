@@ -231,7 +231,7 @@ class EventWindow:
 
     Specifies *when* capacity-at-events payments can be earned: the set of
     eligible calendar months, week-days (ISO Monday=0), and clock hours, plus
-    aggregate statistics used by the γ income formula.
+    aggregate statistics used by the capacity-at-events income formula.
 
     Attributes:
         months: Tuple of eligible months (1=Jan … 12=Dec).
@@ -585,7 +585,7 @@ class GridServicesAtEvents:
 
     .. note::
         ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
-        invariant.  Consumers (**δ**, **ε**) must NOT re-apply
+        invariant.  Consumers must NOT re-apply
         ``(1 - aggregator_share)`` to the per-window tuple — it has already
         been applied.
     """
@@ -633,7 +633,7 @@ def compute_grid_services_at_events(
     """Compute banded availability + utilisation income from grid-services events.
 
     Applies the capacity-at-events pricing formula per event window using the
-    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` (β) and
+    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` and
     the rates from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
 
     **Rate resolution** (override precedence):
@@ -673,7 +673,7 @@ def compute_grid_services_at_events(
     Returns:
         A :class:`GridServicesAtEvents` with:
 
-        - ``per_window_avail_kw`` — firm spare capacity per window (from β).
+        - ``per_window_avail_kw`` — firm spare capacity per window (from :func:`compute_fleet_spare_capacity_kw`).
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
     """
