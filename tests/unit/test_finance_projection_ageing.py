@@ -17,7 +17,6 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig, compute_soh
 from solar_challenge.finance import project_multi_year
-from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.pv import calculate_degradation_factor
 from tests._finance_builders import (
     make_fleet_results,
@@ -29,6 +28,7 @@ from tests._finance_builders import (
 if TYPE_CHECKING:
     import pandas as pd
 
+    from solar_challenge.fleet import FleetConfig, FleetResults
     from solar_challenge.home import HomeConfig
 
 
