@@ -6,6 +6,7 @@ import pickle
 import re
 from collections.abc import Callable
 
+import numpy as np
 import pytest
 from solar_challenge.battery import (
     BatteryConfig,
@@ -126,10 +127,32 @@ class TestBatteryConfigValidation:
         assert type(capacity_kwh) is float
 
     @pytest.mark.parametrize("direction", ["charge", "discharge"])
-    def test_require_valid_power_limit_refuses_as_battery_config_does(self, direction) -> None:
-        with pytest.raises(ConfigurationError) as exc_info:
-            require_valid_power_limit(0.0, direction)
-        assert str(exc_info.value) == f"max_{direction}_kw must be greater than 0, got 0.0"
+    @pytest.mark.parametrize(
+        "kw", [0.0, -1.0, math.nan, math.inf, True, pytest.param("x", id="word")]
+    )
+    def test_require_valid_power_limit_refuses_as_battery_config_does(
+        self, direction: str, kw: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as config_refusal:
+            BatteryConfig(capacity_kwh=5.0, **{f"max_{direction}_kw": kw})
+        with pytest.raises(ConfigurationError) as helper_refusal:
+            require_valid_power_limit(kw, direction)
+        assert str(helper_refusal.value) == str(config_refusal.value)
+
+    @pytest.mark.parametrize("direction", ["charge", "discharge"])
+    @pytest.mark.parametrize(
+        "kw", [3, pytest.param(np.float64(3.5), id="numpy"), pytest.param("3.5", id="quoted")]
+    )
+    def test_require_valid_power_limit_returns_the_limit_as_battery_config_holds_it(
+        self, direction: str, kw: object
+    ) -> None:
+        field = f"max_{direction}_kw"
+        held = getattr(BatteryConfig(capacity_kwh=5.0, **{field: kw}), field)
+
+        read = require_valid_power_limit(kw, direction)
+
+        assert read == held
+        assert type(read) is float
 
 
 class TestBatteryCapacitySetting:
@@ -137,10 +160,17 @@ class TestBatteryCapacitySetting:
 
     @pytest.mark.parametrize(
         ("capacity_kwh", "expected"),
-        [(0.0, False), (0, False), (1e-9, True), (5.0, True)],
+        [
+            (0.0, False),
+            (0, False),
+            (1e-9, True),
+            (5.0, True),
+            pytest.param("0", False, id="quoted-0"),
+            pytest.param("4", True, id="quoted-4"),
+        ],
     )
     def test_a_positive_capacity_is_a_battery_and_zero_is_none(
-        self, capacity_kwh: float, expected: bool
+        self, capacity_kwh: object, expected: bool
     ) -> None:
         assert has_battery(capacity_kwh, "battery_kwh") is expected
 
@@ -162,11 +192,22 @@ class TestBatteryCapacitySetting:
             check(capacity_kwh, "--battery-kwh")
         assert str(exc_info.value) == f"--battery-kwh must be {requirement}, got {capacity_kwh!r}"
 
-    @pytest.mark.parametrize("capacity_kwh", [0.0, 5.0])
-    def test_require_valid_capacity_setting_accepts_zero_and_a_positive_finite_capacity(
-        self, capacity_kwh: float
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "expected"),
+        [
+            (0, 0.0),
+            (5.0, 5.0),
+            pytest.param(np.float64(5.0), 5.0, id="numpy"),
+            pytest.param("5", 5.0, id="quoted"),
+        ],
+    )
+    def test_require_valid_capacity_setting_returns_zero_or_a_positive_finite_capacity_as_a_float(
+        self, capacity_kwh: object, expected: float
     ) -> None:
-        assert require_valid_capacity_setting(capacity_kwh, "battery_kwh") is None
+        read = require_valid_capacity_setting(capacity_kwh, "battery_kwh")
+
+        assert read == expected
+        assert type(read) is float
 
 
 class TestBatteryConfigGridCharging:
@@ -230,6 +271,14 @@ class TestBatteryConfigRoundTripEfficiency:
         )
         assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.81))
         assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.81))
+
+    @pytest.mark.parametrize("field", ["charge_efficiency", "discharge_efficiency"])
+    def test_a_per_direction_efficiency_is_refused_even_where_a_round_trip_one_replaces_it(
+        self, field: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, efficiency=0.9, **{field: 0})
+        assert str(exc_info.value) == f"{field} must be greater than 0 and at most 1, got 0"
 
     def test_efficiency_zero_raises(self) -> None:
         """efficiency == 0 raises ValueError."""

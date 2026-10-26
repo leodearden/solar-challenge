@@ -751,7 +751,10 @@ is checked. The tag accepts `True` wherever 1 is in range, e.g.
 EV's required charge and a location's altitude. EV hours, `household_occupants`
 and `LoadConfig.seed` must be whole numbers: `EVConfig("7kW", 17.5)` is
 refused, which resolves the task 914 line's `IndexError`. `Location` refuses a
-`timezone` zoneinfo does not know, e.g. `"Europe/Londn"`. Each type holds what
+`timezone` zoneinfo does not know, e.g. `"Europe/Londn"`. `BatteryConfig` reads
+its `charge_efficiency` and `discharge_efficiency` even where a round-trip
+`efficiency` replaces them, so `BatteryConfig(capacity_kwh=5, efficiency=0.9,
+charge_efficiency=0)`, which the tag builds, is refused. Each type holds what
 it read: `PVConfig(capacity_kw=4).capacity_kw` is `4.0` and
 `EVConfig("7kW", 18.0).arrival_hour` is `18`; a numpy scalar becomes the Python
 number it equals, and a numeric string such as `"4"` is read as its number, so
@@ -763,11 +766,13 @@ finite, got 0 kW`. `require_valid_power_limit`, `require_valid_capacity_setting`
 `has_battery`, `household_occupant_count`, `calculate_degradation_factor` and
 `calculate_cop` refuse the same way, and so do a `Battery`'s SOC-limit and
 efficiency assignments; the capacity-setting message drops "(0 for no
-battery)". `solar-challenge validate config` reports such homes as an ERROR
-row, and the CLI labels a refused `--battery-kwh` "Configuration error:" where
-the tag says "Invalid value:". Consumers that catch `ValueError` need no change
-for the type; those that match message text, or pass such values, change them
-when they re-pin.
+battery)". `require_valid_power_limit` and `require_valid_capacity_setting`
+return the number they read, and `has_battery` compares that number, so
+`has_battery("4", "battery_kwh")` is `True`. `solar-challenge validate config`
+reports such homes as an ERROR row, and the CLI labels a refused
+`--battery-kwh` "Configuration error:" where the tag says "Invalid value:".
+Consumers that catch `ValueError` need no change for the type; those that
+match message text, or pass such values, change them when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

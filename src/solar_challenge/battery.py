@@ -44,14 +44,18 @@ def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: floa
         )
 
 
-def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> None:
-    """Refuse a battery's maximum *direction* power *kw*, named max_<direction>_kw, as BatteryConfig refuses it.
+_POWER_LIMIT_KW = POSITIVE
+"""The maximum charge and discharge powers, in kW, that BatteryConfig and require_valid_power_limit admit."""
+
+
+def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> float:
+    """Return a battery's maximum *direction* power *kw* read as BatteryConfig reads its max_<direction>_kw.
 
     Raises:
         ConfigurationError: If *kw* is not a positive finite number, naming
             max_<direction>_kw and *kw*.
     """
-    as_finite_float(kw, f"max_{direction}_kw", POSITIVE)
+    return as_finite_float(kw, f"max_{direction}_kw", _POWER_LIMIT_KW)
 
 
 def _require_valid_request(
@@ -69,20 +73,19 @@ def _require_valid_request(
         )
 
 
-def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
-    """Refuse a battery capacity setting unless it is a finite number at least 0; 0 means no battery.
+def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> float:
+    """Return a battery capacity setting read as a finite number at least 0; 0 means no battery.
 
     Raises:
         ConfigurationError: If *capacity_kwh* is not a finite number at least 0, naming
             *setting* and *capacity_kwh*.
     """
-    as_finite_float(capacity_kwh, setting, NON_NEGATIVE)
+    return as_finite_float(capacity_kwh, setting, NON_NEGATIVE)
 
 
 def has_battery(capacity_kwh: float, setting: str) -> bool:
-    """Whether a battery capacity setting asks for a battery (> 0); an invalid one is refused."""
-    require_valid_capacity_setting(capacity_kwh, setting)
-    return capacity_kwh > 0
+    """Whether a battery capacity setting, read by require_valid_capacity_setting, asks for a battery (> 0); an invalid one is refused."""
+    return require_valid_capacity_setting(capacity_kwh, setting) > 0
 
 
 def compute_soh(
@@ -196,8 +199,8 @@ class BatteryConfig:
     def __post_init__(self) -> None:
         """Read each number setting, then refuse SOC limits out of order and derive the per-direction efficiencies from a set round-trip one."""
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
-        read_field(self, "max_charge_kw", as_finite_float, POSITIVE)
-        read_field(self, "max_discharge_kw", as_finite_float, POSITIVE)
+        read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
+        read_field(self, "max_discharge_kw", as_finite_float, _POWER_LIMIT_KW)
         _read_soc_limits_and_efficiencies(self)
         read_field(self, "efficiency", as_finite_float, FRACTION, optional=True)
         read_field(self, "system_age_years", as_finite_float, NON_NEGATIVE)
