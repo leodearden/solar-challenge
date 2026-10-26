@@ -64,3 +64,24 @@ def test_reads_each_link_target_that_names_a_path_on_its_line() -> None:
         "guide/intro.md:3: ../src/pkg/module.py#L3",
         "guide/intro.md:4: records/",
     ]
+
+
+def test_resolves_a_target_from_the_linking_files_directory_or_from_the_root_after_a_slash() -> None:
+    intro = _links_in(
+        PurePosixPath("guide/intro.md"),
+        "[a](setup.md) [b](./images/flow.png) [c](../src/pkg/module.py#L3) [d](records/)\n"
+        "[e](/guide/setup.md) [f](..) [g](../../outside.md) [h](my%20notes.md)\n",
+    )
+    readme = _links_in(PurePosixPath("README.md"), "[i](guide/intro.md)\n")
+
+    assert [str(link.path) for link in [*intro, *readme]] == [
+        "guide/setup.md",
+        "guide/images/flow.png",
+        "src/pkg/module.py",
+        "guide/records",
+        "guide/setup.md",
+        ".",
+        "../outside.md",
+        "guide/my notes.md",
+        "guide/intro.md",
+    ]
