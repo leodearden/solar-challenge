@@ -13,10 +13,12 @@ from flask.testing import FlaskClient
 
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.jobs import HomeSimulator, JobManager
+from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
 from tests._run_storage_layout import stored_run_dir
 from tests._sse import parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
+from tests._web_runs import store_home_run
 from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
@@ -224,8 +226,9 @@ def _status_and_name_while_running_and_once_completed(
 class TestASubmittedJobsRunInRunHistory:
     """A submitted job's run shows in Run History from its submit on: running, then completed or failed.
 
-    A job whose run cannot be recorded completed fails, and its run reads failed, never completed. A run
-    its job left running reads failed once the app is rebuilt on the same store.
+    A job whose run cannot be recorded completed fails, and its run reads failed, never completed. A job
+    shutdown drops from the queue fails naming the shutdown, and so does its run. A run no job finished, as a
+    server stopped mid-job leaves it, reads failed as interrupted once the app is rebuilt on the same store.
     """
 
     @pytest.mark.parametrize(
@@ -313,27 +316,54 @@ class TestASubmittedJobsRunInRunHistory:
         assert "completed" not in statuses
         assert statuses[-1:] == ["failed"]
 
-    def test_a_run_its_job_left_running_reads_failed_as_interrupted_once_the_app_is_rebuilt_on_its_store(
-        self, tmp_path: Path, blocking_simulation: BlockingSimulation
+    def test_a_job_shutdown_drops_from_the_queue_reports_failed_naming_the_shutdown_and_its_run_reads_failed(
+        self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        before_restart = build_test_app(tmp_path)
-        manager = JobManager(run_storage_of(before_restart), max_workers=1, simulate_home=blocking_simulation)
-        client = client_using(before_restart, manager)
-        first_run_id, second_run_id = [
-            client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["run_id"] for _ in range(2)
-        ]
+        manager = JobManager(
+            run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds()
+        )
+        client = client_using(app, manager)
+        assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
+        assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+
         manager.shutdown()
+
+        dropped = client.get("/api/jobs/id-3").get_json()
+        assert (dropped["status"], dropped["message"], dropped["progress_pct"], dropped["current_step"]) == (
+            "failed",
+            "Dropped: the server shut down before the job ran",
+            0.0,
+            "Queued",
+        )
+        run = client.get("/api/history/runs/id-4").get_json()
+        assert (run["status"], run["error_message"]) == ("failed", "Dropped: the server shut down before the job ran")
+        assert run["completed_at"] is not None
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
+        assert [client.get(f"/api/jobs/{job_id}").get_json()["status"] for job_id in ("id-1", "id-3")] == [
+            "completed",
+            "failed",
+        ]
+
+    def test_a_run_no_job_finished_reads_failed_as_interrupted_once_the_app_is_rebuilt_on_its_store(
+        self, tmp_path: Path
+    ) -> None:
+        """create_run's row, with no job left to finish it, is the row a server stopped mid-job leaves."""
+        before_restart = build_test_app(tmp_path)
+        storage = run_storage_of(before_restart)
+        storage.create_run(
+            "left-running", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00"
+        )
+        store_home_run(storage, "completed-run", make_home_config(), make_sim_results(days=1))
 
         release_store_lock(before_restart)
         after_restart = build_test_app(tmp_path).test_client()
 
-        interrupted = after_restart.get(f"/api/history/runs/{second_run_id}").get_json()
+        interrupted = after_restart.get("/api/history/runs/left-running").get_json()
         assert (interrupted["status"], interrupted["error_message"]) == ("failed", "Interrupted by server restart")
         assert interrupted["completed_at"] is not None
-        assert after_restart.get(f"/api/history/runs/{first_run_id}").get_json()["status"] == "completed"
+        assert after_restart.get("/api/history/runs/completed-run").get_json()["status"] == "completed"
 
 
 class TestDeletingARunCancelsItsJob:
