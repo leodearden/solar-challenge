@@ -24,11 +24,12 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import ChartAbsence, sweep_parameter_chart
+from solar_challenge.web.charts import sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_DAYS
+from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
 from tests._plotly_figure import traces
@@ -843,13 +844,26 @@ class TestSweepChart:
         # Should have at least the main trace, optimal marker, and trend line
         assert len(traces(result)) >= 2
 
-    def test_sweep_parameter_chart_of_no_points_names_why_its_titled_panel_has_no_figure(self) -> None:
-        panel = sweep_parameter_chart([], [], "PV Capacity (kW)", "Self-Consumption (%)")
+    @pytest.mark.parametrize(
+        ("param_values", "metric_values"),
+        [pytest.param([], [], id="no-points"), pytest.param([4.0], [65.3], id="one-point")],
+    )
+    def test_sweep_parameter_chart_of_fewer_than_two_points_names_the_rule_and_the_sweeps_points_in_its_titled_panel(
+        self, param_values: list[float], metric_values: list[float]
+    ) -> None:
+        panel = sweep_parameter_chart(param_values, metric_values, "PV Capacity (kW)", "Self-Consumption (%)")
 
-        assert (panel.title, panel.content) == (
+        assert (panel.title, panel.absence_reason) == (
             "Self-Consumption (%) vs PV Capacity (kW)",
-            ChartAbsence("The sweep has no points to draw."),
+            sweep_reason(len(param_values)),
         )
+
+    def test_sweep_parameter_chart_refuses_metric_values_that_are_not_one_per_parameter_value(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"metric_values must be one value per parameter value, 3 of them; got \[50\.5, 65\.3\]",
+        ):
+            sweep_parameter_chart([2.0, 4.0, 6.0], [50.5, 65.3], "PV Capacity (kW)", "Self-Consumption (%)")
 
     def test_sweep_parameter_chart_two_points(self) -> None:
         """Test sweep_parameter_chart works with just two data points."""

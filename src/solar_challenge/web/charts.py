@@ -993,6 +993,9 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
 # ---------------------------------------------------------------------------
 
 
+_SWEEP_MIN_POINTS = 2
+
+
 def sweep_parameter_chart(
     param_values: list[float],
     metric_values: list[float],
@@ -1012,15 +1015,22 @@ def sweep_parameter_chart(
         metric_name: Display name for the Y-axis (e.g. "Self-Consumption (%)").
 
     Returns:
-        The chart's panel, an absence if either input list is empty.
+        The chart's panel, an absence naming the rule and the sweep's points if
+        it has fewer than _SWEEP_MIN_POINTS.
+
+    Raises:
+        ValueError: If *metric_values* does not hold one value per parameter value; the message names both.
     """
+    if len(metric_values) != len(param_values):
+        _refuse("metric_values", metric_values, f"one value per parameter value, {len(param_values)} of them")
+    points = len(param_values)
     return _panel(
         "chart-sweep",
         f"{metric_name} vs {param_name}",
         450,
         _sweep_figure(param_values, metric_values, param_name, metric_name)
-        if param_values and metric_values
-        else ChartAbsence("The sweep has no points to draw."),
+        if points >= _SWEEP_MIN_POINTS
+        else ChartAbsence(f"The sweep chart needs at least {_SWEEP_MIN_POINTS} points; this sweep has {points}."),
     )
 
 
@@ -1030,7 +1040,7 @@ def _sweep_figure(
     param_name: str,
     metric_name: str,
 ) -> go.Figure:
-    """The sweep's line of *metric_values* over *param_values*, its optimal point and its trend line."""
+    """The sweep's line of *metric_values* over *param_values*, at least two points, its optimal point and its trend line."""
     # Main data trace
     traces: list[Any] = [
         go.Scatter(
@@ -1044,36 +1054,34 @@ def _sweep_figure(
     ]
 
     # Highlight optimal point (max metric value)
-    if metric_values:
-        best_idx = max(range(len(metric_values)), key=lambda i: metric_values[i])
-        traces.append(
-            go.Scatter(
-                name="Optimal",
-                x=[param_values[best_idx]],
-                y=[metric_values[best_idx]],
-                mode="markers+text",
-                marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
-                text=[f"{metric_values[best_idx]:.1f}"],
-                textposition="top center",
-                showlegend=True,
-            ),
-        )
+    best_idx = max(range(len(metric_values)), key=lambda i: metric_values[i])
+    traces.append(
+        go.Scatter(
+            name="Optimal",
+            x=[param_values[best_idx]],
+            y=[metric_values[best_idx]],
+            mode="markers+text",
+            marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
+            text=[f"{metric_values[best_idx]:.1f}"],
+            textposition="top center",
+            showlegend=True,
+        ),
+    )
 
     # Simple linear trend line
-    if len(param_values) >= 2:
-        x_arr = np.array(param_values, dtype=float)
-        y_arr = np.array(metric_values, dtype=float)
-        coeffs = np.polyfit(x_arr, y_arr, 1)
-        trend_y = np.polyval(coeffs, x_arr)
-        traces.append(
-            go.Scatter(
-                name="Trend",
-                x=param_values,
-                y=trend_y.round(2).tolist(),
-                mode="lines",
-                line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
-            ),
-        )
+    x_arr = np.array(param_values, dtype=float)
+    y_arr = np.array(metric_values, dtype=float)
+    coeffs = np.polyfit(x_arr, y_arr, 1)
+    trend_y = np.polyval(coeffs, x_arr)
+    traces.append(
+        go.Scatter(
+            name="Trend",
+            x=param_values,
+            y=trend_y.round(2).tolist(),
+            mode="lines",
+            line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
+        ),
+    )
 
     fig = go.Figure(data=traces)
     fig.update_layout(
