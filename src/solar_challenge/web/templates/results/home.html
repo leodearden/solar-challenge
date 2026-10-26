@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import chart_panel, chart_tabs, stat_card %}
+{% from "components/macros.html" import chart_panel, chart_scripts, chart_tabs, stat_card %}
 
 {% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
 
@@ -89,6 +89,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('plotly_js.script') }}"></script>
-<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
+{{ chart_scripts() }}
 {% endblock %}

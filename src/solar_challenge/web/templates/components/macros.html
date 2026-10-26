@@ -107,6 +107,7 @@
                 class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
                 :class='{ {{ _selected_tab_classes | tojson }}: activeTab === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: activeTab !== {{ tab.key | tojson }} }'
                 role="tab"
+                aria-selected="{{ 'true' if loop.first else 'false' }}"
                 :aria-selected='activeTab === {{ tab.key | tojson }}'
             >{{ tab.label }}</button>
             {% endfor %}
@@ -114,6 +115,13 @@
     </div>
     {{ caller() }}
 </div>
+{% endmacro %}
+
+
+{# The scripts a chart page loads: Plotly, then static/js/chart-renderer.js, which draws each chart_panel container #}
+{% macro chart_scripts() %}
+<script src="{{ url_for('plotly_js.script') }}"></script>
+<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
 {% endmacro %}
 
 

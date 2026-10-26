@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_panel, chart_tabs, run_type_badge %}
+{% from "components/macros.html" import chart_panel, chart_scripts, chart_tabs, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -138,6 +138,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('plotly_js.script') }}"></script>
-<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
+{{ chart_scripts() }}
 {% endblock %}
