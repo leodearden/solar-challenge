@@ -4,22 +4,25 @@ templates whose imports do not match the macros they call.
 
 import pytest
 pytest.importorskip("jinja2")
-from jinja2 import Environment, PackageLoader, nodes
-
-_LOADER = PackageLoader("solar_challenge.web", "templates")
-_ENV = Environment(loader=_LOADER)
+from jinja2 import BaseLoader, DictLoader, Environment, PackageLoader, nodes
 
 MACRO_LIBRARIES = ["components/macros.html", "components/icons.html"]
+
+
+def _parsed_templates(loader: BaseLoader) -> dict[str, nodes.Template]:
+    """Every HTML template the loader holds, parsed."""
+    environment = Environment(loader=loader)
+    trees: dict[str, nodes.Template] = {}
+    for name in environment.list_templates(extensions=["html"]):
+        source, _, _ = loader.get_source(environment, name)
+        trees[name] = environment.parse(source, name=name)
+    return trees
 
 
 @pytest.fixture(scope="module")
 def templates() -> dict[str, nodes.Template]:
     """Every dashboard template parsed once, shared by all the checks below."""
-    trees: dict[str, nodes.Template] = {}
-    for name in _ENV.list_templates(extensions=["html"]):
-        source, _, _ = _LOADER.get_source(_ENV, name)
-        trees[name] = _ENV.parse(source, name=name)
-    return trees
+    return _parsed_templates(PackageLoader("solar_challenge.web", "templates"))
 
 
 def _imported_pairs(statement: nodes.FromImport) -> list[tuple[str, str]]:
@@ -121,6 +124,29 @@ def test_templates_import_exactly_the_library_macros_they_call(
             }
 
     assert mismatches == {}
+
+
+def test_a_macro_a_reached_macro_calls_is_reached_but_one_only_an_unreached_macro_or_itself_calls_is_not() -> None:
+    templates = _parsed_templates(
+        DictLoader(
+            {
+                "lib.html": (
+                    "{% macro used() %}{{ helper() }}{% endmacro %}"
+                    "{% macro helper() %}{% endmacro %}"
+                    "{% macro orphan() %}{{ orphan_helper() }}{% endmacro %}"
+                    "{% macro orphan_helper() %}{% endmacro %}"
+                    "{% macro self_caller() %}{{ self_caller() }}{% endmacro %}"
+                ),
+                "page.html": '{% from "lib.html" import used %}{{ used() }}',
+            }
+        )
+    )
+
+    assert _unreached_library_macros(templates, "lib.html") == [
+        "orphan",
+        "orphan_helper",
+        "self_caller",
+    ]
 
 
 @pytest.mark.parametrize("library", MACRO_LIBRARIES)
