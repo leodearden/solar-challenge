@@ -54,6 +54,8 @@ from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
+    CallableGetterDeleter,
+    GetterDeleter,
     GetterPartial,
     NoneSignedCallableGetter,
     Outer,
@@ -78,21 +80,6 @@ class Wrapper:
 
 class Ledger(dict):
     """A class that inherits its constructor from dict, which CPython defines in C."""
-
-
-class GetterDeleter:
-    """A descriptor whose type defines __get__ and __delete__ but no __set__."""
-
-    def __get__(self, instance: object, owner: type) -> int:
-        return 1
-
-    def __delete__(self, instance: object) -> None: ...
-
-
-class CallableGetterDeleter(GetterDeleter):
-    """A callable GetterDeleter."""
-
-    def __call__(self, rate: int) -> str: ...
 
 
 class DeletableCallableGetter(CallableGetter):
