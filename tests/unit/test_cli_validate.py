@@ -475,6 +475,14 @@ home:
                 "'south'",
                 id="pv-azimuth-word",
             ),
+            pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: 5.0, grid_charging: {target_soc_fraction: true}}\n",
+                "target_soc_fraction",
+                "True",
+                id="battery-grid-charging-target-boolean",
+            ),
         ],
     )
     def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(

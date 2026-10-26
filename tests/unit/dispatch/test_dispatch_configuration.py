@@ -11,6 +11,7 @@ import dataclasses
 import typing
 from typing import Any, Callable
 
+import numpy as np
 import pytest
 
 from solar_challenge.battery import BatteryConfig
@@ -25,6 +26,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _EXAMPLES = (
     SelfConsumptionStrategyConfig(),
@@ -134,10 +136,35 @@ class TestGridChargeConfig:
     def test_a_target_in_0_to_1_is_kept(self, target: float) -> None:
         assert GridChargeConfig(target_soc_fraction=target).target_soc_fraction == target
 
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word"), pytest.param(None, id="null")]
+    )
+    def test_a_target_that_is_not_a_finite_number_is_refused_naming_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            GridChargeConfig(target_soc_fraction=value)
+
+        assert str(refusal.value) == f"target_soc_fraction must be a finite number, got {value!r}"
+
     @pytest.mark.parametrize("target", [0.0, -0.1, 1.5])
-    def test_a_target_outside_0_to_1_is_refused(self, target: float) -> None:
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+    def test_a_target_outside_0_to_1_is_refused_naming_its_bounds(self, target: float) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
             GridChargeConfig(target_soc_fraction=target)
+
+        assert str(refusal.value) == f"target_soc_fraction must be greater than 0 and at most 1, got {target!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "held"),
+        [
+            pytest.param(1, 1.0, id="whole-number"),
+            pytest.param("0.5", 0.5, id="quoted"),
+            pytest.param(np.float64(0.8), 0.8, id="numpy"),
+        ],
+    )
+    def test_it_holds_the_target_as_the_float_it_reads(self, value: object, held: float) -> None:
+        target = GridChargeConfig(target_soc_fraction=value).target_soc_fraction
+
+        assert target == held
+        assert type(target) is float
 
     def test_it_refuses_a_field_assignment(self) -> None:
         with pytest.raises(dataclasses.FrozenInstanceError):
