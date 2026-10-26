@@ -45,6 +45,12 @@ _SETTABLE_TEMPERATURE_COEFFICIENT_PER_K = Interval(
 )
 """The temperature coefficients of maximum power a PVConfig sets, per K: from the steepest to below 0."""
 
+_SYSTEM_AGE_YEARS = NON_NEGATIVE
+"""The system ages, in years, that PVConfig and calculate_degradation_factor admit."""
+
+_DEGRADATION_RATE_PER_YEAR = UNIT_INTERVAL
+"""The annual degradation rates, as fractions of rated capacity, that PVConfig and calculate_degradation_factor admit."""
+
 _PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
 
 _CEC_SINGLE_DIODE_MODULE_KEYS = frozenset(
@@ -164,8 +170,8 @@ class PVConfig:
         )
         read_field(self, "inverter_efficiency", as_finite_float, FRACTION)
         read_field(self, "inverter_capacity_kw", as_finite_float, POSITIVE, optional=True)
-        read_field(self, "system_age_years", as_finite_float, NON_NEGATIVE)
-        read_field(self, "degradation_rate_per_year", as_finite_float, UNIT_INTERVAL)
+        read_field(self, "system_age_years", as_finite_float, _SYSTEM_AGE_YEARS)
+        read_field(self, "degradation_rate_per_year", as_finite_float, _DEGRADATION_RATE_PER_YEAR)
         read_field(self, "system_losses", as_finite_float, Interval(0, 1, high_open=True))
         if self.temperature_coefficient is not None and self.custom_module_params is not None:
             _require_module_form_taking_temperature_coefficient(
@@ -1038,8 +1044,8 @@ def calculate_degradation_factor(
         >>> calculate_degradation_factor(10, 0.005)
         0.95
     """
-    age = as_finite_float(system_age_years, "system_age_years", NON_NEGATIVE)
-    rate = as_finite_float(degradation_rate_per_year, "degradation_rate_per_year", UNIT_INTERVAL)
+    age = as_finite_float(system_age_years, "system_age_years", _SYSTEM_AGE_YEARS)
+    rate = as_finite_float(degradation_rate_per_year, "degradation_rate_per_year", _DEGRADATION_RATE_PER_YEAR)
 
     # Linear degradation: factor = 1 - (age * rate)
     factor = 1.0 - (age * rate)

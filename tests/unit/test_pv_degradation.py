@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.pv import apply_degradation, calculate_degradation_factor
+from solar_challenge.pv import PVConfig, apply_degradation, calculate_degradation_factor
 
 
 class TestDegradationFactor:
@@ -69,6 +69,26 @@ class TestDegradationFactor:
         with pytest.raises(ConfigurationError) as exc_info:
             calculate_degradation_factor(5, degradation_rate_per_year=rate)
         assert str(exc_info.value) == f"degradation_rate_per_year must be a finite number, got {rate!r}"
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("system_age_years", -0.1),
+            ("system_age_years", math.nan),
+            ("system_age_years", True),
+            ("system_age_years", "x"),
+            ("degradation_rate_per_year", -0.1),
+            ("degradation_rate_per_year", 1.5),
+            ("degradation_rate_per_year", math.inf),
+            ("degradation_rate_per_year", True),
+        ],
+    )
+    def test_an_age_or_rate_is_refused_as_pv_config_refuses_it(self, field: str, value: object) -> None:
+        with pytest.raises(ConfigurationError) as config_refusal:
+            PVConfig(capacity_kw=4.0, **{field: value})
+        with pytest.raises(ConfigurationError) as factor_refusal:
+            calculate_degradation_factor(**{"system_age_years": 0.0, field: value})
+        assert str(factor_refusal.value) == str(config_refusal.value)
 
     def test_factor_clamped_at_zero(self):
         """Factor can't go below zero."""
