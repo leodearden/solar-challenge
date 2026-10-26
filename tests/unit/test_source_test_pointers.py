@@ -422,6 +422,26 @@ def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: 
     ]
 
 
+def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Path) -> None:
+    (project / "tests" / "unit" / "test_broken.py").write_text(
+        "def test_top(): pass\ndef test_broken(:\n", encoding="utf-8"
+    )
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# tests/unit/test_broken.py::test_top\n"
+        "# tests/unit/test_broken.py::TestGroup::test_member\n"
+        "# tests/unit/test_broken.py names no test\n",
+    )
+
+    assert _dangling(project, _pointers(project, [source])) == [
+        "src/pkg/module.py:1: tests/unit/test_broken.py::test_top:"
+        " tests/unit/test_broken.py does not parse, so it defines no test_top",
+        "src/pkg/module.py:2: tests/unit/test_broken.py::TestGroup::test_member:"
+        " tests/unit/test_broken.py does not parse, so it defines no TestGroup",
+    ]
+
+
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = project / "src" / "pkg" / "logo.png"
     logo.parent.mkdir(parents=True)
