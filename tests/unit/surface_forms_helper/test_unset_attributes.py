@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's unset_attributes, one per test."""
 
+import collections
 import functools
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import pytest
 
@@ -86,6 +87,43 @@ def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_ini
         assert member_forms(cls) == {"history": "attribute list[float]"}
         assert not hasattr(cls("data"), "history")
         assert unset_attributes(cls) == set()
+
+
+def test_a_named_tuple_field_its_instances_read_from_the_tuple_is_never_unset() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class OnX(Point):
+        y: int
+
+        def __new__(cls, x: int) -> "OnX":
+            return super().__new__(cls, x, 0)
+
+    Plain = collections.namedtuple("Plain", ["kwh", "site"])
+
+    class OnKwh(Plain):
+        site: str
+
+        def __new__(cls, kwh: float) -> "OnKwh":
+            return super().__new__(cls, kwh, "roof")
+
+    class Withheld(Point):
+        @property
+        def y(self) -> int:
+            raise AttributeError("y")
+
+    class Redeclared(Withheld):
+        y: int
+
+    assert (OnX(1).y, OnKwh(1.0).site) == (0, "roof")
+    assert not hasattr(Redeclared(1, 2), "y")
+    assert member_forms(OnX) == {"y": "attribute int"}
+    assert member_forms(OnKwh) == {"site": "attribute str"}
+    assert member_forms(Redeclared) == {"y": "attribute int"}
+    assert unset_attributes(OnX) == set()
+    assert unset_attributes(OnKwh) == set()
+    assert unset_attributes(Redeclared) == {"y"}
 
 
 def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
