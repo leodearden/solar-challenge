@@ -25,12 +25,12 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, calculate_summary
-from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._every_field_shape import home_of_every_field_shape
 from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -42,8 +42,8 @@ Edit = Callable[[Any], None]
 
 @pytest.fixture
 def storage(tmp_path: Path) -> RunStorage:
-    """An empty RunStorage under tmp_path, its database a new store open_database created."""
-    return RunStorage(open_database(tmp_path / "runs.db"), tmp_path)
+    """The store of no app in which each test saves or installs a run, edits one of its documents, and loads it."""
+    return empty_run_storage(tmp_path)
 
 
 def _store_home_run_of_every_shape(storage: RunStorage) -> HomeConfig:

@@ -6,8 +6,7 @@ the fake's ``set_streams`` and ``set_chunks`` script its replies with the
 ``make_*_stream`` builders. ``thinking_block``, ``redacted_thinking_block``,
 ``text_block`` and ``tool_use_block`` build the content blocks a
 ``make_tool_use_stream_from_blocks`` reply carries. ``seed_run`` inserts a row
-into a Database's runs table; ``run_storage_over`` builds the RunStorage the
-run-lookup handlers read that Database through.
+into a Database's runs table.
 
 Usage::
 
@@ -41,7 +40,6 @@ import pytest
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.web.database import Database
-from solar_challenge.web.storage import RunStorage
 from tests._run_summaries import summary_json
 
 
@@ -289,8 +287,3 @@ def seed_run(
             """,
             (run_id, name, type, status, created_at, summary_json(summary)),
         )
-
-
-def run_storage_over(database: Database) -> RunStorage:
-    """The RunStorage over *database*, its run files beside the database file."""
-    return RunStorage(database, database.path.parent)

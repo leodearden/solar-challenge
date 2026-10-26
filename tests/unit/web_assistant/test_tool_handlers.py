@@ -29,17 +29,17 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database
 from solar_challenge.web.request_boundary import resolve_location
-from solar_challenge.web.schema import open_database
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import empty_run_storage, run_storage_over
 from tests._run_summaries import fleet_summary, home_summary
 from tests._web_app import run_storage_of
 from tests._web_job_days import web_job_days
 from tests._web_runs import store_fleet_run
-from tests.unit.web_assistant._fakes import run_storage_over, seed_run
+from tests.unit.web_assistant._fakes import seed_run
 from tests.unit.web_assistant._number_tokens import numbers_in
 
 
@@ -230,10 +230,10 @@ class TestGetRunResults:
 
         seed_run leaves n_homes at the schema's default, 1.
         """
-        database = open_database(tmp_path / "grr_test.db")
+        storage = empty_run_storage(tmp_path)
         summary = home_summary(total_generation_kwh=1234.5, self_consumption_ratio=0.62)
         seed_run(
-            database,
+            storage.database,
             run_id="run-abc-123",
             name="test-run",
             type="home",
@@ -242,7 +242,7 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result = get_run_results("run-abc-123", run_storage_over(database))
+        result = get_run_results("run-abc-123", storage)
 
         assert result == {
             "run_id": "run-abc-123",
@@ -265,10 +265,10 @@ class TestGetRunResults:
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
-        database = open_database(tmp_path / "grr_name_test.db")
+        storage = empty_run_storage(tmp_path)
         summary = fleet_summary()
         seed_run(
-            database,
+            storage.database,
             run_id="run-xyz-456",
             name="my-named-run",
             type="fleet",
@@ -277,8 +277,8 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result_by_id = get_run_results("run-xyz-456", run_storage_over(database))
-        result_by_name = get_run_results("my-named-run", run_storage_over(database))
+        result_by_id = get_run_results("run-xyz-456", storage)
+        result_by_name = get_run_results("my-named-run", storage)
 
         # Both should resolve to the same row
         assert result_by_id.get("run_id") == "run-xyz-456"
@@ -291,9 +291,9 @@ class TestGetRunResults:
 
     def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
         """get_run_results with unknown id returns a graceful dict, does NOT raise."""
-        database = open_database(tmp_path / "grr_unknown_test.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="run-known",
             name="known-run",
             status="completed",
@@ -302,7 +302,7 @@ class TestGetRunResults:
         )
 
         try:
-            result = get_run_results("totally-unknown-id-xyz", run_storage_over(database))
+            result = get_run_results("totally-unknown-id-xyz", storage)
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for unknown id; got: {exc!r}"
@@ -317,10 +317,10 @@ class TestGetRunResults:
 
     def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
         """When two rows share a name, get_run_results returns the one with the later created_at."""
-        database = open_database(tmp_path / "grr_collision_test.db")
+        storage = empty_run_storage(tmp_path)
         # Older run seeded first
         seed_run(
-            database,
+            storage.database,
             run_id="run-old-collision",
             name="shared-run-name",
             status="completed",
@@ -329,7 +329,7 @@ class TestGetRunResults:
         )
         # Newer run with same name seeded second
         seed_run(
-            database,
+            storage.database,
             run_id="run-new-collision",
             name="shared-run-name",
             status="completed",
@@ -337,7 +337,7 @@ class TestGetRunResults:
             summary=home_summary(total_generation_kwh=200.0),
         )
 
-        result = get_run_results("shared-run-name", run_storage_over(database))
+        result = get_run_results("shared-run-name", storage)
 
         assert result.get("run_id") == "run-new-collision", (
             f"Name tie-break should return newest run (run-new-collision); "
@@ -346,8 +346,8 @@ class TestGetRunResults:
 
     def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
-        database = open_database(tmp_path / "grr_null_summary.db")
-        with database.transaction() as conn:
+        storage = empty_run_storage(tmp_path)
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -356,7 +356,7 @@ class TestGetRunResults:
             )
 
         try:
-            result = get_run_results("run-null-summary", run_storage_over(database))
+            result = get_run_results("run-null-summary", storage)
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
@@ -370,11 +370,10 @@ class TestGetRunResults:
         self, tmp_path: Path
     ) -> None:
         """The error is RunRecord.summary's StoredRunUnreadable, which names the run and runs.summary_json."""
-        database = open_database(tmp_path / "grr_garbled.db")
-        seed_run(database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
-        with database.transaction() as conn:
+        storage = empty_run_storage(tmp_path)
+        seed_run(storage.database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
+        with storage.database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
-        storage = run_storage_over(database)
         record = storage.run_record("garbled-run")
         assert record is not None
         with pytest.raises(StoredRunUnreadable) as refusal:
@@ -405,11 +404,11 @@ class TestListRecentRuns:
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
-        database = open_database(tmp_path / "lrr_test.db")
+        storage = empty_run_storage(tmp_path)
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
             seed_run(
-                database,
+                storage.database,
                 run_id=f"run-{i:03d}",
                 name=f"run-name-{i}",
                 status="completed",
@@ -417,7 +416,7 @@ class TestListRecentRuns:
                 summary=home_summary(total_generation_kwh=float(i * 100)),
             )
 
-        result = list_recent_runs(3, run_storage_over(database))
+        result = list_recent_runs(3, storage)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -435,9 +434,9 @@ class TestListRecentRuns:
 
     def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
         """Each entry carries id/run_id, name, type, status, created_at."""
-        database = open_database(tmp_path / "lrr_fields_test.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="run-fields-001",
             name="fields-run",
             type="fleet",
@@ -446,7 +445,7 @@ class TestListRecentRuns:
             summary=fleet_summary(fleet_self_consumption_ratio=0.70),
         )
 
-        result = list_recent_runs(10, run_storage_over(database))
+        result = list_recent_runs(10, storage)
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -461,10 +460,10 @@ class TestListRecentRuns:
 
     def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
         """list_recent_runs on empty DB returns {'runs': []} without raising."""
-        database = open_database(tmp_path / "lrr_empty_test.db")
+        storage = empty_run_storage(tmp_path)
 
         try:
-            result = list_recent_runs(10, run_storage_over(database))
+            result = list_recent_runs(10, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -478,11 +477,11 @@ class TestListRecentRuns:
 
     def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
         """A very large limit is clamped so returned count <= clamp ceiling."""
-        database = open_database(tmp_path / "lrr_clamp_test.db")
+        storage = empty_run_storage(tmp_path)
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
             seed_run(
-                database,
+                storage.database,
                 run_id=f"clamp-run-{i:03d}",
                 name=f"clamp-{i}",
                 status="completed",
@@ -490,7 +489,7 @@ class TestListRecentRuns:
                 summary=home_summary(),
             )
 
-        result = list_recent_runs(9999, run_storage_over(database))
+        result = list_recent_runs(9999, storage)
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -499,9 +498,9 @@ class TestListRecentRuns:
 
     def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
         """A non-positive limit is handled gracefully (clamped to default, no raise)."""
-        database = open_database(tmp_path / "lrr_nonpos_test.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="run-np-001",
             name="np-run",
             status="completed",
@@ -510,7 +509,7 @@ class TestListRecentRuns:
         )
 
         try:
-            result = list_recent_runs(0, run_storage_over(database))
+            result = list_recent_runs(0, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -525,8 +524,8 @@ class TestListRecentRuns:
 
     def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
-        database = open_database(tmp_path / "lrr_null_summary.db")
-        with database.transaction() as conn:
+        storage = empty_run_storage(tmp_path)
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -535,7 +534,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, run_storage_over(database))
+            result = list_recent_runs(5, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -597,24 +596,23 @@ class TestListRecentRuns:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
         """One damaged run neither fails the list nor hides the other runs' figures; its entry carries its refusal as unreadable, as its History row does, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
-        database = open_database(tmp_path / "lrr_garbled.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="readable-run",
             name="readable",
             created_at="2026-01-02T00:00:00+00:00",
             summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37),
         )
         seed_run(
-            database,
+            storage.database,
             run_id="garbled-run",
             name="garbled",
             created_at="2026-01-01T00:00:00+00:00",
             summary=home_summary(),
         )
-        with database.transaction() as conn:
+        with storage.database.transaction() as conn:
             conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, "garbled-run"))
-        storage = run_storage_over(database)
         garbled = storage.run_record("garbled-run")
         assert garbled is not None
         with pytest.raises(StoredRunUnreadable) as refusal:

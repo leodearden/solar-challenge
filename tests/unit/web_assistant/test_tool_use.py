@@ -45,9 +45,9 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.schema import open_database
 
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import empty_run_storage, run_storage_over
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -60,7 +60,6 @@ from tests.unit.web_assistant._fakes import (
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     redacted_thinking_block,
-    run_storage_over,
     seed_run,
     text_block,
     thinking_block,
@@ -596,16 +595,15 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_get_run_results_with_storage(self, tmp_path: Path) -> None:
         """dispatch_tool('get_run_results', {...}) with the seeded storage in its context returns the handler's dict."""
-        database = open_database(tmp_path / "disp_grr_test.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="disp-run-001",
             name="dispatch-run",
             status="completed",
             created_at="2026-04-01T10:00:00+00:00",
             summary=home_summary(total_generation_kwh=500.0),
         )
-        storage = run_storage_over(database)
 
         result = dispatch_tool(
             "get_run_results",
@@ -618,16 +616,15 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_list_recent_runs_with_storage(self, tmp_path: Path) -> None:
         """dispatch_tool('list_recent_runs', {'limit': 5}) with the seeded storage in its context returns the handler's dict."""
-        database = open_database(tmp_path / "disp_lrr_test.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="disp-lrr-001",
             name="lrr-dispatch-run",
             status="completed",
             created_at="2026-04-01T11:00:00+00:00",
             summary=home_summary(self_consumption_ratio=0.55),
         )
-        storage = run_storage_over(database)
 
         result = dispatch_tool("list_recent_runs", {"limit": 5}, tool_context(tmp_path, storage=storage))
         expected = list_recent_runs(5, storage)
@@ -639,16 +636,15 @@ class TestRunLookupToolSurface:
     ) -> None:
         """A limit of 0 is a whole number, so it is not refused: list_recent_runs' own rule for a
         limit <= 0 decides how many runs it lists."""
-        database = open_database(tmp_path / "disp_lrr_zero.db")
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            database,
+            storage.database,
             run_id="disp-lrr-zero",
             name="lrr-zero-run",
             status="completed",
             created_at="2026-04-01T12:00:00+00:00",
             summary=home_summary(self_consumption_ratio=0.5),
         )
-        storage = run_storage_over(database)
 
         result = dispatch_tool("list_recent_runs", {"limit": 0}, tool_context(tmp_path, storage=storage))
 

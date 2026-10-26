@@ -16,12 +16,11 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import Database
-from solar_challenge.web.schema import open_database
-from solar_challenge.web.storage import RUN_STATUSES, RunQuery, RunRecord, RunStorage
+from solar_challenge.web.storage import RUN_STATUSES, RunQuery, RunRecord
 from solar_challenge.web.stored_runs import RUN_TYPES
 
 from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage
 
 
 @pytest.fixture
@@ -32,18 +31,9 @@ def temp_dir():
 
 
 @pytest.fixture
-def db_path(temp_dir):
-    """Create a database path for testing."""
-    return temp_dir / "test.db"
-
-
-@pytest.fixture
-def storage(db_path, temp_dir):
-    """Create a RunStorage instance for testing, its run files in an empty directory beside its database."""
-    open_database(db_path)
-    data_dir = temp_dir / "data"
-    data_dir.mkdir()
-    return RunStorage(Database(db_path), data_dir)
+def storage(temp_dir):
+    """The store of no app whose runs the tests save, read, relabel and delete."""
+    return empty_run_storage(temp_dir)
 
 
 @pytest.fixture
