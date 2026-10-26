@@ -8,7 +8,7 @@ simulate (constant FleetResults across ages) stands in for the real fleet simula
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -22,6 +22,12 @@ from solar_challenge.finance import (
 )
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.config import ScenarioConfig
+    from solar_challenge.fleet import FleetConfig, FleetResults
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +174,7 @@ class TestCostRecoverySolution:
 # ---------------------------------------------------------------------------
 
 
-def _make_scenario(n_homes: int) -> "ScenarioConfig":  # type: ignore[name-defined]
+def _make_scenario(n_homes: int) -> ScenarioConfig:
     """The solve tests' scenario: *n_homes* default homes on a 5 p/kWh scenario-level SEG rate."""
     return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0)
 
@@ -389,8 +395,8 @@ class TestSolveCostRecoveryRateInterior:
         # fc.homes[0].pv_config.system_age_years = age, so the factory reads
         # the correct age for each PCHIP node.
         def simulate_degrading(
-            fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp"  # type: ignore[name-defined]
-        ) -> "FleetResults":  # type: ignore[name-defined]
+            fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp
+        ) -> FleetResults:
             age = fc.homes[0].pv_config.system_age_years
             factor = max(0.0, 1.0 - 0.005 * age)
             return make_fleet_results(

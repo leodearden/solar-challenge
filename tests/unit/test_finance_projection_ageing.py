@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig, compute_soh
 from solar_challenge.finance import project_multi_year
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.pv import calculate_degradation_factor
 from tests._finance_builders import (
     make_fleet_results,
@@ -25,6 +25,11 @@ from tests._finance_builders import (
     make_scenario_and_finance,
     make_sim_results,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.home import HomeConfig
 
 
 def _make_degrading_simulate(
@@ -40,7 +45,7 @@ def _make_degrading_simulate(
     output accordingly.  This makes fleet_billed_own_use_kwh decline with age
     in a controlled, verifiable way.
     """
-    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         # Mean degradation factor across homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
@@ -99,7 +104,7 @@ class TestProjectMultiYearSOH:
 
     def test_battery_soh_monotone_non_increasing(self) -> None:
         """points.battery_soh is monotone non-increasing across years (when batteries present)."""
-        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate_with_battery(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             homes = fc.homes
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
@@ -119,7 +124,7 @@ class TestProjectMultiYearSOH:
 
     def test_battery_soh_declines_over_life(self) -> None:
         """battery_soh at end of life < beginning (calendar fade present)."""
-        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate_with_battery(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             homes = fc.homes
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
@@ -167,7 +172,7 @@ class TestCycleFadeEngagement:
         discharge_kwh: float,
     ) -> Callable:
         """Synthetic simulate that returns a fixed per-home discharge amount."""
-        def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             return make_fleet_results(
                 homes=fc.homes,
                 self_kwh=3000.0,
@@ -217,7 +222,7 @@ _ANNUAL_DISCHARGE_KWH = 800.0
 
 
 def _make_battery_ageing_simulate(
-    discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+    discharge_kwh: Callable[[HomeConfig], float],
 ) -> Callable:
     """A simulate whose own-use decays with PV age and whose battery discharges discharge_kwh(home) a year.
 
@@ -226,7 +231,7 @@ def _make_battery_ageing_simulate(
     (demand − import) is 3000 kWh × exp(−0.1 × PV age) whatever the discharge,
     so the ages bisection samples depend on PV age alone.
     """
-    def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
         per_home = []
         for home in fc.homes:
             pv_decay = math.exp(-0.1 * home.pv_config.system_age_years)
@@ -332,7 +337,7 @@ class TestBatterySohCountsThroughputToEachAge:
     )
     def test_battery_soh_never_rises(
         self,
-        discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+        discharge_kwh: Callable[[HomeConfig], float],
     ) -> None:
         """battery_soh is non-increasing year on year, whether discharge falls or rises with age."""
         scenario, finance, _ = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
