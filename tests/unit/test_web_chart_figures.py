@@ -33,6 +33,7 @@ from flask import Flask, url_for
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults
+from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import (
     make_fleet_results,
@@ -51,7 +52,6 @@ _CHART_PAGE_TEMPLATES = (
     "templates/results/fleet.html",
     "templates/history/compare.html",
 )
-_SANKEY_REASON = "No energy flowed in this run: every flow is 0.01 kWh or less."
 _TAB_MARKUP = (
     'role="tab"',
     "border-primary-500 text-primary-600 dark:text-primary-400",
@@ -113,14 +113,6 @@ _CHART_PAGES = {
     "fleet": _ChartPage(_fleet_results_page, 3),
     "compare": _ChartPage(_compare_page, 2),
 }
-
-
-def _monthly_reason(days: int) -> str:
-    return f"The monthly summary needs at least 90 days; this run covers {days}."
-
-
-def _seasonal_reason(days: int) -> str:
-    return f"The seasonal comparison needs at least 180 days; this run covers {days}."
 
 
 def _assert_each_panel_is_drawn_or_gives_its_reason(
@@ -213,9 +205,9 @@ def test_a_one_day_home_run_with_no_flow_and_no_battery_gives_the_reason_of_each
         page,
         {"chart-daily-balance", "chart-power-flow", "chart-financial"},
         {
-            "chart-sankey": ("Energy Flow", _SANKEY_REASON),
-            "chart-monthly": ("Monthly Energy Summary", _monthly_reason(1)),
-            "chart-seasonal": ("Seasonal Comparison", _seasonal_reason(1)),
+            "chart-sankey": ("Energy Flow", SANKEY_REASON),
+            "chart-monthly": ("Monthly Energy Summary", monthly_reason(1)),
+            "chart-seasonal": ("Seasonal Comparison", seasonal_reason(1)),
         },
     )
 
@@ -230,9 +222,9 @@ def test_a_home_run_of_61_calendar_days_across_the_autumn_fall_back_names_its_61
         page,
         {"chart-daily-balance", "chart-power-flow", "chart-financial"},
         {
-            "chart-sankey": ("Energy Flow", _SANKEY_REASON),
-            "chart-monthly": ("Monthly Energy Summary", _monthly_reason(61)),
-            "chart-seasonal": ("Seasonal Comparison", _seasonal_reason(61)),
+            "chart-sankey": ("Energy Flow", SANKEY_REASON),
+            "chart-monthly": ("Monthly Energy Summary", monthly_reason(61)),
+            "chart-seasonal": ("Seasonal Comparison", seasonal_reason(61)),
         },
     )
 

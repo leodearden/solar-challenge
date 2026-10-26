@@ -15,7 +15,6 @@ pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
-    ChartAbsence,
     ChartPanel,
     ChartTab,
     battery_soc_chart,
@@ -32,6 +31,7 @@ from solar_challenge.web.charts import (
 )
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._plotly_figure import annotation_texts, annotations_by_text, sankey_link_values, traces, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
@@ -80,17 +80,6 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResult
         }
     )
     return simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
-
-
-_SANKEY_REASON = "No energy flowed in this run: every flow is 0.01 kWh or less."
-
-
-def _monthly_reason(days: int) -> ChartAbsence:
-    return ChartAbsence(f"The monthly summary needs at least 90 days; this run covers {days}.")
-
-
-def _seasonal_reason(days: int) -> ChartAbsence:
-    return ChartAbsence(f"The seasonal comparison needs at least 180 days; this run covers {days}.")
 
 
 def _drawn(panel: ChartPanel) -> bool:
@@ -147,7 +136,7 @@ class TestChartFunctions:
             total_grid_charge_kwh=0.0,
         )
 
-        assert sankey_diagram(summary).content == ChartAbsence(_SANKEY_REASON)
+        assert sankey_diagram(summary).absence_reason == SANKEY_REASON
 
     def test_power_flow_timeline_returns_json(self) -> None:
         """Test power_flow_timeline returns a panel of Plotly figure JSON."""
@@ -174,10 +163,10 @@ class TestChartFunctions:
         assert "data" in parsed
 
     def test_monthly_summary_of_a_short_run_names_the_rule_and_the_runs_days(self) -> None:
-        assert monthly_summary(make_sinusoidal_sim_results(days=30)).content == _monthly_reason(30)
+        assert monthly_summary(make_sinusoidal_sim_results(days=30)).absence_reason == monthly_reason(30)
 
     def test_seasonal_comparison_of_a_short_run_names_the_rule_and_the_runs_days(self) -> None:
-        assert seasonal_comparison(make_sinusoidal_sim_results(days=60)).content == _seasonal_reason(60)
+        assert seasonal_comparison(make_sinusoidal_sim_results(days=60)).absence_reason == seasonal_reason(60)
 
     def test_heat_pump_analysis_refuses_a_run_without_a_heat_pump_load(self) -> None:
         with pytest.raises(ValueError, match="heat_pump_load"):
@@ -225,9 +214,9 @@ class TestChartDisplayGates:
     def test_a_run_of_61_calendar_days_across_the_autumn_fall_back_names_its_61_days_in_both_reasons(self) -> None:
         results = steady_run("2024-10-01", "2024-11-30")
 
-        assert (monthly_summary(results).content, seasonal_comparison(results).content) == (
-            _monthly_reason(61),
-            _seasonal_reason(61),
+        assert (monthly_summary(results).absence_reason, seasonal_comparison(results).absence_reason) == (
+            monthly_reason(61),
+            seasonal_reason(61),
         )
 
 

@@ -17,6 +17,7 @@ fitted to its container logs one error naming it.
 
 from playwright.sync_api import Locator, Page, expect
 
+from tests._chart_absences import monthly_reason, seasonal_reason
 from tests.e2e._chart_tabs import open_chart_tab, show_chart_tab
 from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
 
@@ -87,8 +88,8 @@ def test_results_tabs_of_a_one_day_run_give_the_reason_its_monthly_and_seasonal_
     page.goto(live_server + f"/results/home/{run_id}")
 
     for tab_name, chart_id, reason in (
-        ("Battery & Finance", "chart-monthly", "The monthly summary needs at least 90 days; this run covers 1."),
-        ("Analysis", "chart-seasonal", "The seasonal comparison needs at least 180 days; this run covers 1."),
+        ("Battery & Finance", "chart-monthly", monthly_reason(1)),
+        ("Analysis", "chart-seasonal", seasonal_reason(1)),
     ):
         open_chart_tab(page, tab_name)
         absence = page.locator(f"#{chart_id}")
