@@ -78,6 +78,36 @@ def test_finds_each_path_into_docs_in_any_text_on_its_line(project: Path) -> Non
     ]
 
 
+def test_reports_each_path_that_names_no_file_or_directory_of_the_tree_on_its_line(project: Path) -> None:
+    source = _write_source(
+        project,
+        "src/pkg/module.py",
+        "# docs/absent.md\n"
+        "# docs/guide.md and docs/prds/record.md exist, and so does docs/prds.\n"
+        "# docs/prds/absent.md §2\n"
+        "# docs/absent\n",
+    )
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:1: docs/absent.md: docs/absent.md does not exist, or git ignores it",
+        "src/pkg/module.py:3: docs/prds/absent.md: docs/prds/absent.md does not exist, or git ignores it",
+        "src/pkg/module.py:4: docs/absent: docs/absent does not exist, or git ignores it",
+    ]
+
+
+def test_a_doc_or_directory_git_ignores_does_not_resolve(project: Path) -> None:
+    (project / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    generated = project / "docs" / "generated"
+    generated.mkdir()
+    (generated / "made.md").write_text("# Made\n", encoding="utf-8")
+    source = _write_source(project, "src/pkg/module.py", "# docs/generated/made.md\n# docs/generated\n")
+
+    assert _dangling(project, _doc_pointers(project, [source])) == [
+        "src/pkg/module.py:1: docs/generated/made.md: docs/generated/made.md does not exist, or git ignores it",
+        "src/pkg/module.py:2: docs/generated: docs/generated does not exist, or git ignores it",
+    ]
+
+
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = project / "src" / "pkg" / "logo.png"
     logo.parent.mkdir(parents=True)
