@@ -13,6 +13,7 @@ since its links cannot be read.
 
 import posixpath
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
@@ -57,6 +58,11 @@ def _links_in(source: PurePosixPath, text: str) -> list[_Link]:
         for match in _LINK_TARGET.finditer(text)
         if _names_a_path(match["target"])
     ]
+
+
+def _dangling(tree: WorkingTreePaths, links: Iterable[_Link]) -> list[str]:
+    """Return "<link>: <reason>" for each of the *links* whose path the working *tree* does not hold, in their order."""
+    return [f"{link}: {link.path} does not exist, or git ignores it" for link in links if not tree.holds(link.path)]
 
 
 def test_reads_each_link_target_that_names_a_path_on_its_line() -> None:
