@@ -29,11 +29,10 @@ import pytest
 import yaml
 
 from tests._hermetic_checkout import init_hermetic_checkout
-from tests._working_tree import working_tree_files
+from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
+from tests._working_tree import working_tree_paths
 
-_UNSCANNED = tuple(
-    PurePosixPath(directory) for directory in ("tests", "docs/prds", "docs/research", "plans", "review")
-)
+_UNSCANNED = (PurePosixPath("tests"), *RECORD_DIRECTORIES)
 
 _POINTER = re.compile(
     r"""
@@ -72,31 +71,14 @@ class _Pointer:
         return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
 
 
-def _scanned_files(root: Path) -> list[PurePosixPath]:
-    """Return the files working_tree_files lists in *root*, but those under an _UNSCANNED directory."""
-    return [
-        path
-        for path in working_tree_files(root)
-        if not any(path.is_relative_to(directory) for directory in _UNSCANNED)
-    ]
-
-
 def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
     """Return every pointer in the *sources*, POSIX paths relative to *root*, file by file and in text order."""
     pointers: list[_Pointer] = []
     for source in sources:
-        text = _utf8_text(root / source)
+        text = utf8_text(root / source)
         if text is not None:
             pointers.extend(_pointers_in(source, text))
     return pointers
-
-
-def _utf8_text(path: Path) -> str | None:
-    """Return the text of the file at *path*, or None if it is not UTF-8."""
-    try:
-        return path.read_bytes().decode("utf-8")
-    except UnicodeDecodeError:
-        return None
 
 
 def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
@@ -199,24 +181,23 @@ def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
 
 
 class _WorkingTree:
-    """The files of a checkout's working tree, as tests/_working_tree.py lists them, and the directories holding them.
+    """The files and directories of a checkout's working tree, as tests/_working_tree.py::working_tree_paths gives them.
 
     Each of its Python files is parsed when first asked for, and at most once.
     """
 
     def __init__(self, root: Path) -> None:
         self._root = root
-        self._files = frozenset(working_tree_files(root))
-        self._directories = frozenset(directory for file in self._files for directory in file.parents)
+        self._paths = working_tree_paths(root)
         self._modules: dict[PurePosixPath, ast.Module] = {}
 
     def holds(self, path: PurePosixPath) -> bool:
         """Return whether *path*, relative to the checkout, is one of the tree's files or directories."""
-        return path in self._files or path in self._directories
+        return self._paths.holds(path)
 
     def module(self, path: PurePosixPath) -> ast.Module | None:
         """Return the syntax tree of the Python file at *path*, or None if the tree holds no Python file there."""
-        if path.suffix != ".py" or path not in self._files:
+        if path.suffix != ".py" or path not in self._paths.files:
             return None
         if path not in self._modules:
             self._modules[path] = ast.parse((self._root / path).read_text(encoding="utf-8"))
@@ -274,7 +255,7 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
 
 
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
-    pointers = _pointers(project_root, _scanned_files(project_root))
+    pointers = _pointers(project_root, scanned_files(project_root, _UNSCANNED))
     unscanned = ", ".join(f"{directory}/" for directory in _UNSCANNED)
     assert pointers, (
         f"found no pointer into tests/ in any file git lists outside the unscanned directories ({unscanned}), so this"
@@ -332,7 +313,7 @@ def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: P
     for source in [*scanned, *unscanned]:
         _write_source(project, source, "")
 
-    assert set(_scanned_files(project)) == {PurePosixPath(source) for source in scanned}
+    assert set(scanned_files(project, _UNSCANNED)) == {PurePosixPath(source) for source in scanned}
 
 
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:

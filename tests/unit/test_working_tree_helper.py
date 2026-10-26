@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from tests._hermetic_checkout import init_hermetic_checkout
-from tests._working_tree import copy_working_tree, working_tree_files
+from tests._working_tree import copy_working_tree, working_tree_files, working_tree_paths
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git is not installed; the helper lists the tree's files with it"
@@ -39,6 +39,33 @@ def test_lists_tracked_and_untracked_files_but_not_ignored_deleted_or_directory_
         PurePosixPath(".gitignore"),
         PurePosixPath("nested/untracked.txt"),
         PurePosixPath("tracked.txt"),
+    ]
+
+
+def test_paths_hold_each_listed_file_and_each_directory_holding_one(checkout: Path) -> None:
+    (checkout / ".gitignore").write_text("ignored.txt\nbuild/\n", encoding="utf-8")
+    (checkout / "build").mkdir()
+    (checkout / "build" / "out.txt").write_text("out", encoding="utf-8")
+
+    paths = working_tree_paths(checkout)
+
+    assert paths.files == frozenset(working_tree_files(checkout))
+    candidates = [
+        "nested",
+        "nested/untracked.txt",
+        "tracked.txt",
+        ".gitignore",
+        "build",
+        "build/out.txt",
+        "ignored.txt",
+        "deleted.txt",
+        "absent",
+    ]
+    assert [candidate for candidate in candidates if paths.holds(PurePosixPath(candidate))] == [
+        "nested",
+        "nested/untracked.txt",
+        "tracked.txt",
+        ".gitignore",
     ]
 
 
