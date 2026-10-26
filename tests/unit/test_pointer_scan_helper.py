@@ -6,8 +6,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._hermetic_checkout import init_hermetic_checkout
 from tests._pointer_scan import scanned_files, utf8_text
+from tests._synthetic_checkout import synthetic_checkout
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git is not installed; the helper lists the tree's files with it"
@@ -15,19 +15,21 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_lists_the_files_git_lists_but_those_at_or_under_an_unscanned_path(tmp_path: Path) -> None:
-    checkout = init_hermetic_checkout(tmp_path / "checkout")
-    for relative_path in [
-        "README.md",
-        "src/module.py",
-        "records/old.md",
-        "records/nested/older.md",
-        "records-new/kept.md",
-        "src/records/kept.md",
-        "skipped.txt",
-    ]:
-        path = checkout / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
+    checkout = synthetic_checkout(
+        tmp_path / "checkout",
+        dict.fromkeys(
+            [
+                "README.md",
+                "src/module.py",
+                "records/old.md",
+                "records/nested/older.md",
+                "records-new/kept.md",
+                "src/records/kept.md",
+                "skipped.txt",
+            ],
+            "",
+        ),
+    )
 
     scanned = scanned_files(checkout, [PurePosixPath("records"), PurePosixPath("skipped.txt")])
 
