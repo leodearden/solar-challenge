@@ -26,7 +26,7 @@ from solar_challenge.config import (
     parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
@@ -109,7 +109,9 @@ def _synthetic_fleet_results(homes: list) -> FleetResults:
     return make_fleet_results_of(per_home, homes=homes)
 
 
-def _constant_simulate(fr: FleetResults) -> Callable:
+def _constant_simulate(
+    fr: FleetResults,
+) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
     """Return a constant simulate function: (fc, s, e) -> fr (age-independent)."""
     return lambda fc, s, e: fr
 
@@ -139,7 +141,7 @@ def _board_econ_scenario() -> tuple:
 def _surplus_at(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
-    simulate: Callable,
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults],
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
     curve = project_multi_year(scenario, finance, simulate=simulate)
