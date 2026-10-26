@@ -1,7 +1,11 @@
 """Tests for Location class."""
 
+import dataclasses
+
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestLocationBasics:
@@ -92,26 +96,76 @@ class TestLocationValidation:
 
     def test_invalid_latitude_too_high(self):
         """Latitude > 90 raises error."""
-        with pytest.raises(ValueError, match="Latitude"):
+        with pytest.raises(ConfigurationError) as exc_info:
             Location(latitude=91.0, longitude=0.0)
+        assert str(exc_info.value) == "latitude must be between -90 and 90, got 91.0"
 
     def test_invalid_latitude_too_low(self):
         """Latitude < -90 raises error."""
-        with pytest.raises(ValueError, match="Latitude"):
+        with pytest.raises(ConfigurationError) as exc_info:
             Location(latitude=-91.0, longitude=0.0)
+        assert str(exc_info.value) == "latitude must be between -90 and 90, got -91.0"
 
     def test_invalid_longitude_too_high(self):
         """Longitude > 180 raises error."""
-        with pytest.raises(ValueError, match="Longitude"):
+        with pytest.raises(ConfigurationError) as exc_info:
             Location(latitude=0.0, longitude=181.0)
+        assert str(exc_info.value) == "longitude must be between -180 and 180, got 181.0"
 
     def test_invalid_longitude_too_low(self):
         """Longitude < -180 raises error."""
-        with pytest.raises(ValueError, match="Longitude"):
+        with pytest.raises(ConfigurationError) as exc_info:
             Location(latitude=0.0, longitude=-181.0)
+        assert str(exc_info.value) == "longitude must be between -180 and 180, got -181.0"
+
+    def test_an_altitude_below_500_metres_under_sea_level_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            Location(latitude=0.0, longitude=0.0, altitude=-501.0)
+        assert str(exc_info.value) == "altitude must be at least -500, got -501.0"
 
     def test_boundary_values_valid(self):
         """Boundary values are valid."""
         # Should not raise
         Location(latitude=90.0, longitude=180.0)
         Location(latitude=-90.0, longitude=-180.0)
+
+    @pytest.mark.parametrize("field", ["latitude", "longitude", "altitude"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_coordinate_that_is_not_a_finite_number_is_refused_naming_it_and_the_value(
+        self, field: str, value: object
+    ) -> None:
+        """A NaN, an infinity, a bool or a word is refused by name, before any range is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(Location.bristol(), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_whole_number_coordinates_are_held_as_the_floats_they_equal(self) -> None:
+        location = Location(51, -2)
+        assert location.latitude == 51.0
+        assert type(location.latitude) is float
+        assert location.longitude == -2.0
+        assert type(location.longitude) is float
+
+
+class TestLocationTimeZone:
+    """A Location's time zone must be one zoneinfo knows."""
+
+    @pytest.mark.parametrize(
+        "timezone",
+        [
+            pytest.param("Europe/Londn", id="misspelt"),
+            pytest.param("", id="empty"),
+            pytest.param(123, id="not-text"),
+        ],
+    )
+    def test_a_time_zone_zoneinfo_does_not_know_is_refused_naming_it(self, timezone: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(Location(51, -2), timezone=timezone)
+        assert "timezone" in str(exc_info.value)
+        assert repr(timezone) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "timezone", ["Europe/London", "Europe/Paris", "Europe/Dublin", "America/New_York", "UTC"]
+    )
+    def test_each_time_zone_in_use_is_known(self, timezone: str) -> None:
+        assert Location(51, -2, timezone=timezone).timezone == timezone

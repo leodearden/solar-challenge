@@ -435,6 +435,35 @@ home:
         assert "ERROR" in text
         assert names_as_a_word(text[text.index("ERROR"):], named)
 
+    @pytest.mark.parametrize(
+        ("document", "field", "value_repr"),
+        [
+            pytest.param(
+                "location: {altitude: .nan}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "altitude",
+                "nan",
+                id="location-altitude-nan",
+            ),
+            pytest.param(
+                "location: {timezone: Europe/Londn}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "timezone",
+                "'Europe/Londn'",
+                id="location-unknown-time-zone",
+            ),
+        ],
+    )
+    def test_a_number_or_zone_a_component_refuses_is_an_error_row_naming_the_field_and_the_value(
+        self, tmp_path: Path, document: str, field: str, value_repr: str
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert names_as_a_word(error_row, field)
+        assert names_as_a_word(error_row, value_repr)
+
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
