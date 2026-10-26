@@ -266,12 +266,12 @@ def _a_days_summary() -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("draw", "trace", "part"),
     [
-        pytest.param(lambda: charts.power_flow_timeline(make_sim_results()), "Generation", "line", id="pv_generation"),
+        pytest.param(lambda: charts.power_flow_timeline(make_sim_results()).content, "Generation", "line", id="pv_generation"),
         pytest.param(
-            lambda: charts.seasonal_comparison(make_sim_results()), "Summer (Jun-Aug)", "marker", id="summer"
+            lambda: charts.seasonal_comparison(make_sim_results()).content, "Summer (Jun-Aug)", "marker", id="summer"
         ),
         pytest.param(
-            lambda: charts.comparison_bar_chart([_a_days_summary()], ["Run A"]),
+            lambda: charts.comparison_bar_chart([_a_days_summary()], ["Run A"]).content,
             "Run A",
             "marker",
             id="comparison_run_1",
@@ -279,11 +279,11 @@ def _a_days_summary() -> dict[str, Any]:
     ],
 )
 def test_a_hue_edit_reaches_the_figure_of_each_role_that_names_the_hue(
-    amber_recoloured: dict[str, str], draw: Callable[[], str | None], trace: str, part: str
+    amber_recoloured: dict[str, str], draw: Callable[[], str | charts.ChartAbsence], trace: str, part: str
 ) -> None:
     """*trace* is the trace the figure draws in the role, and *part* the attribute, line or marker, holding its colour."""
     figure = draw()
-    assert figure is not None, "the builder drew no figure, so this check would pass vacuously"
+    assert isinstance(figure, str), "the builder drew no figure, so this check would pass vacuously"
 
     assert traces_by_name(figure)[trace][part]["color"] == _RECOLOURED_AMBER
     assert _SHIPPED_AMBER not in {opaque(colour) for colour in drawn_colours(figure)}

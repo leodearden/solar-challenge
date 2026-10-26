@@ -13,21 +13,7 @@ from flask import (
 
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.web.charts import (
-    battery_soc_chart,
-    daily_energy_balance,
-    financial_breakdown,
-    fleet_aggregate_timeline,
-    fleet_box_plots,
-    fleet_distribution_histograms,
-    fleet_grid_impact,
-    fleet_heatmap,
-    heat_pump_analysis,
-    monthly_summary,
-    power_flow_timeline,
-    sankey_diagram,
-    seasonal_comparison,
-)
+from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
@@ -136,29 +122,14 @@ def _run_not_found() -> Any:
 
 
 def _home_results_values(run: StoredHomeRun) -> dict[str, Any]:
-    """The values results/home.html shows a home run with, besides its id and name: its summary, whether it has a battery, and its charts."""
-    results = run.results
-    battery_config = run.config.battery_config
-    charts: dict[str, Any] = {
-        "sankey": sankey_diagram(run.summary),
-        "daily_balance": daily_energy_balance(results),
-        "power_flow": power_flow_timeline(results),
-        "battery_soc": None if battery_config is None else battery_soc_chart(results, battery_config),
-        "financial": financial_breakdown(results),
-        "monthly": monthly_summary(results),
-        "seasonal": seasonal_comparison(results),
-        "heat_pump": heat_pump_analysis(results),
+    """The values results/home.html shows a home run with, besides its id and name: its summary, whether it has a battery, which its stat cards read, and its chart tabs."""
+    return {
+        "summary": run.summary,
+        "has_battery": run.config.battery_config is not None,
+        "tabs": home_results_tabs(run.config, run.results, run.summary),
     }
-    return {"summary": run.summary, "charts": charts, "has_battery": battery_config is not None}
 
 
 def _fleet_results_values(run: StoredFleetRun) -> dict[str, Any]:
-    """The values results/fleet.html shows a fleet run with, besides its id and name: its summary and its charts."""
-    charts: dict[str, Any] = {
-        "aggregate_timeline": fleet_aggregate_timeline(run.fleet_results),
-        "grid_impact": fleet_grid_impact(run.fleet_results),
-        "heatmap": fleet_heatmap(run.home_summaries),
-        "box_plots": fleet_box_plots(run.home_summaries),
-        "distribution_histograms": fleet_distribution_histograms(run.home_summaries),
-    }
-    return {"summary": run.summary, "charts": charts}
+    """The values results/fleet.html shows a fleet run with, besides its id and name: its summary and its chart tabs."""
+    return {"summary": run.summary, "tabs": fleet_results_tabs(run.fleet_results, run.home_summaries)}

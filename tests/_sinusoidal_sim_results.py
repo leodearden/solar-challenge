@@ -13,7 +13,7 @@ Usage::
     from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 
     results = make_sinusoidal_sim_results(days=2)
-    figure = power_flow_timeline(results)
+    panel = power_flow_timeline(results)
 """
 
 import numpy as np

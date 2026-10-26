@@ -15,10 +15,15 @@ pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
+    ChartPanel,
+    ChartTab,
     battery_soc_chart,
+    comparison_tabs,
     daily_energy_balance,
     financial_breakdown,
+    fleet_results_tabs,
     heat_pump_analysis,
+    home_results_tabs,
     monthly_summary,
     power_flow_timeline,
     sankey_diagram,
@@ -26,45 +31,12 @@ from solar_challenge.web.charts import (
 )
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
-from tests._finance_builders import make_sim_results
+from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._plotly_figure import annotation_texts, annotations_by_text, sankey_link_values, traces, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
+from tests._steady_runs import steady_run
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
-
-
-def _steady_run(
-    first_day: str,
-    last_day: str,
-    *,
-    demand_kw: float = 0.0,
-    heat_pump_kw: float | None = None,
-    import_cost_gbp: float = 0.0,
-    export_revenue_gbp: float = 0.0,
-) -> SimulationResults:
-    """A run at one row a minute over whole Europe/London days, first_day's midnight to last_day's 23:59, every series steady.
-
-    Demand, heat pump, import cost and export revenue are at the levels given,
-    every other series is zero, and there is no heat pump unless heat_pump_kw is given.
-    """
-    index = pd.date_range(first_day, f"{last_day} 23:59", freq="min", tz="Europe/London")
-
-    def steady(level: float) -> pd.Series:
-        return pd.Series(level, index=index)
-
-    return SimulationResults(
-        generation=steady(0.0),
-        demand=steady(demand_kw),
-        self_consumption=steady(0.0),
-        battery_charge=steady(0.0),
-        battery_discharge=steady(0.0),
-        battery_soc=steady(0.0),
-        grid_import=steady(0.0),
-        grid_export=steady(0.0),
-        import_cost=steady(import_cost_gbp),
-        export_revenue=steady(export_revenue_gbp),
-        tariff_rate=steady(0.0),
-        heat_pump_load=None if heat_pump_kw is None else steady(heat_pump_kw),
-    )
 
 
 def _one_day_summary(
@@ -110,21 +82,25 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResult
     return simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
 
 
-def _drawn(figure: str | None) -> bool:
-    """Whether a chart builder that can decline drew its chart: its Plotly figure JSON, which holds data, rather than None."""
-    assert figure is None or "data" in json.loads(figure)
-    return figure is not None
+def _drawn(panel: ChartPanel) -> bool:
+    """Whether a chart builder whose chart can be absent drew it: its panel holds Plotly figure JSON, which holds data, rather than a ChartAbsence."""
+    assert not isinstance(panel.content, str) or "data" in json.loads(panel.content)
+    return isinstance(panel.content, str)
+
+
+def _tab_layout(tabs: tuple[ChartTab, ...]) -> list[tuple[str, str, list[str]]]:
+    """Each of *tabs* as its key, its label and its panels' ids, in order."""
+    return [(tab.key, tab.label, [panel.dom_id for panel in tab.panels]) for tab in tabs]
 
 
 class TestChartFunctions:
     """Tests for the centralized chart functions in charts.py."""
 
     def test_daily_energy_balance_returns_json(self) -> None:
-        """Test daily_energy_balance returns a non-empty JSON string."""
+        """Test daily_energy_balance returns a panel of Plotly figure JSON."""
         results = make_sinusoidal_sim_results(days=3)
-        output = daily_energy_balance(results)
+        output = daily_energy_balance(results).content
         assert isinstance(output, str)
-        assert len(output) > 2  # more than just "{}"
         parsed = json.loads(output)
         assert "data" in parsed
 
@@ -140,7 +116,7 @@ class TestChartFunctions:
             total_battery_charge_kwh=10.0,
         )
 
-        assert sankey_link_values(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary).content) == {
             ("PV Generation", "Demand"): 42.0,
             ("PV Generation", "Battery"): 10.0,
             ("PV Generation", "Export"): 40.0,
@@ -148,55 +124,58 @@ class TestChartFunctions:
             ("Battery", "Demand"): 8.0,
         }
 
+    def test_sankey_diagram_of_a_run_whose_every_flow_is_at_most_a_hundredth_of_a_kwh_says_no_energy_flowed(self) -> None:
+        summary = _one_day_summary(
+            total_generation_kwh=0.03,
+            total_demand_kwh=0.02,
+            total_self_consumption_kwh=0.01,
+            total_grid_import_kwh=0.01,
+            total_grid_export_kwh=0.01,
+            total_battery_charge_kwh=0.01,
+            total_battery_discharge_kwh=0.0,
+            total_grid_charge_kwh=0.0,
+        )
+
+        assert sankey_diagram(summary).absence_reason == SANKEY_REASON
+
     def test_power_flow_timeline_returns_json(self) -> None:
-        """Test power_flow_timeline returns a non-empty JSON string."""
+        """Test power_flow_timeline returns a panel of Plotly figure JSON."""
         results = make_sinusoidal_sim_results(days=2)
-        output = power_flow_timeline(results)
+        output = power_flow_timeline(results).content
         assert isinstance(output, str)
         parsed = json.loads(output)
         assert "data" in parsed
 
     def test_battery_soc_chart_returns_json(self) -> None:
-        """Test battery_soc_chart returns a non-empty JSON string."""
+        """Test battery_soc_chart returns a panel of Plotly figure JSON."""
         results = make_sinusoidal_sim_results(days=2)
-        output = battery_soc_chart(results, battery_config=BatteryConfig(capacity_kwh=10.0))
+        output = battery_soc_chart(results, battery_config=BatteryConfig(capacity_kwh=10.0)).content
         assert isinstance(output, str)
         parsed = json.loads(output)
         assert "data" in parsed
 
     def test_financial_breakdown_returns_json(self) -> None:
-        """Test financial_breakdown returns a non-empty JSON string."""
+        """Test financial_breakdown returns a panel of Plotly figure JSON."""
         results = make_sinusoidal_sim_results(days=3)
-        output = financial_breakdown(results)
+        output = financial_breakdown(results).content
         assert isinstance(output, str)
         parsed = json.loads(output)
         assert "data" in parsed
 
-    def test_monthly_summary_returns_none_for_short_sim(self) -> None:
-        """Test monthly_summary returns None when simulation < 90 days."""
-        results = make_sinusoidal_sim_results(days=30)
-        output = monthly_summary(results)
-        assert output is None
+    def test_monthly_summary_of_a_short_run_names_the_rule_and_the_runs_days(self) -> None:
+        assert monthly_summary(make_sinusoidal_sim_results(days=30)).absence_reason == monthly_reason(30)
 
-    def test_seasonal_comparison_returns_none_for_short_sim(self) -> None:
-        """Test seasonal_comparison returns None when simulation < 180 days."""
-        results = make_sinusoidal_sim_results(days=60)
-        output = seasonal_comparison(results)
-        assert output is None
+    def test_seasonal_comparison_of_a_short_run_names_the_rule_and_the_runs_days(self) -> None:
+        assert seasonal_comparison(make_sinusoidal_sim_results(days=60)).absence_reason == seasonal_reason(60)
 
-    def test_heat_pump_analysis_returns_none_without_hp(self) -> None:
-        """Test heat_pump_analysis returns None when no heat pump data."""
-        results = make_sinusoidal_sim_results(days=2)
-        output = heat_pump_analysis(results)
-        assert output is None
+    def test_heat_pump_analysis_refuses_a_run_without_a_heat_pump_load(self) -> None:
+        with pytest.raises(ValueError, match="heat_pump_load"):
+            heat_pump_analysis(make_sinusoidal_sim_results(days=2))
 
-    def test_heat_pump_analysis_returns_its_charts_frozen(self) -> None:
-        """A reader of the heat-pump charts cannot rewrite a figure in them."""
-        charts = heat_pump_analysis(_steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
-        assert charts is not None
+    def test_heat_pump_analysis_returns_the_load_share_panel_then_the_load_profile_panel(self) -> None:
+        panels = heat_pump_analysis(steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
 
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            charts.load_share_chart = "{}"  # type: ignore[misc]
+        assert [panel.dom_id for panel in panels] == ["chart-hp-load-share", "chart-hp-load-profile"]
 
 
 class TestChartDisplayGates:
@@ -212,12 +191,10 @@ class TestChartDisplayGates:
     def test_monthly_summary_draws_only_a_window_of_at_least_90_calendar_days(
         self, last_day: str, days: int, drawn: bool
     ) -> None:
-        results = _steady_run("2024-10-01", last_day)
+        results = steady_run("2024-10-01", last_day)
         assert results.window.days == days
 
-        figure = monthly_summary(results)
-
-        assert _drawn(figure) is drawn
+        assert _drawn(monthly_summary(results)) is drawn
 
     @pytest.mark.parametrize(
         ("last_day", "days", "drawn"),
@@ -229,12 +206,18 @@ class TestChartDisplayGates:
     def test_seasonal_comparison_draws_only_a_window_of_at_least_180_calendar_days(
         self, last_day: str, days: int, drawn: bool
     ) -> None:
-        results = _steady_run("2024-07-01", last_day)
+        results = steady_run("2024-07-01", last_day)
         assert results.window.days == days
 
-        figure = seasonal_comparison(results)
+        assert _drawn(seasonal_comparison(results)) is drawn
 
-        assert _drawn(figure) is drawn
+    def test_a_run_of_61_calendar_days_across_the_autumn_fall_back_names_its_61_days_in_both_reasons(self) -> None:
+        results = steady_run("2024-10-01", "2024-11-30")
+
+        assert (monthly_summary(results).absence_reason, seasonal_comparison(results).absence_reason) == (
+            monthly_reason(61),
+            seasonal_reason(61),
+        )
 
 
 class TestBatterySocChartLimitLines:
@@ -264,7 +247,7 @@ class TestBatterySocChartLimitLines:
         self, battery_config: BatteryConfig, limits_kwh: dict[str, float]
     ) -> None:
         """Five years of calendar fade at the default 2% a year leave the last battery at 90% SoH, as the override sets the second's."""
-        figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config)
+        figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config).content
         shapes = json.loads(figure)["layout"]["shapes"]
 
         assert {text: annotation["y"] for text, annotation in annotations_by_text(figure).items()} == pytest.approx(
@@ -290,7 +273,7 @@ class TestSankeyBatteryCharge:
             total_grid_charge_kwh=2.0,
         )
 
-        assert sankey_link_values(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary).content) == {
             ("Grid", "Battery"): 2.0,
             ("Grid", "Demand"): 7.75,
             ("Battery", "Demand"): 4.0,
@@ -309,7 +292,7 @@ class TestSankeyBatteryCharge:
             total_grid_charge_kwh=2.0,
         )
 
-        assert sankey_link_values(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary).content) == {
             ("PV Generation", "Demand"): 4.0,
             ("PV Generation", "Battery"): 3.0,
             ("PV Generation", "Export"): 3.0,
@@ -332,7 +315,7 @@ class TestSankeyBatteryCharge:
         )
         summary = calculate_summary(results)
 
-        links = sankey_link_values(sankey_diagram(summary))
+        links = sankey_link_values(sankey_diagram(summary).content)
 
         assert set(links) == {("Grid", "Demand"), ("Grid", "Battery"), ("Battery", "Demand")}
         assert links[("Grid", "Battery")] == round(summary.total_battery_charge_kwh, 2)
@@ -344,10 +327,9 @@ class TestChartTotals:
     """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
 
     def test_heat_pump_share_is_the_runs_heat_pump_and_other_kwh(self) -> None:
-        charts = heat_pump_analysis(_steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
-        assert charts is not None
+        load_share, _ = heat_pump_analysis(steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
 
-        pie = traces(charts.load_share_chart)[0]
+        pie = traces(load_share.content)[0]
 
         # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
         assert pie["labels"] == ["Heat Pump", "Other Demand"]
@@ -356,8 +338,8 @@ class TestChartTotals:
     def test_financial_bars_are_each_days_pounds(self) -> None:
         by_name = traces_by_name(
             financial_breakdown(
-                _steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
-            )
+                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+            ).content
         )
 
         # £0.002 and £0.001 a minute, for 1440 minutes a day.
@@ -372,8 +354,8 @@ class TestFinancialBreakdownNetCostLine:
     def test_is_the_running_total_of_each_days_import_cost_less_its_export_revenue(self) -> None:
         line = traces_by_name(
             financial_breakdown(
-                _steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
-            )
+                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+            ).content
         )["Cumulative Net Cost"]
 
         # £2.88 of import cost less £1.44 of export revenue each day.
@@ -390,14 +372,14 @@ class TestFinancialBreakdownNetCostLine:
         net_cost = calculate_summary(results).net_cost_gbp
         assert net_cost > 0
 
-        line = traces_by_name(financial_breakdown(results))["Cumulative Net Cost"]
+        line = traces_by_name(financial_breakdown(results).content)["Cumulative Net Cost"]
 
         assert line["y"][-1] == pytest.approx(net_cost, abs=0.005)
 
     def test_is_drawn_against_the_secondary_axis_titled_for_it(self) -> None:
         figure = financial_breakdown(
             make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05)
-        )
+        ).content
 
         line = traces_by_name(figure)["Cumulative Net Cost"]
 
@@ -405,8 +387,8 @@ class TestFinancialBreakdownNetCostLine:
         assert json.loads(figure)["layout"]["yaxis2"]["title"]["text"] == "Cumulative Net Cost (GBP)"
 
     def test_seasonal_bars_are_each_seasons_kwh_of_the_runs_own_flows(self) -> None:
-        figure = seasonal_comparison(make_sim_results(self_kwh=876.0, export_kwh=1752.0, import_kwh=438.0, days=365))
-        assert figure is not None
+        figure = seasonal_comparison(make_sim_results(self_kwh=876.0, export_kwh=1752.0, import_kwh=438.0, days=365)).content
+        assert isinstance(figure, str)
 
         bars = {name: dict(zip(trace["x"], trace["y"])) for name, trace in traces_by_name(figure).items()}
 
@@ -429,7 +411,7 @@ class TestFinancialBreakdownPricing:
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        by_name = traces_by_name(financial_breakdown(results))
+        by_name = traces_by_name(financial_breakdown(results).content)
 
         assert by_name["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert by_name["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
@@ -441,7 +423,7 @@ class TestFinancialBreakdownPricing:
         assert peak_import_kw > 0
         assert peak_export_kw > 0
 
-        by_name = traces_by_name(financial_breakdown(results))
+        by_name = traces_by_name(financial_breakdown(results).content)
 
         assert by_name["Daily Cost"]["y"] == [0.0, 0.0]
         assert by_name["Daily Revenue"]["y"] == [0.0, 0.0]
@@ -479,7 +461,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
             days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
         )
 
-        assert annotation_texts(financial_breakdown(results)) == notes
+        assert annotation_texts(financial_breakdown(results).content) == notes
 
     @pytest.mark.parametrize(
         "export_rate",
@@ -496,7 +478,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
         )
         assert results.grid_import.max() == 0
 
-        assert annotation_texts(financial_breakdown(results)) == []
+        assert annotation_texts(financial_breakdown(results).content) == []
 
     def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
         self,
@@ -506,7 +488,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
 
         assert results.grid_import.sum() > 0
         assert results.export_revenue.sum() > 0
-        assert annotation_texts(financial_breakdown(results)) == [
+        assert annotation_texts(financial_breakdown(results).content) == [
             "No import tariff configured — cost tracking unavailable"
         ]
 
@@ -522,6 +504,62 @@ class TestFinancialBreakdownNoTariffAnnotation:
 
         assert results.grid_import.sum() > 0
         assert results.grid_export.sum() == 0
-        assert annotation_texts(financial_breakdown(results)) == [
+        assert annotation_texts(financial_breakdown(results).content) == [
             "No tariff configured — cost and revenue tracking unavailable"
+        ]
+
+
+class TestResultsTabs:
+    """Each page's assembler lists, tab by tab, the panels of the charts that apply to its run.
+
+    A home's battery chart applies only to a home with a battery, and its heat-pump charts only to a run with a
+    heat-pump load.
+    """
+
+    def test_a_home_with_a_battery_and_a_heat_pump_load_lists_every_home_chart(self) -> None:
+        year = make_sim_results()
+        results = dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
+
+        tabs = home_results_tabs(
+            make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), results, calculate_summary(results)
+        )
+
+        assert _tab_layout(tabs) == [
+            ("overview", "Overview", ["chart-sankey", "chart-daily-balance"]),
+            ("power_flow", "Power Flow", ["chart-power-flow"]),
+            ("battery_finance", "Battery & Finance", ["chart-battery-soc", "chart-financial", "chart-monthly"]),
+            ("analysis", "Analysis", ["chart-seasonal", "chart-hp-load-share", "chart-hp-load-profile"]),
+        ]
+
+    def test_a_home_without_a_battery_or_a_heat_pump_load_lists_neither_their_charts(self) -> None:
+        results = make_sim_results(days=1)
+
+        tabs = home_results_tabs(make_home_config(), results, calculate_summary(results))
+
+        assert _tab_layout(tabs) == [
+            ("overview", "Overview", ["chart-sankey", "chart-daily-balance"]),
+            ("power_flow", "Power Flow", ["chart-power-flow"]),
+            ("battery_finance", "Battery & Finance", ["chart-financial", "chart-monthly"]),
+            ("analysis", "Analysis", ["chart-seasonal"]),
+        ]
+
+    def test_a_fleet_lists_every_fleet_chart(self) -> None:
+        home_summaries = [calculate_summary(make_sim_results(days=1))] * 2
+
+        tabs = fleet_results_tabs(make_fleet_results(n_homes=2, days=1), home_summaries)
+
+        assert _tab_layout(tabs) == [
+            ("aggregate", "Aggregate", ["chart-aggregate-timeline", "chart-grid-impact"]),
+            ("per_home", "Per-Home", ["chart-heatmap", "chart-box-plots"]),
+            ("distributions", "Distributions", ["chart-distribution-histograms"]),
+        ]
+
+    def test_a_comparison_lists_the_energy_totals_and_the_efficiency_ratios(self) -> None:
+        summary = dataclasses.asdict(calculate_summary(make_sim_results(days=1)))
+
+        tabs = comparison_tabs([summary, summary], ["Run A", "Run B"])
+
+        assert _tab_layout(tabs) == [
+            ("bar", "Energy Totals", ["chart-comparison-bar"]),
+            ("radar", "Efficiency Ratios", ["chart-comparison-radar"]),
         ]

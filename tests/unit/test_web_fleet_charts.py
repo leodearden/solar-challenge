@@ -52,7 +52,7 @@ class TestFleetChartFunctions:
         """Each row is one home's five energy totals, in the order the columns name them."""
         summaries = [calculate_summary(home) for home in _one_day_homes(2)]
 
-        heatmap = traces(fleet_heatmap(summaries))[0]
+        heatmap = traces(fleet_heatmap(summaries).content)[0]
 
         assert heatmap["x"] == ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
         assert heatmap["y"] == ["Home 1", "Home 2"]
@@ -62,7 +62,7 @@ class TestFleetChartFunctions:
         """Of 51 homes, the heatmap draws the first 50, in order."""
         summaries = [calculate_summary(make_sim_results(self_kwh=float(n), days=1)) for n in range(1, 52)]
 
-        heatmap = traces(fleet_heatmap(summaries))[0]
+        heatmap = traces(fleet_heatmap(summaries).content)[0]
 
         assert heatmap["y"] == [f"Home {n}" for n in range(1, 51)]
         assert [row[2] for row in heatmap["z"]] == [float(n) for n in range(1, 51)]
@@ -72,8 +72,8 @@ class TestFleetChartFunctions:
         home = make_sim_results(self_kwh=18.456, export_kwh=54.321, import_kwh=27.788, days=1)
         summaries = [calculate_summary(home)]
 
-        heatmap = traces(fleet_heatmap(summaries))[0]
-        boxes = traces(fleet_box_plots(summaries))
+        heatmap = traces(fleet_heatmap(summaries).content)[0]
+        boxes = traces(fleet_box_plots(summaries).content)
 
         assert [box["y"][0] for box in boxes] == pytest.approx([72.777, 46.244, 18.456, 27.788, 54.321])
         assert heatmap["z"] == [[72.78, 46.24, 18.46, 27.79, 54.32]]
@@ -82,7 +82,7 @@ class TestFleetChartFunctions:
         """Each box is one energy total, drawn from each home's summary in the homes' order."""
         summaries = [calculate_summary(home) for home in _one_day_homes(2)]
 
-        data = traces(fleet_box_plots(summaries))
+        data = traces(fleet_box_plots(summaries).content)
 
         assert [(trace["name"], trace["y"]) for trace in data] == [
             ("Generation", [72.0, 8.0]),
@@ -96,7 +96,7 @@ class TestFleetChartFunctions:
         """The three histograms draw each home's generation, self-consumption ratio and grid dependency ratio."""
         summaries = [calculate_summary(home) for home in _one_day_homes(2)]
 
-        data = traces(fleet_distribution_histograms(summaries))
+        data = traces(fleet_distribution_histograms(summaries).content)
 
         assert [(trace["name"], trace["x"]) for trace in data] == [
             ("Generation", [72.0, 8.0]),
@@ -113,7 +113,7 @@ class TestFleetChartFunctions:
 
         drawn = {
             name: trace["y"]
-            for name, trace in traces_by_name(fleet_aggregate_timeline(make_fleet_results_of(homes))).items()
+            for name, trace in traces_by_name(fleet_aggregate_timeline(make_fleet_results_of(homes)).content).items()
         }
 
         assert drawn == {
@@ -130,8 +130,8 @@ class TestFleetChartFunctions:
         """A one-home fleet's totals are its home's flows, so its timeline is the home's power-flow timeline under the fleet's own title."""
         home = make_sim_results(days=365)
 
-        home_figure = json.loads(power_flow_timeline(home))
-        fleet_figure = json.loads(fleet_aggregate_timeline(make_fleet_results_of([home])))
+        home_figure = json.loads(power_flow_timeline(home).content)
+        fleet_figure = json.loads(fleet_aggregate_timeline(make_fleet_results_of([home])).content)
 
         titles = (home_figure["layout"].pop("title"), fleet_figure["layout"].pop("title"))
         assert titles == ({"text": "Power Flow Timeline"}, {"text": "Fleet Aggregate Power Flow"})
@@ -147,7 +147,7 @@ class TestFleetChartFunctions:
 
         drawn = {
             name: trace["y"]
-            for name, trace in traces_by_name(fleet_grid_impact(make_fleet_results_of(homes))).items()
+            for name, trace in traces_by_name(fleet_grid_impact(make_fleet_results_of(homes)).content).items()
         }
 
         assert drawn == {

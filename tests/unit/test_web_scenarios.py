@@ -29,6 +29,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_DAYS
+from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
 from tests._plotly_figure import traces
@@ -821,14 +822,14 @@ class TestSweepChart:
     """Tests for the sweep_parameter_chart function in charts.py."""
 
     def test_sweep_parameter_chart_returns_json(self) -> None:
-        """Test sweep_parameter_chart returns valid Plotly JSON."""
+        """Test sweep_parameter_chart returns a panel of valid Plotly JSON."""
         result = sweep_parameter_chart(
             [2.0, 4.0, 6.0, 8.0],
             [50.5, 65.3, 72.1, 78.4],
             "PV Capacity (kW)",
             "Self-Consumption (%)",
-        )
-        assert result and result != "{}"
+        ).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
 
@@ -839,14 +840,30 @@ class TestSweepChart:
             [10.0, 25.0, 40.0, 55.0, 70.0],
             "Battery (kWh)",
             "Grid Import (kWh)",
-        )
+        ).content
         # Should have at least the main trace, optimal marker, and trend line
         assert len(traces(result)) >= 2
 
-    def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
-        """Test sweep_parameter_chart returns '{}' with empty inputs."""
-        result = sweep_parameter_chart([], [], "X", "Y")
-        assert result == "{}"
+    @pytest.mark.parametrize(
+        ("param_values", "metric_values"),
+        [pytest.param([], [], id="no-points"), pytest.param([4.0], [65.3], id="one-point")],
+    )
+    def test_sweep_parameter_chart_of_fewer_than_two_points_names_the_rule_and_the_sweeps_points_in_its_titled_panel(
+        self, param_values: list[float], metric_values: list[float]
+    ) -> None:
+        panel = sweep_parameter_chart(param_values, metric_values, "PV Capacity (kW)", "Self-Consumption (%)")
+
+        assert (panel.title, panel.absence_reason) == (
+            "Self-Consumption (%) vs PV Capacity (kW)",
+            sweep_reason(len(param_values)),
+        )
+
+    def test_sweep_parameter_chart_refuses_metric_values_that_are_not_one_per_parameter_value(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"metric_values must be one value per parameter value, 3 of them; got \[50\.5, 65\.3\]",
+        ):
+            sweep_parameter_chart([2.0, 4.0, 6.0], [50.5, 65.3], "PV Capacity (kW)", "Self-Consumption (%)")
 
     def test_sweep_parameter_chart_two_points(self) -> None:
         """Test sweep_parameter_chart works with just two data points."""
@@ -855,8 +872,8 @@ class TestSweepChart:
             [20.0, 80.0],
             "Param",
             "Metric",
-        )
-        assert result and result != "{}"
+        ).content
+        assert isinstance(result, str)
         parsed = json.loads(result)
         assert "data" in parsed
         assert "layout" in parsed

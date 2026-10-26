@@ -92,7 +92,7 @@ def test_traces_lists_each_of_two_traces_sharing_a_name() -> None:
 
 
 def test_a_figure_with_no_data_has_no_traces() -> None:
-    """sankey_diagram returns "{}" when it draws no flow."""
+    """The case is a figure's JSON with no data or layout."""
     assert traces("{}") == []
 
 
@@ -176,7 +176,7 @@ def test_annotation_texts_lists_a_shared_text_once_for_each_annotation() -> None
 def test_a_figure_with_no_annotations_reads_as_empty(
     reader: Callable[[str], object], nothing: object, figure: str
 ) -> None:
-    """Figure.to_json writes no annotations key for a figure without any, and sankey_diagram returns "{}" when it draws no flow.
+    """Figure.to_json writes no annotations key for a figure without any, and the last case is a figure's JSON with no data or layout.
 
     The first figure's title has a text, which is not an annotation's.
     """
@@ -269,7 +269,7 @@ def test_sankey_node_colours_keys_each_nodes_colour_as_written_by_its_label() ->
 def test_a_figure_that_is_not_one_sankey_trace_raises_rather_than_reading_a_trace(
     reader: Callable[[str], object], figure: str, types: list[str]
 ) -> None:
-    """sankey_diagram returns "{}" when it draws no flow."""
+    """The case is a figure's JSON with no data or layout."""
     with pytest.raises(ValueError, match=re.escape(f"one trace, a Sankey; got traces of the types {types}") + "$"):
         reader(figure)
 
