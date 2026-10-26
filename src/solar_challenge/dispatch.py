@@ -11,7 +11,7 @@ build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -20,7 +20,14 @@ from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
+from solar_challenge.number_fields import (
+    FRACTION,
+    POSITIVE,
+    Interval,
+    as_finite_float,
+    as_whole_numbers,
+    read_field,
+)
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE
 
@@ -247,19 +254,36 @@ class GridChargeConfig:
         read_field(self, "target_soc_fraction", as_finite_float, FRACTION)
 
 
-def _require_valid_peak_hours(peak_hours: Sequence[tuple[int, int]]) -> None:
-    """Refuse peak_hours unless it holds at least one (start, end) window, each with 0 <= start < end <= 24.
+_PEAK_WINDOW_HOURS = Interval(0, 24)
+"""The hours a peak window starts and ends at, from 0, the midnight that begins the day, to 24, the one that ends it."""
+
+
+def _as_hour_window(value: object, field: str, within: Interval) -> tuple[int, int]:
+    """Return *value*, a window, read as the (start, end) pair of whole hours *within* admits that starts before it ends, each hour named {field}[{j}].
 
     Raises:
-        ConfigurationError: Naming peak_hours, and the first window that breaks the rule.
+        ConfigurationError: If as_whole_numbers refuses *value* or one of its hours, or if
+            *value* is not a (start, end) pair that starts before it ends, naming *field*
+            and *value*.
     """
-    if not peak_hours:
-        raise ConfigurationError("peak_hours must hold at least one (start, end) window; it is empty")
-    for start, end in peak_hours:
-        if not 0 <= start < end <= 24:
-            raise ConfigurationError(
-                f"peak_hours windows must satisfy 0 <= start < end <= 24, got ({start}, {end})"
-            )
+    hours = as_whole_numbers(value, field, within)
+    if len(hours) != 2 or not hours[0] < hours[1]:
+        raise ConfigurationError(f"{field} must be a (start, end) window that starts before it ends, got {value!r}")
+    return (hours[0], hours[1])
+
+
+def _as_hour_windows(value: object, field: str, within: Interval) -> tuple[tuple[int, int], ...]:
+    """Return *value*, a list of at least one window, as the tuple of its windows, each read by _as_hour_window as {field}[{i}].
+
+    Raises:
+        ConfigurationError: If *value* is not a list or tuple, or is empty, naming *field*;
+            or if _as_hour_window refuses a window.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise ConfigurationError(f"{field} must be a list of (start, end) windows, got {value!r}")
+    if not value:
+        raise ConfigurationError(f"{field} must hold at least one (start, end) window; it is empty")
+    return tuple(_as_hour_window(window, f"{field}[{index}]", within) for index, window in enumerate(value))
 
 
 _IMPORT_LIMIT_KW = POSITIVE
@@ -279,19 +303,23 @@ class TOUOptimizedStrategyConfig:
 
     Attributes:
         peak_hours: The (start, end) hours of the peak periods the strategy discharges the
-            battery in: at least one, each with 0 <= start < end <= 24.
+            battery in: a list of at least one window, each a pair of whole hours from 0 to
+            24 that starts before it ends, held as a tuple of int pairs.
 
     Raises:
-        ConfigurationError: If peak_hours breaks that rule, with the refusal
-            TOUOptimizedStrategy gives.
+        ConfigurationError: With the refusal TOUOptimizedStrategy gives, if peak_hours is
+            not a list of at least one window; if an hour is a bool, is not a finite whole
+            number, or is outside 0 to 24, naming it peak_hours[i][j] and the value; or if
+            a window is not a (start, end) pair that starts before it ends, naming it
+            peak_hours[i] and the window.
     """
 
     peak_hours: tuple[tuple[int, int], ...]
     strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
 
     def __post_init__(self) -> None:
-        """Refuse peak_hours as TOUOptimizedStrategy does."""
-        _require_valid_peak_hours(self.peak_hours)
+        """Read peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
+        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS)
 
 
 @dataclass(frozen=True)
@@ -517,17 +545,18 @@ class TOUOptimizedStrategy(DispatchStrategy):
         """Initialize TOU-optimized strategy with tariff period definitions.
 
         Args:
-            peak_hours: List of (start_hour, end_hour) tuples defining peak periods,
-                at least one, each with 0 <= start_hour < end_hour <= 24. For
-                example, [(17, 20)] represents peak period from 5 PM to 8 PM.
-                Every hour outside these ranges is off-peak.
+            peak_hours: List of (start_hour, end_hour) windows defining peak periods: at
+                least one, each a pair of whole hours from 0 to 24 that starts before it
+                ends, held as a tuple of int pairs. For example, [(17, 20)] represents
+                peak period from 5 PM to 8 PM. Every hour outside these ranges is off-peak.
 
         Raises:
-            ConfigurationError: If peak_hours holds no period, or a period
-                breaks 0 <= start_hour < end_hour <= 24
+            ConfigurationError: If peak_hours is not a list of at least one window; if an
+                hour is a bool, is not a finite whole number, or is outside 0 to 24, naming
+                it peak_hours[i][j] and the value; or if a window is not a (start, end)
+                pair that starts before it ends, naming it peak_hours[i] and the window.
         """
-        _require_valid_peak_hours(peak_hours)
-        self._peak_hours = peak_hours
+        self._peak_hours = _as_hour_windows(peak_hours, "peak_hours", _PEAK_WINDOW_HOURS)
 
     def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
         """Determine tariff period for given timestamp.
