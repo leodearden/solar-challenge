@@ -85,11 +85,12 @@ def surface_form(obj: object) -> str:
     A class whose constructor inspect reads differently by minor, or cannot read on any,
     and a routine whose signature inspect reads differently by minor, raise TypeError
     naming what inspect reads that way and saying what to do instead. A signature, an
-    inspect.Signature as __signature__, which inspect reads as given, lifts most of
-    these refusals. docs/surface-forms-inspect-readings.md says how each minor reads
-    the objects this docstring names, where a signature lifts each refusal, and which
-    rule tests pin each rule; signature_of in tests/_surface_forms_signatures.py reads
-    the signature and says which constructors it refuses.
+    inspect.Signature as __signature__, which inspect reads as given, lifts each of
+    these refusals when the class or routine itself carries it.
+    docs/surface-forms-inspect-readings.md says how each minor reads the objects this
+    docstring names, where else a signature lifts each refusal, and which rule tests pin
+    each rule; signature_of in tests/_surface_forms_signatures.py reads the signature
+    and says which constructors it refuses.
 
     A routine whose signature inspect cannot read raises TypeError naming it and its
     kind: one that is not callable, as no functools.partialmethod or
