@@ -1284,15 +1284,16 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but
     def wrapper() -> Callable[..., object]:
         return functools.wraps(called)(lambda *args: called(*args))
 
-    routines = {
-        "partial": signed(functools.partial(called)),
-        "functools-wraps-wrapper": signed(wrapper()),
-        "bound-method": types.MethodType(signed(wrapper(), receiver), object()),
-        "partial-of-a-signed-wrapper": functools.partial(signed(wrapper())),
+    routine_builders = {
+        "partial": lambda: signed(functools.partial(called)),
+        "functools-wraps-wrapper": lambda: signed(wrapper()),
+        "bound-method": lambda: types.MethodType(signed(wrapper(), receiver), object()),
+        "partial-of-a-signed-wrapper": lambda: functools.partial(signed(wrapper())),
     }
+    routine = routine_builders[shape]()
 
-    assert surface_form(routines[shape]) == "(rate: int)"
-    assert named_classes(routines[shape]) == {int}
+    assert surface_form(routine) == "(rate: int)"
+    assert named_classes(routine) == {int}
 
 
 @pytest.mark.parametrize(
