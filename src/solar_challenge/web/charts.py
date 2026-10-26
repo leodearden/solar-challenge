@@ -4,7 +4,8 @@
 Each chart builder returns a frozen ChartPanel: the chart's element id, the title and height its
 card and its figure share, and its Plotly figure JSON, or a ChartAbsence whose reason names the
 rule the run does not meet and the run's value. _panel, each builder's one exit, writes the title
-and height into the figure's layout, so each lives once. heat_pump_analysis returns its two panels.
+and height into the figure's layout, so each lives once. heat_pump_analysis returns its two panels,
+and sweep_panels one per SweepMetric, each marking its best point by the metric's direction.
 Each page's assembler, home_results_tabs, fleet_results_tabs or comparison_tabs, groups the panels
 of the charts that apply to its run into ChartTabs; a chart whose subject the run lacks, a battery
 or a heat-pump load, is not listed. ChartPanel, ChartAbsence and ChartTab each refuse at
@@ -23,6 +24,7 @@ charts agree.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -996,100 +998,125 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
 _SWEEP_MIN_POINTS = 2
 
 
-def sweep_parameter_chart(
-    param_values: list[float],
-    metric_values: list[float],
-    param_name: str,
-    metric_name: str,
-) -> ChartPanel:
-    """Line chart showing parameter vs metric for sweep results.
+@dataclass(frozen=True)
+class SweepPoint:
+    """One finished point of a sweep, the value its run swept to and that run's summary."""
 
-    Plots the swept parameter values on the X-axis and the resulting
-    metric values on the Y-axis.  Highlights the optimal point (maximum
-    metric value) with an annotation and adds a linear trend line.
+    value: float
+    summary: SummaryStatistics
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.value):
+            _refuse("SweepPoint.value", self.value, "a finite number")
+
+
+class _Better(Enum):
+    """The direction in which a sweep metric's best point lies: at its highest value or at its lowest."""
+
+    HIGHER = "higher"
+    LOWER = "lower"
+
+    def best_index(self, values: Sequence[float]) -> int:
+        """The index of the best of *values* in this direction, the first of equals."""
+        return (max if self is _Better.HIGHER else min)(range(len(values)), key=values.__getitem__)
+
+
+class SweepMetric(Enum):
+    """The metrics a sweep's charts draw: each one's label, its reader of a run's summary and the direction of its best point."""
+
+    def __init__(self, label: str, read: Callable[[SummaryStatistics], float], better: _Better) -> None:
+        self.label: Final = label
+        self.read: Final = read
+        self.better: Final = better
+
+    GENERATION = (f"{_EnergyFlow.GENERATION.label} (kWh)", _SUMMARY_KWH[_EnergyFlow.GENERATION], _Better.HIGHER)
+    SELF_CONSUMPTION = (
+        f"{_EnergyFlow.SELF_CONSUMPTION.label} (%)",
+        lambda summary: summary.self_consumption_ratio * 100,
+        _Better.HIGHER,
+    )
+    GRID_IMPORT = (f"{_EnergyFlow.GRID_IMPORT.label} (kWh)", _SUMMARY_KWH[_EnergyFlow.GRID_IMPORT], _Better.LOWER)
+
+    @property
+    def dom_id(self) -> str:
+        """The element id of the metric's sweep panel."""
+        return "chart-sweep-" + self.name.lower().replace("_", "-")
+
+
+def sweep_parameter_chart(parameter_label: str, points: Sequence[SweepPoint], metric: SweepMetric) -> ChartPanel:
+    """The panel of *metric* over the swept values of a sweep's finished *points*, its best point marked by the metric's direction, with a linear trend line.
 
     Args:
-        param_values: List of parameter values tested.
-        metric_values: Corresponding metric values for each parameter point.
-        param_name: Display name for the X-axis (e.g. "PV Capacity (kW)").
-        metric_name: Display name for the Y-axis (e.g. "Self-Consumption (%)").
+        parameter_label: The swept parameter's label, which titles the x-axis (e.g. "PV Capacity (kW)").
+        points: The sweep's finished points, in the order they are drawn.
+        metric: The metric drawn on the y-axis.
 
     Returns:
-        The chart's panel, an absence naming the rule and the sweep's points if
+        The chart's panel, an absence naming the rule and the sweep's finished points if
         it has fewer than _SWEEP_MIN_POINTS.
 
     Raises:
-        ValueError: If *metric_values* does not hold one value per parameter value; the message names both.
+        ValueError: If *parameter_label* is blank; the message names it.
     """
-    if len(metric_values) != len(param_values):
-        _refuse("metric_values", metric_values, f"one value per parameter value, {len(param_values)} of them")
-    points = len(param_values)
+    if not parameter_label.strip():
+        _refuse("parameter_label", parameter_label, "a label, not blank")
     return _panel(
-        "chart-sweep",
-        f"{metric_name} vs {param_name}",
+        metric.dom_id,
+        f"{metric.label} vs {parameter_label}",
         450,
-        _sweep_figure(param_values, metric_values, param_name, metric_name)
-        if points >= _SWEEP_MIN_POINTS
-        else ChartAbsence(f"The sweep chart needs at least {_SWEEP_MIN_POINTS} points; this sweep has {points}."),
+        _sweep_figure(parameter_label, points, metric)
+        if len(points) >= _SWEEP_MIN_POINTS
+        else ChartAbsence(
+            f"The sweep chart needs at least {_SWEEP_MIN_POINTS} finished points; this sweep has {len(points)}."
+        ),
     )
 
 
-def _sweep_figure(
-    param_values: list[float],
-    metric_values: list[float],
-    param_name: str,
-    metric_name: str,
-) -> go.Figure:
-    """The sweep's line of *metric_values* over *param_values*, at least two points, its optimal point and its trend line."""
-    # Main data trace
-    traces: list[Any] = [
+def _sweep_figure(parameter_label: str, points: Sequence[SweepPoint], metric: SweepMetric) -> go.Figure:
+    """The line of *metric* over the values of *points*, at least two, its best point by the metric's direction and its trend line."""
+    values = [point.value for point in points]
+    readings = [metric.read(point.summary) for point in points]
+    best = metric.better.best_index(readings)
+    trend = np.polyval(np.polyfit(np.array(values, dtype=float), np.array(readings, dtype=float), 1), values)
+
+    fig = go.Figure(data=[
         go.Scatter(
-            name=metric_name,
-            x=param_values,
-            y=metric_values,
+            name=metric.label,
+            x=values,
+            y=readings,
             mode="lines+markers",
             line=dict(color=COLOUR_PALETTE["pv_generation"], width=2.5),
             marker=dict(size=8),
         ),
-    ]
-
-    # Highlight optimal point (max metric value)
-    best_idx = max(range(len(metric_values)), key=lambda i: metric_values[i])
-    traces.append(
         go.Scatter(
             name="Optimal",
-            x=[param_values[best_idx]],
-            y=[metric_values[best_idx]],
+            x=[values[best]],
+            y=[readings[best]],
             mode="markers+text",
             marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
-            text=[f"{metric_values[best_idx]:.1f}"],
+            text=[f"{readings[best]:.1f}"],
             textposition="top center",
             showlegend=True,
         ),
-    )
-
-    # Simple linear trend line
-    x_arr = np.array(param_values, dtype=float)
-    y_arr = np.array(metric_values, dtype=float)
-    coeffs = np.polyfit(x_arr, y_arr, 1)
-    trend_y = np.polyval(coeffs, x_arr)
-    traces.append(
         go.Scatter(
             name="Trend",
-            x=param_values,
-            y=trend_y.round(2).tolist(),
+            x=values,
+            y=trend.round(2).tolist(),
             mode="lines",
             line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
         ),
-    )
-
-    fig = go.Figure(data=traces)
+    ])
     fig.update_layout(
         **_SHARED_LAYOUT,
-        xaxis=dict(title=param_name),
-        yaxis=dict(title=metric_name),
+        xaxis=dict(title=parameter_label),
+        yaxis=dict(title=metric.label),
     )
     return fig
+
+
+def sweep_panels(parameter_label: str, points: Sequence[SweepPoint]) -> tuple[ChartPanel, ...]:
+    """The sweep page's panels, one per SweepMetric in member order, each drawing that metric over a sweep's finished *points*."""
+    return tuple(sweep_parameter_chart(parameter_label, points, metric) for metric in SweepMetric)
 
 
 # ---------------------------------------------------------------------------
