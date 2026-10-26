@@ -32,9 +32,13 @@ def synthetic_checkout(directory: Path, files: Mapping[str, str | bytes]) -> Pat
 def write_file(checkout: Path, path: str, content: str | bytes) -> PurePosixPath:
     """Write *content* to *path*, a POSIX path relative to *checkout*, making its missing directories; return *path*.
 
-    Text is written as UTF-8, and bytes as they are.
+    Text is written as UTF-8, and bytes as they are. An absolute *path*, or one holding a '..', is refused with
+    ValueError before anything is written: git lists no file by it.
     """
-    written = checkout / path
+    relative = PurePosixPath(path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"write_file takes a path relative to the checkout {checkout}, without '..', not {path}")
+    written = checkout / relative
     written.parent.mkdir(parents=True, exist_ok=True)
     written.write_bytes(content.encode("utf-8") if isinstance(content, str) else content)
-    return PurePosixPath(path)
+    return relative

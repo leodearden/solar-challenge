@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_synthetic_checkout.py, on real throwaway git checkouts, with no mocks."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -74,3 +75,15 @@ def test_write_file_adds_a_file_beside_those_laid_out_and_returns_its_path(tmp_p
     ]
     assert (checkout / "src" / "pkg" / "page.html").read_text(encoding="utf-8") == "<p>Page</p>\n"
     assert (checkout / "src" / "pkg" / "deeper" / "notes.txt").read_bytes() == b"\xff\xfe"
+
+
+def test_write_file_refuses_an_absolute_path_or_one_holding_a_dot_dot_and_writes_nothing(tmp_path: Path) -> None:
+    checkout = synthetic_checkout(tmp_path / "checkout", {})
+
+    for path in [str(checkout / "inside.txt"), "../outside.txt", "src/../inside.txt"]:
+        refusal = re.escape(f"relative to the checkout {checkout}, without '..', not {path}")
+        with pytest.raises(ValueError, match=refusal):
+            write_file(checkout, path, "")
+
+    assert [entry.name for entry in tmp_path.iterdir()] == ["checkout"]
+    assert [entry.name for entry in checkout.iterdir()] == [".git"]
