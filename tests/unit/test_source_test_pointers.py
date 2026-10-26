@@ -327,7 +327,8 @@ def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path)
         "# tests/unit/test_pointed_at.py::TestGroup\n"
         "# tests/unit/test_pointed_at.py::TestGroup::test_member\n"
         "# tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep\n"
-        "# Not rooted at tests/: src/tests/test_gone.py and https://example.org/pvlib/tests/test_gone.py\n",
+        "# Not rooted at tests/: src/tests/test_gone.py, https://example.org/pvlib/tests/test_gone.py,\n"
+        "# unittests/test_gone.py, my-tests/test_gone.py and site.tests/test_gone.py\n",
     )
 
     pointers = _pointers(project, [source])
@@ -410,7 +411,7 @@ def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Pa
         "// tests/unit/test_pointed_at.py's test_top shows it.\n"
         "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
         "// Its response is a werkzeug.test.TestResponse.\n"
-        "// Not a test name: src/tests/test_gone.py\n"
+        "// Not a test name: src/tests/test_gone.py or pre-test_gone\n"
         "// test_pointed_at.py holds them.\n",
     )
 
