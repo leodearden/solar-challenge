@@ -1,0 +1,518 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The rules of tests/_surface_forms.py's surface_form for the constructor inspect reads for a class, or the signature the class carries in its place, and the TypeError raised where inspect reads that constructor differently by minor or cannot read it, one per test.
+
+Ledger and DeletableCallableGetter are defined at module level, where their qualified
+names carry no '<locals>' and a parametrize decorator can reach them.
+"""
+
+import decimal
+import functools
+import inspect
+import re
+import sys
+import types
+import warnings
+from typing import Callable
+
+import pytest
+
+from tests._surface_forms import named_classes, surface_form
+from tests.unit.surface_forms_helper._fixtures import CallableGetter, NoneSignedCallableGetter
+
+
+class Ledger(dict):
+    """A class that inherits its constructor from dict, which CPython defines in C."""
+
+
+class DeletableCallableGetter(CallableGetter):
+    """A CallableGetter whose type also defines __delete__, so that inspect counts it a method descriptor before Python 3.13 alone."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Rebuilt(Built):
+        pass
+
+    naming_built_and_its_init = r"\.Built\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        surface_form(Built)
+    with pytest.raises(TypeError, match=naming_built_and_its_init):
+        named_classes(Built)
+    with pytest.raises(
+        TypeError, match=r"\.Rebuilt\b.*\.Built\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Rebuilt)
+
+
+def test_a_class_whose_new_is_a_partial_is_spelled_by_the_signature_the_partial_leaves_less_cls() -> None:
+    def make(cls: type, rate: int, scale: float = 1.0) -> object: ...
+
+    class Made:
+        __new__ = functools.partial(make, scale=2.0)
+
+    assert surface_form(Made) == "(rate: int, *, scale: float = 2.0) -> object"
+
+
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Both:
+        def __new__(cls, rate: int) -> object: ...
+
+        __init__ = functools.partial(build, scale=2.0)
+
+    assert surface_form(Both) == "(rate: int) -> object"
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        pytest.param(object.__new__, id="builtin"),
+        pytest.param(staticmethod(object.__new__), id="staticmethod"),
+    ],
+)
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_type_error_naming_the_partial(
+    new: object,
+) -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Assigned:
+        __new__ = new
+        __init__ = functools.partial(build, scale=2.0)
+
+    with pytest.raises(
+        TypeError, match=r"\.Assigned\b.*\.Assigned\.__init__\b.*\bfunctools\.partial\b"
+    ):
+        surface_form(Assigned)
+
+
+@pytest.mark.parametrize(
+    ("cls", "naming_it_and_its_constructor"),
+    [
+        pytest.param(
+            functools.partial,
+            r"\bfunctools\.partial\b.*\bfunctools\.partial\b",
+            id="functools.partial",
+        ),
+        pytest.param(int, r"\bbuiltins\.int\b.*\bbuiltins\.int\b", id="int"),
+        pytest.param(list, r"\bbuiltins\.list\b.*\bbuiltins\.list\b", id="list"),
+        pytest.param(
+            decimal.Decimal,
+            r"\bdecimal\.Decimal\b.*\bdecimal\.Decimal\b",
+            id="decimal.Decimal",
+        ),
+        pytest.param(
+            types.ModuleType,
+            r"\bbuiltins\.module\b.*\bbuiltins\.module\b",
+            id="types.ModuleType",
+        ),
+        pytest.param(
+            types.FunctionType,
+            r"\bbuiltins\.function\b.*\bbuiltins\.function\b",
+            id="types.FunctionType",
+        ),
+        pytest.param(
+            Ledger,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_constructors\.Ledger\b.*\bbuiltins\.dict\b",
+            id="Ledger",
+        ),
+    ],
+)
+def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
+    cls: type, naming_it_and_its_constructor: str
+) -> None:
+    with pytest.raises(TypeError, match=naming_it_and_its_constructor):
+        surface_form(cls)
+    with pytest.raises(TypeError, match=naming_it_and_its_constructor):
+        named_classes(cls)
+
+
+def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
+    class Plain:
+        pass
+
+    assert surface_form(object) == "()"
+    assert surface_form(Plain) == "()"
+
+
+def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Rated(dict):
+        __signature__ = signature
+
+    class Rerated(Rated):
+        pass
+
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    class Counted(metaclass=Counting):
+        __signature__ = signature
+
+    assert surface_form(Rated) == "(rate: int)"
+    assert named_classes(Rated) == {int}
+    assert surface_form(Rerated) == "(rate: int)"
+    assert surface_form(Counted) == "(rate: int)"
+    assert surface_form(functools.partial(Rated)) == "(rate: int)"
+
+
+def test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable() -> None:
+    class Created:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Created":
+            return object.__new__(cls)
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Recreated(Created):
+        pass
+
+    class Initialised:
+        @functools.wraps(object.__init__)
+        def __init__(self, rate: int) -> None: ...
+
+    class Keyed(dict):
+        @functools.wraps(dict.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Keyed":
+            return dict.__new__(cls)
+
+        def __init__(self, rate: int) -> None: ...
+
+    naming_created_and_its_new = r"\.Created\b.*\.Created\.__new__\b.*\bobject\.__new__\b"
+    with pytest.raises(TypeError, match=naming_created_and_its_new):
+        surface_form(Created)
+    with pytest.raises(TypeError, match=naming_created_and_its_new):
+        named_classes(Created)
+    with pytest.raises(
+        TypeError, match=r"\.Recreated\b.*\.Created\.__new__\b.*\bobject\.__new__\b"
+    ):
+        surface_form(Recreated)
+    with pytest.raises(
+        TypeError,
+        match=r"\.Initialised\b.*\.Initialised\.__init__\b.*\bobject\.__init__\b",
+    ):
+        surface_form(Initialised)
+    with pytest.raises(
+        TypeError, match=r"\.Keyed\b.*\.Keyed\.__new__\b.*\bdict\.__new__\b"
+    ):
+        surface_form(Keyed)
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 13), reason="warnings.deprecated is new in Python 3.13"
+)
+def test_a_class_decorated_with_warnings_deprecated_raises_the_type_error_naming_the_new_it_writes() -> None:
+    @warnings.deprecated("use Meter")
+    class Gauge:
+        def __init__(self, rate: int) -> None: ...
+
+    with pytest.raises(
+        TypeError, match=r"\.Gauge\b.*\.Gauge\.__new__\b.*\bobject\.__new__\b"
+    ):
+        surface_form(Gauge)
+
+
+def test_a_constructor_that_wraps_one_defined_with_def_is_spelled_by_the_one_it_wraps() -> None:
+    class Based:
+        def __new__(cls, rate: int) -> "Based":
+            return object.__new__(cls)
+
+    class Rebased(Based):
+        @functools.wraps(Based.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Rebased":
+            return Based.__new__(cls, *args, **kwargs)
+
+    assert surface_form(Rebased) == "(rate: int) -> Based"
+
+
+def test_a_wrapper_of_a_callable_defined_in_c_that_inspect_reads_after_another_constructor_leaves_the_class_spelled_by_that_constructor() -> None:
+    class Paired:
+        def __new__(cls, rate: int) -> "Paired":
+            return object.__new__(cls)
+
+        @functools.wraps(object.__init__)
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+    class Wrapping:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Wrapping":
+            return object.__new__(cls)
+
+    class Overriding(Wrapping):
+        def __init__(self, rate: int) -> None: ...
+
+    assert surface_form(Paired) == "(rate: int) -> Paired"
+    assert surface_form(Overriding) == "(rate: int) -> None"
+
+
+def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_call_and_that_callable() -> None:
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    class Counted(metaclass=Counting):
+        def __init__(self, rate: int) -> None: ...
+
+    naming_counted_and_its_call = r"\.Counted\b.*\.Counting\.__call__\b.*\btype\.__call__\b"
+    with pytest.raises(TypeError, match=naming_counted_and_its_call):
+        surface_form(Counted)
+    with pytest.raises(TypeError, match=naming_counted_and_its_call):
+        named_classes(Counted)
+
+
+def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
+    def settle(cls: type, rate: int, scale: float = 1.0) -> None: ...
+
+    class Partial(type):
+        __call__ = functools.partial(settle, scale=2.0)
+
+    class Made(metaclass=Partial):
+        pass
+
+    naming_made_and_its_call = r"\.Made\b.*\.Partial\.__call__\b.*\bfunctools\.partial\b"
+    with pytest.raises(TypeError, match=naming_made_and_its_call):
+        surface_form(Made)
+    with pytest.raises(TypeError, match=naming_made_and_its_call):
+        named_classes(Made)
+
+
+def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value() -> None:
+    class Initialised:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = "(self, rate)"
+
+    class Priced:
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = lambda: "(self, rate)"
+
+    class Created:
+        def __new__(cls, rate: int) -> "Created":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+    class Recreated(Created):
+        pass
+
+    class Texted:
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Texted":
+            return object.__new__(cls)
+
+        __new__.__signature__ = "(cls, rate)"
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Counting(type):
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Counted(metaclass=Counting):
+        pass
+
+    class Wrapping(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+        __call__.__signature__ = "(cls, rate)"
+
+    class Wrapped(metaclass=Wrapping):
+        pass
+
+    naming_initialised_its_init_and_the_text = (
+        r"\.Initialised\b.*\.Initialised\.__init__\b.*'\(self, rate\)'"
+        r".*\bbuiltins\.str\b.*\binspect\.Signature\b"
+    )
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        named_classes(Initialised)
+    with pytest.raises(TypeError, match=naming_initialised_its_init_and_the_text):
+        surface_form(functools.partial(Initialised))
+    with pytest.raises(
+        TypeError, match=r"\.Priced\b.*\.Priced\.__init__\b.*\bbuiltins\.function\b"
+    ):
+        surface_form(Priced)
+    with pytest.raises(
+        TypeError, match=r"\.Created\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Created)
+    with pytest.raises(
+        TypeError, match=r"\.Recreated\b.*\.Created\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Recreated)
+    with pytest.raises(
+        TypeError, match=r"\.Texted\b.*\.Texted\.__new__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Texted)
+    with pytest.raises(
+        TypeError, match=r"\.Counted\b.*\.Counting\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Counted)
+    with pytest.raises(
+        TypeError, match=r"\.Wrapped\b.*\.Wrapping\.__call__\b.*'\(cls, rate\)'"
+    ):
+        surface_form(Wrapped)
+
+
+def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
+    class Created:
+        @functools.wraps(object.__new__)
+        def __new__(cls, rate: int) -> object:
+            return object.__new__(cls)
+
+        __new__.__signature__ = None
+
+    class Initialised:
+        @functools.wraps(object.__init__)
+        def __init__(self, rate: int) -> None: ...
+
+        __init__.__signature__ = None
+
+    class Counting(type):
+        @functools.wraps(type.__call__)
+        def __call__(cls, rate: int) -> object: ...
+
+        __call__.__signature__ = None
+
+    class Counted(metaclass=Counting):
+        pass
+
+    assert surface_form(Created) == "(rate: int) -> object"
+    assert surface_form(Initialised) == "(rate: int) -> None"
+    assert surface_form(Counted) == "(rate: int) -> object"
+
+
+def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_is_spelled_by_that_call_whatever_its_constructor() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
+    class Charging(type):
+        def __call__(cls, rate: int) -> None: ...
+
+    class Keyed(dict, metaclass=Charging):
+        pass
+
+    class Built(metaclass=Charging):
+        __init__ = functools.partial(build, scale=2.0)
+
+    class Created(metaclass=Charging):
+        @functools.wraps(object.__new__)
+        def __new__(cls, *args: object, **kwargs: object) -> "Created":
+            return object.__new__(cls)
+
+    assert surface_form(Keyed) == "(rate: int) -> None"
+    assert named_classes(Keyed) == {int}
+    assert surface_form(Built) == "(rate: int) -> None"
+    assert surface_form(Created) == "(rate: int) -> None"
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "reading"),
+    [
+        pytest.param(CallableGetter(), r"\bevery admitted minor\b", id="get-only"),
+        pytest.param(
+            NoneSignedCallableGetter(lambda rate: None),
+            r"\bevery admitted minor\b",
+            id="get-only-signature-of-none",
+        ),
+        pytest.param(DeletableCallableGetter(), r"\b__delete__\b.*\b3\.13\b", id="get-delete"),
+    ],
+)
+def test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type(
+    descriptor: object, reading: str
+) -> None:
+    class Built:
+        __init__ = descriptor
+
+    class Rebuilt(Built):
+        pass
+
+    class Made:
+        __new__ = descriptor
+
+    class Calling(type):
+        __call__ = descriptor
+
+    class Called(metaclass=Calling):
+        pass
+
+    class Wrapped:
+        @functools.wraps(descriptor)
+        def __init__(self, rate: int) -> None: ...
+
+    kind = rf"\.{type(descriptor).__qualname__}\b"
+    for cls, constructor in (
+        (Built, "Built.__init__"),
+        (Rebuilt, "Built.__init__"),
+        (Made, "Made.__new__"),
+        (Called, "Calling.__call__"),
+        (Wrapped, "Wrapped.__init__"),
+    ):
+        naming_it = rf"\.{cls.__name__}\b.*\.{re.escape(constructor)}\b.*{kind}.*{reading}"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(cls)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(cls)
+    with pytest.raises(TypeError, match=rf"\.Built\b.*\.Built\.__init__\b.*{kind}"):
+        surface_form(functools.partial(Built))
+
+
+def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:
+    def build(rate: int) -> str: ...
+
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Giving:
+        def __get__(self, instance: object, owner: type) -> Callable[..., object]:
+            return build
+
+    class Signed(CallableGetter):
+        __signature__ = signature
+
+    class SignedDeletable(DeletableCallableGetter):
+        __signature__ = signature
+
+    class Given:
+        __init__ = Giving()
+
+    class Rated:
+        __init__ = Signed()
+
+    class Rerated:
+        __init__ = SignedDeletable()
+
+    class Calling(type):
+        __call__ = Giving()
+
+    class Called(metaclass=Calling):
+        pass
+
+    class SignedCalling(type):
+        __call__ = Signed()
+
+    class SignedCalled(metaclass=SignedCalling):
+        pass
+
+    assert surface_form(Given) == "(rate: int) -> str"
+    assert surface_form(Rated) == "(rate: int)"
+    assert surface_form(Rerated) == "(rate: int)"
+    assert surface_form(Called) == "(rate: int) -> str"
+    assert surface_form(SignedCalled) == "(rate: int)"
