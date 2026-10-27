@@ -13,6 +13,8 @@ on load, when the sidebar collapses or expands and when the
 window narrows, and, for a chart whose tab is hidden at the
 time, once its tab is shown again. A chart that cannot be
 fitted to its container logs one error naming it.
+A chart container added to the page after load is drawn, and
+a drawn container given another figure is redrawn with it.
 """
 
 from playwright.sync_api import Locator, Page, expect
@@ -433,6 +435,55 @@ def test_a_chart_whose_fitting_fails_after_plotly_plots_resize_returns_logs_one_
         f"expected one error naming {_POWER_FLOW_CHART_ID!r}, saying {_FAILED_TO_FIT_THE_POWER_FLOW_CHART!r}, "
         f"and no other carrying {_FAILED_FITTING!r}, but the page logged: {page_errors}"
     )
+
+
+# -- A chart container added or given another figure after load is drawn --
+
+# Adds, right after the drawn container it is called on, a container carrying that
+# container's figure but not its class, the js-plotly-plot Plotly gave it.
+_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER = """(drawn) => {
+    const added = document.createElement('div');
+    added.id = 'chart-added-late';
+    added.dataset.chartFigure = drawn.dataset.chartFigure;
+    drawn.after(added);
+}"""
+
+_GIVE_IT_THE_SANKEYS_FIGURE = """(container) => {
+    container.dataset.chartFigure = document.getElementById('chart-sankey').dataset.chartFigure;
+}"""
+
+
+def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    page.locator("#chart-daily-balance").evaluate(_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER)
+
+    expect(page.locator("#chart-added-late.js-plotly-plot")).to_be_visible()
+    assert page_errors == []
+
+
+def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """The daily balance's container, given the Sankey's figure, is drawn titled as the Sankey's layout is."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    title = page.locator("#chart-daily-balance .gtitle")
+    expect(title).to_have_text("Daily Energy Balance")
+
+    page.locator("#chart-daily-balance").evaluate(_GIVE_IT_THE_SANKEYS_FIGURE)
+
+    expect(title).to_have_text("Energy Flow")
+    assert page_errors == []
 
 
 # -- Download CSV returns 200 ----------------------------------------------
