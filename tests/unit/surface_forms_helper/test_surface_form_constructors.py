@@ -485,6 +485,42 @@ def test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_
 
 
 @pytest.mark.parametrize(
+    ("construct", "constructor", "refusal"),
+    [
+        pytest.param(_class_whose_new_is, "Made.__new__", r"\.Period\b.*\benum\.Enum\b", id="new"),
+        pytest.param(
+            _class_whose_init_is,
+            "Built.__init__",
+            r"\bfunctools\.partial\b.*\b3\.14\b",
+            id="init",
+        ),
+        pytest.param(
+            _class_whose_metaclass_call_is,
+            "Calling.__call__",
+            r"\bfunctools\.partial\b.*\b3\.14\b",
+            id="metaclass-call",
+        ),
+    ],
+)
+def test_a_class_whose_constructor_is_a_partial_of_an_enum_raises_the_type_error_naming_that_enum_as_new_and_the_one_for_its_binding_as_init_or_metaclass_call(
+    construct: Callable[[object], type], constructor: str, refusal: str
+) -> None:
+    cls = construct(functools.partial(Period))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*{refusal}"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
     ("signature", "form"),
     [
         pytest.param(
@@ -517,8 +553,15 @@ def test_a_class_whose_constructor_wraps_an_enum_but_carries_a_signature_or_a_si
 
     build.__wrapped__ = Period
     build.__signature__ = signature
+    cls = construct(build)
 
-    assert surface_form(construct(build)) == form
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == form
+        assert named_classes(subject) == {int}
+        assert surface_form(functools.partial(subject)) == form
 
 
 def test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor() -> None:
