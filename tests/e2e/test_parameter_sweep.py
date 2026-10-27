@@ -19,8 +19,15 @@ while the browser reopens the stream; its job's completion on the reopened
 stream fills its row, and a reopened stream the server refuses fails it, as
 does a stream that stays broken past the page's reconnect limit.
 
+Once every point of a sweep has ended, the page posts the finished points to
+POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
+shows the chart panels it answers in the region named "Sweep charts", or why
+it could not draw them; a sweep run after it drops that request and clears the
+region.
+
 Last, verifies that another tab loads Run History while the jobs of an
-8-point sweep run, and that each point's row then shows its results.
+8-point sweep run, and that each point's row then shows its results, and that
+a real three-point sweep draws one chart per metric from its points' runs.
 """
 
 import itertools
@@ -198,6 +205,9 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
 # -- Each point's row follows its own sweep's job --------------------------
 
 
+_SWEEP_CHARTS_URL = "**/scenarios/sweep/chart"
+
+
 @dataclass(frozen=True)
 class _SweepJobs:
     """The jobs of the sweeps the page submits: each job's progress stream, and once it completes its results, held until the test answers them."""
@@ -208,7 +218,12 @@ class _SweepJobs:
 
 @pytest.fixture
 def sweep_jobs(page: Page) -> Iterator[_SweepJobs]:
-    """Accept the page's Nth sweep with two points, N and N + 10, which run as the jobs sweep-N-point-1 and sweep-N-point-2, so no point reaches the live server's JobManager; abort the requests still held at teardown."""
+    """Accept the page's Nth sweep with two points, N and N + 10, which run as the jobs sweep-N-point-1 and sweep-N-point-2, so no point reaches the live server's JobManager; abort the requests still held at teardown.
+
+    The page's requests for a sweep's charts are held too, so no faked point's run id reaches the live server, whose
+    400 would log a console error. A test that needs the charts answered routes their URL itself; Playwright consults
+    the newer route first.
+    """
     sweep_numbers = itertools.count(1)
 
     def _accept(route: Route) -> None:
@@ -225,12 +240,20 @@ def sweep_jobs(page: Page) -> Iterator[_SweepJobs]:
     jobs = _SweepJobs(
         HeldJobRequests("text/event-stream"), HeldJobRequests("application/json")
     )
+    held_chart_requests: list[Route] = []
+
+    def _hold(route: Route) -> None:
+        held_chart_requests.append(route)
+
     page.route("**/api/simulate/sweep", _accept)
     page.route("**/api/jobs/*/progress", jobs.progress.handle)
     page.route("**/api/jobs/*/results", jobs.results.handle)
+    page.route(_SWEEP_CHARTS_URL, _hold)
     yield jobs
     jobs.progress.abort_held()
     jobs.results.abort_held()
+    while held_chart_requests:
+        held_chart_requests.pop().abort()
 
 
 def _completion(job_id: str) -> str:
@@ -477,6 +500,96 @@ def test_a_sweep_point_whose_progress_stream_stays_broken_past_the_reconnect_lim
     )
 
 
+# -- The sweep's charts, once every point has ended -------------------------
+
+
+def _is_the_sweep_charts_request(request: Request) -> bool:
+    return request.url.endswith("/scenarios/sweep/chart")
+
+
+def _sweep_charts(page: Page) -> Locator:
+    """The region the sweep page shows the chart panels of its last sweep in."""
+    return page.get_by_role("region", name="Sweep charts", exact=True)
+
+
+def test_once_every_point_has_ended_the_page_posts_the_finished_points_labelled_with_the_parameter_swept(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """The failed second point is left out, and the label is the parameter the sweep ran, not the one selected since."""
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(label="Battery Capacity (kWh)")
+
+    with page.expect_request(_SWEEP_CHARTS_URL) as charts_request:
+        sweep_jobs.progress.answer(
+            "sweep-1-point-2", sse_event("error", {"status": "failed", "message": "Point 2 failed"})
+        )
+
+    assert charts_request.value.post_data_json == {
+        "parameter_label": "PV Capacity (kW)",
+        "points": [{"value": 1, "run_id": "run-of-sweep-1-point-1"}],
+    }
+
+
+def test_a_sweep_run_after_another_drops_the_earlier_sweeps_charts_request(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
+    page.goto(live_server + "/scenarios/sweep")
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+    with page.expect_request(_SWEEP_CHARTS_URL):
+        run.click()
+
+    with page.expect_event("requestfailed", predicate=_is_the_sweep_charts_request):
+        run.click()
+
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_a_sweep_run_after_another_clears_the_earlier_sweeps_charts(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    page.route(
+        _SWEEP_CHARTS_URL,
+        lambda route: route.fulfill(
+            status=200, content_type="text/html", body="<p id=\"chart-sweep-generation\">The first sweep's charts</p>"
+        ),
+    )
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
+    page.goto(live_server + "/scenarios/sweep")
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+    run.click()
+    expect(_sweep_charts(page).get_by_text("The first sweep's charts", exact=True)).to_be_visible()
+
+    run.click()
+
+    expect(page.get_by_text("The first sweep's charts", exact=True)).to_have_count(0)
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_the_page_says_why_it_could_not_draw_the_sweep_charts(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """The refusal's 400 is a console error Chromium logs, so this test does not read the page's errors."""
+    page.route(
+        _SWEEP_CHARTS_URL,
+        lambda route: route.fulfill(status=400, json={"error": "Run 'run-of-sweep-1-point-1' is unknown"}),
+    )
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
+    page.goto(live_server + "/scenarios/sweep")
+
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    expect(
+        page.get_by_text("Could not draw the sweep charts: Run 'run-of-sweep-1-point-1' is unknown", exact=True)
+    ).to_be_visible()
+
+
 # -- Other requests still load while a large sweep runs --------------------
 
 
@@ -512,4 +625,34 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
         expect(rows.nth(n - 1).get_by_role("cell")).to_have_text(
             [str(n), "72.0", "33.3%", "12.0", "completed"]
         )
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+# -- A real sweep's charts, drawn from its points' runs ---------------------
+
+
+def test_a_three_point_sweep_draws_one_chart_per_metric_from_its_points_runs(
+    page: Page,
+    live_server: str,
+    release_held_simulations: Callable[[], None],
+    page_errors: list[str],
+) -> None:
+    """The jobs are released before Run, so each point's job ends at once, saving its run through the live server's RunStorage (B12, task 135)."""
+    release_held_simulations()
+    page.goto(live_server + "/scenarios/sweep")
+    page.get_by_label("Steps", exact=True).fill("3")
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    rows = _result_rows(page)
+    for n in range(3):
+        expect(_status_badge(rows.nth(n))).to_have_text("completed")
+    charts = _sweep_charts(page)
+    expect(charts.locator(".js-plotly-plot")).to_have_count(3)
+    expect(charts.get_by_role("heading")).to_have_text(
+        [
+            "Generation (kWh) vs PV Capacity (kW)",
+            "Self-Consumption (%) vs PV Capacity (kW)",
+            "Grid Import (kWh) vs PV Capacity (kW)",
+        ]
+    )
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
