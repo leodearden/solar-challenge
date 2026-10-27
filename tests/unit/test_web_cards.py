@@ -11,8 +11,8 @@ import pytest
 
 pytest.importorskip("flask")
 
+from flask import Flask
 from flask.testing import FlaskClient
-from markupsafe import Markup
 
 from solar_challenge.web.storage import RunStorage
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
@@ -170,20 +170,18 @@ def test_a_card_given_no_title_is_one_div_in_the_card_classes_and_its_own_that_h
 
 
 def test_a_titled_card_draws_a_header_band_with_its_dot_title_aside_and_subtitle_then_its_padded_body(
-    macros: Any,
+    app: Flask,
 ) -> None:
-    drawn = str(
-        macros.card(
-            title="PV Systems",
-            subtitle="Sizes (kW)",
-            classes="overflow-hidden",
-            header_classes="bg-component-pv-50",
-            dot_classes="bg-component-pv-500",
-            header_aside=Markup('<label class="ml-auto">Enable</label>'),
-            body_classes="p-6",
-            caller=lambda: "Editor",
-        )
+    """The aside is markup its page captures in a {% set %} block, as simulate/fleet.html captures its battery card's switch."""
+    page = app.jinja_env.from_string(
+        '{% from "components/macros.html" import card %}'
+        '{% set aside %}<label class="ml-auto">Enable</label>{% endset %}'
+        '{% call card(title="PV Systems", subtitle="Sizes (kW)", classes="overflow-hidden",'
+        ' header_classes="bg-component-pv-50", dot_classes="bg-component-pv-500",'
+        ' header_aside=aside, body_classes="p-6") %}Editor{% endcall %}'
     )
+
+    drawn = page.render()
 
     assert _div_classes(drawn) == [
         _CARD_CLASSES | {"overflow-hidden"},
