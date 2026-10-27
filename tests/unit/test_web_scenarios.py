@@ -832,6 +832,20 @@ _THREE_POINTS = (
     ),
 )
 
+# A battery sweep past what the home can fill: generation is the same at every capacity, and self-consumption
+# and grid import stop changing from 5 kWh, so each metric's best reading is shared by more than one point.
+_SATURATED_BATTERY_POINTS = (
+    SweepPoint(
+        0.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=6.0)
+    ),
+    SweepPoint(
+        5.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        10.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+)
+
 _SWEEP_PANEL_HEADINGS = [
     ("chart-sweep-generation", "Generation (kWh) vs PV Capacity (kW)"),
     ("chart-sweep-self-consumption", "Self-Consumption (%) vs PV Capacity (kW)"),
@@ -881,6 +895,23 @@ class TestSweepChart:
         self, metric: SweepMetric, optimal_value: float, optimal_metric: float
     ) -> None:
         optimal = traces_by_name(_figure(sweep_parameter_chart(_PV_CAPACITY, _THREE_POINTS, metric)))["Optimal"]
+
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
+
+    @pytest.mark.parametrize(
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 0.0, 108.0, id="generation-highest-at-every-point"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 5.0, 50.0, id="self-consumption-highest-from-5-kwh"),
+            pytest.param(SweepMetric.GRID_IMPORT, 5.0, 3.0, id="grid-import-lowest-from-5-kwh"),
+        ],
+    )
+    def test_sweep_parameter_chart_marks_the_earliest_swept_of_the_points_sharing_the_best_reading(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
+    ) -> None:
+        panel = sweep_parameter_chart("Battery Capacity (kWh)", _SATURATED_BATTERY_POINTS, metric)
+
+        optimal = traces_by_name(_figure(panel))["Optimal"]
 
         assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
 
