@@ -3,8 +3,10 @@
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
  * A container added to the page after load, or given another figure, is
- * drawn the same way once shown, so a page that inserts chart panels, as the
- * sweep page does, needs no renderer API.
+ * drawn the same way once shown, and a container removed from the page is
+ * forgotten, its chart purged, so a page that inserts and replaces chart
+ * panels, as the sweep page does, needs no renderer API and keeps no chart it
+ * no longer shows.
  * Each drawn chart is fitted to its container whenever the container's size
  * changes while it is shown, as when base.html's main column slides in on
  * load, the sidebar is toggled, the window is resized or the chart's tab is
@@ -18,9 +20,9 @@
  * left transparent, as charts._SHARED_LAYOUT sets them, so the card shows
  * through. Each drawn chart is recoloured on theme-changed once it is shown
  * (AC10): at once if it is, else when its tab is next shown. A chart that
- * cannot be drawn, fitted or recoloured, whether Plotly fails at once or
- * after it returns, logs a console error naming its container's id, and the
- * page's other charts still draw.
+ * cannot be drawn, fitted, recoloured or purged, whether Plotly fails at once
+ * or after it returns, logs a console error naming its container's id, and
+ * the page's other charts still draw.
  *
  * Plotly must load first.
  */
@@ -137,7 +139,9 @@
      * names. A polar disc is a plot area, so it is drawn in the figure's plot
      * background, in every theme. The theme-changed listener recolours only
      * drawn charts, so a chart whose container names other colours once its
-     * drawing finishes, after a theme change, is recoloured here.
+     * drawing finishes, after a theme change, is recoloured here. A container
+     * that has left the page by the time its drawing finishes is forgotten
+     * then.
      */
     function _draw(container) {
         var subplots;
@@ -151,9 +155,13 @@
             return Plotly.newPlot(container, fig.data, _setPaths(layout, paths), SOLAR_CHART_CONFIG);
         }, function () {
             _drawn.set(container, subplots);
-            _fitWhileShown.observe(container);
-            if (!_sameColours(_chromeColours(container), drawnIn)) {
-                _recolourOnceShown.observe(container);
+            if (container.isConnected) {
+                _fitWhileShown.observe(container);
+                if (!_sameColours(_chromeColours(container), drawnIn)) {
+                    _recolourOnceShown.observe(container);
+                }
+            } else {
+                _forget(container);
             }
         });
     }
@@ -203,37 +211,68 @@
         });
     });
 
-    /** Draws, once shown, node if it is a container, an element carrying a figure, and each container inside it; a text node holds none. */
-    function _drawEachContainerIn(node) {
+    /** Calls action with node if it is a container, an element carrying a figure, and with each container inside it; a text node holds none. */
+    function _forEachContainerIn(node, action) {
         if (!(node instanceof Element)) {
             return;
         }
         if (node.matches('[data-chart-figure]')) {
-            _drawOnceShown.observe(node);
+            action(node);
         }
         node.querySelectorAll('[data-chart-figure]').forEach(function (container) {
-            _drawOnceShown.observe(container);
+            action(container);
         });
     }
 
+    /** Draws container the first time it is shown (AC3). */
+    function _drawWhenShown(container) {
+        _drawOnceShown.observe(container);
+    }
+
     /**
-     * Draws, once shown, each container added to the page after load, and each
-     * container given another figure, which _draw redraws with Plotly.newPlot.
-     * A container whose figure was removed is left as it is.
+     * Forgets container, which has left the page, so the renderer keeps
+     * nothing of it: it is no longer drawn, fitted or recoloured, and its
+     * chart, if drawn, is purged.
      */
-    var _drawContainersChangedAfterLoad = new MutationObserver(function (records) {
+    function _forget(container) {
+        _drawOnceShown.unobserve(container);
+        _fitWhileShown.unobserve(container);
+        _recolourOnceShown.unobserve(container);
+        if (_drawn.delete(container)) {
+            _attempt(container, 'purge the chart of', function () {
+                Plotly.purge(container);
+            });
+        }
+    }
+
+    /**
+     * Follows the page's containers after load: each container added is drawn
+     * once shown, each given another figure is redrawn, by _draw's
+     * Plotly.newPlot, once shown, and each removed is forgotten. A container
+     * whose figure was removed is left as it is. Nodes added to or removed
+     * from inside a container are its chart's own drawing, such as a hover
+     * label, so they are skipped.
+     */
+    var _followContainersAfterLoad = new MutationObserver(function (records) {
         records.forEach(function (record) {
-            if (record.type === 'childList') {
-                record.addedNodes.forEach(_drawEachContainerIn);
-            } else if (record.target.hasAttribute('data-chart-figure')) {
-                _drawOnceShown.observe(record.target);
+            if (record.type === 'attributes') {
+                if (record.target.hasAttribute('data-chart-figure')) {
+                    _drawWhenShown(record.target);
+                }
+            } else if (!record.target.closest('[data-chart-figure]')) {
+                record.removedNodes.forEach(function (node) {
+                    _forEachContainerIn(node, _forget);
+                });
+                record.addedNodes.forEach(function (node) {
+                    _forEachContainerIn(node, _drawWhenShown);
+                });
             }
         });
     });
 
     document.addEventListener('DOMContentLoaded', function () {
-        _drawEachContainerIn(document.body);
-        _drawContainersChangedAfterLoad.observe(document.body, {
+        _forEachContainerIn(document.body, _drawWhenShown);
+        _followContainersAfterLoad.observe(document.body, {
             childList: true, subtree: true, attributes: true, attributeFilter: ['data-chart-figure'],
         });
     });

@@ -14,7 +14,9 @@ window narrows, and, for a chart whose tab is hidden at the
 time, once its tab is shown again. A chart that cannot be
 fitted to its container logs one error naming it.
 A chart container added to the page after load is drawn, and
-a drawn container given another figure is redrawn with it.
+a drawn container given another figure is redrawn with it. A
+drawn container removed from the page has its chart purged,
+and a theme toggle after it logs no error.
 """
 
 from playwright.sync_api import Locator, Page, expect
@@ -437,7 +439,7 @@ def test_a_chart_whose_fitting_fails_after_plotly_plots_resize_returns_logs_one_
     )
 
 
-# -- A chart container added or given another figure after load is drawn --
+# -- A chart container added, given another figure or removed after load --
 
 # Adds, right after the drawn container it is called on, a container carrying that
 # container's figure but not its class, the js-plotly-plot Plotly gave it.
@@ -483,6 +485,32 @@ def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
     page.locator("#chart-daily-balance").evaluate(_GIVE_IT_THE_SANKEYS_FIGURE)
 
     expect(title).to_have_text("Energy Flow")
+    assert page_errors == []
+
+
+_REMOVE_IT = "container => { container.remove(); return container; }"
+
+# Plotly draws a chart into its container's .plot-container, which Plotly.purge removes.
+_ITS_CHART_IS_PURGED = "container => container.querySelector('.plot-container') === null"
+
+
+def test_a_drawn_chart_container_removed_after_load_has_its_chart_purged_and_a_theme_toggle_then_logs_no_error(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Purging the removed container's chart leaves the renderer holding none of it; the toggle recolours the Sankey, the chart left in the tab."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    sankey_title = page.locator("#chart-sankey .gtitle")
+    sankey_title_fill = sankey_title.evaluate("title => getComputedStyle(title).fill")
+
+    removed = page.locator("#chart-daily-balance").evaluate_handle(_REMOVE_IT)
+
+    page.wait_for_function(_ITS_CHART_IS_PURGED, arg=removed)
+    page.get_by_role("button", name="Toggle dark mode").click()
+    expect(sankey_title).not_to_have_css("fill", sankey_title_fill)
     assert page_errors == []
 
 
