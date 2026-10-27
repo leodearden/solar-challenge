@@ -31,6 +31,19 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
     assert unset_attributes(Reading) == set()
 
 
+def test_an_attribute_the_class_body_annotates_and_lists_in_its_slots_is_unset_where_its_own_initialisers_never_set_it() -> None:
+    class Meter:
+        __slots__ = ("site", "reading")
+        site: pathlib.Path
+        reading: float
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    assert not hasattr(Meter(pathlib.Path("roof")), "reading")
+    assert unset_attributes(Meter) == {"reading"}
+
+
 def test_a_declared_attribute_only_a_method_other_than_init_or_post_init_sets_is_unset() -> None:
     class Meter:
         reading: float
