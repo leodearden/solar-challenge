@@ -23,8 +23,8 @@ The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
 reading of a constructor read through an object its class makes callable was measured on
 CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, and 4.2's reading of a
-class's constructor on those releases on 2026-10-27. A new refusal gets its rule test
-first, then its entry here.
+class's constructor and 3.3's reading on those releases on 2026-10-27. A new refusal gets
+its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -66,6 +66,23 @@ spelled by its type's qualified name.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_a_constant_spelled_by_its_type_qualified_name`
+
+### 3.3 A `__new__` defined with `def` beside a `functools.partial` `__init__`
+
+Where `inspect` reads a class's `__new__`, defined with `def`, in place of an `__init__`
+that is a `functools.partial`, the class's own or a base's, every minor reads the class
+alike, by that `__new__`: with `def __new__(cls, rate: int) -> object` beside
+`__init__ = functools.partial(build)` and `def build(self, rate: int)`, it reads as
+`(rate: int) -> object`. Every minor looks up that `__init__` too, before it chooses which
+of the two to read. 3.13 and 3.14 bind it there, with `inspect._descriptor_get`: 3.13's
+`functools.partial.__get__` warns `FutureWarning`, and 3.14's binds it as a method without
+a warning. 3.11 and 3.12's `functools.partial` defines no `__get__`, so neither binds it.
+`signature_of` ignores that one warning, from `inspect` alone, while `inspect` reads a
+signature, so `surface_form` and `named_classes` warn on no minor. A `functools.partial`
+held as an `__init__` that `inspect` reads is refused before it is read, as 4.5 says.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new_without_a_warning`
 
 ## 4. Refused
 
@@ -272,9 +289,9 @@ refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, th
 listed in 4.5, 4.5's reading of a constructor read through an object its class makes
 callable where it meets those two readings of 4.4, and the reading 4.6 refuses where
 `inspect` reads a partial differ only between 3.11 and 3.12 on one side and 3.13 and 3.14
-on the other, so they rest on 3.11 and 3.12 alone. 4.6's refusal where a partial is bound
-rests on no minor: it names a binding no rule reads. Whether to lift one is for the task
-that changes `requires-python`.
+on the other, so they rest on 3.11 and 3.12 alone. The warning 3.3 ignores rests on 3.13
+alone. 4.6's refusal where a partial is bound rests on no minor: it names a binding no
+rule reads. Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 

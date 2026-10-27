@@ -98,7 +98,9 @@ def signature_of(obj: Callable[..., object]) -> inspect.Signature:
     """The signature inspect reads for *obj*, a class or a routine, once _refuse_chain_without_a_portable_form has passed the chain inspect follows from it.
 
     For a class at that chain's end, _refuse_constructor_without_a_portable_form lists
-    the constructors it refuses.
+    the constructors it refuses. inspect's own FutureWarning on binding a
+    functools.partial, which Python 3.13 alone emits, is ignored while inspect reads, as
+    docs/surface-forms-inspect-readings.md §3.3 says.
     """
     _refuse_chain_without_a_portable_form(obj, obj)
     with warnings.catch_warnings():
