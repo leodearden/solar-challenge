@@ -19,6 +19,8 @@ document.addEventListener('alpine:init', () => {
         // Results
         sweepValues: [],
         sweepResults: [],
+        // The label of the parameter the last submitted sweep ran; unlike currentParam, it ignores the select
+        sweptParameterLabel: '',
         // The HTML of the sweep's chart panels, as POST /scenarios/sweep/chart answers it; '' hides the chart area
         sweepCharts: '',
         submitting: false,
@@ -78,8 +80,9 @@ document.addEventListener('alpine:init', () => {
             this.sweepResults = [];
             this.sweepCharts = '';
             this.destroy();
-            // Label the charts with the parameter this sweep runs, not one selected while it runs
+            // Label the table and the charts with the parameter this sweep runs, not one selected while it runs
             const parameterLabel = this.currentParam.label;
+            this.sweptParameterLabel = parameterLabel;
 
             const payload = {
                 parameter: this.parameter,
