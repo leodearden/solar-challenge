@@ -1,7 +1,7 @@
 # Surface Forms: What inspect Reads Differently by Python Minor
 
 **Task:** #1103
-**Code:** [`tests/_surface_forms.py`](../tests/_surface_forms.py)'s `surface_form`, and [`tests/_surface_forms_signatures.py`](../tests/_surface_forms_signatures.py), which raises its refusals
+**Code:** [`tests/_surface_forms.py`](../tests/_surface_forms.py)'s `surface_form` and `named_classes`, and [`tests/_surface_forms_signatures.py`](../tests/_surface_forms_signatures.py), which holds their refusals
 **Test:** [`tests/unit/surface_forms_helper/`](../tests/unit/surface_forms_helper/)
 
 ---
@@ -15,9 +15,11 @@ signatures through `inspect`, which reads some objects differently from one mino
 next. For each such object, `surface_form` either reads it as one minor does, on every
 minor (§3), or raises `TypeError` naming what `inspect` reads that way and saying what to
 do instead (§4). Both rest on the chain `inspect` follows from a routine, which is the same
-on every minor (§2). Each entry says how each minor reads its objects, and names the rule
-tests that pin what `surface_form` does. Each `TypeError` also states its own case's
-reading.
+on every minor (§2). `named_classes`, which gives the classes a form names, reads each
+string annotation in the module that spells it, and raises `TypeError` where that module
+could differ by minor (4.2). Each entry says how each minor reads its objects, and names
+the rule tests that pin what `surface_form` and `named_classes` do. Each `TypeError` also
+states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -122,9 +124,17 @@ class, that constructor and that Enum on every minor, unless the class or one of
 constructor's links carries a signature; a `functools.partial` held as `__init__` or as a
 metaclass `__call__` is refused first, by its binding, as 4.5 says.
 
+Where a link of the routine's chain, or of the constructor's, carries a signature over
+the Enum, `inspect` stops there on every minor (§2), so `surface_form` spells that
+signature and `named_classes` names the classes it is annotated with. But that signature
+may be a copy of the Enum's own, which each minor reads from a different place, so no
+module is known to spell a string annotation in it: `named_classes` raises `TypeError`
+naming that Enum and the string.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with`
+- `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_string_annotation_in_a_signature_a_link_carries_over_an_enum_raises_type_error_naming_that_enum_and_the_string`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_naming_it_that_constructor_and_that_enum`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_partial_of_an_enum_raises_the_type_error_naming_that_enum_as_new_and_the_one_for_its_binding_as_init_or_metaclass_call`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_wraps_an_enum_but_carries_a_signature_or_a_signature_of_none_is_spelled_by_what_inspect_reads`
