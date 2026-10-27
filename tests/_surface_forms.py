@@ -126,6 +126,10 @@ def member_forms(cls: type) -> dict[str, str]:
     attribute by annotating it alone or as a dataclass field, except those
     surface_form(cls) already pins: the dataclass fields, named tuple fields and
     init-only variables its constructor's signature takes, and an Enum's members.
+    A slot that *cls*'s own namespace binds for one of its dataclass fields, as
+    @dataclass(slots=True) binds one for each field no base holds a slot for, and a
+    __slots__ in the body binds one for each name it lists, is no name the body
+    defines: a field is a member of a class whose body declares it.
     surface_form(cls) pins a named tuple field only while instances read it from the
     tuple: while no class in *cls*'s MRO, *cls* included, binds a value to its name
     before the class typing.NamedTuple or collections.namedtuple made. The attributes
@@ -650,6 +654,13 @@ def _init_only_variables(cls: type) -> set[str]:
     return (annotated & _constructor_parameters(cls)) - _dataclass_fields(cls).keys()
 
 
+def _field_slots(cls: type) -> set[str]:
+    """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as @dataclass(slots=True) binds one for each field no base holds a slot for, and a __slots__ in the body binds one for each name it lists; none if *cls* is no dataclass."""
+    return {
+        name for name in _dataclass_fields(cls) if inspect.ismemberdescriptor(vars(cls).get(name))
+    }
+
+
 @dataclasses.dataclass(frozen=True)
 class _AnnotatedAttribute:
     """The annotation of a name a class body declares as an instance attribute, by annotating it alone or as a dataclass field."""
@@ -677,12 +688,17 @@ def _public_members(cls: type) -> dict[str, object]:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value; a dataclass init-only variable declares a constructor parameter, so it is neither, even with a default."""
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value; a dataclass init-only variable declares a constructor parameter, so it is neither, even with a default, and a dataclass field's slot defines nothing, since the field is declared where a body annotates it."""
     declared = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in _declared_attributes(cls).items()
     }
-    defined = {name: value for name, value in vars(cls).items() if name not in declared}
+    slots = _field_slots(cls)
+    defined = {
+        name: value
+        for name, value in vars(cls).items()
+        if name not in declared and name not in slots
+    }
     init_only = _init_only_variables(cls)
     return {
         name: member
