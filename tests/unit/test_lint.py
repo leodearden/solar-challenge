@@ -2,8 +2,8 @@
 """Lint contract tests.
 
 The lint is ruff, run with the rules pyproject.toml's [tool.ruff.lint] selects.
-The verify runs the test suite, so these tests are how it lints the package;
-docs/lint-gate.md says why the orchestrator's lint_command does not.
+The verify runs the test suite, so these tests are how it lints the package and
+its tests; docs/lint-gate.md says why the orchestrator's lint_command does not.
 """
 
 import json
@@ -14,9 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _PACKAGE = "src/solar_challenge"
+_TESTS = "tests"
+_LINTED_TREES = (_PACKAGE, _TESTS)
 _PROBE = f"{_PACKAGE}/lint_probe.py"
-_TEST_PROBE = "tests/unit/test_lint_probe.py"
-_LINTED_TREES = (_PACKAGE,)
+_TEST_PROBE = f"{_TESTS}/unit/test_lint_probe.py"
 
 
 @dataclass(frozen=True)
@@ -82,8 +83,9 @@ def _located_codes(findings: list[_Finding]) -> list[tuple[str, str, int]]:
 def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> None:
     """The lint reports an unused import in a module of the package.
 
-    Once the package is clean, test_the_package_passes_the_lint passes for a lint
-    that flags nothing, so this checks the lint on a module of known verdict.
+    Once the package is clean, test_the_package_and_its_tests_pass_the_lint
+    passes for a lint that flags nothing, so this checks the lint on a module of
+    known verdict.
     """
     findings = _lint_probe(project_root, "import json\n")
 
@@ -186,11 +188,11 @@ def test_the_lint_covers_the_package_and_its_tests(project_root: Path, tmp_path:
     )
 
 
-def test_the_package_passes_the_lint(project_root: Path) -> None:
-    """The package has no finding under the project's lint, so the verify fails a commit that adds one."""
+def test_the_package_and_its_tests_pass_the_lint(project_root: Path) -> None:
+    """The package and its tests have no finding under the project's lint, so the verify fails a commit that adds one."""
     findings = _lint_the_project(project_root)
 
     assert not findings, (
-        f"the package has lint findings; clear them (`uv run --locked --extra dev ruff check --fix {_PACKAGE}` "
-        "applies the safe fixes):\n" + "\n".join(map(str, findings))
+        "the package or its tests have lint findings; clear them (`uv run --locked --extra dev ruff check --fix "
+        f"{' '.join(_LINTED_TREES)}` applies the safe fixes):\n" + "\n".join(map(str, findings))
     )
