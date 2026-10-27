@@ -130,11 +130,13 @@ def member_forms(cls: type) -> dict[str, str]:
     @dataclass(slots=True) binds one for each field no base holds a slot for, and a
     __slots__ in the body binds one for each name it lists, is no name the body
     defines: a field is a member of a class whose body declares it.
-    surface_form(cls) pins a named tuple field only while instances read it from the
-    tuple: while no class in *cls*'s MRO, *cls* included, binds a value to its name
-    before the class typing.NamedTuple or collections.namedtuple made. The attributes
-    the body declares come first, in annotation order, then the other names it defines,
-    in class-body order. A ClassVar annotation declares a class variable, not an
+    surface_form(cls) pins a dataclass field only while instances read it from the
+    instance: while the first class in *cls*'s MRO, *cls* included, that binds its name,
+    if any, binds there no data descriptor other than a slot. It pins a named tuple
+    field only while instances read it from the tuple: while no class in *cls*'s MRO,
+    *cls* included, binds a value to its name before the class typing.NamedTuple or
+    collections.namedtuple made. The attributes the body declares come first, in
+    annotation order, then the other names it defines, in class-body order. A ClassVar annotation declares a class variable, not an
     instance attribute; a string annotation is read as named_classes reads one, so a
     name its module does not bind raises NameError, a module inspect reads no source for
     raises TypeError, and a module another of the same name has replaced in sys.modules
@@ -594,11 +596,11 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes, or each named tuple field it takes that instances read from the tuple."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes that instances read from the instance, or each named tuple field it takes that instances read from the tuple."""
     if is_enum(cls):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _dataclass_fields(cls).keys() & _constructor_parameters(cls)
+        return _fields_read_from_the_instance(cls) & _constructor_parameters(cls)
     if _is_named_tuple(cls):
         return _fields_read_from_the_tuple(cls) & _constructor_parameters(cls)
     return set()
@@ -609,6 +611,23 @@ def _dataclass_fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _fields_read_from_the_instance(cls: type) -> set[str]:
+    """The names of *cls*'s dataclass fields that its instances read from the instance, its __dict__ or a slot: each whose name no class in *cls*'s MRO binds, or whose first binder there binds a value _outranks_the_instance does not hold of; none if *cls* is no dataclass."""
+    first_holders = {
+        name: next(namespace_holders(cls.__mro__, name), None) for name in _dataclass_fields(cls)
+    }
+    return {
+        name
+        for name, holder in first_holders.items()
+        if holder is None or not _outranks_the_instance(vars(holder)[name])
+    }
+
+
+def _outranks_the_instance(value: object) -> bool:
+    """Whether instances read *value*, which a class binds under a name, in place of what they hold under that name: whether it is a data descriptor, which attribute lookup reads before the instance's __dict__, other than a slot's member descriptor, which reads the instance's own slot."""
+    return inspect.isdatadescriptor(value) and not inspect.ismemberdescriptor(value)
 
 
 def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
