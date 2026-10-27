@@ -136,6 +136,15 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelle
 
         __init__ = functools.partial(build, scale=2.0)
 
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert surface_form(Both) == "(rate: int) -> object"
+        assert named_classes(Both) == {int, object}
+
+
+def test_a_class_whose_inherited_init_is_a_partial_beside_its_own_new_defined_with_def_is_spelled_by_that_new_without_a_warning() -> None:
+    def build(self: object, rate: int, scale: float = 1.0) -> None: ...
+
     class Built:
         __init__ = functools.partial(build, scale=2.0)
 
@@ -144,8 +153,6 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelle
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert surface_form(Both) == "(rate: int) -> object"
-        assert named_classes(Both) == {int, object}
         assert surface_form(Remade) == "(rate: int) -> object"
 
 

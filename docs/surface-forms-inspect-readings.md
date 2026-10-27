@@ -83,6 +83,7 @@ held as an `__init__` that `inspect` reads is refused before it is read, as 4.5 
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new_without_a_warning`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_inherited_init_is_a_partial_beside_its_own_new_defined_with_def_is_spelled_by_that_new_without_a_warning`
 
 ## 4. Refused
 
