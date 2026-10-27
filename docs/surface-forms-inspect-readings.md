@@ -20,8 +20,10 @@ tests that pin what `surface_form` does. Each `TypeError` also states its own ca
 reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
-and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. A new
-refusal gets its rule test first, then its entry here.
+and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
+reading of a constructor read through an object its class makes callable was measured on
+CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26. A new refusal gets its
+rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -140,12 +142,14 @@ Pinned by:
 
 ### 4.5 A class whose constructor inspect reads differently by minor, or cannot read on any
 
-Such a class raises `TypeError` naming it and the class holding that constructor, unless
-it carries a signature, which `inspect` reads in that constructor's place. A routine that
-wraps such a class, through a `functools.partial`, a bound method or a `functools.wraps`
-wrapper, raises the same, unless the class or one of the routine's links carries a
-signature. `signature_of`'s docstring in `tests/_surface_forms_signatures.py` points at the
-list of the constructors refused, in the order they are checked. A constructor can meet
+Such a class raises `TypeError` naming it and the class holding that constructor, or,
+where `inspect` reads that constructor through an object its class makes callable, naming
+it and what 4.4's `TypeError` names besides the routine, unless the class carries a
+signature, which `inspect` reads in that constructor's place. A routine that wraps such a
+class, through a `functools.partial`, a bound method or a `functools.wraps` wrapper,
+raises the same, unless the class or one of the routine's links carries a signature.
+`signature_of`'s docstring in `tests/_surface_forms_signatures.py` points at the list of
+the constructors refused, in the order they are checked. A constructor can meet
 the readings of 4.1 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
 held as `__init__` or as a metaclass `__call__`, dropping its first parameter, and 3.11 to
 3.13 do not, 3.13 warning `FutureWarning`; 4.6 says how a partial whose type takes
@@ -161,6 +165,19 @@ The other readings are:
   raises `ValueError`.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
+- A constructor read through an object its class makes callable. `inspect` reads a
+  metaclass `__call__`, a `__new__` or an `__init__`, bound as it binds it, as it reads a
+  routine (§2), so where that constructor is such an object, or a chain from it ends at
+  one, `inspect` reads it through the `__call__` the object's class resolves, by the three
+  readings 4.4 lists. For `__call__ = functools.partial(charge, rate=1)`, with
+  `def charge(self, share, rate)`, an `__init__` or a metaclass `__call__` reads as
+  `(self, share, *, rate=1)` on 3.11 to 3.13, 3.13 warning `FutureWarning`, and as
+  `(share, *, rate=1)` on 3.14; held as `__new__`, it reads one parameter fewer on each
+  minor. `operator.itemgetter(1)` as `__init__` reads as `(*args, **kwargs)` on 3.11 and
+  3.12 and as `(obj, /)` from 3.13. A `__text_signature__` the object carries is read in
+  place of its `__call__` from 3.13. `surface_form` raises the `TypeError` 4.4 raises,
+  naming the class in the routine's place, unless the object or the class carries a
+  signature.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial`
@@ -172,6 +189,9 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
@@ -233,10 +253,12 @@ Pinned by:
 On a newly admitted minor, re-measure each reading here (§6) and run the rule tests. An
 entry whose readings no longer differ among the admitted minors no longer needs its
 refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, the first
-listed in 4.5 and the reading 4.6 refuses where `inspect` reads a partial differ only
-between 3.11 and 3.12 on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and
-3.12 alone. 4.6's refusal where a partial is bound rests on no minor: it names a binding
-no rule reads. Whether to lift one is for the task that changes `requires-python`.
+listed in 4.5, 4.5's reading of a constructor read through an object its class makes
+callable where it meets those two readings of 4.4, and the reading 4.6 refuses where
+`inspect` reads a partial differ only between 3.11 and 3.12 on one side and 3.13 and 3.14
+on the other, so they rest on 3.11 and 3.12 alone. 4.6's refusal where a partial is bound
+rests on no minor: it names a binding no rule reads. Whether to lift one is for the task
+that changes `requires-python`.
 
 ## 6. How to Re-measure
 

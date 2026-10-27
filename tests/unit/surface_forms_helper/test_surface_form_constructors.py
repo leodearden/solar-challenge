@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form for the constructor inspect reads for a class, or the signature the class carries in its place, and the TypeError raised where inspect reads that constructor differently by minor or cannot read it, one per test.
 
-Ledger and DeletableCallableGetter are defined at module level, where their qualified
-names carry no '<locals>' and a parametrize decorator can reach them.
+The classes and functions above the first test are defined at module level, where their
+qualified names carry no '<locals>' and a parametrize decorator can reach them.
 """
 
 import decimal
+import fractions
 import functools
 import inspect
+import operator
 import re
 import sys
 import types
@@ -28,6 +30,56 @@ class DeletableCallableGetter(CallableGetter):
     """A CallableGetter whose type also defines __delete__, so that inspect counts it a method descriptor before Python 3.13 alone."""
 
     def __delete__(self, instance: object) -> None: ...
+
+
+def _charge(self: object, share: fractions.Fraction, rate: int) -> None: ...
+
+
+class PartialCall:
+    """A class whose __call__ is a functools.partial, which Python 3.14 alone binds to its instances as a method."""
+
+    __call__ = functools.partial(_charge, rate=1)
+
+
+class NestedCall:
+    """A class whose __call__ is a PartialCall, which inspect reads in turn through the partial PartialCall resolves."""
+
+    __call__ = PartialCall()
+
+
+class DefCall:
+    """A class whose __call__ is defined with def."""
+
+    def __call__(self, share: fractions.Fraction, rate: int) -> None: ...
+
+
+def _with_a_text_signature(call: DefCall) -> DefCall:
+    call.__text_signature__ = "(rate)"
+    return call
+
+
+def _class_whose_init_is(constructor: object) -> type:
+    class Built:
+        __init__ = constructor
+
+    return Built
+
+
+def _class_whose_new_is(constructor: object) -> type:
+    class Made:
+        __new__ = constructor
+
+    return Made
+
+
+def _class_whose_metaclass_call_is(constructor: object) -> type:
+    class Calling(type):
+        __call__ = constructor
+
+    class Called(metaclass=Calling):
+        pass
+
+    return Called
 
 
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
@@ -516,3 +568,114 @@ def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_wh
     assert surface_form(Rerated) == "(rate: int)"
     assert surface_form(Called) == "(rate: int) -> str"
     assert surface_form(SignedCalled) == "(rate: int)"
+
+
+def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial() -> None:
+    class Built:
+        __init__ = PartialCall()
+
+    class Rebuilt(Built):
+        pass
+
+    class Made:
+        __new__ = PartialCall()
+
+    class Calling(type):
+        __call__ = PartialCall()
+
+    class Called(metaclass=Calling):
+        pass
+
+    class Wrapped:
+        __init__ = functools.wraps(PartialCall())(lambda self, share: None)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for cls in (Built, Rebuilt, Made, Called, Wrapped):
+            naming_it_and_that_call = (
+                rf"\.{cls.__name__}\b.*\.PartialCall\.__call__\b.*\bfunctools\.partial\b.*\b3\.14\b"
+            )
+            with pytest.raises(TypeError, match=naming_it_and_that_call):
+                surface_form(cls)
+            with pytest.raises(TypeError, match=naming_it_and_that_call):
+                named_classes(cls)
+        with pytest.raises(TypeError, match=r"\.Built\b.*\.PartialCall\.__call__\b"):
+            surface_form(functools.partial(Built))
+
+
+@pytest.mark.parametrize(
+    ("build", "read_through"),
+    [
+        pytest.param(
+            lambda: operator.itemgetter(1),
+            r"operator\.itemgetter\(1\), .*\boperator\.itemgetter\.__call__\b.*\bdefined in C\b",
+            id="call-defined-in-c",
+        ),
+        pytest.param(
+            lambda: _with_a_text_signature(DefCall()),
+            r"<.*\.DefCall object\b.*\b__text_signature__ '\(rate\)'",
+            id="text-signature",
+        ),
+        pytest.param(
+            NestedCall,
+            r".*\.PartialCall\.__call__\b.*\bfunctools\.partial\b",
+            id="call-read-through-an-object",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(_class_whose_init_is, id="init"),
+        pytest.param(_class_whose_new_is, id="new"),
+        pytest.param(_class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class(
+    construct: Callable[[object], type], build: Callable[[], object], read_through: str
+) -> None:
+    cls = construct(build())
+
+    refusing_its_call = rf"\.{cls.__name__} is read through {read_through}"
+    with pytest.raises(TypeError, match=refusing_its_call):
+        surface_form(cls)
+    with pytest.raises(TypeError, match=refusing_its_call):
+        named_classes(cls)
+
+
+def test_a_class_constructed_through_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:
+    class StaticCall:
+        __call__ = staticmethod(functools.partial(_charge, rate=1))
+
+    class SignedCall:
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=float)]
+        )
+        __text_signature__ = "(rate)"
+        __call__ = functools.partial(_charge, rate=1)
+
+    class Built:
+        __init__ = DefCall()
+
+    class Made:
+        __new__ = DefCall()
+
+    class Calling(type):
+        __call__ = DefCall()
+
+    class Called(metaclass=Calling):
+        pass
+
+    class Static:
+        __init__ = StaticCall()
+
+    class Signed:
+        __init__ = SignedCall()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert surface_form(Built) == "(share: Fraction, rate: int) -> None"
+        assert surface_form(Made) == "(rate: int) -> None"
+        assert surface_form(Called) == "(share: Fraction, rate: int) -> None"
+        assert surface_form(Static) == "(self: object, share: Fraction, *, rate: int = 1) -> None"
+        assert surface_form(Signed) == "(share: float)"
