@@ -22,8 +22,9 @@ reading.
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
 reading of a constructor read through an object its class makes callable was measured on
-CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26. A new refusal gets its
-rule test first, then its entry here.
+CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, and 4.2's reading of a
+class's constructor on those releases on 2026-10-27. A new refusal gets its rule test
+first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -81,7 +82,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
 
-### 4.2 A routine that wraps an Enum
+### 4.2 A routine that wraps an Enum, or a class constructor `inspect` reads as one
 
 `inspect` reads an Enum's signature from `EnumType.__call__` on 3.11, from
 `Enum.__signature__` on 3.12 and 3.13, and from `EnumType.__signature__` on 3.14. An Enum
@@ -91,9 +92,23 @@ and from 3.12 as `(*values)`. An Enum is spelled by its members; a routine that 
 raises `TypeError` naming it and that Enum, unless one of the routine's links carries a
 signature.
 
+A class whose constructor `inspect` reads as an Enum is read the same way. Its metaclass
+`__call__`, `__new__` or `__init__`, bound as `inspect` binds it, may be the Enum itself
+or a callable whose chain (§2) ends at it, as a `functools.wraps` wrapper of it does.
+Where the Enum has a member, such a constructor defined with `def` reads on 3.11 as
+`(names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`, the
+Enum's signature less its first parameter, and from 3.12 as `(*values)`. On 3.12 and 3.13
+the Enum's own `__signature__` is a bound method, which 4.1 would refuse on those minors
+alone, so `surface_form` checks for the Enum first. It raises `TypeError` naming the
+class, that constructor and that Enum on every minor, unless the class or one of the
+constructor's links carries a signature; a `functools.partial` held as `__init__` or as a
+metaclass `__call__` is refused first, by its binding, as 4.5 says.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_an_enum_raises_a_type_error_naming_it_and_that_enum`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_signature_a_link_carries_over_an_enum_names_the_classes_it_is_annotated_with`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_naming_it_that_constructor_and_that_enum`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_wraps_an_enum_but_carries_a_signature_or_a_signature_of_none_is_spelled_by_what_inspect_reads`
 
 ### 4.3 A routine that wraps a descriptor whose type defines `__get__` and `__delete__` but no `__set__`
 
@@ -149,8 +164,8 @@ signature, which `inspect` reads in that constructor's place. A routine that wra
 class, through a `functools.partial`, a bound method or a `functools.wraps` wrapper,
 raises the same, unless the class or one of the routine's links carries a signature.
 `signature_of`'s docstring in `tests/_surface_forms_signatures.py` points at the list of
-the constructors refused, in the order they are checked. A constructor can meet
-the readings of 4.1 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
+the constructors refused, in the order they are checked. A constructor can meet the
+readings of 4.1, 4.2 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
 held as `__init__` or as a metaclass `__call__`, dropping its first parameter, and 3.11 to
 3.13 do not, 3.13 warning `FutureWarning`; 4.6 says how a partial whose type takes
 `__get__` from a class other than `functools.partial` is refused there and as `__new__`.
