@@ -571,23 +571,36 @@ def test_a_sweep_run_after_another_clears_the_earlier_sweeps_charts(
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
+@pytest.mark.parametrize(
+    ("answer", "why"),
+    [
+        pytest.param(
+            {"status": 400, "json": {"error": "Run 'run-of-sweep-1-point-1' is unknown"}},
+            "Run 'run-of-sweep-1-point-1' is unknown",
+            id="a-refusal-naming-its-error",
+        ),
+        pytest.param(
+            {"status": 500, "content_type": "text/html", "body": "<h1>Internal Server Error</h1>"},
+            "HTTP 500",
+            id="an-error-page-that-is-not-json",
+        ),
+    ],
+)
 def test_the_page_says_why_it_could_not_draw_the_sweep_charts(
-    page: Page, live_server: str, sweep_jobs: _SweepJobs
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, answer: dict[str, Any], why: str
 ) -> None:
-    """The refusal's 400 is a console error Chromium logs, so this test does not read the page's errors."""
-    page.route(
-        _SWEEP_CHARTS_URL,
-        lambda route: route.fulfill(status=400, json={"error": "Run 'run-of-sweep-1-point-1' is unknown"}),
-    )
+    """A refusal is named by its error, and an answer that is not JSON, such as the app's HTML 500 page, by its status.
+
+    The failed answer is a console error Chromium logs, so this test does not read the page's errors.
+    """
+    page.route(_SWEEP_CHARTS_URL, lambda route: route.fulfill(**answer))
     sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
     sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
     page.goto(live_server + "/scenarios/sweep")
 
     page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
 
-    expect(
-        page.get_by_text("Could not draw the sweep charts: Run 'run-of-sweep-1-point-1' is unknown", exact=True)
-    ).to_be_visible()
+    expect(page.get_by_text(f"Could not draw the sweep charts: {why}", exact=True)).to_be_visible()
 
 
 # -- Other requests still load while a large sweep runs --------------------

@@ -200,7 +200,9 @@ document.addEventListener('alpine:init', () => {
                 if (resp.ok) {
                     panels = await resp.text();
                 } else {
-                    failure = (await resp.json()).error || 'HTTP ' + resp.status;
+                    // An answer that is not JSON, such as the app's HTML 500 page, is named by its status
+                    const refusal = await resp.json().catch(() => null);
+                    failure = (refusal && refusal.error) || 'HTTP ' + resp.status;
                 }
             } catch (e) {
                 failure = e.message;
