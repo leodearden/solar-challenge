@@ -59,7 +59,7 @@
 </div>
 
 <!-- Recent runs table -->
-{% call card(title="Recent Runs", subtitle="Last 10 simulation runs") %}
+{% call card(title="Recent Runs", subtitle="Last 10 simulation runs", body_classes="p-6") %}
 {% if runs %}
     <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
         <table id="recent-runs-table" class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
