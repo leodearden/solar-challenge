@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's member_forms, one per test."""
+"""The rules of tests/_surface_forms.py's member_forms, one per test.
+
+Rounded is defined at module level, where its qualified name carries no '<locals>'.
+"""
 
 import abc
 import collections
@@ -30,6 +33,19 @@ from tests.unit.surface_forms_helper._fixtures import (
     SettableGetterPartial,
     imported_module,
 )
+
+
+class Rounded:
+    """A data descriptor that keeps each value set through it rounded and gives 0 when read from a class, which a dataclass takes as the default of a field it is assigned to."""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = f"_{name}"
+
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 0 if instance is None else getattr(instance, self.name)
+
+    def __set__(self, instance: object, value: float) -> None:
+        setattr(instance, self.name, round(value))
 
 
 def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
@@ -409,6 +425,16 @@ def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_an
     assert Fixed(1).x == 7
     assert member_forms(Fixed) == {"x": "property[settable] (self) -> int"}
     assert member_forms(Meter) == {"reading": "property[settable] (self) -> float"}
+
+
+def test_a_descriptor_typed_dataclass_field_is_both_a_parameter_its_class_form_spells_and_a_member_spelled_by_its_descriptors_type() -> None:
+    @dataclass
+    class Meter:
+        reading: Rounded = Rounded()
+
+    assert (Meter().reading, Meter(2.6).reading) == (0, 3)
+    assert surface_form(Meter) == "dataclass[eq] (reading: Rounded = 0) -> None"
+    assert member_forms(Meter) == {"reading": "Rounded"}
 
 
 def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
