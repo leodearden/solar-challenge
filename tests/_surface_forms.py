@@ -189,10 +189,10 @@ def named_classes(obj: object) -> set[type]:
     string in one carried over an Enum raises TypeError naming that Enum and the string;
     docs/surface-forms-inspect-readings.md §4.2 says why. A signature that annotates
     nothing, as that of each routine CPython defines in C such as str.join, names no
-    class, and no module is looked up for it. Met again inside its own evaluation in the
-    same module, as each
-    "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
-    no class there: that evaluation names them all.
+    class, and no module is looked up for it.
+    Met again inside its own evaluation in the same module, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
+    there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class or routine whose signature surface_form refuses
     raises the TypeError surface_form raises for it, and a class with a member

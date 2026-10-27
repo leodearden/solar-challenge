@@ -740,22 +740,21 @@ def _constructor_spelling_modules(
     An Enum's signature is spelled in no module known, as _EnumReadByMinor says. Any
     other class's constructor is the __call__ *cls*'s metaclass resolves, if
     _metaclass_call_as_read gives one, which inspect reads before any __new__ or
-    __init__; else the one
-    _constructor_as_read gives for the nearest class in *cls*'s MRO that holds one, which
-    may be a base defined in another module. It is spelled where
-    _chain_spelling_modules spells the end of its chain, so a function the class body
-    assigns from another module, or that wraps one there as functools.wraps records one,
-    is spelled in that other module. If the function whose annotations that end holds,
-    as _annotations_author gives it, was compiled outside the class body and renamed
-    into it, as the dataclass decorator generates an __init__ and collections.namedtuple
-    a __new__, the constructor is spelled as _generated_constructor_modules spells it;
-    if that function was renamed into another class and assigned here, TypeError names
-    *cls* and the function. A constructor defined in C, or one that wraps a callable
-    defined in C, spells no annotation, so the class's is that of the class
-    _signature_holder gives if *cls* carries a signature, else where
-    _chain_spelling_modules finds the link given the signature a link of that
-    constructor's chain carries, if any does; _signature_holder checks every other class
-    that carries a signature before the constructor is read.
+    __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
+    MRO that holds one, which may be a base defined in another module. It is spelled
+    where _chain_spelling_modules spells the end of its chain, so a function the class
+    body assigns from another module, or that wraps one there as functools.wraps records
+    one, is spelled in that other module. If the function whose annotations that end
+    holds, as _annotations_author gives it, was compiled outside the class body and
+    renamed into it, as the dataclass decorator generates an __init__ and
+    collections.namedtuple a __new__, the constructor is spelled as
+    _generated_constructor_modules spells it; if that function was renamed into another
+    class and assigned here, TypeError names *cls* and the function. A constructor
+    defined in C, or one that wraps a callable defined in C, spells no annotation, so
+    the class's is that of the class _signature_holder gives if *cls* carries a
+    signature, else where _chain_spelling_modules finds the link given the signature a
+    link of that constructor's chain carries, if any does; _signature_holder checks
+    every other class that carries a signature before the constructor is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
