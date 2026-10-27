@@ -7,6 +7,7 @@ docs/lint-gate.md says why the orchestrator's lint_command does not.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from pathlib import Path
 
 _PACKAGE = "src/solar_challenge"
 _PROBE = f"{_PACKAGE}/lint_probe.py"
+_TEST_PROBE = "tests/unit/test_lint_probe.py"
+_LINTED_TREES = (_PACKAGE,)
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,11 @@ def _lint(project_root: Path, *ruff_args: str, stdin: str | None = None) -> list
         )
         for entry in json.loads(result.stdout)
     ]
+
+
+def _lint_the_project(project_root: Path) -> list[_Finding]:
+    """Lint every tree in _LINTED_TREES, the trees the verify holds to the project's lint, in *project_root*."""
+    return _lint(project_root, *_LINTED_TREES)
 
 
 def _lint_probe(project_root: Path, source: str, *ruff_args: str) -> list[_Finding]:
@@ -153,9 +161,34 @@ def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Pat
     )
 
 
+def test_the_lint_covers_the_package_and_its_tests(project_root: Path, tmp_path: Path) -> None:
+    """The lint reaches a module in each tree it holds to the rules: the package and its tests.
+
+    The scratch project carries this project's pyproject.toml, a package module with
+    an unused import, and a test module whose annotation names an unbound name, the
+    pattern that built up in tests/ while nothing linted it. With both trees clean,
+    test_the_package_and_its_tests_pass_the_lint also passes for a lint that skips
+    one of them, so this checks that the lint reaches both.
+    """
+    shutil.copy(project_root / "pyproject.toml", tmp_path / "pyproject.toml")
+    for module, source in (
+        (_PROBE, "import json\n"),
+        (_TEST_PROBE, 'def make_results() -> "SimulationResults":\n    raise NotImplementedError\n'),
+    ):
+        (tmp_path / module).parent.mkdir(parents=True)
+        (tmp_path / module).write_text(source)
+
+    findings = _lint_the_project(tmp_path)
+
+    assert sorted(_located_codes(findings)) == [("F401", _PROBE, 1), ("F821", _TEST_PROBE, 1)], (
+        "the lint must report the package module's unused import and the test module's undefined name, "
+        "and nothing else; it reported:\n" + "\n".join(map(str, findings))
+    )
+
+
 def test_the_package_passes_the_lint(project_root: Path) -> None:
     """The package has no finding under the project's lint, so the verify fails a commit that adds one."""
-    findings = _lint(project_root, _PACKAGE)
+    findings = _lint_the_project(project_root)
 
     assert not findings, (
         f"the package has lint findings; clear them (`uv run --locked --extra dev ruff check --fix {_PACKAGE}` "
