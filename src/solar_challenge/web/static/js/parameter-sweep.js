@@ -19,6 +19,8 @@ document.addEventListener('alpine:init', () => {
         // Results
         sweepValues: [],
         sweepResults: [],
+        // The label of the parameter the last submitted sweep ran; unlike currentParam, it ignores the select
+        sweptParameterLabel: '',
         // The HTML of the sweep's chart panels, as POST /scenarios/sweep/chart answers it; '' hides the chart area
         sweepCharts: '',
         submitting: false,
@@ -78,8 +80,8 @@ document.addEventListener('alpine:init', () => {
             this.sweepResults = [];
             this.sweepCharts = '';
             this.destroy();
-            // Label the charts with the parameter this sweep runs, not one selected while it runs
-            const parameterLabel = this.currentParam.label;
+            // Label the table and the charts with the parameter this sweep runs, not one selected while it runs
+            this.sweptParameterLabel = this.currentParam.label;
 
             const payload = {
                 parameter: this.parameter,
@@ -119,7 +121,7 @@ document.addEventListener('alpine:init', () => {
                     this._sweepRequests = sweepRequests;
                     const rows = this.sweepResults.filter(row => row.job_id);
                     this._followSweep(rows, sweepRequests.signal).then(
-                        () => this._drawSweepCharts(rows, parameterLabel, sweepRequests.signal),
+                        () => this._drawSweepCharts(rows, sweepRequests.signal),
                         e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; }
                     );
                 }
@@ -185,7 +187,7 @@ document.addEventListener('alpine:init', () => {
 
         // Post the finished points of rows, those whose jobs completed, in sweep order, and show the chart panels
         // POST /scenarios/sweep/chart answers, or why it could not draw them; nothing, if signal aborts first
-        async _drawSweepCharts(rows, parameterLabel, signal) {
+        async _drawSweepCharts(rows, signal) {
             if (signal.aborted) return;
             const points = rows.filter(row => row.run_id).map(row => ({ value: row.value, run_id: row.run_id }));
             let panels = '';
@@ -194,7 +196,7 @@ document.addEventListener('alpine:init', () => {
                 const resp = await fetch('/scenarios/sweep/chart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ parameter_label: parameterLabel, points }),
+                    body: JSON.stringify({ parameter_label: this.sweptParameterLabel, points }),
                     signal,
                 });
                 if (resp.ok) {
