@@ -76,7 +76,10 @@ document.addEventListener('alpine:init', () => {
             this.submitting = true;
             this.errorMsg = '';
             this.sweepResults = [];
+            this.sweepCharts = '';
             this.destroy();
+            // Label the charts with the parameter this sweep runs, not one selected while it runs
+            const parameterLabel = this.currentParam.label;
 
             const payload = {
                 parameter: this.parameter,
@@ -106,14 +109,19 @@ document.addEventListener('alpine:init', () => {
                         self_consumption: '-',
                         grid_import: '-',
                         job_id: data.job_ids ? data.job_ids[i] : null,
+                        run_id: null,
                     }));
                     // Follow the points' jobs unawaited, so submitting ends once the sweep is accepted.
                     // Read each row back from this.sweepResults: only Alpine's reactive proxy of a row
                     // passes the job's writes to the page.
+                    // Draw the charts once every point has ended; _drawSweepCharts reports its own failures.
                     const sweepRequests = new AbortController();
                     this._sweepRequests = sweepRequests;
-                    this._followSweep(this.sweepResults.filter(row => row.job_id), sweepRequests.signal)
-                        .catch(e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; });
+                    const rows = this.sweepResults.filter(row => row.job_id);
+                    this._followSweep(rows, sweepRequests.signal).then(
+                        () => this._drawSweepCharts(rows, parameterLabel, sweepRequests.signal),
+                        e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; }
+                    );
                 }
             } catch (e) {
                 this.errorMsg = 'Network error: ' + e.message;
@@ -155,6 +163,8 @@ document.addEventListener('alpine:init', () => {
                         const data = JSON.parse(e.data);
                         row.status = 'completed';
                         if (data.run_id) {
+                            // The sweep's charts are drawn from each finished point's run
+                            row.run_id = data.run_id;
                             this._fetchResult(row, signal);
                         }
                     } catch(err) {}
@@ -171,6 +181,35 @@ document.addEventListener('alpine:init', () => {
                     lost: () => endWith('failed'),
                 });
             });
+        },
+
+        // Post the finished points of rows, those whose jobs completed, in sweep order, and show the chart panels
+        // POST /scenarios/sweep/chart answers, or why it could not draw them; nothing, if signal aborts first
+        async _drawSweepCharts(rows, parameterLabel, signal) {
+            if (signal.aborted) return;
+            const points = rows.filter(row => row.run_id).map(row => ({ value: row.value, run_id: row.run_id }));
+            let panels = '';
+            let failure = '';
+            try {
+                const resp = await fetch('/scenarios/sweep/chart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parameter_label: parameterLabel, points }),
+                    signal,
+                });
+                if (resp.ok) {
+                    panels = await resp.text();
+                } else {
+                    failure = (await resp.json()).error || 'HTTP ' + resp.status;
+                }
+            } catch (e) {
+                failure = e.message;
+            }
+            if (signal.aborted) return;
+            this.sweepCharts = panels;
+            if (failure) {
+                this.errorMsg = 'Could not draw the sweep charts: ' + failure;
+            }
         },
 
         // Fetch a completed point's result summary into that point's row, unless signal aborts first
