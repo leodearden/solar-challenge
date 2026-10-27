@@ -2,8 +2,9 @@
 """Flask Blueprint for the scenario builder and parameter sweep pages, and the sweep page's chart endpoint.
 
 The chart endpoint, POST /scenarios/sweep/chart, answers HTML: the sweep's chart panels, drawn
-from its finished points' stored runs. The JSON endpoints these pages call live under /api/, in
-api.py.
+from its finished points' stored runs. It refuses a request in JSON, and a stored run it cannot
+read with the 409 of every JSON answer (D-S19-9), which the blueprint registers. The JSON
+endpoints these pages call live under /api/, in api.py.
 """
 
 from typing import Any, assert_never
@@ -13,15 +14,17 @@ from flask import Blueprint, Response, jsonify, render_template
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.number_fields import as_finite_float
-from solar_challenge.web.api import SWEEP_MAX_STEPS, answer_stored_run_unreadable
+from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import refuse_unrecognised_keys, request_json_object, require_json_object
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.stored_runs import StoredRunUnreadable
+from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 bp = Blueprint("scenarios", __name__)
+bp.register_error_handler(StoredRunUnreadable, answer_stored_run_unreadable)
 
 
 @bp.route("/builder")
@@ -74,14 +77,12 @@ def sweep_chart() -> str | tuple[Response, int]:
 
     Returns:
         The panels sweep_panels draws, one per SweepMetric. HTTP 400 with the error naming the
-        field or the run refused; HTTP 409 through answer_stored_run_unreadable for a run whose
-        summary cannot be read.
+        field or the run refused; HTTP 409, as the blueprint answers a StoredRunUnreadable, for a
+        run whose summary cannot be read.
     """
     try:
         parameter_label, requested = _sweep_chart_request(request_json_object())
         points = [_finished_point(value, run_id) for value, run_id in requested]
-    except StoredRunUnreadable as unreadable:
-        return answer_stored_run_unreadable(unreadable)
     except ValueError as refusal:
         return jsonify({"error": str(refusal)}), 400
     return str(render_template(

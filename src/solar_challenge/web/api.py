@@ -49,6 +49,7 @@ from solar_challenge.web.sse import JobStreamPolicy, event_stream, job_progress_
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import one_of
+from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +75,8 @@ def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable
     return jsonify({"error": str(unreadable)}), 500
 
 
-@api_bp.errorhandler(StoredRunUnreadable)
-def answer_stored_run_unreadable(unreadable: StoredRunUnreadable) -> tuple[Response, int]:
-    """Answer HTTP 409 with the refusal of a stored run that cannot be read, logged as a warning: its message as error, and its run_id, document and field.
-
-    Any endpoint of this blueprint that reads a stored run is answered this way, and a JSON
-    endpoint of another blueprint answers through it (D-S19-9 in docs/prds/run-store-one-owner.md);
-    field is None when the document as a whole is refused.
-    """
-    logger.warning("%s", unreadable)
-    return jsonify(
-        {"error": str(unreadable), "run_id": unreadable.run_id, "document": unreadable.document, "field": unreadable.field}
-    ), 409
+# Any endpoint of this blueprint that reads a stored run it cannot read answers 409 (D-S19-9)
+api_bp.register_error_handler(StoredRunUnreadable, answer_stored_run_unreadable)
 
 
 def _submitted_job_answer(job_id: str, run_id: str) -> tuple[Response, int]:
