@@ -125,6 +125,28 @@ def test_a_named_tuple_field_its_instances_read_from_the_tuple_is_never_unset() 
     assert unset_attributes(Redeclared) == {"y"}
 
 
+def test_a_dataclass_field_a_data_descriptor_hides_from_instances_is_unset_where_a_class_body_declares_it_again_and_no_default_or_own_initialiser_supplies_it() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Withheld(Point):
+        @property
+        def x(self) -> int:
+            raise AttributeError("x")
+
+        @x.setter
+        def x(self, value: int) -> None: ...
+
+    class Redeclared(Withheld):
+        x: int
+
+    assert not hasattr(Redeclared(1), "x")
+    assert member_forms(Redeclared) == {"x": "attribute int"}
+    assert unset_attributes(Withheld) == set()
+    assert unset_attributes(Redeclared) == {"x"}
+
+
 def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
     class Meter:
         reading: float

@@ -334,6 +334,53 @@ def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_var
     assert member_forms(Site) == {"LAT": "float"}
 
 
+def test_a_dataclass_field_a_class_binds_to_a_data_descriptor_is_a_member_since_its_instances_read_that_descriptor_in_place_of_the_field() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Doubled(Point):
+        @property
+        def x(self) -> int:
+            return self._x * 2
+
+        @x.setter
+        def x(self, value: int) -> None:
+            self._x = value
+
+    class Retyped(Doubled):
+        x: int
+
+    @dataclass
+    class Redecorated(Doubled):
+        x: int = field(default_factory=lambda: 3)
+
+    assert (Doubled(1).x, Retyped(1).x, Redecorated().x) == (2, 2, 6)
+    assert member_forms(Doubled) == {"x": "property[settable] (self) -> int"}
+    assert member_forms(Retyped) == {"x": "attribute int"}
+    assert member_forms(Redecorated) == {"x": "attribute int"}
+
+
+def test_a_dataclass_field_a_class_binds_to_a_plain_value_a_method_or_a_slot_is_not_a_member_since_its_instances_still_read_the_field() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Constant(Point):
+        x = 5
+
+    class Method(Point):
+        def x(self) -> int: ...
+
+    @dataclass(slots=True)
+    class Slotted:
+        x: int
+
+    assert (Constant(1).x, Method(1).x, Slotted(1).x) == (1, 1, 1)
+    for cls in (Constant, Method, Slotted):
+        assert member_forms(cls) == {}
+
+
 def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
     @dataclass(frozen=True)
     class Reading:
