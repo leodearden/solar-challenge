@@ -26,7 +26,7 @@ mypy src/solar_challenge
 
 # Lint: ruff with the rules pyproject.toml's [tool.ruff.lint] selects; the
 # verify runs it through tests/unit/test_lint.py
-uv run --locked --extra dev ruff check src/solar_challenge
+uv run --locked --extra dev ruff check src/solar_challenge tests
 
 # Test coverage
 pytest --cov=src/solar_challenge
