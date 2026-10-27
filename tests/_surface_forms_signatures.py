@@ -425,7 +425,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     The constructors it refuses, in the order it checks them; a constructor wraps a
     callable defined in C here if _wrapped_c_callable gives one for it, and is read as
     an Enum, carries a __signature__ inspect reads by minor, or is read as a builtin or
-    through an object its class makes callable, if _refuse_first_read_constructor finds
+    through an object its class makes callable, if _refuse_constructor_reading finds
     it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
@@ -447,7 +447,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
-        _refuse_first_read_constructor(
+        _refuse_constructor_reading(
             cls, type(cls), "__call__", call, _metaclass_call_as_read(cls)
         )
         return
@@ -456,7 +456,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
-    _refuse_first_read_constructor(
+    _refuse_constructor_reading(
         cls, holder, name, constructor, _constructor_as_read(cls, holder)
     )
     if holder is not object and _constructed_in_c(holder):
@@ -554,7 +554,7 @@ def _partial_binding_clause(partial: functools.partial[object]) -> str:
     )
 
 
-def _refuse_first_read_constructor(
+def _refuse_constructor_reading(
     cls: type, owner: type, name: str, constructor: object, read: object
 ) -> None:
     """Raise the TypeError for *cls* that the first refusal below finds for *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, or for *read*, that constructor bound as inspect binds it: *read* is read as an Enum, *constructor* carries a __signature__ inspect reads by minor, or *read* is read as a builtin or through an object its class makes callable."""
