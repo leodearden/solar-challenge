@@ -81,7 +81,8 @@ document.addEventListener('alpine:init', () => {
             this.sweepCharts = '';
             this.destroy();
             // Label the table and the charts with the parameter this sweep runs, not one selected while it runs
-            this.sweptParameterLabel = this.currentParam.label;
+            const parameterLabel = this.currentParam.label;
+            this.sweptParameterLabel = parameterLabel;
 
             const payload = {
                 parameter: this.parameter,
@@ -121,7 +122,7 @@ document.addEventListener('alpine:init', () => {
                     this._sweepRequests = sweepRequests;
                     const rows = this.sweepResults.filter(row => row.job_id);
                     this._followSweep(rows, sweepRequests.signal).then(
-                        () => this._drawSweepCharts(rows, sweepRequests.signal),
+                        () => this._drawSweepCharts(rows, parameterLabel, sweepRequests.signal),
                         e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; }
                     );
                 }
@@ -187,7 +188,7 @@ document.addEventListener('alpine:init', () => {
 
         // Post the finished points of rows, those whose jobs completed, in sweep order, and show the chart panels
         // POST /scenarios/sweep/chart answers, or why it could not draw them; nothing, if signal aborts first
-        async _drawSweepCharts(rows, signal) {
+        async _drawSweepCharts(rows, parameterLabel, signal) {
             if (signal.aborted) return;
             const points = rows.filter(row => row.run_id).map(row => ({ value: row.value, run_id: row.run_id }));
             let panels = '';
@@ -196,7 +197,7 @@ document.addEventListener('alpine:init', () => {
                 const resp = await fetch('/scenarios/sweep/chart', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ parameter_label: this.sweptParameterLabel, points }),
+                    body: JSON.stringify({ parameter_label: parameterLabel, points }),
                     signal,
                 });
                 if (resp.ok) {
