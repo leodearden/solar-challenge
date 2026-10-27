@@ -139,15 +139,16 @@ def member_forms(cls: type) -> dict[str, str]:
     field only while instances read it from the tuple: while no class in *cls*'s MRO,
     *cls* included, binds a value to its name before the class typing.NamedTuple or
     collections.namedtuple made. The attributes the body declares come first, in
-    annotation order, then the other names it defines, in class-body order. A ClassVar annotation declares a class variable, not an
-    instance attribute; a string annotation is read as named_classes reads one, so a
-    name its module does not bind raises NameError, a module inspect reads no source for
-    raises TypeError, and a module another of the same name has replaced in sys.modules
-    raises LookupError. A public member that no member rule spells and that is a routine
-    whose signature inspect cannot read, as surface_form describes one, or a
-    functools.partial, raises TypeError naming *cls*, the member and its kind or
-    binding. docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor
-    reads and binds such a partial.
+    annotation order, then the other names it defines, in class-body order. A ClassVar
+    annotation declares a class variable, not an instance attribute; a string annotation
+    is read as named_classes reads one, so a name its module does not bind raises
+    NameError, a module inspect reads no source for raises TypeError, and a module
+    another of the same name has replaced in sys.modules raises LookupError. A public
+    member that no member rule spells and that is a routine whose signature inspect
+    cannot read, as surface_form describes one, or a functools.partial, raises TypeError
+    naming *cls*, the member and its kind or binding.
+    docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
+    binds such a partial.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
