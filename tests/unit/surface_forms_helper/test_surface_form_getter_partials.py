@@ -14,7 +14,12 @@ from typing import Callable
 import pytest
 
 from tests._surface_forms import named_classes, surface_form
-from tests.unit.surface_forms_helper._fixtures import GetterPartial, SettableGetterPartial
+from tests.unit.surface_forms_helper._fixtures import (
+    GetterPartial,
+    SettableGetterPartial,
+    class_whose_init_is,
+    class_whose_metaclass_call_is,
+)
 
 
 def _settled(self: object, share: float, rate: int) -> None: ...
@@ -93,23 +98,6 @@ class WrappingGetterPartialNew:
     """A class whose __new__ is a GetterPartial that records _metered as __wrapped__."""
 
     __new__ = _with_metered_as_wrapped(GetterPartial(_settled, rate=1))
-
-
-def _class_whose_init_is(partial: object) -> type:
-    class Built:
-        __init__ = partial
-
-    return Built
-
-
-def _class_whose_metaclass_call_is(partial: object) -> type:
-    class Calling(type):
-        __call__ = partial
-
-    class Called(metaclass=Calling):
-        pass
-
-    return Called
 
 
 def _partial_of_an_object_whose_call_is(partial: object) -> object:
@@ -286,12 +274,12 @@ def test_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_i
     ("build", "site"),
     [
         pytest.param(
-            _class_whose_init_is,
+            class_whose_init_is,
             r"\.Built\b.* is constructed through .*\.Built\.__init__, ",
             id="init",
         ),
         pytest.param(
-            _class_whose_metaclass_call_is,
+            class_whose_metaclass_call_is,
             r"\.Called\b.* is constructed through .*\.Calling\.__call__, ",
             id="metaclass-call",
         ),

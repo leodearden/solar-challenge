@@ -20,7 +20,12 @@ from typing import Callable
 import pytest
 
 from tests._surface_forms import named_classes, surface_form
-from tests.unit.surface_forms_helper._fixtures import CallableGetter, NoneSignedCallableGetter
+from tests.unit.surface_forms_helper._fixtures import (
+    CallableGetter,
+    NoneSignedCallableGetter,
+    class_whose_init_is,
+    class_whose_metaclass_call_is,
+)
 
 
 class Ledger(dict):
@@ -59,28 +64,11 @@ def _with_a_text_signature(call: DefCall) -> DefCall:
     return call
 
 
-def _class_whose_init_is(constructor: object) -> type:
-    class Built:
-        __init__ = constructor
-
-    return Built
-
-
 def _class_whose_new_is(constructor: object) -> type:
     class Made:
         __new__ = constructor
 
     return Made
-
-
-def _class_whose_metaclass_call_is(constructor: object) -> type:
-    class Calling(type):
-        __call__ = constructor
-
-    class Called(metaclass=Calling):
-        pass
-
-    return Called
 
 
 class Period(enum.Enum):
@@ -476,9 +464,9 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
 @pytest.mark.parametrize(
     ("construct", "constructor"),
     [
-        pytest.param(_class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
         pytest.param(_class_whose_new_is, "Made.__new__", id="new"),
-        pytest.param(_class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
     ],
 )
 def test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_naming_it_that_constructor_and_that_enum(
@@ -506,13 +494,13 @@ def test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_
     [
         pytest.param(_class_whose_new_is, "Made.__new__", r"\.Period\b.*\benum\.Enum\b", id="new"),
         pytest.param(
-            _class_whose_init_is,
+            class_whose_init_is,
             "Built.__init__",
             r"\bfunctools\.partial\b.*\b3\.14\b",
             id="init",
         ),
         pytest.param(
-            _class_whose_metaclass_call_is,
+            class_whose_metaclass_call_is,
             "Calling.__call__",
             r"\bfunctools\.partial\b.*\b3\.14\b",
             id="metaclass-call",
@@ -558,9 +546,9 @@ def test_a_class_whose_constructor_is_a_partial_of_an_enum_raises_the_type_error
 @pytest.mark.parametrize(
     "construct",
     [
-        pytest.param(_class_whose_init_is, id="init"),
+        pytest.param(class_whose_init_is, id="init"),
         pytest.param(_class_whose_new_is, id="new"),
-        pytest.param(_class_whose_metaclass_call_is, id="metaclass-call"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
     ],
 )
 def test_a_class_whose_constructor_wraps_an_enum_but_carries_a_signature_or_a_signature_of_none_is_spelled_by_what_inspect_reads(
@@ -784,9 +772,9 @@ def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as
 @pytest.mark.parametrize(
     "construct",
     [
-        pytest.param(_class_whose_init_is, id="init"),
+        pytest.param(class_whose_init_is, id="init"),
         pytest.param(_class_whose_new_is, id="new"),
-        pytest.param(_class_whose_metaclass_call_is, id="metaclass-call"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
     ],
 )
 def test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class(
