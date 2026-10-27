@@ -82,8 +82,11 @@ def sweep_chart() -> str | tuple[Response, int]:
     """
     try:
         parameter_label, requested = _sweep_chart_request(request_json_object())
-        points = [_finished_point(value, run_id) for value, run_id in requested]
     except ValueError as refusal:
+        return jsonify({"error": str(refusal)}), 400
+    try:
+        points = [_finished_point(value, run_id) for value, run_id in requested]
+    except _NotAFinishedHomeRun as refusal:
         return jsonify({"error": str(refusal)}), 400
     return str(render_template(
         "scenarios/partials/sweep-panels.html",
@@ -127,23 +130,27 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
     return value, run_id
 
 
+class _NotAFinishedHomeRun(ValueError):
+    """The run a sweep point names is not a finished home run: no run has its id, or it is a fleet run or has no summary yet; the message names the run id."""
+
+
 def _finished_point(value: float, run_id: str) -> SweepPoint:
     """The sweep point that swept to *value*, its summary that of home run *run_id*.
 
     Raises:
-        ValueError: If no run has *run_id*, or that run is a fleet run or has no summary yet; the
-            message names the run id.
+        _NotAFinishedHomeRun: If no run has *run_id*, or that run is a fleet run or has no
+            summary yet.
         StoredRunUnreadable: From RunRecord.summary(), for a summary that cannot be read.
     """
     record = get_storage().run_record(run_id)
     if record is None:
-        raise ValueError(f"Run {run_id!r} is unknown: no run has that id")
+        raise _NotAFinishedHomeRun(f"Run {run_id!r} is unknown: no run has that id")
     match record.summary():
         case SummaryStatistics() as summary:
             return SweepPoint(value, summary)
         case FleetSummary():
-            raise ValueError(f"Run {run_id!r} is a fleet run, not a home run: each sweep point runs one home")
+            raise _NotAFinishedHomeRun(f"Run {run_id!r} is a fleet run, not a home run: each sweep point runs one home")
         case None:
-            raise ValueError(f"Run {run_id!r} has no summary yet: its job has not saved its results")
+            raise _NotAFinishedHomeRun(f"Run {run_id!r} has no summary yet: its job has not saved its results")
         case unexpected:
             assert_never(unexpected)

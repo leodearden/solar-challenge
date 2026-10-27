@@ -1073,6 +1073,19 @@ class TestSweepChartRoute:
         assert body == {"error": body["error"]}
         assert [text for text in ("run-4kw", why) if text not in body["error"]] == [], body["error"]
 
+    def test_a_runs_row_the_store_cannot_read_answers_500_not_a_refusal_of_the_request(
+        self, app: Flask, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        """A writer outside the store blanked the point's runs name, which contract C7 forbids, so RunRecord refuses the row with a ValueError: the store's fault, not the request's."""
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET name = '   ' WHERE id = ?", ("run-4kw",))
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
+
+        assert response.status_code == 500, response.get_data(as_text=True)
+
     @pytest.mark.parametrize(("body", "named"), _MALFORMED_SWEEP_CHART_BODIES)
     def test_a_malformed_body_is_refused_naming_the_field(
         self, client: FlaskClient, body: object, named: list[str]
