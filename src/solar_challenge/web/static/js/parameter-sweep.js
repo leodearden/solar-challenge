@@ -19,6 +19,8 @@ document.addEventListener('alpine:init', () => {
         // Results
         sweepValues: [],
         sweepResults: [],
+        // The HTML of the sweep's chart panels, as POST /scenarios/sweep/chart answers it; '' hides the chart area
+        sweepCharts: '',
         submitting: false,
         errorMsg: '',
 
