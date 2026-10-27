@@ -737,10 +737,10 @@ def _constructor_spelling_modules(
 ) -> Mapping[str, ModuleOrUnspelled] | None:
     """The module whose source spells the annotation inspect.signature(*cls*) gives each of *names*, parameter names or "return": where the constructor inspect reads is spelled; None if _chain_spelling_modules finds none on that constructor's chain.
 
-    An Enum's signature is spelled in no module known, as _EnumReadByMinor says, since
-    inspect reads it from a different place on each minor. Any other class's constructor
-    is the __call__ *cls*'s metaclass resolves, if _metaclass_call_as_read gives one,
-    which inspect reads before any __new__ or __init__; else the one
+    An Enum's signature is spelled in no module known, as _EnumReadByMinor says. Any
+    other class's constructor is the __call__ *cls*'s metaclass resolves, if
+    _metaclass_call_as_read gives one, which inspect reads before any __new__ or
+    __init__; else the one
     _constructor_as_read gives for the nearest class in *cls*'s MRO that holds one, which
     may be a base defined in another module. It is spelled where
     _chain_spelling_modules spells the end of its chain, so a function the class body
