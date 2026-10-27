@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """components/macros.html's card draws every dashboard card, one element in the card
 classes plus the classes its page gives it. The card classes are written once, in card,
-so no other template or script draws a card itself.
+so no other template or script draws a card itself. A card call that gives its header band
+a subtitle, colours or an aside also gives the title that opens the band.
 """
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from html.parser import HTMLParser
 from typing import Any
 
@@ -26,6 +27,7 @@ from tests._web_runs import store_fleet_run, store_home_run
 _CARD_TRIPLE = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
 _CARD_CLASSES = frozenset(_CARD_TRIPLE.split())
 _CARD_MACROS_KEY = "templates/components/macros.html"
+_HEADER_BAND_PARAMETERS = frozenset({"subtitle", "header_classes", "dot_classes", "header_aside"})
 
 _JINJA = Environment()
 _SCRIPT_STRING_LITERAL = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`""")
@@ -208,6 +210,41 @@ def test_a_card_given_an_href_is_one_link_to_it_in_the_card_classes_and_its_own(
         ("/simulate/home", _CARD_CLASSES | {"group", "block", "p-6"})
     ]
     assert element_attributes(drawn, "div") == []
+
+
+def _card_calls(source: str) -> list[nodes.Call]:
+    """Each call of card in the Jinja template *source*, by {{ card(...) }} and {% call card(...) %} alike."""
+    return [
+        call
+        for call in _JINJA.parse(source).find_all(nodes.Call)
+        if isinstance(call.node, nodes.Name) and call.node.name == "card"
+    ]
+
+
+def _given_parameters(call: nodes.Call, parameters: Sequence[str]) -> set[str]:
+    """The parameters *call* gives, by position or by keyword, of a macro that takes *parameters* in that order."""
+    return {*parameters[: len(call.args)], *(keyword.key for keyword in call.kwargs)}
+
+
+def test_every_card_call_that_gives_a_header_band_argument_gives_a_title(macros: Any) -> None:
+    """card draws subtitle, header_classes, dot_classes and header_aside only in the header band its
+    title opens, so a call that gives them without a title loses them, and its page still answers 200."""
+    band_calls = [
+        (f"{path}:{call.lineno}", given)
+        for path, source in dashboard_template_sources().items()
+        for call in _card_calls(source)
+        if (given := _given_parameters(call, macros.card.arguments)) & _HEADER_BAND_PARAMETERS
+    ]
+    assert band_calls, "read no card call that gives a header band argument, so this guard would pass vacuously"
+
+    untitled = {site: sorted(given & _HEADER_BAND_PARAMETERS) for site, given in band_calls if "title" not in given}
+
+    listing = "".join(f"\n  {site}: {', '.join(arguments)}" for site, arguments in untitled.items())
+    assert untitled == {}, (
+        f"These card calls give header band arguments but no title:{listing}\n"
+        "card draws subtitle, header_classes, dot_classes and header_aside in the header band its title "
+        "opens, and drops them without one. Give the call a title, or drop those arguments."
+    )
 
 
 class _StartTagClasses(HTMLParser):
