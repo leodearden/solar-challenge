@@ -129,7 +129,10 @@ def member_forms(cls: type) -> dict[str, str]:
     A slot that *cls*'s own namespace binds for one of its dataclass fields, as
     @dataclass(slots=True) binds one for each field no base holds a slot for, and a
     __slots__ in the body binds one for each name it lists, is no name the body
-    defines: a field is a member of a class whose body declares it.
+    defines: a field is a member of a class whose body declares it. Any other data
+    descriptor the body binds under a dataclass field's name, such as a settable
+    property, is a name it defines, spelled by its kind, since instances read it in the
+    field's place.
     surface_form(cls) pins a dataclass field only while instances read it from the
     instance: while the first class in *cls*'s MRO, *cls* included, that binds its name,
     if any, binds there no data descriptor other than a slot. It pins a named tuple
@@ -727,12 +730,17 @@ def _own_members(cls: type) -> dict[str, object]:
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a dataclass field's default is the field's, not a class value.
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; what the body binds under a dataclass field's name, its default or its slot, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    class_values = vars(cls).keys() - _dataclass_fields(cls).keys()
+    field_names = _dataclass_fields(cls).keys()
+    class_values = {
+        name
+        for name, value in vars(cls).items()
+        if name not in field_names or _outranks_the_instance(value)
+    }
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
