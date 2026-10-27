@@ -269,6 +269,36 @@ def test_a_dataclass_field_its_constructor_does_not_take_is_spelled_attribute_th
     assert member_forms(Cache) == {"path": "attribute Path"}
 
 
+def test_an_inherited_dataclass_field_is_a_member_of_the_class_whose_body_declares_it_though_a_slots_subclass_binds_its_slot() -> None:
+    @dataclass
+    class Reading:
+        kwh: float
+        label: Optional[str] = field(init=False, default=None)
+
+    @dataclass(slots=True)
+    class Slotted(Reading):
+        site: str
+        note: str = field(init=False, default="")
+
+    assert inspect.ismemberdescriptor(vars(Slotted)["label"])
+    assert member_forms(Reading) == {"label": "attribute str | None"}
+    assert member_forms(Slotted) == {"note": "attribute str"}
+    assert named_classes(Slotted) == {float, str}
+
+
+def test_a_value_a_class_body_binds_under_an_inherited_dataclass_field_name_is_a_member_where_its_constructor_does_not_take_the_field() -> None:
+    @dataclass
+    class Reading:
+        kwh: float
+        label: Optional[str] = field(init=False, default=None)
+
+    class Labelled(Reading):
+        label = "peak"
+
+    assert Labelled(1.0).label == "peak"
+    assert member_forms(Labelled) == {"label": "str"}
+
+
 def test_a_dataclass_field_with_a_default_is_spelled_and_names_classes_by_its_annotation_not_its_default() -> None:
     @dataclass(frozen=True)
     class Meter:
