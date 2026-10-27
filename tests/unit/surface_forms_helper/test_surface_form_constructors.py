@@ -87,7 +87,7 @@ class Giver:
         return self.given
 
 
-def test_aclass_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
+def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
     class Built:
@@ -116,7 +116,7 @@ def test_a_class_whose_new_is_a_partial_is_spelled_by_the_signature_the_partial_
     assert surface_form(Made) == "(rate: int, *, scale: float = 2.0) -> object"
 
 
-def test_aclass_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new_without_a_warning() -> None:
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new_without_a_warning() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
     class Both:
@@ -151,7 +151,7 @@ def test_a_class_whose_inherited_init_is_a_partial_beside_its_own_new_defined_wi
         pytest.param(staticmethod(object.__new__), id="staticmethod"),
     ],
 )
-def test_aclass_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_type_error_naming_the_partial(
+def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_type_error_naming_the_partial(
     new: object,
 ) -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
@@ -346,7 +346,7 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
         named_classes(Counted)
 
 
-def test_aclass_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
+def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
     def settle(cls: type, rate: int, scale: float = 1.0) -> None: ...
 
     class Partial(type):
