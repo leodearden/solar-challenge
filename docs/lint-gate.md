@@ -1,6 +1,6 @@
 # Lint: The Gate Is a Test, Not `lint_command`
 
-**Task:** #246; #994 (§4); #1003 (§5)
+**Task:** #246; #994 (§4); #1003 (§5); #302 (§6)
 **Rules:** [`pyproject.toml`](../pyproject.toml), table `[tool.ruff.lint]`
 **Test:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py)
 
@@ -10,14 +10,15 @@
 
 The lint is ruff, from the `dev` extra, with the rules `pyproject.toml`'s `[tool.ruff.lint]`
 selects. That table is the one home of the selection: the test, a developer's
-`uv run --locked --extra dev ruff check src/solar_challenge` and an editor all read it. The
-selection is named rather than left to ruff's defaults, because those change between
+`uv run --locked --extra dev ruff check src/solar_challenge tests` and an editor all read it.
+The selection is named rather than left to ruff's defaults, because those change between
 releases: ruff 0.16.10 enables hundreds of rules by default that 0.15.9 does not.
 
 ## 2. Where It Runs
 
-`tests/unit/test_lint.py` lints `src/solar_challenge`, and the verify's test command runs it
-with the rest of the suite. `dark-factory-orchestrator.yaml` keeps `lint_command: "true"`.
+`tests/unit/test_lint.py` lints `src/solar_challenge` and `tests`, and the verify's test
+command runs it with the rest of the suite. `dark-factory-orchestrator.yaml` keeps
+`lint_command: "true"`.
 
 ## 3. Why Not `lint_command`
 
@@ -63,3 +64,20 @@ path, a broken symlink or a module ruff may not open, as an E902 finding. Withou
 only warns on stderr and reports no finding, so the lint would pass a module it never
 read. Ruff reports a syntax error whatever the selection. E999, the old syntax-error
 rule, was removed in ruff 0.8.0 and can no longer be selected, so E9 is E902 alone.
+
+## 6. Decision (task 302, 2026-10-26): The Lint Covers `tests`
+
+The test lints `tests` as well as the package, with the same selection, because
+`pyproject.toml`'s `[tool.ruff.lint]` is the one home of the rules for both trees. While
+nothing linted `tests`, findings built up there unseen. The chief one was F821: a helper
+annotated with a type its module never imports, such as `-> "SimulationResults"`, carrying
+`# type: ignore[name-defined]` to quiet mypy. Such an annotation tells the reader that a
+name is bound where it is not, and `typing.get_type_hints` cannot resolve it. The pattern
+came back after cleanups, because new tests copied it from their neighbours, until task 300
+cleared the last of it. The verify's type check does not reach the test modules, so F821 is
+the one check on their annotations.
+
+With both trees clean, a lint that skipped one would also pass. So
+`tests/unit/test_lint.py::test_the_lint_covers_the_package_and_its_tests` lints a scratch
+project that carries this `pyproject.toml` and one finding in each tree, and expects both
+findings.
