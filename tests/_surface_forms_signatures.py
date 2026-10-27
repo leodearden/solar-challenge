@@ -558,15 +558,15 @@ def _refuse_constructor_reading(
     cls: type, owner: type, name: str, constructor: object, read: object
 ) -> None:
     """Raise the TypeError for *cls* that the first refusal below finds for *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, or for *read*, that constructor bound as inspect binds it: *read* is read as an Enum, *constructor* carries a __signature__ inspect reads by minor, or *read* is read as a builtin or through an object its class makes callable."""
-    _refuse_constructor_read_as_enum(cls, owner, name, read)
+    end = _chain_end(read, stop=_has_non_none_signature)
+    _refuse_constructor_read_as_enum(cls, owner, name, end)
     _refuse_constructor_signature(cls, owner, name, constructor)
     _refuse_constructor_read_as_builtin(cls, owner, name, read)
-    _refuse_call_without_a_portable_form(cls, _chain_end(read, stop=_has_non_none_signature))
+    _refuse_call_without_a_portable_form(cls, end)
 
 
-def _refuse_constructor_read_as_enum(cls: type, owner: type, name: str, read: object) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name* and the Enum that ends the chain inspect follows from *read*, if an Enum ends it; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
-    end = _chain_end(read, stop=_has_non_none_signature)
+def _refuse_constructor_read_as_enum(cls: type, owner: type, name: str, end: object) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name* and *end* if *end* is an Enum; *end* is the end of the chain inspect follows from the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
     if is_enum(end):
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect "
