@@ -126,9 +126,10 @@ def member_forms(cls: type) -> dict[str, str]:
     attribute by annotating it alone or as a dataclass field, except those
     surface_form(cls) already pins: the dataclass fields, named tuple fields and
     init-only variables its constructor's signature takes, and an Enum's members.
-    A dataclass field's slot, as @dataclass(slots=True) binds one for each field,
-    inherited ones included, is no name the body defines: a field is a member of a class
-    whose body declares it.
+    A slot that *cls*'s own namespace binds for one of its dataclass fields, as
+    @dataclass(slots=True) binds one for each field no base holds a slot for, and a
+    __slots__ in the body binds one for each name it lists, is no name the body
+    defines: a field is a member of a class whose body declares it.
     surface_form(cls) pins a named tuple field only while instances read it from the
     tuple: while no class in *cls*'s MRO, *cls* included, binds a value to its name
     before the class typing.NamedTuple or collections.namedtuple made. The attributes
@@ -654,7 +655,7 @@ def _init_only_variables(cls: type) -> set[str]:
 
 
 def _field_slots(cls: type) -> set[str]:
-    """The names of *cls*'s dataclass fields whose slot *cls*'s own namespace binds, as @dataclass(slots=True) binds one for each field, inherited ones included; none if *cls* is no dataclass."""
+    """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as @dataclass(slots=True) binds one for each field no base holds a slot for, and a __slots__ in the body binds one for each name it lists; none if *cls* is no dataclass."""
     return {
         name for name in _dataclass_fields(cls) if inspect.ismemberdescriptor(vars(cls).get(name))
     }

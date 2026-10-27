@@ -299,6 +299,20 @@ def test_a_value_a_class_body_binds_under_an_inherited_dataclass_field_name_is_a
     assert member_forms(Labelled) == {"label": "str"}
 
 
+def test_an_inherited_dataclass_field_is_a_member_of_the_class_whose_body_declares_it_though_an_undecorated_subclass_lists_it_in_its_slots() -> None:
+    @dataclass
+    class Reading:
+        kwh: float
+        label: Optional[str] = field(init=False, default=None)
+
+    class HandSlotted(Reading):
+        __slots__ = ("label",)
+
+    assert inspect.ismemberdescriptor(vars(HandSlotted)["label"])
+    assert member_forms(Reading) == {"label": "attribute str | None"}
+    assert member_forms(HandSlotted) == {}
+
+
 def test_a_dataclass_field_with_a_default_is_spelled_and_names_classes_by_its_annotation_not_its_default() -> None:
     @dataclass(frozen=True)
     class Meter:
