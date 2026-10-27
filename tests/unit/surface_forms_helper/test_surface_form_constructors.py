@@ -58,6 +58,30 @@ def _with_a_text_signature(call: DefCall) -> DefCall:
     return call
 
 
+def _class_whose_init_is(constructor: object) -> type:
+    class Built:
+        __init__ = constructor
+
+    return Built
+
+
+def _class_whose_new_is(constructor: object) -> type:
+    class Made:
+        __new__ = constructor
+
+    return Made
+
+
+def _class_whose_metaclass_call_is(constructor: object) -> type:
+    class Calling(type):
+        __call__ = constructor
+
+    class Called(metaclass=Calling):
+        pass
+
+    return Called
+
+
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
@@ -580,36 +604,43 @@ def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as
 
 
 @pytest.mark.parametrize(
-    ("build", "refusing_its_call"),
+    ("build", "read_through"),
     [
         pytest.param(
             lambda: operator.itemgetter(1),
-            r"\.Built is read through operator\.itemgetter\(1\), "
-            r".*\boperator\.itemgetter\.__call__\b.*\bdefined in C\b",
+            r"operator\.itemgetter\(1\), .*\boperator\.itemgetter\.__call__\b.*\bdefined in C\b",
             id="call-defined-in-c",
         ),
         pytest.param(
             lambda: _with_a_text_signature(DefCall()),
-            r"\.Built is read through <.*\.DefCall object\b.*\b__text_signature__ '\(rate\)'",
+            r"<.*\.DefCall object\b.*\b__text_signature__ '\(rate\)'",
             id="text-signature",
         ),
         pytest.param(
             NestedCall,
-            r"\.Built is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b",
+            r".*\.PartialCall\.__call__\b.*\bfunctools\.partial\b",
             id="call-read-through-an-object",
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(_class_whose_init_is, id="init"),
+        pytest.param(_class_whose_new_is, id="new"),
+        pytest.param(_class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
 def test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class(
-    build: Callable[[], object], refusing_its_call: str
+    construct: Callable[[object], type], build: Callable[[], object], read_through: str
 ) -> None:
-    class Built:
-        __init__ = build()
+    cls = construct(build())
 
+    refusing_its_call = rf"\.{cls.__name__} is read through {read_through}"
     with pytest.raises(TypeError, match=refusing_its_call):
-        surface_form(Built)
+        surface_form(cls)
     with pytest.raises(TypeError, match=refusing_its_call):
-        named_classes(Built)
+        named_classes(cls)
 
 
 def test_a_class_constructed_through_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:
