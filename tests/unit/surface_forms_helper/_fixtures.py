@@ -13,8 +13,9 @@ and CallableGetterDeleter a callable one, for the rules about how inspect reads 
 descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
 other than functools.partial, and SettableGetterPartial one whose type also defines
 __set__, for the rules about how inspect reads and binds such a partial.
-class_whose_init_is and class_whose_metaclass_call_is build a class whose __init__, or
-whose metaclass's __call__, is the argument, for the rules about each constructor site.
+class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
+whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
+rules about each constructor site.
 """
 
 import functools
@@ -100,6 +101,13 @@ def class_whose_init_is(constructor: object) -> type:
         __init__ = constructor
 
     return Built
+
+
+def class_whose_new_is(constructor: object) -> type:
+    class Made:
+        __new__ = constructor
+
+    return Made
 
 
 def class_whose_metaclass_call_is(constructor: object) -> type:

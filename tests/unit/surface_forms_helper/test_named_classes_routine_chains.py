@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING, Callable
 import pytest
 
 from tests._surface_forms import named_classes
-from tests.unit.surface_forms_helper._fixtures import imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    class_whose_init_is,
+    class_whose_metaclass_call_is,
+    class_whose_new_is,
+    imported_module,
+)
 
 if TYPE_CHECKING:
     from decimal import Decimal  # noqa: F401
@@ -80,20 +85,19 @@ def _typed_partial(function: Callable[..., object], annotation: object) -> Calla
 
 
 def _signed_links_over(enum_class: type[enum.Enum], annotation: object) -> dict[str, Callable[..., object]]:
-    """One link of each shape that carries over *enum_class* a signature annotating share with *annotation*, by the shape's name: a functools.partial, a wrapper as functools.wraps records one, a bound method of one, a functools.partial of a callable object whose __call__ is one, and a class whose __init__ is one."""
+    """One link of each shape that carries over *enum_class* a signature annotating share with *annotation*, by the shape's name: a functools.partial, a wrapper as functools.wraps records one, a bound method of one, a functools.partial of a callable object whose __call__ is one, and a class whose __init__, whose __new__, or whose metaclass's __call__ is one."""
 
     class Caller:
         __call__ = _typed(enum_class, "receiver", annotation=annotation)
-
-    class Initialised:
-        __init__ = _typed(enum_class, "receiver", annotation=annotation)
 
     return {
         "partial": _typed_partial(enum_class, annotation),
         "functools-wraps-wrapper": _typed(enum_class, annotation=annotation),
         "bound-method": types.MethodType(_typed(enum_class, "receiver", annotation=annotation), object()),
         "callable-object": functools.partial(Caller()),
-        "constructor": Initialised,
+        "init": class_whose_init_is(_typed(enum_class, "receiver", annotation=annotation)),
+        "new": class_whose_new_is(_typed(enum_class, "receiver", annotation=annotation)),
+        "metaclass-call": class_whose_metaclass_call_is(_typed(enum_class, "receiver", annotation=annotation)),
     }
 
 

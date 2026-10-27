@@ -25,6 +25,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     NoneSignedCallableGetter,
     class_whose_init_is,
     class_whose_metaclass_call_is,
+    class_whose_new_is,
 )
 
 
@@ -62,13 +63,6 @@ class DefCall:
 def _with_a_text_signature(call: DefCall) -> DefCall:
     call.__text_signature__ = "(rate)"
     return call
-
-
-def _class_whose_new_is(constructor: object) -> type:
-    class Made:
-        __new__ = constructor
-
-    return Made
 
 
 class Period(enum.Enum):
@@ -465,7 +459,7 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
     ("construct", "constructor"),
     [
         pytest.param(class_whose_init_is, "Built.__init__", id="init"),
-        pytest.param(_class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
         pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
     ],
 )
@@ -492,7 +486,7 @@ def test_a_class_whose_constructor_inspect_reads_as_an_enum_raises_a_type_error_
 @pytest.mark.parametrize(
     ("construct", "constructor", "refusal"),
     [
-        pytest.param(_class_whose_new_is, "Made.__new__", r"\.Period\b.*\benum\.Enum\b", id="new"),
+        pytest.param(class_whose_new_is, "Made.__new__", r"\.Period\b.*\benum\.Enum\b", id="new"),
         pytest.param(
             class_whose_init_is,
             "Built.__init__",
@@ -547,7 +541,7 @@ def test_a_class_whose_constructor_is_a_partial_of_an_enum_raises_the_type_error
     "construct",
     [
         pytest.param(class_whose_init_is, id="init"),
-        pytest.param(_class_whose_new_is, id="new"),
+        pytest.param(class_whose_new_is, id="new"),
         pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
     ],
 )
@@ -773,7 +767,7 @@ def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as
     "construct",
     [
         pytest.param(class_whose_init_is, id="init"),
-        pytest.param(_class_whose_new_is, id="new"),
+        pytest.param(class_whose_new_is, id="new"),
         pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
     ],
 )
