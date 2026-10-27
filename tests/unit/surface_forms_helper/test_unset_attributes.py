@@ -147,6 +147,25 @@ def test_a_dataclass_field_a_data_descriptor_hides_from_instances_is_unset_where
     assert unset_attributes(Redeclared) == {"x"}
 
 
+def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_annotates_declares_no_attribute_so_it_is_never_unset() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Fixed(Point):
+        x: int
+
+        @property
+        def x(self) -> int:
+            return 7
+
+        @x.setter
+        def x(self, value: int) -> None: ...
+
+    assert Fixed(1).x == 7
+    assert unset_attributes(Fixed) == set()
+
+
 def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
     class Meter:
         reading: float

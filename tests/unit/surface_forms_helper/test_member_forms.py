@@ -381,6 +381,36 @@ def test_a_dataclass_field_a_class_binds_to_a_plain_value_a_method_or_a_slot_is_
         assert member_forms(cls) == {}
 
 
+def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_annotates_is_spelled_as_that_descriptor_not_as_an_attribute() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Fixed(Point):
+        x: int
+
+        @property
+        def x(self) -> int:
+            return 7
+
+        @x.setter
+        def x(self, value: int) -> None: ...
+
+    @dataclass
+    class Meter:
+        reading: float
+
+        @property
+        def reading(self) -> float: ...
+
+        @reading.setter
+        def reading(self, value: float) -> None: ...
+
+    assert Fixed(1).x == 7
+    assert member_forms(Fixed) == {"x": "property[settable] (self) -> int"}
+    assert member_forms(Meter) == {"reading": "property[settable] (self) -> float"}
+
+
 def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
     @dataclass(frozen=True)
     class Reading:
