@@ -125,6 +125,48 @@ def test_a_named_tuple_field_its_instances_read_from_the_tuple_is_never_unset() 
     assert unset_attributes(Redeclared) == {"y"}
 
 
+def test_a_dataclass_field_a_data_descriptor_hides_from_instances_is_unset_where_a_class_body_declares_it_again_and_no_default_or_own_initialiser_supplies_it() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Doubled(Point):
+        @property
+        def x(self) -> int:
+            return self._x * 2
+
+        @x.setter
+        def x(self, value: int) -> None:
+            self._x = value
+
+    class Retyped(Doubled):
+        x: int
+
+    assert Retyped(1).x == 2
+    assert member_forms(Retyped) == {"x": "attribute int"}
+    assert unset_attributes(Doubled) == set()
+    assert unset_attributes(Retyped) == {"x"}
+
+
+def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_annotates_declares_no_attribute_so_it_is_never_unset() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Fixed(Point):
+        x: int
+
+        @property
+        def x(self) -> int:
+            return 7
+
+        @x.setter
+        def x(self, value: int) -> None: ...
+
+    assert Fixed(1).x == 7
+    assert unset_attributes(Fixed) == set()
+
+
 def test_a_reviewed_write_under_a_computed_name_sets_no_declared_attribute() -> None:
     class Meter:
         reading: float

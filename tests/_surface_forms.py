@@ -129,20 +129,26 @@ def member_forms(cls: type) -> dict[str, str]:
     A slot that *cls*'s own namespace binds for one of its dataclass fields, as
     @dataclass(slots=True) binds one for each field no base holds a slot for, and a
     __slots__ in the body binds one for each name it lists, is no name the body
-    defines: a field is a member of a class whose body declares it.
-    surface_form(cls) pins a named tuple field only while instances read it from the
-    tuple: while no class in *cls*'s MRO, *cls* included, binds a value to its name
-    before the class typing.NamedTuple or collections.namedtuple made. The attributes
-    the body declares come first, in annotation order, then the other names it defines,
-    in class-body order. A ClassVar annotation declares a class variable, not an
-    instance attribute; a string annotation is read as named_classes reads one, so a
-    name its module does not bind raises NameError, a module inspect reads no source for
-    raises TypeError, and a module another of the same name has replaced in sys.modules
-    raises LookupError. A public member that no member rule spells and that is a routine
-    whose signature inspect cannot read, as surface_form describes one, or a
-    functools.partial, raises TypeError naming *cls*, the member and its kind or
-    binding. docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor
-    reads and binds such a partial.
+    defines: a field is a member of a class whose body declares it. Any other data
+    descriptor the body binds under a dataclass field's name, such as a settable
+    property, is a name it defines, spelled by its kind, since instances read it in the
+    field's place.
+    surface_form(cls) pins a dataclass field only while instances read it from the
+    instance: while the first class in *cls*'s MRO, *cls* included, that binds its name,
+    if any, binds there no data descriptor other than a slot. It pins a named tuple
+    field only while instances read it from the tuple: while no class in *cls*'s MRO,
+    *cls* included, binds a value to its name before the class typing.NamedTuple or
+    collections.namedtuple made. The attributes the body declares come first, in
+    annotation order, then the other names it defines, in class-body order. A ClassVar
+    annotation declares a class variable, not an instance attribute; a string annotation
+    is read as named_classes reads one, so a name its module does not bind raises
+    NameError, a module inspect reads no source for raises TypeError, and a module
+    another of the same name has replaced in sys.modules raises LookupError. A public
+    member that no member rule spells and that is a routine whose signature inspect
+    cannot read, as surface_form describes one, or a functools.partial, raises TypeError
+    naming *cls*, the member and its kind or binding.
+    docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
+    binds such a partial.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -594,11 +600,11 @@ def _member_form_classes(member: object, cls: type) -> set[type]:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes, or each named tuple field it takes that instances read from the tuple."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, each dataclass field its constructor takes that instances read from the instance, or each named tuple field it takes that instances read from the tuple."""
     if is_enum(cls):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _dataclass_fields(cls).keys() & _constructor_parameters(cls)
+        return _fields_read_from_the_instance(cls) & _constructor_parameters(cls)
     if _is_named_tuple(cls):
         return _fields_read_from_the_tuple(cls) & _constructor_parameters(cls)
     return set()
@@ -609,6 +615,23 @@ def _dataclass_fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _fields_read_from_the_instance(cls: type) -> set[str]:
+    """The names of *cls*'s dataclass fields that its instances read from the instance, its __dict__ or a slot: each whose name no class in *cls*'s MRO binds, or whose first binder there binds a value _outranks_the_instance does not hold of; none if *cls* is no dataclass."""
+    first_holders = {
+        name: next(namespace_holders(cls.__mro__, name), None) for name in _dataclass_fields(cls)
+    }
+    return {
+        name
+        for name, holder in first_holders.items()
+        if holder is None or not _outranks_the_instance(vars(holder)[name])
+    }
+
+
+def _outranks_the_instance(value: object) -> bool:
+    """Whether instances read *value*, which a class binds under a name, in place of what they hold under that name: whether it is a data descriptor, which attribute lookup reads before the instance's __dict__, other than a slot's member descriptor, which reads the instance's own slot."""
+    return inspect.isdatadescriptor(value) and not inspect.ismemberdescriptor(value)
 
 
 def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
@@ -708,12 +731,17 @@ def _own_members(cls: type) -> dict[str, object]:
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a dataclass field's default is the field's, not a class value.
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; what the body binds under a dataclass field's name, its default or its slot, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    class_values = vars(cls).keys() - _dataclass_fields(cls).keys()
+    field_names = _dataclass_fields(cls).keys()
+    class_values = {
+        name
+        for name, value in vars(cls).items()
+        if name not in field_names or _outranks_the_instance(value)
+    }
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()

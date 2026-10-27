@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's member_forms, one per test."""
+"""The rules of tests/_surface_forms.py's member_forms, one per test.
+
+Rounded is defined at module level, where its qualified name carries no '<locals>'.
+"""
 
 import abc
 import collections
@@ -30,6 +33,19 @@ from tests.unit.surface_forms_helper._fixtures import (
     SettableGetterPartial,
     imported_module,
 )
+
+
+class Rounded:
+    """A data descriptor that keeps each value set through it rounded and gives 0 when read from a class, which a dataclass takes as the default of a field it is assigned to."""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = f"_{name}"
+
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 0 if instance is None else getattr(instance, self.name)
+
+    def __set__(self, instance: object, value: float) -> None:
+        setattr(instance, self.name, round(value))
 
 
 def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
@@ -332,6 +348,93 @@ def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_var
         tags: list[str] = field(default_factory=list)
 
     assert member_forms(Site) == {"LAT": "float"}
+
+
+def test_a_dataclass_field_a_class_binds_to_a_data_descriptor_is_a_member_since_its_instances_read_that_descriptor_in_place_of_the_field() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Doubled(Point):
+        @property
+        def x(self) -> int:
+            return self._x * 2
+
+        @x.setter
+        def x(self, value: int) -> None:
+            self._x = value
+
+    class Retyped(Doubled):
+        x: int
+
+    @dataclass
+    class Redecorated(Doubled):
+        x: int = field(default_factory=lambda: 3)
+
+    assert (Doubled(1).x, Retyped(1).x, Redecorated().x) == (2, 2, 6)
+    assert member_forms(Doubled) == {"x": "property[settable] (self) -> int"}
+    assert member_forms(Retyped) == {"x": "attribute int"}
+    assert member_forms(Redecorated) == {"x": "attribute int"}
+
+
+def test_a_dataclass_field_a_class_binds_to_a_plain_value_a_method_or_a_slot_is_not_a_member_since_its_instances_still_read_the_field() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Constant(Point):
+        x = 5
+
+    class Method(Point):
+        def x(self) -> int: ...
+
+    @dataclass(slots=True)
+    class Slotted:
+        x: int
+
+    assert (Constant(1).x, Method(1).x, Slotted(1).x) == (1, 1, 1)
+    for cls in (Constant, Method, Slotted):
+        assert member_forms(cls) == {}
+
+
+def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_annotates_is_spelled_as_that_descriptor_not_as_an_attribute() -> None:
+    @dataclass
+    class Point:
+        x: int
+
+    class Fixed(Point):
+        x: int
+
+        @property
+        def x(self) -> int:
+            return 7
+
+        @x.setter
+        def x(self, value: int) -> None: ...
+
+    @dataclass
+    class Meter:
+        reading: float
+
+        @property
+        def reading(self) -> float: ...
+
+        @reading.setter
+        def reading(self, value: float) -> None: ...
+
+    assert Fixed(1).x == 7
+    assert member_forms(Fixed) == {"x": "property[settable] (self) -> int"}
+    assert member_forms(Meter) == {"reading": "property[settable] (self) -> float"}
+
+
+def test_a_descriptor_typed_dataclass_field_is_both_a_parameter_its_class_form_spells_and_a_member_spelled_by_its_descriptors_type() -> None:
+    @dataclass
+    class Meter:
+        reading: Rounded = Rounded()
+
+    assert (Meter().reading, Meter(2.6).reading) == (0, 3)
+    assert surface_form(Meter) == "dataclass[eq] (reading: Rounded = 0) -> None"
+    assert member_forms(Meter) == {"reading": "Rounded"}
 
 
 def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
