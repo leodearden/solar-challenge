@@ -28,5 +28,5 @@ def seasonal_reason(days: int) -> str:
 
 
 def sweep_reason(points: int) -> str:
-    """Why a sweep of *points* points, fewer than 2, has no sweep chart."""
-    return f"The sweep chart needs at least 2 points; this sweep has {points}."
+    """Why a sweep of *points* finished points, fewer than 2, has no sweep chart."""
+    return f"The sweep chart needs at least 2 finished points; this sweep has {points}."

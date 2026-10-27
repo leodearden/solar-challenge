@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import bound_run_status_badge %}
+{% from "components/macros.html" import bound_run_status_badge, chart_scripts %}
 
 {% block title %}Parameter Sweep{% endblock %}
 
@@ -193,6 +193,13 @@
             </table>
         </div>
     </div>
+
+    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished -->
+    <section aria-label="Sweep charts" x-show="sweepCharts" x-cloak x-html="sweepCharts" class="space-y-6"></section>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+{{ chart_scripts() }}
 {% endblock %}

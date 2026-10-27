@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,16 +25,21 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import sweep_parameter_chart
+from solar_challenge.web.api import SWEEP_MAX_STEPS
+from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_DAYS
+from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
-from tests._html_page import element_attributes, element_count, element_ids, texts, texts_after
-from tests._plotly_figure import traces
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._html_page import chart_figures, element_attributes, element_count, texts, texts_after
+from tests._plotly_figure import traces_by_name
+from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 class TestScenarioBuilderRoute:
@@ -141,14 +147,6 @@ class TestSweepRoute:
         assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
             ("1", str(MAX_DAYS))
         ]
-
-    def test_sweep_page_has_no_chart_card_that_nothing_draws(self, client: FlaskClient) -> None:
-        """The sweep page holds no sweep-chart card, since no script draws a chart into one.
-
-        Task 835, which draws the sweep's charts, replaces this test.
-        """
-        page = client.get("/scenarios/sweep").get_data(as_text=True)
-        assert "sweep-chart" not in element_ids(page)
 
 
 class TestOldScenarioApiPaths:
@@ -818,62 +816,283 @@ class TestBuilderScenarioYaml:
         assert "latitude" in response.get_json()["error"]
 
 
+_PV_CAPACITY = "PV Capacity (kW)"
+
+# The three metrics' bests fall at three different values, and grid import's highest (2.0) is not
+# its lowest (4.0). The ratios are exact in binary, so their percentages are exactly 50, 37.5 and 25.
+_THREE_POINTS = (
+    SweepPoint(
+        2.0, home_summary(total_generation_kwh=72.0, self_consumption_ratio=0.5, total_grid_import_kwh=12.0)
+    ),
+    SweepPoint(
+        4.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        6.0, home_summary(total_generation_kwh=144.0, self_consumption_ratio=0.25, total_grid_import_kwh=6.0)
+    ),
+)
+
+# A battery sweep past what the home can fill: generation is the same at every capacity, and self-consumption
+# and grid import stop changing from 5 kWh, so each metric's best reading is shared by more than one point.
+_SATURATED_BATTERY_POINTS = (
+    SweepPoint(
+        0.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=6.0)
+    ),
+    SweepPoint(
+        5.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        10.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+)
+
+_SWEEP_PANEL_HEADINGS = [
+    ("chart-sweep-generation", "Generation (kWh) vs PV Capacity (kW)"),
+    ("chart-sweep-self-consumption", "Self-Consumption (%) vs PV Capacity (kW)"),
+    ("chart-sweep-grid-import", "Grid Import (kWh) vs PV Capacity (kW)"),
+]
+
+
+def _figure(panel: ChartPanel) -> str:
+    """*panel*'s figure JSON, failing the test when the panel is an absence."""
+    assert panel.figure_json is not None, f"{panel.dom_id} drew no figure: {panel.absence_reason}"
+    return panel.figure_json
+
+
 class TestSweepChart:
-    """Tests for the sweep_parameter_chart function in charts.py."""
+    """sweep_panels draws one panel per SweepMetric, each through sweep_parameter_chart, from a sweep's finished points."""
 
-    def test_sweep_parameter_chart_returns_json(self) -> None:
-        """Test sweep_parameter_chart returns a panel of valid Plotly JSON."""
-        result = sweep_parameter_chart(
-            [2.0, 4.0, 6.0, 8.0],
-            [50.5, 65.3, 72.1, 78.4],
-            "PV Capacity (kW)",
-            "Self-Consumption (%)",
-        ).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
+    def test_sweep_panels_draw_one_panel_per_metric_in_member_order(self) -> None:
+        panels = sweep_panels(_PV_CAPACITY, _THREE_POINTS)
 
-    def test_sweep_parameter_chart_has_traces(self) -> None:
-        """Test sweep_parameter_chart includes main, optimal, and trend traces."""
-        result = sweep_parameter_chart(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            [10.0, 25.0, 40.0, 55.0, 70.0],
-            "Battery (kWh)",
-            "Grid Import (kWh)",
-        ).content
-        # Should have at least the main trace, optimal marker, and trend line
-        assert len(traces(result)) >= 2
+        assert [(panel.dom_id, panel.title) for panel in panels] == _SWEEP_PANEL_HEADINGS
+        assert [panel.dom_id for panel in panels] == [metric.dom_id for metric in SweepMetric]
+
+    def test_each_sweep_panel_draws_its_metric_at_each_swept_value_beside_the_optimal_point_and_the_trend(
+        self,
+    ) -> None:
+        drawn = []
+        for panel in sweep_panels(_PV_CAPACITY, _THREE_POINTS):
+            by_name = traces_by_name(_figure(panel))
+            names = list(by_name)
+            drawn.append((names, by_name[names[0]]["x"], by_name[names[0]]["y"]))
+
+        assert drawn == [
+            (["Generation (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [72.0, 108.0, 144.0]),
+            (["Self-Consumption (%)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [50.0, 37.5, 25.0]),
+            (["Grid Import (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [12.0, 3.0, 6.0]),
+        ]
 
     @pytest.mark.parametrize(
-        ("param_values", "metric_values"),
-        [pytest.param([], [], id="no-points"), pytest.param([4.0], [65.3], id="one-point")],
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 6.0, 144.0, id="generation-at-its-highest"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 2.0, 50.0, id="self-consumption-at-its-highest"),
+            pytest.param(SweepMetric.GRID_IMPORT, 4.0, 3.0, id="grid-import-at-its-lowest"),
+        ],
     )
-    def test_sweep_parameter_chart_of_fewer_than_two_points_names_the_rule_and_the_sweeps_points_in_its_titled_panel(
-        self, param_values: list[float], metric_values: list[float]
+    def test_sweep_parameter_chart_marks_the_optimal_point_by_its_metrics_direction(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
     ) -> None:
-        panel = sweep_parameter_chart(param_values, metric_values, "PV Capacity (kW)", "Self-Consumption (%)")
+        optimal = traces_by_name(_figure(sweep_parameter_chart(_PV_CAPACITY, _THREE_POINTS, metric)))["Optimal"]
 
-        assert (panel.title, panel.absence_reason) == (
-            "Self-Consumption (%) vs PV Capacity (kW)",
-            sweep_reason(len(param_values)),
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
+
+    @pytest.mark.parametrize(
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 0.0, 108.0, id="generation-highest-at-every-point"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 5.0, 50.0, id="self-consumption-highest-from-5-kwh"),
+            pytest.param(SweepMetric.GRID_IMPORT, 5.0, 3.0, id="grid-import-lowest-from-5-kwh"),
+        ],
+    )
+    def test_sweep_parameter_chart_marks_the_earliest_swept_of_the_points_sharing_the_best_reading(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
+    ) -> None:
+        panel = sweep_parameter_chart("Battery Capacity (kWh)", _SATURATED_BATTERY_POINTS, metric)
+
+        optimal = traces_by_name(_figure(panel))["Optimal"]
+
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
+
+    @pytest.mark.parametrize(
+        "points", [pytest.param((), id="no-points"), pytest.param(_THREE_POINTS[1:2], id="one-point")]
+    )
+    def test_sweep_panels_of_fewer_than_two_points_name_the_rule_and_the_sweeps_points_in_each_titled_panel(
+        self, points: tuple[SweepPoint, ...]
+    ) -> None:
+        panels = sweep_panels(_PV_CAPACITY, points)
+
+        assert [(panel.dom_id, panel.title, panel.absence_reason) for panel in panels] == [
+            (dom_id, title, sweep_reason(len(points))) for dom_id, title in _SWEEP_PANEL_HEADINGS
+        ]
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
+    def test_a_sweep_point_refuses_a_value_that_is_not_finite(self, value: float) -> None:
+        with pytest.raises(ValueError, match=r"SweepPoint\.value"):
+            SweepPoint(value, home_summary())
+
+    @pytest.mark.parametrize("label", ["", "   "], ids=["empty", "spaces"])
+    def test_sweep_parameter_chart_refuses_a_blank_parameter_label(self, label: str) -> None:
+        with pytest.raises(ValueError, match="parameter_label"):
+            sweep_parameter_chart(label, _THREE_POINTS, SweepMetric.GENERATION)
+
+
+_SWEEP_CHART_URL = "/scenarios/sweep/chart"
+
+
+def _sweep_chart_body(*points: tuple[object, object]) -> dict[str, Any]:
+    """A sweep chart request of the PV capacity sweep's *points*, each its value and its run's id."""
+    return {"parameter_label": _PV_CAPACITY, "points": [{"value": value, "run_id": run_id} for value, run_id in points]}
+
+
+def _store_a_finished_point(storage: RunStorage, run_id: str, self_kwh: float, export_kwh: float, import_kwh: float) -> None:
+    """Save a day's home run under *run_id*, its totals the kWh given, as a sweep point's finished job saves it."""
+    store_home_run(
+        storage,
+        run_id,
+        make_home_config(),
+        make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh, days=1),
+    )
+
+
+def _no_run(storage: RunStorage, run_id: str) -> None:
+    """Store nothing, so no run has *run_id*."""
+
+
+def _a_finished_fleet_run(storage: RunStorage, run_id: str) -> None:
+    store_fleet_run(storage, run_id, make_fleet_results(n_homes=2, days=1))
+
+
+def _a_home_run_with_no_summary_yet(storage: RunStorage, run_id: str) -> None:
+    storage.create_run(run_id, run_type="home", name="Sweep point", n_homes=1, created_at="2026-10-26T09:00:00+00:00")
+
+
+_A_POINT = {"value": 2.0, "run_id": "run-2kw"}
+
+_MALFORMED_SWEEP_CHART_BODIES = [
+    pytest.param(["PV Capacity (kW)", [_A_POINT]], ["Request body"], id="body-not-an-object"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [_A_POINT], "metric": "generation"},
+        ["'metric'"],
+        id="unrecognised-key",
+    ),
+    pytest.param({"points": [_A_POINT]}, ["parameter_label"], id="parameter-label-missing"),
+    pytest.param({"parameter_label": "  ", "points": [_A_POINT]}, ["parameter_label"], id="parameter-label-blank"),
+    pytest.param({"parameter_label": 7, "points": [_A_POINT]}, ["parameter_label"], id="parameter-label-not-a-string"),
+    pytest.param({"parameter_label": _PV_CAPACITY}, ["points"], id="points-missing"),
+    pytest.param({"parameter_label": _PV_CAPACITY, "points": _A_POINT}, ["points"], id="points-not-an-array"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [_A_POINT] * (SWEEP_MAX_STEPS + 1)},
+        ["points", str(SWEEP_MAX_STEPS)],
+        id="more-points-than-a-sweep-has-steps",
+    ),
+    pytest.param({"parameter_label": _PV_CAPACITY, "points": [2.0]}, ["points[0]"], id="point-not-an-object"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{**_A_POINT, "label": "2 kW"}]},
+        ["points[0]", "'label'"],
+        id="unrecognised-point-key",
+    ),
+    pytest.param(_sweep_chart_body((True, "run-2kw")), ["points[0].value"], id="value-a-bool"),
+    pytest.param(_sweep_chart_body(("NaN", "run-2kw")), ["points[0].value"], id="value-the-text-nan"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{"run_id": "run-2kw"}]}, ["points[0].value"], id="value-missing"
+    ),
+    pytest.param(_sweep_chart_body((2.0, 7)), ["points[0].run_id"], id="run-id-a-number"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{"value": 2.0}]}, ["points[0].run_id"], id="run-id-missing"
+    ),
+    pytest.param(
+        _sweep_chart_body((2.0, "run-2kw"), (False, "run-4kw")),
+        ["points[1].value"],
+        id="a-later-point-refused-before-an-earlier-points-unknown-run-is-read",
+    ),
+]
+
+
+class TestSweepChartRoute:
+    """POST /scenarios/sweep/chart answers the HTML of a sweep's panels, read from its finished points' stored runs."""
+
+    def test_three_finished_points_draw_each_metrics_panel_marking_its_best_point_by_its_direction(
+        self, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        """Grid import is marked at its lowest, 4.0, while its highest is at 2.0 (B12)."""
+        _store_a_finished_point(storage, "run-2kw", self_kwh=24.0, export_kwh=48.0, import_kwh=12.0)
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+        _store_a_finished_point(storage, "run-6kw", self_kwh=36.0, export_kwh=108.0, import_kwh=6.0)
+
+        response = client.post(
+            _SWEEP_CHART_URL, json=_sweep_chart_body((2.0, "run-2kw"), (4.0, "run-4kw"), (6.0, "run-6kw"))
         )
 
-    def test_sweep_parameter_chart_refuses_metric_values_that_are_not_one_per_parameter_value(self) -> None:
-        with pytest.raises(
-            ValueError,
-            match=r"metric_values must be one value per parameter value, 3 of them; got \[50\.5, 65\.3\]",
-        ):
-            sweep_parameter_chart([2.0, 4.0, 6.0], [50.5, 65.3], "PV Capacity (kW)", "Self-Consumption (%)")
+        assert (response.status_code, response.mimetype) == (200, "text/html"), response.get_data(as_text=True)
+        figures = chart_figures(response.get_data(as_text=True))
+        assert list(figures) == [metric.dom_id for metric in SweepMetric]
+        assert {dom_id: traces_by_name(figure)["Optimal"]["x"] for dom_id, figure in figures.items()} == {
+            "chart-sweep-generation": [6.0],
+            "chart-sweep-self-consumption": [2.0],
+            "chart-sweep-grid-import": [4.0],
+        }
 
-    def test_sweep_parameter_chart_two_points(self) -> None:
-        """Test sweep_parameter_chart works with just two data points."""
-        result = sweep_parameter_chart(
-            [1.0, 10.0],
-            [20.0, 80.0],
-            "Param",
-            "Metric",
-        ).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
-        assert "layout" in parsed
+    def test_one_finished_point_gives_each_panel_the_reason_it_has_no_chart(
+        self, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        page = response.get_data(as_text=True)
+        assert chart_figures(page) == {}
+        assert [texts_after(page, title, 1) for _, title in _SWEEP_PANEL_HEADINGS] == [
+            [sweep_reason(1)] for _ in _SWEEP_PANEL_HEADINGS
+        ]
+
+    @pytest.mark.parametrize(
+        ("store", "why"),
+        [
+            pytest.param(_no_run, "no run", id="no-run-has-the-id"),
+            pytest.param(_a_finished_fleet_run, "fleet run", id="a-fleet-run"),
+            pytest.param(_a_home_run_with_no_summary_yet, "no summary", id="a-home-run-with-no-summary-yet"),
+        ],
+    )
+    def test_a_point_whose_run_is_not_a_finished_home_run_is_refused_naming_its_run_id(
+        self,
+        client: FlaskClient,
+        storage: RunStorage,
+        store: Callable[[RunStorage, str], None],
+        why: str,
+    ) -> None:
+        _store_a_finished_point(storage, "run-2kw", self_kwh=24.0, export_kwh=48.0, import_kwh=12.0)
+        store(storage, "run-4kw")
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((2.0, "run-2kw"), (4.0, "run-4kw")))
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        body = response.get_json()
+        assert body == {"error": body["error"]}
+        assert [text for text in ("run-4kw", why) if text not in body["error"]] == [], body["error"]
+
+    def test_a_runs_row_the_store_cannot_read_answers_500_not_a_refusal_of_the_request(
+        self, app: Flask, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        """A writer outside the store blanked the point's runs name, which contract C7 forbids, so RunRecord refuses the row with a ValueError: the store's fault, not the request's."""
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET name = '   ' WHERE id = ?", ("run-4kw",))
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
+
+        assert response.status_code == 500, response.get_data(as_text=True)
+
+    @pytest.mark.parametrize(("body", "named"), _MALFORMED_SWEEP_CHART_BODIES)
+    def test_a_malformed_body_is_refused_naming_the_field(
+        self, client: FlaskClient, body: object, named: list[str]
+    ) -> None:
+        response = client.post(_SWEEP_CHART_URL, json=body)
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        refusal = response.get_json()
+        assert refusal == {"error": refusal["error"]}
+        assert [text for text in named if text not in refusal["error"]] == [], refusal["error"]
