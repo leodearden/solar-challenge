@@ -9,7 +9,8 @@ filled into the form returns one background job per sweep point, and detects
 Bug B1 (Alpine race condition with external JS).
 
 Also verifies that each sweep point's row shows how its own job ended, that
-its status badge takes the classes the server draws for that status, that
+its status badge takes the classes the server draws for that status, that the
+table's header names the parameter the sweep ran, not one selected since, that
 running a sweep drops the requests the sweep before it still has in flight and
 opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
@@ -202,7 +203,7 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
     assert all(job_ids)
 
 
-# -- Each point's row follows its own sweep's job --------------------------
+# -- Each point's row follows its own sweep's job, the header its parameter --
 
 
 _SWEEP_CHARTS_URL = "**/scenarios/sweep/chart"
@@ -332,6 +333,21 @@ def test_each_sweep_rows_status_badge_takes_the_classes_the_server_draws_for_its
     assert classes_of_each(_status_badge(rows.nth(1))) == [
         server_drawn_classes(dashboard_macros.run_status_badge("failed"))
     ]
+
+
+def test_the_results_table_header_names_the_parameter_swept_not_the_one_selected_since(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    expect(page.get_by_role("columnheader", name="PV Capacity (kW)", exact=True)).to_be_visible()
+
+    page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(label="Battery Capacity (kWh)")
+
+    expect(page.get_by_role("columnheader", name="PV Capacity (kW)", exact=True)).to_be_visible()
+    expect(page.get_by_role("columnheader", name="Battery Capacity (kWh)", exact=True)).to_have_count(0)
 
 
 def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(
@@ -531,21 +547,6 @@ def test_once_every_point_has_ended_the_page_posts_the_finished_points_labelled_
         "parameter_label": "PV Capacity (kW)",
         "points": [{"value": 1, "run_id": "run-of-sweep-1-point-1"}],
     }
-
-
-def test_the_results_table_header_names_the_parameter_swept_not_the_one_selected_since(
-    page: Page, live_server: str, sweep_jobs: _SweepJobs
-) -> None:
-    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
-    page.goto(live_server + "/scenarios/sweep")
-    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
-        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
-    expect(page.get_by_role("columnheader", name="PV Capacity (kW)", exact=True)).to_be_visible()
-
-    page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(label="Battery Capacity (kWh)")
-
-    expect(page.get_by_role("columnheader", name="PV Capacity (kW)", exact=True)).to_be_visible()
-    expect(page.get_by_role("columnheader", name="Battery Capacity (kWh)", exact=True)).to_have_count(0)
 
 
 def test_a_sweep_run_after_another_drops_the_earlier_sweeps_charts_request(
