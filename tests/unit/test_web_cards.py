@@ -4,7 +4,9 @@ classes plus the classes its page gives it. The card classes are written once, i
 so no other template or script draws a card itself.
 """
 
+import re
 from collections.abc import Callable, Mapping
+from html.parser import HTMLParser
 from typing import Any
 
 import pytest
@@ -13,6 +15,7 @@ pytest.importorskip("flask")
 
 from flask import Flask
 from flask.testing import FlaskClient
+from jinja2 import Environment, nodes
 
 from solar_challenge.web.storage import RunStorage
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
@@ -23,6 +26,9 @@ from tests._web_runs import store_fleet_run, store_home_run
 _CARD_TRIPLE = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
 _CARD_CLASSES = frozenset(_CARD_TRIPLE.split())
 _CARD_MACROS_KEY = "templates/components/macros.html"
+
+_JINJA = Environment()
+_SCRIPT_STRING_LITERAL = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`""")
 
 _Card = tuple[str, frozenset[str]]
 
@@ -204,15 +210,51 @@ def test_a_card_given_an_href_is_one_link_to_it_in_the_card_classes_and_its_own(
     assert element_attributes(drawn, "div") == []
 
 
-def test_the_card_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html() -> None:
-    """Exactly one copy, so neither another template or script nor a macro built on card writes them again."""
-    sources = {**dashboard_template_sources(), **dashboard_script_sources()}
+class _StartTagClasses(HTMLParser):
+    """Collects the classes of each start tag of an HTML text, in text order."""
 
-    written = {path: count for path, source in sources.items() if (count := source.count(_CARD_TRIPLE))}
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.class_sets: list[frozenset[str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.class_sets.append(_classes(dict(attrs)))
+
+
+def _template_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, read with every
+    Jinja tag blanked, then the words of each string its Jinja holds, such as a {% set %} value."""
+    elements = _StartTagClasses()
+    elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
+    elements.close()
+    constants = _JINJA.parse(source).find_all(nodes.Const)
+    strings = [constant.value for constant in constants if isinstance(constant.value, str)]
+    return [*elements.class_sets, *(frozenset(string.split()) for string in strings)]
+
+
+def _script_class_lists(source: str) -> list[frozenset[str]]:
+    """The words of each string literal of the script *source*."""
+    return [frozenset(literal[1:-1].split()) for literal in _SCRIPT_STRING_LITERAL.findall(source)]
+
+
+def test_the_card_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html() -> None:
+    """One class list holds them all, in whatever order, so neither another template or script nor a
+    macro built on card writes them again."""
+    class_lists = {
+        **{path: _template_class_lists(source) for path, source in dashboard_template_sources().items()},
+        **{path: _script_class_lists(source) for path, source in dashboard_script_sources().items()},
+    }
+
+    written = {
+        path: count
+        for path, lists in class_lists.items()
+        if (count := sum(_CARD_CLASSES <= classes for classes in lists))
+    }
 
     listing = "".join(f"\n  {path}: {count}" for path, count in written.items())
     assert written == {_CARD_MACROS_KEY: 1}, (
-        f"These dashboard sources write the card classes '{_CARD_TRIPLE}' this many times:{listing}\n"
+        f"These dashboard sources write every card class, '{_CARD_TRIPLE}' in any order, in this many"
+        f" class lists:{listing}\n"
         f"The card classes are written once, in {_CARD_MACROS_KEY}'s card, so a page draws a card with "
         "{% call card(...) %}: classes for the card's own padding, margin and hover; title, subtitle, "
         "header_classes, dot_classes and header_aside for a header band; body_classes for a padded "
