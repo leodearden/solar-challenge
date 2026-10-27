@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """components/macros.html's card draws every dashboard card, one element in the card
-classes plus the classes its page gives it.
+classes plus the classes its page gives it. The card classes are written once, in card,
+so no other template or script draws a card itself.
 """
 
 from collections.abc import Callable, Mapping
@@ -14,12 +15,14 @@ from flask.testing import FlaskClient
 from markupsafe import Markup
 
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, headings, texts
 from tests._web_runs import store_fleet_run, store_home_run
 
 _CARD_TRIPLE = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
 _CARD_CLASSES = frozenset(_CARD_TRIPLE.split())
+_CARD_MACROS_KEY = "templates/components/macros.html"
 
 _Card = tuple[str, frozenset[str]]
 
@@ -201,3 +204,19 @@ def test_a_card_given_an_href_is_one_link_to_it_in_the_card_classes_and_its_own(
         ("/simulate/home", _CARD_CLASSES | {"group", "block", "p-6"})
     ]
     assert element_attributes(drawn, "div") == []
+
+
+def test_the_card_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html() -> None:
+    """Exactly one copy, so neither another template or script nor a macro built on card writes them again."""
+    sources = {**dashboard_template_sources(), **dashboard_script_sources()}
+
+    written = {path: count for path, source in sources.items() if (count := source.count(_CARD_TRIPLE))}
+
+    listing = "".join(f"\n  {path}: {count}" for path, count in written.items())
+    assert written == {_CARD_MACROS_KEY: 1}, (
+        f"These dashboard sources write the card classes '{_CARD_TRIPLE}' this many times:{listing}\n"
+        f"The card classes are written once, in {_CARD_MACROS_KEY}'s card, so a page draws a card with "
+        "{% call card(...) %}: classes for the card's own padding, margin and hover; title, subtitle, "
+        "header_classes, dot_classes and header_aside for a header band; body_classes for a padded "
+        "body; and href for a link."
+    )
