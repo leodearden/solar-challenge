@@ -46,3 +46,10 @@ def test_reads_a_utf8_files_text_and_nothing_from_another(tmp_path: Path) -> Non
 
     assert utf8_text(note) == "§3 costs £5\n"
     assert utf8_text(logo) is None
+
+
+def test_reads_a_utf8_files_text_without_its_leading_byte_order_mark(tmp_path: Path) -> None:
+    marked = tmp_path / "marked.md"
+    marked.write_bytes("# 1. Intro\n".encode("utf-8-sig"))
+
+    assert utf8_text(marked) == "# 1. Intro\n"
