@@ -2,6 +2,9 @@
  * Draws each Plotly chart of a page from the figure its container carries
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
+ * A container added to the page after load, or given another figure, is
+ * drawn the same way once shown, so a page that inserts chart panels, as the
+ * sweep page does, needs no renderer API.
  * Each drawn chart is fitted to its container whenever the container's size
  * changes while it is shown, as when base.html's main column slides in on
  * load, the sidebar is toggled, the window is resized or the chart's tab is
@@ -200,9 +203,38 @@
         });
     });
 
-    document.addEventListener('DOMContentLoaded', function () {
-        document.querySelectorAll('[data-chart-figure]').forEach(function (container) {
+    /** Draws, once shown, node if it is a container, an element carrying a figure, and each container inside it; a text node holds none. */
+    function _drawEachContainerIn(node) {
+        if (!(node instanceof Element)) {
+            return;
+        }
+        if (node.matches('[data-chart-figure]')) {
+            _drawOnceShown.observe(node);
+        }
+        node.querySelectorAll('[data-chart-figure]').forEach(function (container) {
             _drawOnceShown.observe(container);
+        });
+    }
+
+    /**
+     * Draws, once shown, each container added to the page after load, and each
+     * container given another figure, which _draw redraws with Plotly.newPlot.
+     * A container whose figure was removed is left as it is.
+     */
+    var _drawContainersChangedAfterLoad = new MutationObserver(function (records) {
+        records.forEach(function (record) {
+            if (record.type === 'childList') {
+                record.addedNodes.forEach(_drawEachContainerIn);
+            } else if (record.target.hasAttribute('data-chart-figure')) {
+                _drawOnceShown.observe(record.target);
+            }
+        });
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+        _drawEachContainerIn(document.body);
+        _drawContainersChangedAfterLoad.observe(document.body, {
+            childList: true, subtree: true, attributes: true, attributeFilter: ['data-chart-figure'],
         });
     });
 
