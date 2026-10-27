@@ -15,6 +15,7 @@ import functools
 import inspect
 import types
 import typing
+import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 from tests._surface_forms_module_lookup import (
@@ -100,7 +101,14 @@ def signature_of(obj: Callable[..., object]) -> inspect.Signature:
     the constructors it refuses.
     """
     _refuse_chain_without_a_portable_form(obj, obj)
-    return inspect.signature(obj)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"functools\.partial will be a method descriptor",
+            category=FutureWarning,
+            module=r"inspect\Z",
+        )
+        return inspect.signature(obj)
 
 
 def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None:
