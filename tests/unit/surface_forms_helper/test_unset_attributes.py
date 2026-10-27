@@ -130,21 +130,22 @@ def test_a_dataclass_field_a_data_descriptor_hides_from_instances_is_unset_where
     class Point:
         x: int
 
-    class Withheld(Point):
+    class Doubled(Point):
         @property
         def x(self) -> int:
-            raise AttributeError("x")
+            return self._x * 2
 
         @x.setter
-        def x(self, value: int) -> None: ...
+        def x(self, value: int) -> None:
+            self._x = value
 
-    class Redeclared(Withheld):
+    class Retyped(Doubled):
         x: int
 
-    assert not hasattr(Redeclared(1), "x")
-    assert member_forms(Redeclared) == {"x": "attribute int"}
-    assert unset_attributes(Withheld) == set()
-    assert unset_attributes(Redeclared) == {"x"}
+    assert Retyped(1).x == 2
+    assert member_forms(Retyped) == {"x": "attribute int"}
+    assert unset_attributes(Doubled) == set()
+    assert unset_attributes(Retyped) == {"x"}
 
 
 def test_a_data_descriptor_a_class_body_binds_under_a_dataclass_field_name_it_annotates_declares_no_attribute_so_it_is_never_unset() -> None:
