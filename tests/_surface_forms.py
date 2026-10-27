@@ -126,13 +126,13 @@ def member_forms(cls: type) -> dict[str, str]:
     attribute by annotating it alone or as a dataclass field, except those
     surface_form(cls) already pins: the dataclass fields, named tuple fields and
     init-only variables its constructor's signature takes, and an Enum's members.
-    A slot that *cls*'s own namespace binds for one of its dataclass fields, as
-    @dataclass(slots=True) binds one for each field no base holds a slot for, and a
-    __slots__ in the body binds one for each name it lists, is no name the body
-    defines: a field is a member of a class whose body declares it. Any other data
-    descriptor the body binds under a dataclass field's name, such as a settable
-    property, is a name it defines, spelled by its kind, since instances read it in the
-    field's place.
+    A __slots__ in the body binds a slot in *cls*'s own namespace for each name it
+    lists, and @dataclass(slots=True) one for each field no base holds a slot for. Such
+    a slot is no name the body defines if the body annotates its name, other than as a
+    ClassVar, or the name is one of *cls*'s dataclass fields: the attribute is a member
+    of a class whose body declares it. Any other data descriptor the body binds under a
+    dataclass field's name, such as a settable property, is a name it defines, spelled
+    by its kind, since instances read it in the field's place.
     surface_form(cls) pins a dataclass field only while instances read it from the
     instance: while the first class in *cls*'s MRO, *cls* included, that binds its name,
     if any, binds there no data descriptor other than a slot. It pins a named tuple
@@ -630,8 +630,13 @@ def _fields_read_from_the_instance(cls: type) -> set[str]:
 
 
 def _outranks_the_instance(value: object) -> bool:
-    """Whether instances read *value*, which a class binds under a name, in place of what they hold under that name: whether it is a data descriptor, which attribute lookup reads before the instance's __dict__, other than a slot's member descriptor, which reads the instance's own slot."""
-    return inspect.isdatadescriptor(value) and not inspect.ismemberdescriptor(value)
+    """Whether instances read *value*, which a class binds under a name, in place of what they hold under that name: whether it is a data descriptor, which attribute lookup reads before the instance's __dict__, other than a slot, which reads the instance's own storage."""
+    return inspect.isdatadescriptor(value) and not _is_slot(value)
+
+
+def _is_slot(value: object) -> bool:
+    """Whether *value*, which a class binds under a name, is a slot: a member descriptor, through which instances read and write their own storage under that name, as a __slots__ in a class body binds one for each name it lists, and @dataclass(slots=True) one for each field no base holds a slot for."""
+    return inspect.ismemberdescriptor(value)
 
 
 def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
@@ -678,10 +683,8 @@ def _init_only_variables(cls: type) -> set[str]:
 
 
 def _field_slots(cls: type) -> set[str]:
-    """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as @dataclass(slots=True) binds one for each field no base holds a slot for, and a __slots__ in the body binds one for each name it lists; none if *cls* is no dataclass."""
-    return {
-        name for name in _dataclass_fields(cls) if inspect.ismemberdescriptor(vars(cls).get(name))
-    }
+    """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as _is_slot recognises one; none if *cls* is no dataclass."""
+    return {name for name in _dataclass_fields(cls) if _is_slot(vars(cls).get(name))}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -731,7 +734,7 @@ def _own_members(cls: type) -> dict[str, object]:
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; what the body binds under a dataclass field's name, its default or its slot, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place.
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a slot is never a class value, since instances read their own storage through it, and what else the body binds under a dataclass field's name, its default, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
@@ -740,7 +743,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     class_values = {
         name
         for name, value in vars(cls).items()
-        if name not in field_names or _outranks_the_instance(value)
+        if not _is_slot(value) and (name not in field_names or _outranks_the_instance(value))
     }
     return {
         name: annotation

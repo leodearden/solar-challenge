@@ -145,6 +145,14 @@ def test_a_class_constant_member_is_spelled_by_its_type() -> None:
     assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float", "RATE": "float"}
 
 
+def test_a_class_constant_the_body_also_annotates_is_spelled_by_its_type_not_as_an_attribute() -> None:
+    class Meter:
+        UNITS: str = "kWh"
+        reading: float = 0.0
+
+    assert member_forms(Meter) == {"UNITS": "str", "reading": "float"}
+
+
 def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_its_annotation() -> None:
     class Meter:
         site: pathlib.Path
@@ -158,6 +166,34 @@ def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_it
         "site": "attribute Path",
         "reading": "attribute float | None",
     }
+
+
+def test_an_attribute_the_class_body_annotates_and_lists_in_its_slots_is_spelled_and_names_classes_by_its_annotation_not_its_slot() -> None:
+    class Meter:
+        __slots__ = ("site", "reading")
+        site: pathlib.Path
+        reading: Optional[float]
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+            self.reading = None
+
+    assert inspect.ismemberdescriptor(vars(Meter)["site"])
+    assert member_forms(Meter) == {
+        "site": "attribute Path",
+        "reading": "attribute float | None",
+    }
+    assert named_classes(Meter) == {pathlib.Path, float}
+
+
+def test_a_name_the_class_body_lists_in_its_slots_without_annotating_it_is_a_name_it_defines_spelled_by_its_slots_type() -> None:
+    class Meter:
+        __slots__ = ("level",)
+
+        def __init__(self) -> None:
+            self.level = 0
+
+    assert member_forms(Meter) == {"level": "member_descriptor"}
 
 
 def test_an_attribute_set_on_self_is_a_member_only_once_a_class_body_declares_it() -> None:
