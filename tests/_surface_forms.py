@@ -186,13 +186,13 @@ def named_classes(obj: object) -> set[type]:
     A string in one given to a link that records no module, as a functools.partial
     records none, or to a function that wraps a link carrying a signature of its own,
     which the new one may copy, raises TypeError naming the link and the string. A
-    string in one carried over an Enum raises TypeError naming that Enum and the string:
-    inspect reads an Enum's own signature, which the carried one may copy, from a
-    different place on each minor. A signature that annotates nothing, as that of each
-    routine CPython defines in C such as str.join, names no class, and no module is
-    looked up for it. Met again inside its own evaluation in the same module, as each
-    "JSON" is in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names
-    no class there: that evaluation names them all.
+    string in one carried over an Enum raises TypeError naming that Enum and the string;
+    docs/surface-forms-inspect-readings.md §4.2 says why. A signature that annotates
+    nothing, as that of each routine CPython defines in C such as str.join, names no
+    class, and no module is looked up for it.
+    Met again inside its own evaluation in the same module, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
+    there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class or routine whose signature surface_form refuses
     raises the TypeError surface_form raises for it, and a class with a member
