@@ -423,14 +423,14 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """Raise TypeError naming *cls* if inspect reads its constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
-    callable defined in C here if _wrapped_c_callable gives one for it, carries a
-    __signature__ inspect reads by minor if _refuse_constructor_signature finds one, and
-    is read as a builtin, or through an object its class makes callable, if
-    _refuse_constructor_as_read refuses it, bound as inspect binds it:
+    callable defined in C here if _wrapped_c_callable gives one for it, and is read as
+    an Enum, carries a __signature__ inspect reads by minor, or is read as a builtin or
+    through an object its class makes callable, if _refuse_first_read_constructor finds
+    it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
-      __new__ or __init__, if it wraps a callable defined in C, is a
-      functools.partial, carries such a __signature__, or is read as a builtin or
+      __new__ or __init__, if it wraps a callable defined in C, is a functools.partial,
+      is read as an Enum, carries such a __signature__, or is read as a builtin or
       through such an object. inspect reads any other __call__ _metaclass_call gives in
       their place, so none of the constructors below is then checked;
     - the constructor inspect reads first of those the holder's own namespace holds, if
@@ -438,8 +438,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
       class wraps object.__new__;
     - a functools.partial the holder's own namespace holds as __init__, unless that
       namespace also holds a __new__ not defined in C, which inspect reads first;
-    - that first-read constructor, if it carries such a __signature__, or is read as a
-      builtin or through such an object;
+    - that first-read constructor, if it is read as an Enum, carries such a
+      __signature__, or is read as a builtin or through such an object;
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
@@ -447,16 +447,18 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
-        _refuse_constructor_signature(cls, type(cls), "__call__", call)
-        _refuse_constructor_as_read(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
+        _refuse_first_read_constructor(
+            cls, type(cls), "__call__", call, _metaclass_call_as_read(cls)
+        )
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
-    _refuse_constructor_signature(cls, holder, name, constructor)
-    _refuse_constructor_as_read(cls, holder, name, _constructor_as_read(cls, holder))
+    _refuse_first_read_constructor(
+        cls, holder, name, constructor, _constructor_as_read(cls, holder)
+    )
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
@@ -552,10 +554,25 @@ def _partial_binding_clause(partial: functools.partial[object]) -> str:
     )
 
 
-def _refuse_constructor_as_read(cls: type, owner: type, name: str, read: object) -> None:
-    """Raise TypeError naming *cls* if inspect reads *read* as a builtin, or through an object its class makes callable, differently by minor or cannot read it on any; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+def _refuse_first_read_constructor(
+    cls: type, owner: type, name: str, constructor: object, read: object
+) -> None:
+    """Raise the TypeError for *cls* that the first refusal below finds for *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, or for *read*, that constructor bound as inspect binds it: *read* is read as an Enum, *constructor* carries a __signature__ inspect reads by minor, or *read* is read as a builtin or through an object its class makes callable."""
+    _refuse_constructor_read_as_enum(cls, owner, name, read)
+    _refuse_constructor_signature(cls, owner, name, constructor)
     _refuse_constructor_read_as_builtin(cls, owner, name, read)
     _refuse_call_without_a_portable_form(cls, _chain_end(read, stop=_has_non_none_signature))
+
+
+def _refuse_constructor_read_as_enum(cls: type, owner: type, name: str, read: object) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name* and the Enum that ends the chain inspect follows from *read*, if an Enum ends it; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    end = _chain_end(read, stop=_has_non_none_signature)
+    if is_enum(end):
+        raise TypeError(
+            f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect "
+            f"reads as {label_of(end)}, an {label_of(enum.Enum)}, {_ENUM_SIGNATURE_BY_MINOR}: "
+            f"make the name private, or define {name} with def, wrapping no Enum"
+        )
 
 
 def _refuse_constructor_read_as_builtin(
