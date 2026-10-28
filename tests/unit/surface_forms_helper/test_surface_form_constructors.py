@@ -440,6 +440,122 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
 
 
 @pytest.mark.parametrize(
+    ("signature", "carried"),
+    [
+        pytest.param("(receiver, rate)", r"'\(receiver, rate\)', a builtins\.str\b", id="string"),
+        pytest.param(lambda: "(receiver, rate)", r", a builtins\.function\b", id="callable"),
+    ],
+)
+@pytest.mark.parametrize(
+    "hold",
+    [pytest.param(classmethod, id="classmethod"), pytest.param(Giver, id="descriptor")],
+)
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_classmethod_or_descriptor_constructor_gives_a_function_carrying_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value(
+    construct: Callable[[object], type],
+    constructor: str,
+    hold: Callable[[Callable[..., object]], object],
+    signature: object,
+    carried: str,
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    build.__signature__ = signature
+    cls = construct(hold(build))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*{carried}"
+            r".*\binspect\.Signature\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    ("hold", "form", "classes"),
+    [
+        pytest.param(classmethod, "(rate: int) -> None", {int}, id="classmethod"),
+        pytest.param(
+            staticmethod,
+            "(receiver: float, rate: int) -> None",
+            {float, int},
+            id="staticmethod",
+        ),
+        pytest.param(
+            Giver, "(receiver: float, rate: int) -> None", {float, int}, id="descriptor"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_classmethod_staticmethod_or_descriptor_constructor_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_inspect_binds_it_to(
+    construct: Callable[[object], type],
+    hold: Callable[[Callable[..., object]], object],
+    form: str,
+    classes: set[type],
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    held = hold(build)
+    held.__signature__ = "(rate)"
+    cls = construct(held)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == form
+        assert named_classes(subject) == classes
+        assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
+    ("hold", "form", "classes"),
+    [
+        pytest.param(classmethod, "() -> None", set(), id="classmethod"),
+        pytest.param(staticmethod, "(rate: int) -> None", {int}, id="staticmethod"),
+        pytest.param(Giver, "(rate: int) -> None", {int}, id="descriptor"),
+    ],
+)
+def test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter(
+    hold: Callable[[Callable[..., object]], object], form: str, classes: set[type]
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    held = hold(build)
+    held.__signature__ = "(rate)"
+    cls = class_whose_new_is(held)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == form
+        assert named_classes(subject) == classes
+        assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
     "build",
     [
         pytest.param(lambda: functools.wraps(Period)(lambda receiver, value: None), id="wrapper"),

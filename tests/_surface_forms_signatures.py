@@ -457,18 +457,14 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if call is not None:
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
-        _refuse_constructor_reading(
-            cls, type(cls), "__call__", call, _metaclass_call_as_read(cls)
-        )
+        _refuse_constructor_reading(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
         return
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
-    _refuse_constructor_reading(
-        cls, holder, name, constructor, _constructor_as_read(cls, holder)
-    )
+    _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, holder))
     if holder is not object and _constructed_in_c(holder):
         raise TypeError(
             f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
@@ -524,8 +520,11 @@ def _wrapped_c_callable(
     """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link whose __signature__ is not None, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
 
     It stops at any __signature__, as inspect's own lookup of a constructor does from
-    Python 3.13, so it and _refuse_constructor_signature never both apply to one
-    constructor.
+    Python 3.13, and leaves a constructor whose chain carries one to
+    _refuse_constructor_signature, which reads the chain from that constructor as
+    inspect binds it. Since it reads *constructor* as held, a constructor that wraps a
+    callable defined in C and whose binding gives a callable carrying a __signature__
+    meets both; _refuse_constructor_without_a_portable_form checks the wrapper first.
     """
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
@@ -564,13 +563,11 @@ def _partial_binding_clause(partial: functools.partial[object]) -> str:
     )
 
 
-def _refuse_constructor_reading(
-    cls: type, owner: type, name: str, constructor: object, read: object
-) -> None:
-    """Raise the TypeError for *cls* that the first refusal below finds for *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, or for *read*, that constructor bound as inspect binds it: *read* is read as an Enum, *constructor* carries a __signature__ inspect reads by minor, or *read* is read as a builtin or through an object its class makes callable."""
+def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object) -> None:
+    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(cls, owner, name, end)
-    _refuse_constructor_signature(cls, owner, name, constructor)
+    _refuse_constructor_signature(cls, owner, name, end)
     _refuse_constructor_read_as_builtin(cls, owner, name, read)
     _refuse_call_without_a_portable_form(cls, end)
 
@@ -613,15 +610,14 @@ def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None
     return None
 
 
-def _refuse_constructor_signature(
-    cls: type, owner: type, name: str, constructor: object
-) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name* and the __signature__ _minor_dependent_signature gives for the end of *constructor*'s chain, if it gives one; *constructor* is the one *owner* holds as *name* that inspect reads first for *cls*.
+def _refuse_constructor_signature(cls: type, owner: type, name: str, end: object) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name* and the __signature__ _minor_dependent_signature gives for *end*, if it gives one; *end* is the end of the chain inspect follows from the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
 
-    The constructor is named as *owner*.*name*, not by its own label: a functools.wraps
-    wrapper's label is that of the callable it wraps.
+    The constructor is named as *owner*.*name*, not by the label of *end*: a
+    functools.wraps wrapper's label is that of the callable it wraps, and *end* may be
+    the function a classmethod holds or one a descriptor's __get__ gives.
     """
-    signature = _minor_dependent_signature(_chain_end(constructor, stop=_has_non_none_signature))
+    signature = _minor_dependent_signature(end)
     if signature is not None:
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which "
