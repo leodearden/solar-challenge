@@ -23,6 +23,7 @@ from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     CallableGetter,
     NoneSignedCallableGetter,
+    SettableGetterPartial,
     class_whose_init_is,
     class_whose_metaclass_call_is,
     class_whose_new_is,
@@ -40,6 +41,9 @@ class DeletableCallableGetter(CallableGetter):
 
 
 def _charge(self: object, share: fractions.Fraction, rate: int) -> None: ...
+
+
+def _settle(receiver: object, rate: int) -> None: ...
 
 
 class PartialCall:
@@ -63,6 +67,11 @@ class DefCall:
 def _with_a_text_signature(call: DefCall) -> DefCall:
     call.__text_signature__ = "(rate)"
     return call
+
+
+def _with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
+    function.__signature__ = "(receiver, rate)"
+    return function
 
 
 class Period(enum.Enum):
@@ -553,6 +562,124 @@ def test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries
         assert surface_form(subject) == form
         assert named_classes(subject) == classes
         assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
+    ("wrap", "kind"),
+    [
+        pytest.param(Giver, r"\.Giver\b", id="descriptor"),
+        pytest.param(
+            lambda build: Giver(_with_a_string_signature(build)),
+            r"\.Giver\b",
+            id="descriptor-giving-a-string-signature",
+        ),
+        pytest.param(staticmethod, r"\bbuiltins\.staticmethod\b", id="staticmethod"),
+        pytest.param(classmethod, r"\bbuiltins\.classmethod\b", id="classmethod"),
+        pytest.param(
+            lambda build: object.__init__, r"\bbuiltins\.wrapper_descriptor\b", id="slot-wrapper"
+        ),
+        pytest.param(
+            lambda build: str.join, r"\bbuiltins\.method_descriptor\b", id="method-descriptor"
+        ),
+        pytest.param(
+            SettableGetterPartial, r"\.SettableGetterPartial\b", id="partial-with-its-own-get"
+        ),
+        pytest.param(functools.cache, r"\bfunctools\._lru_cache_wrapper\b", id="lru-cache"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_classmethod_constructor_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_constructor_and_that_type(
+    construct: Callable[[object], type],
+    constructor: str,
+    wrap: Callable[[Callable[..., object]], object],
+    kind: str,
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    cls = construct(classmethod(wrap(build)))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}, a classmethod\b"
+            rf".*{kind}.*\b3\.11\b.*\b3\.13\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+def test_a_class_beside_whose_constructor_inspect_binds_a_classmethod_that_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_that_classmethod() -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    class Joined:
+        __init__ = classmethod(str.join)
+
+    class Made(Joined):
+        def __new__(cls, rate: int) -> object: ...
+
+    class Static:
+        __new__ = classmethod(staticmethod(build))
+
+    class Built(Static):
+        def __init__(self, rate: int) -> None: ...
+
+    class Both:
+        def __new__(cls, rate: int) -> object: ...
+
+        __init__ = classmethod(staticmethod(build))
+
+    for cls, constructor, kind in (
+        (Made, "Joined.__init__", r"\bbuiltins\.method_descriptor\b"),
+        (Built, "Static.__new__", r"\bbuiltins\.staticmethod\b"),
+        (Both, "Both.__init__", r"\bbuiltins\.staticmethod\b"),
+    ):
+        naming_that_classmethod = (
+            rf"\.{cls.__name__}\b.*\.{re.escape(constructor)}, a classmethod\b.*{kind}"
+        )
+        with pytest.raises(TypeError, match=naming_that_classmethod):
+            surface_form(cls)
+        with pytest.raises(TypeError, match=naming_that_classmethod):
+            named_classes(cls)
+
+
+@pytest.mark.parametrize(
+    ("wrapped", "form", "classes"),
+    [
+        pytest.param(_settle, "(rate: int) -> None", {int}, id="function"),
+        pytest.param(functools.partial(_settle), "(rate: int) -> None", {int}, id="partial"),
+        pytest.param(types.MethodType(_settle, object()), "() -> None", set(), id="bound-method"),
+    ],
+)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_classmethod_constructor_wraps_a_function_a_partial_or_a_bound_method_is_spelled_by_what_inspect_binds_it_to(
+    construct: Callable[[object], type], wrapped: object, form: str, classes: set[type]
+) -> None:
+    cls = construct(classmethod(wrapped))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert surface_form(cls) == form
+        assert surface_form(functools.partial(cls)) == form
+        assert named_classes(cls) == classes
 
 
 @pytest.mark.parametrize(

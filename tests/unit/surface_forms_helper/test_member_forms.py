@@ -69,6 +69,19 @@ def test_a_classmethod_or_staticmethod_member_is_spelled_by_its_kind_then_its_fu
     }
 
 
+def test_a_classmethod_member_that_wraps_an_object_whose_type_defines_get_is_spelled_classmethod_then_the_form_of_what_it_wraps_without_binding_it() -> None:
+    def settle(receiver: float, rate: int) -> None: ...
+
+    class Meter:
+        chained = classmethod(staticmethod(settle))
+        cached = classmethod(functools.cache(settle))
+
+    assert member_forms(Meter) == {
+        "chained": "classmethod (receiver: float, rate: int) -> None",
+        "cached": "classmethod (receiver: float, rate: int) -> None",
+    }
+
+
 def test_a_property_or_cached_property_member_is_spelled_by_its_kind_then_its_getter() -> None:
     class Meter:
         @property
