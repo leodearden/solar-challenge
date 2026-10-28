@@ -7,6 +7,7 @@ import functools
 import inspect
 import pathlib
 import warnings
+from collections.abc import Callable
 
 import pytest
 
@@ -757,23 +758,35 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
     assert named_classes(getattr(signing, name)) == {decimal.Decimal}
 
 
-def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names() -> None:
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        pytest.param(lambda build: str.join, id="method-descriptor"),
+        pytest.param(classmethod, id="classmethod"),
+        pytest.param(property, id="property"),
+    ],
+)
+def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names(
+    wrap: Callable[[Callable[..., object]], object],
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
     signature = inspect.Signature(
         [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
     )
 
     class Initialised:
         __signature__ = signature
-        __init__ = classmethod(str.join)
+        __init__ = classmethod(wrap(build))
 
     class Created:
         __signature__ = signature
-        __new__ = classmethod(str.join)
+        __new__ = classmethod(wrap(build))
 
-    class Joining(type):
-        __call__ = classmethod(str.join)
+    class Calling(type):
+        __call__ = classmethod(wrap(build))
 
-    class Called(metaclass=Joining):
+    class Called(metaclass=Calling):
         __signature__ = signature
 
     for cls in (Initialised, Created, Called):
