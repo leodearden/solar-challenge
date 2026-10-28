@@ -172,9 +172,10 @@ def named_classes(obj: object) -> set[type]:
     wraps another callable as functools.wraps records one, where that callable is,
     whatever __signature__ the wrapper carries, but a wrapper that is no partial and
     carries a __signature__ of None, where its annotations were
-    spelled; an object its class makes callable, where the __call__ that class resolves
-    is once bound to the object, as inspect binds it, which may be a base's in another
-    module; and a class in the one sys.modules holds under the name its __module__
+    spelled; an object its class makes callable, where the __call__ that class resolves,
+    which may be a base's in another module, is once bound to the object, as inspect
+    binds it, or a classmethod as docs/surface-forms-inspect-readings.md §4.7 says; and
+    a class in the one sys.modules holds under the name its __module__
     records. One whose module another of the same name has since replaced in sys.modules
     raises LookupError naming it and the module found there, and one whose module has
     since left sys.modules, LookupError naming it and that module's name. Where inspect

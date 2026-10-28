@@ -491,10 +491,15 @@ def _constructed_in_c(holder: type) -> bool:
 
 
 def _first_read_constructor(holder: type) -> tuple[str, object]:
-    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), unless that is defined in C beside an __init__; else its __init__."""
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), or as _bound_classmethod binds it if it is a classmethod, unless that is defined in C beside an __init__; else its __init__."""
     namespace = vars(holder)
     if "__new__" in namespace:
-        new = getattr(holder, "__new__")
+        held = namespace["__new__"]
+        new = (
+            _bound_classmethod(held.__func__, holder)
+            if isinstance(held, classmethod)
+            else getattr(holder, "__new__")
+        )
         if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and "__init__" in namespace):
             return "__new__", new
     return "__init__", namespace["__init__"]
@@ -833,7 +838,7 @@ def _refuse_constructor_generated_for_another_class(
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
+    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as _first_read_constructor gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
     kind, constructor = _first_read_constructor(holder)
     if kind == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return constructor
@@ -855,12 +860,23 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod bound to *owner*'s type as _bound_classmethod binds it; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    if isinstance(descriptor, classmethod):
+        return _bound_classmethod(descriptor.__func__, type(owner))
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
     bound: object = get(descriptor, owner, type(owner))
     return bound
+
+
+def _bound_classmethod(function: Callable[..., object], owner: type) -> types.MethodType:
+    """A classmethod that holds *function*, bound to *owner* as Python 3.13 and 3.14 bind one, whatever it holds: as a method of *function*.
+
+    3.11 and 3.12 bind it alike unless _refuse_classmethod_bound_by_minor refuses the
+    classmethod, as it does wherever inspect itself binds one.
+    """
+    return types.MethodType(function, owner)
 
 
 def _generated_constructor_modules(
