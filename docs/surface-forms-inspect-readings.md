@@ -179,12 +179,12 @@ to the routine, and names the routine. Three readings of the object differ by mi
   naming the routine and that `__call__`. A partial whose type takes `__get__` from a class
   other than `functools.partial` binds by that `__get__` instead, as 4.6 says.
 
-Read from an instance, a class member that is a `functools.partial` is bound as a partial
-`__call__` is: 3.14 binds it to the instance as a method, so its first parameter goes,
-while 3.11 to 3.13 call it without the instance, 3.13 warning `FutureWarning`.
-`member_forms` raises `TypeError` naming the class, the member and that binding. Wrapped
-in `staticmethod`, which gives the partial itself on every minor, it is spelled
-`staticmethod`, then the signature the partial leaves.
+The section's other case is a class member that is a `functools.partial`. Read from an
+instance, it is bound as a partial `__call__` is: 3.14 binds it to the instance as a
+method, so its first parameter goes, while 3.11 to 3.13 call it without the instance, 3.13
+warning `FutureWarning`. `member_forms` raises `TypeError` naming the class, the member
+and that binding. Wrapped in `staticmethod`, which gives the partial itself on every
+minor, it is spelled `staticmethod`, then the signature the partial leaves.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine`
