@@ -151,7 +151,7 @@ def _call_as_read(obj: object) -> object:
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, is read differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
+    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, is read differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial or a classmethod _refuse_classmethod_bound_by_minor refuses."""
     holders = list(namespace_holders(type(obj).__mro__, "__call__"))
     c_holder = next(
         (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
@@ -176,9 +176,9 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
             "on that object or on what is read through it"
         )
-    _refuse_partial_bound_as_method(
-        subject, "is read through", holders[0], "__call__", vars(holders[0])["__call__"]
-    )
+    binding = _call_inspect_binds(obj)
+    _refuse_partial_bound_as_method(subject, "is read through", *binding)
+    _refuse_classmethod_bound_by_minor(subject, "is read through", *binding)
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -890,6 +890,12 @@ def _constructors_inspect_binds(cls: type) -> Iterator[tuple[type, str, object]]
     for name in ("__new__", "__init__"):
         owner = next(namespace_holders(cls.__mro__, name))
         yield owner, name, vars(owner)[name]
+
+
+def _call_inspect_binds(obj: object) -> tuple[type, str, object]:
+    """The __call__ inspect binds for *obj*, an object its class makes callable, as the class holding it, its name and the value held there: the first class in its type's MRO that holds one, whose __call__ inspect.getattr_static finds."""
+    holder = next(namespace_holders(type(obj).__mro__, "__call__"))
+    return holder, "__call__", vars(holder)["__call__"]
 
 
 def _signature_holder(cls: type) -> type:
