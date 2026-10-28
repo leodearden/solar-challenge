@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""components/macros.html's tab_bar draws the dashboard's tab bars, today the results and
+compare pages' chart tabs, through chart_tabs. Each bar is a tablist named for what it
+switches, and the server draws its first tab selected. Each tab carries its bar's layout
+and its selection's colours: one pair that every bar shares, whose dark hover colours
+mirror its light ones (shade n to 900 - n: hover text slate-700 to slate-200, hover
+underline slate-300 to slate-600), as the dashboard's other hover colours do.
+"""
+
+from collections.abc import Callable, Mapping
+from typing import NamedTuple
+
+import pytest
+
+pytest.importorskip("flask")
+
+from flask.testing import FlaskClient
+
+from solar_challenge.web.storage import RunStorage
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._html_page import element_attributes
+from tests._web_runs import store_fleet_run, store_home_run
+
+_SELECTED_TAB_CLASSES = frozenset({"border-primary-500", "text-primary-600", "dark:text-primary-400"})
+_UNSELECTED_TAB_CLASSES = frozenset(
+    {
+        "border-transparent",
+        "text-slate-500",
+        "dark:text-slate-400",
+        "hover:text-slate-700",
+        "dark:hover:text-slate-200",
+        "hover:border-slate-300",
+        "dark:hover:border-slate-600",
+    }
+)
+_CHART_TAB_LAYOUT = frozenset(
+    {"whitespace-nowrap", "py-3", "px-1", "border-b-2", "font-medium", "text-sm", "transition-colors"}
+)
+
+
+def _classes(attributes: Mapping[str, str | None]) -> frozenset[str]:
+    """The classes of an element that carries *attributes*."""
+    return frozenset((attributes.get("class") or "").split())
+
+
+def _page(client: FlaskClient, path: str) -> str:
+    """The page the app answers at *path*, which it must answer 200."""
+    response = client.get(path)
+
+    assert response.status_code == 200, f"{path} answered {response.status_code}"
+    return response.get_data(as_text=True)
+
+
+def _home_results_page(client: FlaskClient, storage: RunStorage) -> str:
+    """The results page of a stored one-day home run."""
+    store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1))
+    return _page(client, "/results/home-1")
+
+
+def _fleet_results_page(client: FlaskClient, storage: RunStorage) -> str:
+    """The results page of a stored one-day run of a two-home fleet."""
+    store_fleet_run(storage, "fleet-1", make_fleet_results(n_homes=2, days=1))
+    return _page(client, "/results/fleet-1")
+
+
+def _compare_page(client: FlaskClient, storage: RunStorage) -> str:
+    """The page comparing two stored one-day home runs."""
+    for run_id in ("home-1", "home-2"):
+        store_home_run(storage, run_id, make_home_config(), make_sim_results(days=1))
+    return _page(client, "/history/compare?ids=home-1,home-2")
+
+
+class _TabBar(NamedTuple):
+    """The tab bar of the page *open* opens: its name, the layout classes each of its tabs carries beside its colours, and how many tabs it has."""
+
+    open: Callable[[FlaskClient, RunStorage], str]
+    label: str
+    tab_layout: frozenset[str]
+    tab_count: int
+
+
+_PAGES_WITH_TAB_BARS = [
+    pytest.param(_TabBar(_home_results_page, "Chart tabs", _CHART_TAB_LAYOUT, 4), id="results-home"),
+    pytest.param(_TabBar(_fleet_results_page, "Chart tabs", _CHART_TAB_LAYOUT, 3), id="results-fleet"),
+    pytest.param(_TabBar(_compare_page, "Chart tabs", _CHART_TAB_LAYOUT, 2), id="compare"),
+]
+
+
+@pytest.mark.parametrize("bar", _PAGES_WITH_TAB_BARS)
+def test_a_pages_tab_bar_is_a_tablist_named_for_what_it_switches_whose_tabs_carry_its_layout_and_their_selections_colours(
+    client: FlaskClient, storage: RunStorage, bar: _TabBar
+) -> None:
+    page = bar.open(client, storage)
+
+    tablist_labels = [nav.get("aria-label") for nav in element_attributes(page, "nav") if nav.get("role") == "tablist"]
+    tab_classes = [_classes(button) for button in element_attributes(page, "button") if button.get("role") == "tab"]
+
+    assert (tablist_labels, tab_classes) == (
+        [bar.label],
+        [bar.tab_layout | _SELECTED_TAB_CLASSES] + [bar.tab_layout | _UNSELECTED_TAB_CLASSES] * (bar.tab_count - 1),
+    )
