@@ -106,17 +106,22 @@ _PAGES_WITH_TAB_BARS = [
 
 
 @pytest.mark.parametrize("bar", _PAGES_WITH_TAB_BARS)
-def test_a_pages_tab_bar_is_a_tablist_named_for_what_it_switches_whose_tabs_carry_its_layout_and_their_selections_colours(
+def test_a_pages_tab_bar_is_a_tablist_named_for_what_it_switches_whose_tabs_carry_its_layout_and_their_selection_as_aria_selected_and_colours(
     client: FlaskClient, storage: RunStorage, bar: _TabBar
 ) -> None:
     page = bar.open(client, storage)
 
     tablist_labels = [nav.get("aria-label") for nav in element_attributes(page, "nav") if nav.get("role") == "tablist"]
-    tab_classes = [_classes(button) for button in element_attributes(page, "button") if button.get("role") == "tab"]
+    tabs = [
+        (button.get("aria-selected"), _classes(button))
+        for button in element_attributes(page, "button")
+        if button.get("role") == "tab"
+    ]
 
-    assert (tablist_labels, tab_classes) == (
+    assert (tablist_labels, tabs) == (
         [bar.label],
-        [bar.tab_layout | _SELECTED_TAB_CLASSES] + [bar.tab_layout | _UNSELECTED_TAB_CLASSES] * (bar.tab_count - 1),
+        [("true", bar.tab_layout | _SELECTED_TAB_CLASSES)]
+        + [("false", bar.tab_layout | _UNSELECTED_TAB_CLASSES)] * (bar.tab_count - 1),
     )
 
 
