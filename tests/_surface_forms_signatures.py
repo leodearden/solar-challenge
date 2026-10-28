@@ -491,12 +491,12 @@ def _constructed_in_c(holder: type) -> bool:
 
 
 def _first_read_constructor(holder: type) -> tuple[str, object]:
-    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), or as _bound_classmethod binds it if it is a classmethod, unless that is defined in C beside an __init__; else its __init__."""
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), or as _classmethod_as_read gives it if it is a classmethod, unless that is defined in C beside an __init__; else its __init__."""
     namespace = vars(holder)
     if "__new__" in namespace:
         held = namespace["__new__"]
         new = (
-            _bound_classmethod(held.__func__, holder)
+            _classmethod_as_read(held.__func__, holder)
             if isinstance(held, classmethod)
             else getattr(holder, "__new__")
         )
@@ -860,9 +860,9 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod bound to *owner*'s type as _bound_classmethod binds it; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
     if isinstance(descriptor, classmethod):
-        return _bound_classmethod(descriptor.__func__, type(owner))
+        return _classmethod_as_read(descriptor.__func__, type(owner))
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
@@ -870,12 +870,18 @@ def _bound_to(descriptor: object, owner: object) -> object:
     return bound
 
 
-def _bound_classmethod(function: Callable[..., object], owner: type) -> types.MethodType:
-    """A classmethod that holds *function*, bound to *owner* as Python 3.13 and 3.14 bind one, whatever it holds: as a method of *function*.
+def _classmethod_as_read(function: object, owner: type) -> object:
+    """What inspect reads for a classmethod that holds *function*, bound to *owner* as Python 3.13 and 3.14 bind one, whatever it holds: a method of *function*, or *function* itself if it is not callable.
+
+    types.MethodType will not make a method of what is not callable, though
+    classmethod.__get__ makes one, and inspect reads such a method through to
+    *function*, as _links_inspect_reads does.
 
     3.11 and 3.12 bind it alike unless _refuse_classmethod_bound_by_minor refuses the
     classmethod, as it does wherever inspect itself binds one.
     """
+    if not callable(function):
+        return function
     return types.MethodType(function, owner)
 
 
