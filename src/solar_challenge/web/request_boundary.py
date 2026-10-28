@@ -63,6 +63,21 @@ def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str
         )
 
 
+def require_encodable_text(text: str, what: str) -> str:
+    """Return *text*, a request's *what*, which must encode as UTF-8, the encoding sqlite3 binds text in.
+
+    A JSON string can escape a lone surrogate, which UTF-8 cannot encode.
+
+    Raises:
+        ValueError: Naming *what* and *text*, for text holding a lone surrogate.
+    """
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        raise ValueError(f"{what} must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}") from None
+    return text
+
+
 LOCATION_PRESETS: dict[str, Location] = {
     "bristol": Location(latitude=51.45, longitude=-2.58, altitude=11.0, name="Bristol, UK"),
     "london": Location(latitude=51.51, longitude=-0.13, altitude=11.0, name="London, UK"),
