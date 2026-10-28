@@ -599,7 +599,8 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
     A function's __get__ binds it as a method, as 3.13 and 3.14 bind what any
     classmethod holds; functools.partial and types.MethodType define __get__ only from
-    3.13, where a classmethod no longer binds what it holds through its __get__.
+    3.13, where a classmethod no longer binds what it holds through its __get__, so on
+    3.11 and 3.12 neither hides the __get__ of a class after it in the MRO.
     """
     return any(
         holder not in (types.FunctionType, functools.partial, types.MethodType)

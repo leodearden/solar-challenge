@@ -24,6 +24,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     CallableGetter,
     ChainedCall,
     NoneSignedCallableGetter,
+    PartialFirstGetterPartial,
     SettableGetterPartial,
     class_whose_init_is,
     class_whose_metaclass_call_is,
@@ -584,6 +585,11 @@ def test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries
         ),
         pytest.param(
             SettableGetterPartial, r"\.SettableGetterPartial\b", id="partial-with-its-own-get"
+        ),
+        pytest.param(
+            PartialFirstGetterPartial,
+            r"\.PartialFirstGetterPartial\b",
+            id="partial-taking-get-from-a-later-base",
         ),
         pytest.param(functools.cache, r"\bfunctools\._lru_cache_wrapper\b", id="lru-cache"),
     ],

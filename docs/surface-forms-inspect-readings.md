@@ -362,7 +362,10 @@ wraps: any type that takes `__get__` from a class other than a function's,
 4.6 refuses a binding no rule reads, so `classmethod(functools.cache(build))`, and
 `classmethod(object.__init__)` held as `__init__`, are refused though they read alike. So
 is a class whose `__init__` is such a `classmethod` beside a `__new__` defined with `def`,
-which `inspect` binds but does not read.
+which `inspect` binds but does not read. A `classmethod` of a `functools.partial` whose
+type lists `functools.partial` before the class it takes `__get__` from is refused on
+every minor too: 3.11 and 3.12 bind it through that class's `__get__`, though from 3.13
+`functools.partial`'s own comes first in its MRO.
 
 `member_forms` reads a `classmethod` member without binding it, so it reads alike: by its
 kind, then the form of what it wraps. A method a caller binds before `surface_form` sees
