@@ -2,11 +2,15 @@
 
 Verifies that the app renders correctly at a mobile viewport (375x812),
 the hamburger menu is visible, the desktop sidebar is hidden, the mobile
-menu opens, and key pages remain usable on small screens.
+menu opens, key pages remain usable on small screens, and no page with a
+tab bar scrolls sideways, since a bar wider than the screen scrolls inside
+its own list.
 """
 
 import pytest
 from playwright.sync_api import Page, expect
+
+from tests.e2e._tab_bar_pages import PAGES_WITH_TAB_BARS, TabBarPage
 
 MOBILE_WIDTH = 375
 MOBILE_HEIGHT = 812
@@ -135,6 +139,31 @@ def test_mobile_simulate_home_usable(page: Page, live_server: str) -> None:
     # Scroll the submit button into view and verify it is visible
     submit_btn.scroll_into_view_if_needed()
     expect(submit_btn).to_be_visible()
+
+
+# -- No page with a tab bar scrolls sideways on mobile ---------------------
+
+# For locator.evaluate: an element's content width and its box's width
+_SCROLL_AND_CLIENT_WIDTHS = "element => [element.scrollWidth, element.clientWidth]"
+
+
+@pytest.mark.parametrize("tab_bar_page", PAGES_WITH_TAB_BARS)
+def test_mobile_page_with_a_tab_bar_does_not_scroll_sideways(
+    page: Page, live_server: str, request: pytest.FixtureRequest, tab_bar_page: TabBarPage
+) -> None:
+    """At 375px a tab bar wider than the screen scrolls inside its own list, so the page is no wider than the screen."""
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + tab_bar_page.path_of(request))
+    tab_list = page.get_by_role("tablist")
+    expect(tab_list.get_by_role("tab")).to_have_text(tab_bar_page.tab_names)
+
+    page_width, viewport_width = page.locator("html").evaluate(_SCROLL_AND_CLIENT_WIDTHS)
+    tabs_width, tab_list_width = tab_list.evaluate(_SCROLL_AND_CLIENT_WIDTHS)
+
+    assert page_width == viewport_width, (
+        f"the page is {page_width}px wide in a {viewport_width}px viewport, so it scrolls sideways; "
+        f"its tab list holds {tabs_width}px of tabs in {tab_list_width}px"
+    )
 
 
 # -- History lists runs as cards on mobile ---------------------------------

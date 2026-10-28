@@ -5,7 +5,10 @@ Each bar is a tablist named for what it switches, and the server draws its first
 selected. Each tab carries its bar's layout and its selection's colours: one pair that
 every bar shares, whose dark hover colours mirror its light ones (shade n to 900 - n:
 hover text slate-700 to slate-200, hover underline slate-300 to slate-600), as the
-dashboard's other hover colours do. The tab markup is written once, in tab_bar.
+dashboard's other hover colours do. Every bar's list scrolls sideways inside the bar,
+its scrollbar hidden, and its tabs do not shrink, so a bar wider than its page leaves
+the page its width; tests/e2e/test_mobile_responsive.py checks that on a phone. The tab
+markup is written once, in tab_bar.
 
 The written-once guard reads each source's raw text for the tab markup as
 components/macros.html spells it, so it misses tab markup spelled any other way: a colour
@@ -48,12 +51,12 @@ _UNSELECTED_TAB_CLASSES = frozenset(
         "dark:hover:border-slate-600",
     }
 )
-_CONFIGURATION_TAB_LAYOUT = frozenset(
-    {"whitespace-nowrap", "py-3", "px-6", "flex-shrink-0", "border-b-2", "font-medium", "text-sm", "transition-colors"}
+_TAB_LAYOUT = frozenset(
+    {"whitespace-nowrap", "flex-shrink-0", "py-3", "border-b-2", "font-medium", "text-sm", "transition-colors"}
 )
-_CHART_TAB_LAYOUT = frozenset(
-    {"whitespace-nowrap", "py-3", "px-1", "border-b-2", "font-medium", "text-sm", "transition-colors"}
-)
+_CONFIGURATION_TAB_LAYOUT = _TAB_LAYOUT | {"px-6"}
+_CHART_TAB_LAYOUT = _TAB_LAYOUT | {"px-1"}
+_SIDEWAYS_SCROLLING_LIST = frozenset({"overflow-x-auto", "scrollbar-hide"})
 
 
 def _classes(attributes: Mapping[str, str | None]) -> frozenset[str]:
@@ -128,6 +131,17 @@ def test_a_pages_tab_bar_is_a_tablist_named_for_what_it_switches_whose_tabs_carr
         [("true", bar.tab_layout | _SELECTED_TAB_CLASSES)]
         + [("false", bar.tab_layout | _UNSELECTED_TAB_CLASSES)] * (bar.tab_count - 1),
     )
+
+
+@pytest.mark.parametrize("bar", _PAGES_WITH_TAB_BARS)
+def test_a_pages_tab_list_scrolls_sideways_inside_its_bar_with_its_scrollbar_hidden(
+    client: FlaskClient, storage: RunStorage, bar: _TabBar
+) -> None:
+    page = bar.open(client, storage)
+
+    tab_lists = [_classes(nav) for nav in element_attributes(page, "nav") if nav.get("role") == "tablist"]
+
+    assert [_SIDEWAYS_SCROLLING_LIST - classes for classes in tab_lists] == [frozenset()]
 
 
 def test_no_dashboard_source_but_components_macros_html_writes_tab_markup() -> None:
