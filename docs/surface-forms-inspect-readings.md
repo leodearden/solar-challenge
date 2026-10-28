@@ -28,8 +28,9 @@ and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 sa
 reading of a constructor read through an object its class makes callable was measured on
 CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, 4.2's reading of a
 class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's reading
-of a class member that is a `functools.partial` on those releases on 2026-10-28. A new
-refusal gets its rule test first, then its entry here.
+of a class member that is a `functools.partial` and 4.1's reading of a constructor
+`inspect` binds as a `classmethod` or through a descriptor on those releases on
+2026-10-28. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -101,9 +102,27 @@ with its type: on the routine or class itself, on the link of a routine's chain 
 `inspect` stops, and on the constructor `inspect` reads for a class, its metaclass
 `__call__` included.
 
+`inspect` binds the constructor it reads for a class before it reads it, on every minor,
+as 4.5 says: a `__new__` as `getattr` gives it, and an `__init__` or a metaclass `__call__`
+with `inspect._descriptor_get`. So the `__signature__` it meets there is on what that
+binding gives: the function a `classmethod` holds, or what a descriptor's `__get__` gives.
+With `def build(cls, rate: int)` carrying `'(cls, rate)'`, `classmethod(build)` held as
+`__init__` or as a metaclass `__call__` reads as `(rate)` on 3.12 and 3.13, as does a
+descriptor held there whose `__get__` gives a function carrying `'(rate)'`, and 3.11 and
+3.14 raise `TypeError` for both. `surface_form` raises `TypeError` naming the class, that
+constructor by the class holding it, as in `Built.__init__`, and that value with its type,
+on every minor. A `__signature__` carried by the `classmethod` or the `staticmethod`
+itself, or by a descriptor whose `__get__` gives another callable, is read on no minor, so
+the class is spelled by what the binding gives: held as `__init__`, a `classmethod` that
+carries `'(rate)'` over `def build(receiver: float, rate: int) -> None` reads as
+`(rate: int) -> None` on every minor. A descriptor whose `__get__` gives itself, such as
+the one 4.5 reads as a method descriptor, is still read through its own `__signature__`.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_or_descriptor_constructor_gives_a_function_carrying_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_staticmethod_or_descriptor_constructor_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_inspect_binds_it_to`
 
 ### 4.2 A routine that wraps an Enum, or a class constructor `inspect` reads as one
 
