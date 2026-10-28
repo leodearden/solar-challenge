@@ -22,6 +22,7 @@ import pytest
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     CallableGetter,
+    ChainedCall,
     NoneSignedCallableGetter,
     SettableGetterPartial,
     class_whose_init_is,
@@ -1003,6 +1004,11 @@ def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as
             NestedCall,
             r".*\.PartialCall\.__call__\b.*\bfunctools\.partial\b",
             id="call-read-through-an-object",
+        ),
+        pytest.param(
+            ChainedCall,
+            r".*\.ChainedCall\.__call__, a classmethod\b.*\bbuiltins\.staticmethod\b",
+            id="call-a-classmethod-binds-by-minor",
         ),
     ],
 )

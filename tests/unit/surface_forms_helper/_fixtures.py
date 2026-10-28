@@ -13,6 +13,9 @@ and CallableGetterDeleter a callable one, for the rules about how inspect reads 
 descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
 other than functools.partial, and SettableGetterPartial one whose type also defines
 __set__, for the rules about how inspect reads and binds such a partial.
+ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
+inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
+what it wraps.
 class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
 whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
 rules about each constructor site.
@@ -94,6 +97,15 @@ class SettableGetterPartial(GetterPartial):
     """A GetterPartial whose type also defines __set__, so that no minor reads it as a method descriptor."""
 
     def __set__(self, instance: object, value: object) -> None: ...
+
+
+def _share(receiver: object, rate: int) -> None: ...
+
+
+class ChainedCall:
+    """A class whose __call__ is a classmethod of a staticmethod, which Python 3.11 and 3.12 bind through the staticmethod's __get__ and later minors as a method of the staticmethod."""
+
+    __call__ = classmethod(staticmethod(_share))
 
 
 def class_whose_init_is(constructor: object) -> type:

@@ -25,6 +25,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
     CallableGetterDeleter,
+    ChainedCall,
     GetterDeleter,
 )
 
@@ -444,6 +445,21 @@ def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_
             surface_form(functools.partial(SignedPartialCall()))
         with pytest.raises(TypeError, match=rf"{re.escape(repr(nested))} is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
             surface_form(nested)
+
+
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_classmethod_that_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_call_and_that_type() -> None:
+    called = functools.partial(ChainedCall())
+
+    refusing_that_call = (
+        r" is read through .*\.ChainedCall\.__call__, a classmethod\b"
+        r".*\bbuiltins\.staticmethod\b.*\b3\.11\b.*\b3\.13\b"
+    )
+    with pytest.raises(TypeError, match=re.escape(repr(called)) + refusing_that_call):
+        surface_form(called)
+    with pytest.raises(TypeError, match=re.escape(repr(called)) + refusing_that_call):
+        named_classes(called)
+    with pytest.raises(TypeError, match=r"\.<lambda>" + refusing_that_call):
+        surface_form(functools.wraps(ChainedCall())(lambda rate: None))
 
 
 def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:
