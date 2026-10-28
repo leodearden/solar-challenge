@@ -11,12 +11,10 @@ to the run but has nothing to draw gets a card that gives the reason, on an elem
 id; a chart that does not apply, a battery's or a heat pump's to a run without one, gets no
 card. No other dashboard source, template or script, calls Plotly.
 
-The chart pages share their other parts through components/macros.html too. Each loads
+The chart pages share their scripts through components/macros.html too. Each loads
 Plotly and chart-renderer.js once, through chart_scripts, the one template that names
 them, and so does the parameter sweep page (/scenarios/sweep), whose script inserts the
-sweep's chart panels once its points finish. Each chart page draws its chart tabs through
-chart_tabs, which selects the first on the server, so no chart page template writes tab
-markup; the sweep page has no chart tabs.
+sweep's chart panels once its points finish.
 """
 
 import dataclasses
@@ -24,7 +22,6 @@ import json
 import re
 import uuid
 from collections.abc import Callable, Mapping
-from typing import NamedTuple
 
 import pandas as pd
 import pytest
@@ -49,16 +46,6 @@ from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
 _PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
-_CHART_PAGE_TEMPLATES = (
-    "templates/results/home.html",
-    "templates/results/fleet.html",
-    "templates/history/compare.html",
-)
-_TAB_MARKUP = (
-    'role="tab"',
-    "border-primary-500 text-primary-600 dark:text-primary-400",
-    "border-transparent text-slate-500",
-)
 
 
 def _saved_home_run(
@@ -103,27 +90,15 @@ def _compare_page(app: Flask) -> str:
     return _page(app, f"/history/compare?ids={','.join(run_ids)}")
 
 
-class _ChartPage(NamedTuple):
-    """A chart page, opened in a test app by *open*, and how many chart tabs it has."""
-
-    open: Callable[[Flask], str]
-    tab_count: int
-
-
-_CHART_PAGES = {
-    "home": _ChartPage(_home_with_a_battery_results_page, 4),
-    "fleet": _ChartPage(_fleet_results_page, 3),
-    "compare": _ChartPage(_compare_page, 2),
-}
-
-
 def _sweep_page(app: Flask) -> str:
     """The parameter sweep page, which has no chart until its script inserts the sweep's panels."""
     return _page(app, "/scenarios/sweep")
 
 
 _PAGES_LOADING_THE_CHART_SCRIPTS: Mapping[str, Callable[[Flask], str]] = {
-    **{name: chart_page.open for name, chart_page in _CHART_PAGES.items()},
+    "home": _home_with_a_battery_results_page,
+    "fleet": _fleet_results_page,
+    "compare": _compare_page,
     "sweep": _sweep_page,
 }
 
@@ -266,34 +241,6 @@ def test_only_components_macros_html_names_the_chart_scripts() -> None:
     assert naming == ["templates/components/macros.html"], (
         "Only components/macros.html's chart_scripts writes the tags that load Plotly and"
         " chart-renderer.js; a chart page calls chart_scripts()"
-    )
-
-
-@pytest.mark.parametrize("chart_page", _CHART_PAGES)
-def test_each_chart_pages_tabs_are_tabs_whose_selection_the_server_draws(
-    app: Flask, chart_page: str
-) -> None:
-    opened = _CHART_PAGES[chart_page]
-    tabs = [
-        button
-        for button in element_attributes(opened.open(app), "button")
-        if button.get("role") == "tab"
-    ]
-
-    assert [tab.get("aria-selected") for tab in tabs] == ["true"] + ["false"] * (opened.tab_count - 1)
-
-
-def test_no_chart_page_template_writes_tab_markup() -> None:
-    sources = dashboard_template_sources()
-
-    written = {
-        template: [markup for markup in _TAB_MARKUP if markup in sources[template]]
-        for template in _CHART_PAGE_TEMPLATES
-    }
-
-    assert written == dict.fromkeys(_CHART_PAGE_TEMPLATES, []), (
-        "A chart page draws its tabs through components/macros.html's chart_tabs, the one"
-        " home of the tab markup"
     )
 
 

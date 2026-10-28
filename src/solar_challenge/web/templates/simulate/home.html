@@ -1,6 +1,9 @@
 {% extends "base.html" %}
+{% from "components/macros.html" import tab_bar %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
+
+{% set configuration_tabs = [{'key': 'pv', 'label': 'PV'}, {'key': 'battery', 'label': 'Battery'}, {'key': 'load', 'label': 'Load'}, {'key': 'heat_pump', 'label': 'Heat Pump'}, {'key': 'tariff', 'label': 'Tariff'}, {'key': 'location', 'label': 'Location'}, {'key': 'period', 'label': 'Period'}] %}
 
 {% block title %}Simulate Home{% endblock %}
 
@@ -8,7 +11,7 @@
 <script>
 document.addEventListener('alpine:init', () => {
     Alpine.data('homeSimulator', () => ({
-        activeTab: 'pv',
+        activeTab: {{ configuration_tabs[0].key | tojson }},
         submitting: false,
         submittedJob: null,
         errorMsg: '',
@@ -55,15 +58,6 @@ document.addEventListener('alpine:init', () => {
             seg_preset: 'custom',
             seg_rate_pence_per_kwh: 4.0
         },
-        tabs: [
-            { id: 'pv', label: 'PV' },
-            { id: 'battery', label: 'Battery' },
-            { id: 'load', label: 'Load' },
-            { id: 'heat_pump', label: 'Heat Pump' },
-            { id: 'tariff', label: 'Tariff' },
-            { id: 'location', label: 'Location' },
-            { id: 'period', label: 'Period' }
-        ],
         init() {
             this.fetchPresets();
         },
@@ -223,21 +217,7 @@ document.addEventListener('alpine:init', () => {
 <div x-data="homeSimulator()">
     <!-- Tab navigation -->
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
-        <nav class="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto scrollbar-hide" aria-label="Configuration tabs" role="tablist">
-            <template x-for="tab in tabs" :key="tab.id">
-                <button
-                    type="button"
-                    @click="activeTab = tab.id"
-                    class="px-6 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0"
-                    :class="activeTab === tab.id
-                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                        : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'"
-                    :aria-selected="activeTab === tab.id"
-                    role="tab"
-                    x-text="tab.label"
-                ></button>
-            </template>
-        </nav>
+        {{ tab_bar(configuration_tabs, label='Configuration tabs', list_classes='overflow-x-auto scrollbar-hide', tab_classes='px-6 flex-shrink-0') }}
 
         <!-- Tab content panels -->
         <div class="p-6">

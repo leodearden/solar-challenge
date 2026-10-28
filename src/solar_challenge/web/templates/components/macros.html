@@ -105,19 +105,20 @@
 {% endmacro %}
 
 
-{# The chart tabs' colours: the selected tab's, and each other tab's #}
+{# Every tab bar's colours: the selected tab's, and each other tab's #}
 {% set _selected_tab_classes = 'border-primary-500 text-primary-600 dark:text-primary-400' %}
-{% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300' %}
+{% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600' %}
 
 
-{# The chart tabs' bar: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_chart_tab_colours.py says why its :class is an object #}
-{% macro tab_bar(tabs, model='activeTab') %}
-<div class="border-b border-slate-200 dark:border-slate-700 mb-6">
-    <nav class="-mb-px flex space-x-6" aria-label="Chart tabs" role="tablist">
+{# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
+{% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
+<div class="border-b border-slate-200 dark:border-slate-700 {{ classes }}">
+    <nav class="flex {{ list_classes }}" aria-label="{{ label }}" role="tablist">
         {% for tab in tabs %}
         <button
+            type="button"
             @click='{{ model }} = {{ tab.key | tojson }}'
-            class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
+            class="whitespace-nowrap py-3 border-b-2 font-medium text-sm transition-colors {{ tab_classes }} {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
             :class='{ {{ _selected_tab_classes | tojson }}: {{ model }} === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: {{ model }} !== {{ tab.key | tojson }} }'
             role="tab"
             aria-selected="{{ 'true' if loop.first else 'false' }}"
@@ -132,7 +133,7 @@
 {# A page's charts.ChartTab tabs: their tab_bar, the first tab open, then each tab's panels, shown while activeTab is its key #}
 {% macro chart_tabs(tabs) %}
 <div x-data='{ activeTab: {{ tabs[0].key | tojson }} }' class="mb-8">
-    {{ tab_bar(tabs) }}
+    {{ tab_bar(tabs, label='Chart tabs', classes='mb-6', list_classes='-mb-px space-x-6', tab_classes='px-1') }}
     {% for tab in tabs %}
     <div x-show='activeTab === {{ tab.key | tojson }}'{% if not loop.first %} x-cloak{% endif %} class="space-y-6">
         {% for panel in tab.panels %}
