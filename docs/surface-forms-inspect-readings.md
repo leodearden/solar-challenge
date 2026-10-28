@@ -1,7 +1,7 @@
 # Surface Forms: What inspect Reads Differently by Python Minor
 
 **Task:** #1103
-**Code:** [`tests/_surface_forms.py`](../tests/_surface_forms.py)'s `surface_form` and `named_classes`, and [`tests/_surface_forms_signatures.py`](../tests/_surface_forms_signatures.py), which holds their refusals
+**Code:** [`tests/_surface_forms.py`](../tests/_surface_forms.py)'s `surface_form`, `member_forms` and `named_classes`, and [`tests/_surface_forms_signatures.py`](../tests/_surface_forms_signatures.py), which holds their refusals
 **Test:** [`tests/unit/surface_forms_helper/`](../tests/unit/surface_forms_helper/)
 
 ---
@@ -17,16 +17,19 @@ minor (§3), or raises `TypeError` naming what `inspect` reads that way and sayi
 do instead (§4). Both rest on the chain `inspect` follows from a routine, which is the same
 on every minor (§2). `named_classes`, which gives the classes a form names, reads each
 string annotation in the module that spells it, and raises `TypeError` where that module
-could differ by minor (4.2). Each entry says how each minor reads its objects, and names
-the rule tests that pin what `surface_form` and `named_classes` do. Each `TypeError` also
-states its own case's reading.
+could differ by minor (4.2). `member_forms`, which spells the public members a class's own
+body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Each
+entry says how each minor reads its objects, and names the rule tests that pin what
+`surface_form`, `member_forms` and `named_classes` do. Each `TypeError` also states its
+own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
 reading of a constructor read through an object its class makes callable was measured on
-CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, and 4.2's reading of a
-class's constructor and 3.3's reading on those releases on 2026-10-27. A new refusal gets
-its rule test first, then its entry here.
+CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, 4.2's reading of a
+class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's reading
+of a class member that is a `functools.partial` on those releases on 2026-10-28. A new
+refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -152,7 +155,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_set_or_no_get_or_that_carries_a_signature_is_spelled_by_the_signature_inspect_reads_for_it`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but_no_set_is_spelled_by_the_signature_one_of_its_links_carries`
 
-### 4.4 A routine whose chain ends at an object its class makes callable
+### 4.4 A routine whose chain ends at an object its class makes callable, or a class member that is a `functools.partial`
 
 `inspect` reads such an object through the `__call__` its class resolves, unless the
 object carries a signature (§2). Each other refusal of this section, and `surface_form`'s
@@ -176,6 +179,13 @@ to the routine, and names the routine. Three readings of the object differ by mi
   naming the routine and that `__call__`. A partial whose type takes `__get__` from a class
   other than `functools.partial` binds by that `__get__` instead, as 4.6 says.
 
+Read from an instance, a class member that is a `functools.partial` is bound as a partial
+`__call__` is: 3.14 binds it to the instance as a method, so its first parameter goes,
+while 3.11 to 3.13 call it without the instance, 3.13 warning `FutureWarning`.
+`member_forms` raises `TypeError` naming the class, the member and that binding. Wrapped
+in `staticmethod`, which gives the partial itself on every minor, it is spelled
+`staticmethod`, then the signature the partial leaves.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_raises_the_type_error_the_call_it_is_read_through_raises_naming_the_routine`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_call_wraps_a_refused_class_raises_the_type_error_naming_that_class`
@@ -183,6 +193,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_overrides_a_call_a_base_defines_in_c_raises_a_type_error_naming_it_that_object_and_that_base`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_partial_member_raises_a_type_error_naming_the_class_the_member_and_that_only_python_3_14_binds_it_to_the_instance`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_partial_member_wrapped_in_staticmethod_is_spelled_staticmethod_then_the_signature_the_partial_leaves`
 
 ### 4.5 A class whose constructor inspect reads differently by minor, or cannot read on any
 
