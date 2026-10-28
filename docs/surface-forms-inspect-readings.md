@@ -28,9 +28,9 @@ and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 sa
 reading of a constructor read through an object its class makes callable was measured on
 CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, 4.2's reading of a
 class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's reading
-of a class member that is a `functools.partial` and 4.1's reading of a constructor
-`inspect` binds as a `classmethod` or through a descriptor on those releases on
-2026-10-28. A new refusal gets its rule test first, then its entry here.
+of a class member that is a `functools.partial`, 4.1's reading of a constructor
+`inspect` binds as a `classmethod` or through a descriptor, and 4.7's readings on those
+releases on 2026-10-28. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -105,7 +105,8 @@ with its type: on the routine or class itself, on the link of a routine's chain 
 `inspect` binds the constructor it reads for a class before it reads it, on every minor,
 as 4.5 says: a `__new__` as `getattr` gives it, and an `__init__` or a metaclass `__call__`
 with `inspect._descriptor_get`. So the `__signature__` it meets there is on what that
-binding gives: the function a `classmethod` holds, or what a descriptor's `__get__` gives.
+binding gives: the function a `classmethod` holds, or what a descriptor's `__get__` gives;
+a `classmethod` that 4.7 refuses is refused before it is bound.
 With `def build(cls, rate: int)` carrying `'(cls, rate)'`, `classmethod(build)` held as
 `__init__` or as a metaclass `__call__` reads as `(rate)` on 3.12 and 3.13, as does a
 descriptor held there whose `__get__` gives a function carrying `'(rate)'`, and 3.11 and
@@ -182,7 +183,7 @@ Pinned by:
 `inspect` reads such an object through the `__call__` its class resolves, unless the
 object carries a signature (§2). Each other refusal of this section, and `surface_form`'s
 refusal of a routine whose signature `inspect` cannot read, applies to that `__call__` as
-to the routine, and names the routine. Three readings of the object differ by minor:
+to the routine, and names the routine. Four readings of the object differ by minor:
 
 - A class in the object's type's MRO defines `__call__` in C. From 3.13 `inspect` reads a
   `__text_signature__` such a class gives its instances in place of the `__call__` their
@@ -200,6 +201,9 @@ to the routine, and names the routine. Three readings of the object differ by mi
   same way, so that signature does not lift the refusal. `surface_form` raises `TypeError`
   naming the routine and that `__call__`. A partial whose type takes `__get__` from a class
   other than `functools.partial` binds by that `__get__` instead, as 4.6 says.
+- The `__call__` the object's class resolves is a `classmethod` that wraps an object whose
+  type defines `__get__`: 3.11 and 3.12 bind it through that `__get__`, and 3.13 and 3.14
+  as a method of what it wraps, as 4.7 says.
 
 The section's other case is a class member that is a `functools.partial`. Read from an
 instance, it is bound as a partial `__call__` is: 3.14 binds it to the instance as a
@@ -231,8 +235,9 @@ the constructors refused, in the order they are checked. A constructor can meet 
 readings of 4.1, 4.2 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
 held as `__init__` or as a metaclass `__call__`, dropping its first parameter, and 3.11 to
 3.13 do not, 3.13 warning `FutureWarning`; 4.6 says how a partial whose type takes
-`__get__` from a class other than `functools.partial` is refused there and as `__new__`.
-The other readings are:
+`__get__` from a class other than `functools.partial` is refused there and as `__new__`;
+and 4.7 says how a `classmethod` held as any constructor `inspect` binds, read or not, is
+refused before any is bound. The other readings are:
 
 - A constructor that wraps a callable defined in C, as `functools.wraps(object.__new__)`
   records one: 3.11 and 3.12 read the wrapper through that callable, as
@@ -246,7 +251,7 @@ The other readings are:
 - A constructor read through an object its class makes callable. `inspect` reads a
   metaclass `__call__`, a `__new__` or an `__init__`, bound as it binds it, as it reads a
   routine (§2), so where that constructor is such an object, or a chain from it ends at
-  one, `inspect` reads it through the `__call__` the object's class resolves, by the three
+  one, `inspect` reads it through the `__call__` the object's class resolves, by the
   readings 4.4 lists. For `__call__ = functools.partial(charge, rate=1)`, with
   `def charge(self, share, rate)`, an `__init__` or a metaclass `__call__` reads as
   `(self, share, *, rate=1)` on 3.11 to 3.13, 3.13 warning `FutureWarning`, and as
@@ -326,15 +331,68 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_getter_partials.py::test_a_plain_partial_of_a_partial_whose_type_takes_get_from_another_class_and_that_holds_no_instance_dict_is_spelled_by_the_func_and_arguments_it_takes_as_its_own`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_member_that_is_a_partial_whose_type_takes_get_from_another_class_but_carries_wrapped_raises_the_type_error_for_its_binding`
 
+### 4.7 A `classmethod` that `inspect` binds, wrapping an object whose type defines `__get__`
+
+3.11 and 3.12 bind a `classmethod` through the `__get__` of what it wraps, where that has
+one: descriptor chaining, deprecated in 3.11 and removed in 3.13. From 3.13 a
+`classmethod` binds as a method of what it wraps. A function's `__get__` binds it as a
+method, and `functools.partial` and bound methods define `__get__` only from 3.13, so a
+`classmethod` of any of these binds alike on every minor.
+
+`inspect` binds a user metaclass `__call__` in place of any constructor. Otherwise it
+binds both the `__new__` and the `__init__` a class resolves before it chooses which to
+read, as 3.3 says. It also binds the `__call__` an object's class resolves (§2, 4.4).
+With `def build(receiver, rate: int) -> None`:
+
+- `classmethod(staticmethod(build))` held as `__init__` or as a metaclass `__call__` reads
+  as `(receiver, rate: int) -> None` on 3.11 and 3.12 and as `(rate: int) -> None` from
+  3.13; held as `__new__`, it reads one parameter fewer on each.
+- A `classmethod` of a descriptor whose `__get__` gives `build` reads like that on 3.11
+  and 3.12, and from 3.13 raises `TypeError`, as not a callable object.
+- `classmethod(str.join)` raises `TypeError` on 3.11 and 3.12, from `str.join`'s own
+  `__get__`, and from 3.13 reads as `(iterable, /)` held as `__init__` or as a metaclass
+  `__call__`.
+- `classmethod(object.__init__)` held as `__new__` raises `ValueError` on 3.11 and 3.12
+  and reads as `(*args, **kwargs)` from 3.13.
+
+Wherever `inspect` binds such a `classmethod`, `surface_form` raises `TypeError` naming
+the class or the routine, the class holding the `classmethod`, and the type of what it
+wraps: any type that takes `__get__` from a class other than a function's,
+`functools.partial` and a bound method's. It does so whatever that `__get__` gives, as
+4.6 refuses a binding no rule reads, so `classmethod(functools.cache(build))`, and
+`classmethod(object.__init__)` held as `__init__`, are refused though they read alike. So
+is a class whose `__init__` is such a `classmethod` beside a `__new__` defined with `def`,
+which `inspect` binds but does not read.
+
+`member_forms` reads a `classmethod` member without binding it, so it reads alike: by its
+kind, then the form of what it wraps. A method a caller binds before `surface_form` sees
+it, as `Meter.settle` binds one, is bound by the caller's minor, so no rule can refuse it
+alike: read a class's members with `member_forms`.
+
+Where `named_classes` binds a constructor or a `__call__` itself, to find where a
+signature carried over it is spelled, it binds a `classmethod` as 3.13 and 3.14 do, on
+every minor. `surface_form` reads that signature alike, since `inspect` reads it before it
+binds anything.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_constructor_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_constructor_and_that_type`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_beside_whose_constructor_inspect_binds_a_classmethod_that_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_that_classmethod`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_constructor_wraps_a_function_a_partial_or_a_bound_method_is_spelled_by_what_inspect_binds_it_to`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_classmethod_that_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_call_and_that_type`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_classmethod_member_that_wraps_an_object_whose_type_defines_get_is_spelled_classmethod_then_the_form_of_what_it_wraps_without_binding_it`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
+- `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_signature_over_a_classmethod_call_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
+
 ## 5. When the Admitted Minors Change
 
 On a newly admitted minor, re-measure each reading here (§6) and run the rule tests. An
 entry whose readings no longer differ among the admitted minors no longer needs its
 refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, the first
 listed in 4.5, 4.5's reading of a constructor read through an object its class makes
-callable where it meets those two readings of 4.4, and the reading 4.6 refuses where
-`inspect` reads a partial differ only between 3.11 and 3.12 on one side and 3.13 and 3.14
-on the other, so they rest on 3.11 and 3.12 alone. The warning 3.3 ignores rests on 3.13
+callable where it meets those two readings of 4.4, the reading 4.6 refuses where
+`inspect` reads a partial, and the binding 4.7 refuses differ only between 3.11 and 3.12
+on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. The warning 3.3 ignores rests on 3.13
 alone. 4.6's refusal where a partial is bound rests on no minor: it names a binding no
 rule reads. Whether to lift one is for the task that changes `requires-python`.
 
