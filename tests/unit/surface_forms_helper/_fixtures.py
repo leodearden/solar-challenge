@@ -18,7 +18,10 @@ functools.partial, whose own __get__ comes first from Python 3.13, for the rules
 classmethod that wraps such a partial.
 ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
 inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
-what it wraps.
+what it wraps. CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR makes, from a function, a method
+descriptor, a classmethod or a property, each of which a classmethod that wraps it binds
+through its __get__ on 3.11 and 3.12 and as a method from 3.13, for the rules about where
+named_classes binds such a classmethod itself.
 class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
 whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
 rules about each constructor site.
@@ -120,6 +123,13 @@ class ChainedCall:
     """A class whose __call__ is a classmethod of a staticmethod, which Python 3.11 and 3.12 bind through the staticmethod's __get__ and later minors as a method of the staticmethod."""
 
     __call__ = classmethod(staticmethod(_share))
+
+
+CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR = (
+    pytest.param(lambda build: str.join, id="method-descriptor"),
+    pytest.param(classmethod, id="classmethod"),
+    pytest.param(property, id="property"),
+)
 
 
 def class_whose_init_is(constructor: object) -> type:
