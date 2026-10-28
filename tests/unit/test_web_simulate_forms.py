@@ -24,6 +24,7 @@ from tests._html_page import (
     element_ids,
     headings,
     texts,
+    texts_after,
 )
 from tests._web_job_days import web_job_days
 
@@ -115,11 +116,21 @@ class TestSimulateHomeRoute:
         assert (run["status"], run["name"]) == ("completed", name_input["placeholder"])
 
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
+        """GET /simulate/home draws one tab list, Configuration tabs, with one tab per panel: each tab opens its panel, and the server draws the first tab selected."""
         response = client.get("/simulate/home")
         page = response.get_data(as_text=True)
-        assert element_count(page, "nav", {"role": "tablist"}) == 1
+        tablist_labels = [nav.get("aria-label") for nav in element_attributes(page, "nav") if nav.get("role") == "tablist"]
+        assert tablist_labels == ["Configuration tabs"]
         tab_ids = ("pv", "battery", "load", "heat_pump", "tariff", "location", "period")
+        tabs = [
+            (button.get("@click"), button.get("aria-selected"))
+            for button in element_attributes(page, "button")
+            if button.get("role") == "tab"
+        ]
+        assert tabs == [
+            (f'activeTab = "{tab_id}"', "true" if index == 0 else "false") for index, tab_id in enumerate(tab_ids)
+        ]
+        assert texts_after(page, "PV", 6) == ["Battery", "Load", "Heat Pump", "Tariff", "Location", "Period"]
         panels_per_tab = {
             tab_id: element_count(
                 page, "div", {"role": "tabpanel", "x-show": f"activeTab === '{tab_id}'"}

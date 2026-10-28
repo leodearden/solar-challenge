@@ -15,8 +15,7 @@ The chart pages share their other parts through components/macros.html too. Each
 Plotly and chart-renderer.js once, through chart_scripts, the one template that names
 them, and so does the parameter sweep page (/scenarios/sweep), whose script inserts the
 sweep's chart panels once its points finish. Each chart page draws its chart tabs through
-chart_tabs, which selects the first on the server, so no chart page template writes tab
-markup; the sweep page has no chart tabs.
+chart_tabs, which selects the first on the server; the sweep page has no chart tabs.
 """
 
 import dataclasses
@@ -49,16 +48,6 @@ from tests._web_runs import store_fleet_run, store_home_run
 
 _CHART_RENDERER_KEY = "static/js/chart-renderer.js"
 _PLOTLY_CALL = re.compile(r"\bPlotly\.\w+")
-_CHART_PAGE_TEMPLATES = (
-    "templates/results/home.html",
-    "templates/results/fleet.html",
-    "templates/history/compare.html",
-)
-_TAB_MARKUP = (
-    'role="tab"',
-    "border-primary-500 text-primary-600 dark:text-primary-400",
-    "border-transparent text-slate-500",
-)
 
 
 def _saved_home_run(
@@ -281,20 +270,6 @@ def test_each_chart_pages_tabs_are_tabs_whose_selection_the_server_draws(
     ]
 
     assert [tab.get("aria-selected") for tab in tabs] == ["true"] + ["false"] * (opened.tab_count - 1)
-
-
-def test_no_chart_page_template_writes_tab_markup() -> None:
-    sources = dashboard_template_sources()
-
-    written = {
-        template: [markup for markup in _TAB_MARKUP if markup in sources[template]]
-        for template in _CHART_PAGE_TEMPLATES
-    }
-
-    assert written == dict.fromkeys(_CHART_PAGE_TEMPLATES, []), (
-        "A chart page draws its tabs through components/macros.html's chart_tabs, the one"
-        " home of the tab markup"
-    )
 
 
 def test_no_dashboard_source_but_chart_renderer_js_calls_plotly() -> None:

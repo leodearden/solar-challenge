@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""components/macros.html's tab_bar draws the dashboard's tab bars, today the results and
-compare pages' chart tabs, through chart_tabs. Each bar is a tablist named for what it
-switches, and the server draws its first tab selected. Each tab carries its bar's layout
-and its selection's colours: one pair that every bar shares, whose dark hover colours
-mirror its light ones (shade n to 900 - n: hover text slate-700 to slate-200, hover
-underline slate-300 to slate-600), as the dashboard's other hover colours do.
+"""components/macros.html's tab_bar draws the dashboard's tab bars: the home form's
+configuration tabs, and the results and compare pages' chart tabs, through chart_tabs.
+Each bar is a tablist named for what it switches, and the server draws its first tab
+selected. Each tab carries its bar's layout and its selection's colours: one pair that
+every bar shares, whose dark hover colours mirror its light ones (shade n to 900 - n:
+hover text slate-700 to slate-200, hover underline slate-300 to slate-600), as the
+dashboard's other hover colours do. The tab markup is written once, in tab_bar.
 """
 
 from collections.abc import Callable, Mapping
@@ -17,9 +18,18 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes
 from tests._web_runs import store_fleet_run, store_home_run
+
+_TAB_BAR_MACROS_KEY = "templates/components/macros.html"
+_TAB_MARKUP = (
+    'role="tablist"',
+    'role="tab"',
+    "border-primary-500 text-primary-600 dark:text-primary-400",
+    "border-transparent text-slate-500",
+)
 
 _SELECTED_TAB_CLASSES = frozenset({"border-primary-500", "text-primary-600", "dark:text-primary-400"})
 _UNSELECTED_TAB_CLASSES = frozenset(
@@ -32,6 +42,9 @@ _UNSELECTED_TAB_CLASSES = frozenset(
         "hover:border-slate-300",
         "dark:hover:border-slate-600",
     }
+)
+_CONFIGURATION_TAB_LAYOUT = frozenset(
+    {"whitespace-nowrap", "py-3", "px-6", "flex-shrink-0", "border-b-2", "font-medium", "text-sm", "transition-colors"}
 )
 _CHART_TAB_LAYOUT = frozenset(
     {"whitespace-nowrap", "py-3", "px-1", "border-b-2", "font-medium", "text-sm", "transition-colors"}
@@ -49,6 +62,11 @@ def _page(client: FlaskClient, path: str) -> str:
 
     assert response.status_code == 200, f"{path} answered {response.status_code}"
     return response.get_data(as_text=True)
+
+
+def _home_form_page(client: FlaskClient, storage: RunStorage) -> str:
+    """The form that starts a home simulation, which shows no stored run."""
+    return _page(client, "/simulate/home")
 
 
 def _home_results_page(client: FlaskClient, storage: RunStorage) -> str:
@@ -80,6 +98,7 @@ class _TabBar(NamedTuple):
 
 
 _PAGES_WITH_TAB_BARS = [
+    pytest.param(_TabBar(_home_form_page, "Configuration tabs", _CONFIGURATION_TAB_LAYOUT, 7), id="home-form"),
     pytest.param(_TabBar(_home_results_page, "Chart tabs", _CHART_TAB_LAYOUT, 4), id="results-home"),
     pytest.param(_TabBar(_fleet_results_page, "Chart tabs", _CHART_TAB_LAYOUT, 3), id="results-fleet"),
     pytest.param(_TabBar(_compare_page, "Chart tabs", _CHART_TAB_LAYOUT, 2), id="compare"),
@@ -98,4 +117,25 @@ def test_a_pages_tab_bar_is_a_tablist_named_for_what_it_switches_whose_tabs_carr
     assert (tablist_labels, tab_classes) == (
         [bar.label],
         [bar.tab_layout | _SELECTED_TAB_CLASSES] + [bar.tab_layout | _UNSELECTED_TAB_CLASSES] * (bar.tab_count - 1),
+    )
+
+
+def test_no_dashboard_source_but_components_macros_html_writes_tab_markup() -> None:
+    sources = {**dashboard_template_sources(), **dashboard_script_sources()}
+    unwritten = [marker for marker in _TAB_MARKUP if marker not in sources.get(_TAB_BAR_MACROS_KEY, "")]
+    assert unwritten == [], (
+        f"read none of {unwritten} from {_TAB_BAR_MACROS_KEY}, so this guard would pass vacuously"
+    )
+
+    written = {
+        path: found
+        for path, source in sources.items()
+        if path != _TAB_BAR_MACROS_KEY and (found := [marker for marker in _TAB_MARKUP if marker in source])
+    }
+
+    listing = "".join(f"\n  {path}: {', '.join(found)}" for path, found in written.items())
+    assert written == {}, (
+        f"These dashboard sources write tab markup themselves:{listing}\n"
+        f"The tab markup is written once, in {_TAB_BAR_MACROS_KEY}'s tab_bar, so a page draws its tabs "
+        "with tab_bar(tabs, label=..., ...), or its chart tabs with chart_tabs."
     )
