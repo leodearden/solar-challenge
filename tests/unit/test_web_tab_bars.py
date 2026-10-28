@@ -6,6 +6,11 @@ selected. Each tab carries its bar's layout and its selection's colours: one pai
 every bar shares, whose dark hover colours mirror its light ones (shade n to 900 - n:
 hover text slate-700 to slate-200, hover underline slate-300 to slate-600), as the
 dashboard's other hover colours do. The tab markup is written once, in tab_bar.
+
+The written-once guard reads each source's raw text for the tab markup as
+components/macros.html spells it, so it misses tab markup spelled any other way: a colour
+pair in another order, role='tab' in single quotes, or a role a script sets with
+setAttribute.
 """
 
 from collections.abc import Callable, Mapping
