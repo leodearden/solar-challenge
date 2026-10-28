@@ -345,6 +345,16 @@ def test_a_signature_a_link_carries_over_the_call_of_a_callable_object_that_wrap
     assert named_classes(functools.partial(Caller())) == {decimal.Decimal}
 
 
+def test_a_routine_whose_chain_ends_at_an_object_that_carries_a_signature_over_a_classmethod_call_whose_binding_differs_by_minor_names_the_classes_that_signature_names() -> None:
+    class JoinCall:
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        )
+        __call__ = classmethod(str.join)
+
+    assert named_classes(functools.partial(JoinCall())) == {int}
+
+
 def test_a_signature_a_link_carries_over_an_object_that_is_neither_callable_nor_a_routine_names_the_classes_it_names_read_where_the_link_given_it_is_spelled() -> None:
     assert named_classes(_typed(property(len))) == {decimal.Decimal}
 

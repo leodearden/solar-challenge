@@ -4,12 +4,13 @@
 import decimal
 import fractions
 import functools
+import inspect
 import pathlib
 import warnings
 
 import pytest
 
-from tests._surface_forms import named_classes
+from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import imported_module
 
 
@@ -754,6 +755,30 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
     )
 
     assert named_classes(getattr(signing, name)) == {decimal.Decimal}
+
+
+def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names() -> None:
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Initialised:
+        __signature__ = signature
+        __init__ = classmethod(str.join)
+
+    class Created:
+        __signature__ = signature
+        __new__ = classmethod(str.join)
+
+    class Joining(type):
+        __call__ = classmethod(str.join)
+
+    class Called(metaclass=Joining):
+        __signature__ = signature
+
+    for cls in (Initialised, Created, Called):
+        assert surface_form(cls) == "(rate: int)"
+        assert named_classes(cls) == {int}
 
 
 @pytest.mark.parametrize(
