@@ -176,9 +176,10 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
             "on that object or on what is read through it"
         )
-    binding = _call_inspect_binds(obj)
-    _refuse_partial_bound_as_method(subject, "is read through", *binding)
-    _refuse_classmethod_bound_by_minor(subject, "is read through", *binding)
+    holder = holders[0]
+    held = vars(holder)["__call__"]
+    _refuse_partial_bound_as_method(subject, "is read through", holder, "__call__", held)
+    _refuse_classmethod_bound_by_minor(subject, "is read through", holder, "__call__", held)
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -438,14 +439,16 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     through an object its class makes callable, if _refuse_constructor_reading finds
     it so:
 
-    - each constructor _constructors_inspect_binds gives for *cls*, whether inspect
-      reads it or not, if it is a classmethod _refuse_classmethod_bound_by_minor
-      refuses, before any constructor is bound;
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
-      __new__ or __init__, if it wraps a callable defined in C, is a functools.partial,
-      is read as an Enum, carries such a __signature__, or is read as a builtin or
-      through such an object. inspect reads any other __call__ _metaclass_call gives in
-      their place, so none of the constructors below is then checked;
+      __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
+      refuses, checked before it is bound, or if it wraps a callable defined in C, is a
+      functools.partial, is read as an Enum, carries such a __signature__, or is read
+      as a builtin or through such an object. inspect reads any other __call__
+      _metaclass_call gives in their place, so none of the constructors below is then
+      checked;
+    - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
+      chooses which to read, if either is a classmethod
+      _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -456,14 +459,20 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
-    for owner, name, held in _constructors_inspect_binds(cls):
-        _refuse_classmethod_bound_by_minor(cls, "is constructed through", owner, name, held)
     call = _metaclass_call(cls)
     if call is not None:
+        _refuse_classmethod_bound_by_minor(
+            cls, "is constructed through", type(cls), "__call__", call
+        )
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_reading(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
         return
+    for name in ("__new__", "__init__"):
+        owner = next(namespace_holders(cls.__mro__, name))
+        _refuse_classmethod_bound_by_minor(
+            cls, "is constructed through", owner, name, vars(owner)[name]
+        )
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
@@ -902,23 +911,6 @@ def _generated_constructor_modules(
 def _constructor_holder(cls: type) -> type:
     """The class in *cls*'s MRO whose own namespace holds __init__ or __new__, the constructor inspect.signature(*cls*) reads."""
     return next(namespace_holders(cls.__mro__, "__init__", "__new__"))
-
-
-def _constructors_inspect_binds(cls: type) -> Iterator[tuple[type, str, object]]:
-    """Each constructor inspect binds for *cls*, as the class holding it, its name and the value held there: the __call__ _metaclass_call gives, which inspect binds in place of any __new__ or __init__; else the __new__ and the __init__ *cls* resolves, both of which inspect binds before it chooses which to read."""
-    call = _metaclass_call(cls)
-    if call is not None:
-        yield type(cls), "__call__", call
-        return
-    for name in ("__new__", "__init__"):
-        owner = next(namespace_holders(cls.__mro__, name))
-        yield owner, name, vars(owner)[name]
-
-
-def _call_inspect_binds(obj: object) -> tuple[type, str, object]:
-    """The __call__ inspect binds for *obj*, an object its class makes callable, as the class holding it, its name and the value held there: the first class in its type's MRO that holds one, whose __call__ inspect.getattr_static finds."""
-    holder = next(namespace_holders(type(obj).__mro__, "__call__"))
-    return holder, "__call__", vars(holder)["__call__"]
 
 
 def _signature_holder(cls: type) -> type:
