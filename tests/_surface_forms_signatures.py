@@ -522,7 +522,9 @@ def _wrapped_c_callable(
     It stops at any __signature__, as inspect's own lookup of a constructor does from
     Python 3.13, and leaves a constructor whose chain carries one to
     _refuse_constructor_signature, which reads the chain from that constructor as
-    inspect binds it.
+    inspect binds it. Since it reads *constructor* as held, a constructor that wraps a
+    callable defined in C and whose binding gives a callable carrying a __signature__
+    meets both; _refuse_constructor_without_a_portable_form checks the wrapper first.
     """
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
