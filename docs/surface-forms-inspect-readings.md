@@ -371,8 +371,12 @@ alike: read a class's members with `member_forms`.
 
 Where `named_classes` binds a constructor or a `__call__` itself, to find where a
 signature carried over it is spelled, it binds a `classmethod` as 3.13 and 3.14 do, on
-every minor. `surface_form` reads that signature alike, since `inspect` reads it before it
-binds anything.
+every minor: as a method of what it wraps. What a `classmethod` wraps may not be
+callable, as a `classmethod` or a `property` is not. `types.MethodType` will not make a
+method of it, though `classmethod.__get__` does, so `named_classes` reads what the
+`classmethod` wraps in the method's place: `inspect` reads such a method through to its
+`__func__` (§2). `surface_form` reads that signature alike, since `inspect` reads it
+before it binds anything.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_constructor_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_constructor_and_that_type`
@@ -392,9 +396,10 @@ refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, th
 listed in 4.5, 4.5's reading of a constructor read through an object its class makes
 callable where it meets those two readings of 4.4, the reading 4.6 refuses where
 `inspect` reads a partial, and the binding 4.7 refuses differ only between 3.11 and 3.12
-on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. The warning 3.3 ignores rests on 3.13
-alone. 4.6's refusal where a partial is bound rests on no minor: it names a binding no
-rule reads. Whether to lift one is for the task that changes `requires-python`.
+on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. The
+warning 3.3 ignores rests on 3.13 alone. 4.6's refusal where a partial is bound rests on
+no minor: it names a binding no rule reads. Whether to lift one is for the task that
+changes `requires-python`.
 
 ## 6. How to Re-measure
 
