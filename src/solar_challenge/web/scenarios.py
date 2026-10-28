@@ -17,7 +17,12 @@ from solar_challenge.number_fields import as_finite_float
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.request_boundary import refuse_unrecognised_keys, request_json_object, require_json_object
+from solar_challenge.web.request_boundary import (
+    refuse_unrecognised_keys,
+    request_json_object,
+    require_encodable_text,
+    require_json_object,
+)
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.stored_runs import StoredRunUnreadable
@@ -119,7 +124,7 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
 
     Raises:
         ValueError: Naming *what*, or its field, when *point* is not a {"value", "run_id"} object
-            of a finite number and a string.
+            of a finite number and a string that encodes as UTF-8.
     """
     fields = require_json_object(point, what)
     refuse_unrecognised_keys(fields, {"value", "run_id"}, what)
@@ -127,7 +132,7 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
     run_id = fields.get("run_id")
     if not isinstance(run_id, str):
         raise ValueError(f"{what}.run_id must be the id of the point's run, a string; got {run_id!r}")
-    return value, run_id
+    return value, require_encodable_text(run_id, f"{what}.run_id")
 
 
 class _NotAFinishedHomeRun(ValueError):

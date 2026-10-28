@@ -34,9 +34,15 @@ def request_json_object() -> dict[str, Any]:
     Raises:
         NotAJsonObject: From require_json_object, which refuses any other body
             as the "Request body". An absent, non-JSON or unparseable body, or
-            JSON null, reads as NoneType.
+            JSON null, reads as NoneType; so does a body nested so deeply that
+            parsing it exhausts the recursion limit, which get_json(silent=True)
+            does not swallow.
     """
-    return require_json_object(request.get_json(silent=True), "Request body")
+    try:
+        body = request.get_json(silent=True)
+    except RecursionError:
+        body = None
+    return require_json_object(body, "Request body")
 
 
 def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str], what: str) -> None:
@@ -55,6 +61,21 @@ def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str
             f"Unrecognised {what.lower()} keys: {', '.join(map(repr, unrecognised))}; "
             f"recognised keys: {', '.join(sorted(recognised))}"
         )
+
+
+def require_encodable_text(text: str, what: str) -> str:
+    """Return *text*, a request's *what*, which must encode as UTF-8, the encoding sqlite3 binds text in.
+
+    A JSON string can escape a lone surrogate, which UTF-8 cannot encode.
+
+    Raises:
+        ValueError: Naming *what* and *text*, for text holding a lone surrogate.
+    """
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        raise ValueError(f"{what} must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}") from None
+    return text
 
 
 LOCATION_PRESETS: dict[str, Location] = {

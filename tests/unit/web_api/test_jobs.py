@@ -7,6 +7,7 @@ from unittest.mock import NonCallableMagicMock
 import pytest
 
 pytest.importorskip("flask")
+from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.fleet import calculate_fleet_summary
@@ -64,6 +65,21 @@ class TestGetJobProgress:
             assert response.mimetype == "text/event-stream"
             assert response.headers["Cache-Control"] == "no-cache"
             assert response.headers["X-Accel-Buffering"] == "no"
+        finally:
+            response.close()
+
+    def test_a_last_event_id_of_more_digits_than_python_converts_names_no_version_so_a_running_jobs_state_is_sent_at_once(
+        self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """5000 digits, past Python's int-string limit, are read as no header, not a 500: had the stream resumed after so high a version, its first frame would be a heartbeat."""
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+        mock_job_manager.job_snapshot.return_value = JobSnapshot(4, _A_RUNNING_JOB)
+
+        response = client.get("/api/jobs/job-running/progress", headers={"Last-Event-ID": "9" * 5000}, buffered=False)
+        try:
+            assert response.status_code == 200
+            chunks = iter(response.response)
+            assert parse_sse_events(next(chunks).decode()) == [SseFrame("progress", asdict(_A_RUNNING_JOB), id=4)]
         finally:
             response.close()
 

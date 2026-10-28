@@ -137,14 +137,18 @@ class JobStreamPolicy:
     sleep: Callable[[float], None] = time.sleep
 
 
+_LAST_EVENT_ID_MAX_DIGITS: Final = 18
+
+
 def parse_last_event_id(header: str | None) -> int | None:
     """Return the version a reopened job stream's ``Last-Event-ID`` header names: the number its ASCII digits spell.
 
     A stream writes each state's version as its frame's ``id``, so any other header, or
     none, names no version and is read as None: an empty one, or one with a sign, a space,
-    a decimal point or a digit that is not ASCII.
+    a decimal point, a digit that is not ASCII, or more than _LAST_EVENT_ID_MAX_DIGITS
+    digits, more than a job's version ever has.
     """
-    if header is None or not (header.isascii() and header.isdigit()):
+    if header is None or not (header.isascii() and header.isdigit()) or len(header) > _LAST_EVENT_ID_MAX_DIGITS:
         return None
     return int(header)
 

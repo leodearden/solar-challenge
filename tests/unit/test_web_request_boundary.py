@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object and only recognised keys, and its location resolver."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, and its location resolver."""
 
 import pytest
 
 pytest.importorskip("flask")
+
+from flask import Flask
 
 from solar_challenge.location import Location
 from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
     refuse_unrecognised_keys,
+    request_json_object,
+    require_encodable_text,
     require_json_object,
     resolve_location,
 )
@@ -68,6 +72,16 @@ class TestRequireJsonObject:
             require_json_object("x", "Home config")
 
 
+class TestRequestJsonObject:
+    def test_a_body_nested_past_the_recursion_limit_reads_as_unparseable(self) -> None:
+        """get_json(silent=True) swallows only ValueError, so the RecursionError of parsing is read as NoneType."""
+        with Flask(__name__).test_request_context(
+            data="[" * 100000, content_type="application/json", method="POST"
+        ):
+            with pytest.raises(NotAJsonObject, match="got NoneType"):
+                request_json_object()
+
+
 class TestRefuseUnrecognisedKeys:
     """refuse_unrecognised_keys passes a body of recognised keys and refuses one with any other key."""
 
@@ -85,6 +99,35 @@ class TestRefuseUnrecognisedKeys:
             )
         assert str(exc_info.value) == (
             "Unrecognised fleet form keys: 'heat_pump', 'tarif'; recognised keys: days, pv_kw"
+        )
+
+
+class TestRequireEncodableText:
+    """require_encodable_text passes text that encodes as UTF-8 and refuses text holding a lone surrogate."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("run-2kw", id="ascii"),
+            pytest.param("", id="empty"),
+            pytest.param("Café ☀ 😀", id="non-ascii-and-astral"),
+        ],
+    )
+    def test_text_that_encodes_is_returned_as_given(self, text: str) -> None:
+        assert require_encodable_text(text, "points[0].run_id") is text
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("\ud800", id="a-lone-high-surrogate"),
+            pytest.param("run-\udc00", id="a-lone-low-surrogate-after-text"),
+        ],
+    )
+    def test_text_holding_a_lone_surrogate_is_refused_naming_what_and_the_text(self, text: str) -> None:
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(text, "points[1].run_id")
+        assert str(refusal.value) == (
+            f"points[1].run_id must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}"
         )
 
 

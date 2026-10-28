@@ -999,6 +999,7 @@ _MALFORMED_SWEEP_CHART_BODIES = [
         {"parameter_label": _PV_CAPACITY, "points": [{"run_id": "run-2kw"}]}, ["points[0].value"], id="value-missing"
     ),
     pytest.param(_sweep_chart_body((2.0, 7)), ["points[0].run_id"], id="run-id-a-number"),
+    pytest.param(_sweep_chart_body((2.0, "run-2kw"), (4.0, "\ud800")), ["points[1].run_id"], id="run-id-a-lone-surrogate"),
     pytest.param(
         {"parameter_label": _PV_CAPACITY, "points": [{"value": 2.0}]}, ["points[0].run_id"], id="run-id-missing"
     ),
@@ -1085,6 +1086,14 @@ class TestSweepChartRoute:
         response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
 
         assert response.status_code == 500, response.get_data(as_text=True)
+
+    def test_a_body_nested_past_the_recursion_limit_is_refused_not_a_500(self, app: Flask, client: FlaskClient) -> None:
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.post(_SWEEP_CHART_URL, data="[" * 100000, content_type="application/json")
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        assert "NoneType" in response.get_json()["error"]
 
     @pytest.mark.parametrize(("body", "named"), _MALFORMED_SWEEP_CHART_BODIES)
     def test_a_malformed_body_is_refused_naming_the_field(
