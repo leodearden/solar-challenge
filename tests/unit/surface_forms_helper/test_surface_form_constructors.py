@@ -530,6 +530,32 @@ def test_a_class_whose_classmethod_staticmethod_or_descriptor_constructor_itself
 
 
 @pytest.mark.parametrize(
+    ("hold", "form", "classes"),
+    [
+        pytest.param(classmethod, "() -> None", set(), id="classmethod"),
+        pytest.param(staticmethod, "(rate: int) -> None", {int}, id="staticmethod"),
+        pytest.param(Giver, "(rate: int) -> None", {int}, id="descriptor"),
+    ],
+)
+def test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter(
+    hold: Callable[[Callable[..., object]], object], form: str, classes: set[type]
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    held = hold(build)
+    held.__signature__ = "(rate)"
+    cls = class_whose_new_is(held)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == form
+        assert named_classes(subject) == classes
+        assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
     "build",
     [
         pytest.param(lambda: functools.wraps(Period)(lambda receiver, value: None), id="wrapper"),

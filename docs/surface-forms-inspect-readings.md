@@ -115,14 +115,17 @@ on every minor. A `__signature__` carried by the `classmethod` or the `staticmet
 itself, or by a descriptor whose `__get__` gives another callable, is read on no minor, so
 the class is spelled by what the binding gives: held as `__init__`, a `classmethod` that
 carries `'(rate)'` over `def build(receiver: float, rate: int) -> None` reads as
-`(rate: int) -> None` on every minor. A descriptor whose `__get__` gives itself, such as
-the one 4.5 reads as a method descriptor, is still read through its own `__signature__`.
+`(rate: int) -> None` on every minor; held as `__new__`, it reads as `() -> None`, since
+`inspect` also drops the first parameter of what `getattr` gives for a `__new__`. A
+descriptor whose `__get__` gives itself, such as the one 4.5 reads as a method descriptor,
+is still read through its own `__signature__`.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_what_carries_it_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_or_descriptor_constructor_gives_a_function_carrying_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_raises_a_type_error_naming_it_that_constructor_and_that_value`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_staticmethod_or_descriptor_constructor_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_inspect_binds_it_to`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries_a_signature_attribute_that_is_neither_none_nor_an_inspect_signature_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter`
 
 ### 4.2 A routine that wraps an Enum, or a class constructor `inspect` reads as one
 
