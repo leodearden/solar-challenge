@@ -5,11 +5,14 @@ import pytest
 
 pytest.importorskip("flask")
 
+from flask import Flask
+
 from solar_challenge.location import Location
 from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
     refuse_unrecognised_keys,
+    request_json_object,
     require_json_object,
     resolve_location,
 )
@@ -66,6 +69,16 @@ class TestRequireJsonObject:
         """Every web caller answers a ValueError, with HTTP 400 or an assistant tool_result error."""
         with pytest.raises(ValueError):
             require_json_object("x", "Home config")
+
+
+class TestRequestJsonObject:
+    def test_a_body_nested_past_the_recursion_limit_reads_as_unparseable(self) -> None:
+        """get_json(silent=True) swallows only ValueError, so the RecursionError of parsing is read as NoneType."""
+        with Flask(__name__).test_request_context(
+            data="[" * 100000, content_type="application/json", method="POST"
+        ):
+            with pytest.raises(NotAJsonObject, match="got NoneType"):
+                request_json_object()
 
 
 class TestRefuseUnrecognisedKeys:

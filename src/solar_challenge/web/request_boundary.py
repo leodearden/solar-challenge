@@ -34,9 +34,15 @@ def request_json_object() -> dict[str, Any]:
     Raises:
         NotAJsonObject: From require_json_object, which refuses any other body
             as the "Request body". An absent, non-JSON or unparseable body, or
-            JSON null, reads as NoneType.
+            JSON null, reads as NoneType; so does a body nested so deeply that
+            parsing it exhausts the recursion limit, which get_json(silent=True)
+            does not swallow.
     """
-    return require_json_object(request.get_json(silent=True), "Request body")
+    try:
+        body = request.get_json(silent=True)
+    except RecursionError:
+        body = None
+    return require_json_object(body, "Request body")
 
 
 def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str], what: str) -> None:

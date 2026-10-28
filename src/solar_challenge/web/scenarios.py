@@ -127,6 +127,10 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
     run_id = fields.get("run_id")
     if not isinstance(run_id, str):
         raise ValueError(f"{what}.run_id must be the id of the point's run, a string; got {run_id!r}")
+    try:
+        run_id.encode()
+    except UnicodeEncodeError:
+        raise ValueError(f"{what}.run_id must be the id of the point's run, text that encodes; got {run_id!r}") from None
     return value, run_id
 
 

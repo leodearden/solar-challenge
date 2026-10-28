@@ -142,11 +142,15 @@ def parse_last_event_id(header: str | None) -> int | None:
 
     A stream writes each state's version as its frame's ``id``, so any other header, or
     none, names no version and is read as None: an empty one, or one with a sign, a space,
-    a decimal point or a digit that is not ASCII.
+    a decimal point, a digit that is not ASCII, or so many digits that Python's int-string
+    limit refuses to convert them.
     """
     if header is None or not (header.isascii() and header.isdigit()):
         return None
-    return int(header)
+    try:
+        return int(header)
+    except ValueError:
+        return None
 
 
 _STREAM_LIMIT_SECONDS: Final = 600.0
