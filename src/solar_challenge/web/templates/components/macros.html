@@ -110,7 +110,7 @@
 {% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600' %}
 
 
-{# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. classes lays out the bar, list_classes its tab list and tab_classes each tab. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
+{# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
 {% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
 <div class="border-b border-slate-200 dark:border-slate-700 {{ classes }}">
     <nav class="flex {{ list_classes }}" aria-label="{{ label }}" role="tablist">
