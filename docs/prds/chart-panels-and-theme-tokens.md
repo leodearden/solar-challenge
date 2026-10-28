@@ -216,7 +216,8 @@ class RunHeadline:
                                                     An undefined panel fails the render naming it, as chart_panel does today #}
 {% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
                                                  {# role=tablist/tab, aria-selected, the active/inactive class pair once; label names the bar,
-                                                    and classes, list_classes and tab_classes lay out the bar, its list and each tab (task 1169) #}
+                                                    and classes, list_classes and tab_classes lay out the bar, its list and each tab (task 1169);
+                                                    a list wider than its bar scrolls sideways inside it, so the page keeps its width (task 1174) #}
 {% macro chart_tabs(tabs) %}                     {# tab_bar + one x-show panel list per tab #}
 {% macro chart_scripts() %}                      {# the Plotly CDN tag and chart-renderer.js, once #}
 ```

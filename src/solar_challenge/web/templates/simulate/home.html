@@ -217,7 +217,7 @@ document.addEventListener('alpine:init', () => {
 <div x-data="homeSimulator()">
     <!-- Tab navigation -->
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
-        {{ tab_bar(configuration_tabs, label='Configuration tabs', list_classes='overflow-x-auto scrollbar-hide', tab_classes='px-6 flex-shrink-0') }}
+        {{ tab_bar(configuration_tabs, label='Configuration tabs', tab_classes='px-6') }}
 
         <!-- Tab content panels -->
         <div class="p-6">

@@ -113,12 +113,12 @@
 {# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
 {% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
 <div class="border-b border-slate-200 dark:border-slate-700 {{ classes }}">
-    <nav class="flex {{ list_classes }}" aria-label="{{ label }}" role="tablist">
+    <nav class="flex overflow-x-auto scrollbar-hide {{ list_classes }}" aria-label="{{ label }}" role="tablist">
         {% for tab in tabs %}
         <button
             type="button"
             @click='{{ model }} = {{ tab.key | tojson }}'
-            class="whitespace-nowrap py-3 border-b-2 font-medium text-sm transition-colors {{ tab_classes }} {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
+            class="whitespace-nowrap flex-shrink-0 py-3 border-b-2 font-medium text-sm transition-colors {{ tab_classes }} {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
             :class='{ {{ _selected_tab_classes | tojson }}: {{ model }} === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: {{ model }} !== {{ tab.key | tojson }} }'
             role="tab"
             aria-selected="{{ 'true' if loop.first else 'false' }}"

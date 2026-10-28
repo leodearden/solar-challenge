@@ -4,55 +4,10 @@ No tab's colours fade in as the page loads, and a click still fades the selected
 colours from the tab that had them to the clicked tab alone.
 """
 
-from collections.abc import Callable
-
 import pytest
 from playwright.sync_api import Page, expect
 
-
-def _simulate_home_path(request: pytest.FixtureRequest) -> str:
-    return "/simulate/home"
-
-
-def _results_home_path(request: pytest.FixtureRequest) -> str:
-    run_id, _ = request.getfixturevalue("seeded_home_run")
-    return f"/results/home/{run_id}"
-
-
-def _results_fleet_path(request: pytest.FixtureRequest) -> str:
-    run_id, _ = request.getfixturevalue("seeded_fleet_run")
-    return f"/results/fleet/{run_id}"
-
-
-def _history_compare_path(request: pytest.FixtureRequest) -> str:
-    runs = request.getfixturevalue("seeded_home_runs_pair")
-    return "/history/compare?ids=" + ",".join(run_id for run_id, _ in runs)
-
-
-# Each page with a tab bar: its path, given the test's request, through which a page of stored runs requests the
-# fixture seeding them, and its tabs' names, the opening tab first.
-_PAGES_WITH_TAB_BARS = [
-    pytest.param(
-        _simulate_home_path,
-        ("PV", "Battery", "Load", "Heat Pump", "Tariff", "Location", "Period"),
-        id="simulate-home",
-    ),
-    pytest.param(
-        _results_home_path,
-        ("Overview", "Power Flow", "Battery & Finance", "Analysis"),
-        id="results-home",
-    ),
-    pytest.param(
-        _results_fleet_path,
-        ("Aggregate", "Per-Home", "Distributions"),
-        id="results-fleet",
-    ),
-    pytest.param(
-        _history_compare_path,
-        ("Energy Totals", "Efficiency Ratios"),
-        id="history-compare",
-    ),
-]
+from tests.e2e._tab_bar_pages import PAGES_WITH_TAB_BARS, TabBarPage
 
 # An init script. window.tabProbe.colours() reads each tab's bottom border and text colour by tab name, and .fading()
 # the CSS transitions running on the tabs; each page has one tablist. It records two readings in window.tabProbe.load:
@@ -102,34 +57,32 @@ def _tab_colours(page: Page) -> dict[str, dict[str, str]]:
     return page.evaluate("() => window.tabProbe.colours()")
 
 
-@pytest.mark.parametrize(("path_of", "tab_names"), _PAGES_WITH_TAB_BARS)
+@pytest.mark.parametrize("tab_bar_page", PAGES_WITH_TAB_BARS)
 def test_a_page_paints_its_tabs_in_their_colours_before_alpine_starts_so_none_fades_in(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    path_of: Callable[[pytest.FixtureRequest], str],
-    tab_names: tuple[str, ...],
+    tab_bar_page: TabBarPage,
 ) -> None:
     """Before Alpine starts, each tab already has the colours it keeps once the page has settled, and no tab's colours are fading as Alpine starts."""
-    url = live_server + path_of(request)
-    _open_with_the_tabs_recorded(page, url, tab_names[0])
+    url = live_server + tab_bar_page.path_of(request)
+    _open_with_the_tabs_recorded(page, url, tab_bar_page.tab_names[0])
     assert page.evaluate("() => window.tabProbe.load") == {
         "colours_before_alpine": _tab_colours(page),
         "fading_as_alpine_starts": [],
     }
 
 
-@pytest.mark.parametrize(("path_of", "tab_names"), _PAGES_WITH_TAB_BARS)
+@pytest.mark.parametrize("tab_bar_page", PAGES_WITH_TAB_BARS)
 def test_a_click_on_a_tab_fades_the_selected_colours_from_the_tab_that_had_them_to_it_alone(
     page: Page,
     live_server: str,
     request: pytest.FixtureRequest,
-    path_of: Callable[[pytest.FixtureRequest], str],
-    tab_names: tuple[str, ...],
+    tab_bar_page: TabBarPage,
 ) -> None:
     """Each click fades exactly two tabs, the one selected before and the one clicked, and leaves the clicked tab alone in the colours the opening tab loaded with. The opening tab is clicked last, so its click too has to move the selection. A ternary-string :class fails it: Alpine's string form adds and undoes only the classes it added itself, so it never removes one the server drew, while the object form tab_bar binds removes a false key's classes."""
-    url = live_server + path_of(request)
-    opening_tab, *other_tabs = tab_names
+    url = live_server + tab_bar_page.path_of(request)
+    opening_tab, *other_tabs = tab_bar_page.tab_names
     _open_with_the_tabs_recorded(page, url, opening_tab)
     loaded = _tab_colours(page)
     selected, unselected = loaded[opening_tab], loaded[other_tabs[0]]
@@ -142,6 +95,6 @@ def test_a_click_on_a_tab_fades_the_selected_colours_from_the_tab_that_had_them_
         page.wait_for_function(_NO_TAB_FADING)
         assert ({transition["tab"] for transition in fading}, _tab_colours(page)) == (
             {previously_selected, clicked},
-            {name: selected if name == clicked else unselected for name in tab_names},
+            {name: selected if name == clicked else unselected for name in tab_bar_page.tab_names},
         ), f"after a click on the {clicked!r} tab"
         previously_selected = clicked
