@@ -410,7 +410,7 @@ def test_a_stream_open_for_more_than_ten_minutes_sends_the_timed_out_frame_and_e
     assert list(stream) == [_TIMED_OUT_FRAME]
 
 
-@pytest.mark.parametrize(("header", "version"), [("0", 0), ("17", 17), ("9" * 18, 999999999999999999)])
+@pytest.mark.parametrize(("header", "version"), [("0", 0), ("17", 17), ("9" * 18, 10**18 - 1)])
 def test_a_last_event_id_of_ascii_digits_names_that_version(header: str, version: int) -> None:
     assert parse_last_event_id(header) == version
 
