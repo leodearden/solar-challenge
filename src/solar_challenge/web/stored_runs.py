@@ -14,7 +14,8 @@ finish. A run is read only after its format.json names RUN_FORMAT_VERSION.
 A document is read strictly, as StoredDocument.read reads it, by web/field_tree.py's
 read_field_tree, and a value it refuses becomes a StoredRunUnreadable naming the run, the
 document, the field's dotted path and the reason. Non-JSON text, a document that is missing or
-cannot be read, and a time series that cannot be read are refused the same way.
+cannot be read, a time series that cannot be read, and one whose index SimulationResults.window
+refuses are refused the same way.
 StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the boundary
 answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
@@ -463,18 +464,22 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
 
     Raises:
         StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions or a
-            damaged page, or is not a parquet of a SimulationResults' columns, the error being the
-            cause; the field is None.
+            damaged page, is not a parquet of a SimulationResults' columns, or has an index
+            SimulationResults.window refuses: not a DatetimeIndex, empty, one row with no
+            fixed-duration freq, or rows not evenly spaced at a positive cadence. The error is
+            the cause, and the field is None.
     """
     path = run_dir / name
     if not path.is_file():
         raise StoredRunUnreadable(run_id, name, None, "is missing")
     try:
-        return SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+        results = SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+        results.window
     except ValueError as refusal:
         raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
     except OSError as unreadable:
         raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
+    return results
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
