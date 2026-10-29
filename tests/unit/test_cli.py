@@ -349,7 +349,7 @@ class TestErrorHandling:
         [
             pytest.param(
                 {"loan_term_years": float("inf")},
-                "loan_term_years must be a finite whole number, got inf",
+                "loan_term_years must be a finite number, got inf",
                 id="infinite-loan-term",
             ),
             pytest.param(
@@ -360,8 +360,25 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "EventWindow.months values must be in 1..12, got (13,)",
+                "months[0] must be between 1 and 12, got 13",
                 id="event-window-month-13",
+            ),
+            pytest.param(
+                {
+                    "grid_services_events": {
+                        "event_windows": [
+                            {
+                                "months": [11],
+                                "weekdays": [0],
+                                "hours": [17],
+                                "events_per_year": 1,
+                                "event_hours": float("inf"),
+                            }
+                        ]
+                    }
+                },
+                "event_hours must be a finite number, got inf",
+                id="event-window-infinite-event-hours",
             ),
         ],
     )

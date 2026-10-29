@@ -20,6 +20,7 @@ from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
 )
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 REPEATED_OFF_PEAK_TARIFF = TariffConfig(
     periods=(
@@ -82,6 +83,24 @@ class TestTariffPeriodValidation:
         message = str(refusal.value)
         assert "rate_per_kwh" in message
         assert names_as_a_word(message, rate)
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_rate_that_is_not_a_finite_number_is_refused_with_the_leafs_wording(
+        self, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod("09:00", "17:00", value)
+        assert str(refusal.value) == f"rate_per_kwh must be a finite number, got {value!r}"
+
+    def test_a_negative_rate_is_refused_naming_its_bound(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod("09:00", "17:00", -0.1)
+        assert str(refusal.value) == "rate_per_kwh must be at least 0, got -0.1"
+
+    def test_a_whole_rate_is_held_as_the_float_it_reads(self) -> None:
+        rate = TariffPeriod("00:00", "00:00", 1).rate_per_kwh
+        assert rate == 1.0
+        assert type(rate) is float
 
     def test_invalid_start_time_format(self):
         """Invalid start time format raises ConfigurationError."""
@@ -412,6 +431,21 @@ class TestTariffConfigFlatRate:
         tariff = TariffConfig.flat_rate(0.20)
         assert "0.20" in tariff.name
         assert "Flat rate" in tariff.name
+
+    @pytest.mark.parametrize("value", [pytest.param("x", id="word"), pytest.param(True, id="boolean")])
+    def test_flat_rate_refuses_a_rate_that_is_not_a_finite_number_naming_it(
+        self, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffConfig.flat_rate(value)
+        assert str(refusal.value) == f"rate_per_kwh must be a finite number, got {value!r}"
+
+    def test_flat_rate_names_itself_after_the_float_it_read(self) -> None:
+        tariff = TariffConfig.flat_rate(1)
+        assert tariff.name == "Flat rate 1.00 £/kWh"
+        rate = tariff.periods[0].rate_per_kwh
+        assert rate == 1.0
+        assert type(rate) is float
 
     def test_flat_rate_covers_2359_boundary(self):
         """flat_rate tariff covers 23:59:00 (last minute of the day).

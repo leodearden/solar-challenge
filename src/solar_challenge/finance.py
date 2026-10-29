@@ -46,6 +46,15 @@ from solar_challenge.gridservices import (
     GridServicesModel,
     NoGridServices,
 )
+from solar_challenge.number_fields import (
+    FRACTION,
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    as_finite_float,
+    as_whole_number,
+    read_field,
+)
 from solar_challenge.seg import SEGTariff
 from solar_challenge.whole_numbers import whole_number
 
@@ -67,7 +76,8 @@ class FinanceConfig:
     Holds investor-spreadsheet defaults used to compute project NPV, payback
     period, and per-home savings.
     All monetary values are in nominal GBP or pence; rates are fractional.
-    Every number must be finite.
+    Every number is read through number_fields and held as read: a float or,
+    for the two year counts, an int.
 
     Attributes:
         standing_charge_pence_per_day: Retail grid standing charge (required).
@@ -132,69 +142,34 @@ class FinanceConfig:
     grid_services_events: Optional["GridServicesEventsConfig"] = None
 
     def __post_init__(self) -> None:
-        """Validate financial parameters, raising ConfigurationError on violation."""
-        for field_name in ("loan_term_years", "asset_life_years"):
-            years = getattr(self, field_name)
-            whole_years = whole_number(years)
-            if whole_years is None:
-                raise ConfigurationError(
-                    f"{field_name} must be a finite whole number, got {years}"
-                )
-            object.__setattr__(self, field_name, whole_years)
-        if not (0.0 <= self.vat_rate <= 1.0):
-            raise ConfigurationError(
-                f"vat_rate must be in [0, 1], got {self.vat_rate}"
-            )
-        if not (0.0 <= self.equity_fraction <= 1.0):
-            raise ConfigurationError(
-                f"equity_fraction must be in [0, 1], got {self.equity_fraction}"
-            )
-        if self.self_consumption_override is not None:
-            if not (0.0 < self.self_consumption_override <= 1.0):
-                raise ConfigurationError(
-                    "self_consumption_override must be in (0, 1] when set, "
-                    f"got {self.self_consumption_override}"
-                )
-        if self.loan_term_years <= 0:
-            raise ConfigurationError(
-                f"loan_term_years must be > 0, got {self.loan_term_years}"
-            )
-        if self.asset_life_years < self.loan_term_years:
-            raise ConfigurationError(
-                f"asset_life_years ({self.asset_life_years}) must be >= "
-                f"loan_term_years ({self.loan_term_years})"
-            )
-        _positive_fields = {
-            "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
-            "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
-            "pv_cost_per_kwp_gbp": self.pv_cost_per_kwp_gbp,
-            "roof_fit_cost_gbp": self.roof_fit_cost_gbp,
-            "battery_cost_per_kwh_gbp": self.battery_cost_per_kwh_gbp,
-            "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
-        }
-        for field_name, value in _positive_fields.items():
-            if not 0.0 < value < math.inf:
-                raise ConfigurationError(
-                    f"{field_name} must be > 0 and finite, got {value}"
-                )
-        _non_negative_fields = {
-            "loan_rate": self.loan_rate,
-            "grant_gbp": self.grant_gbp,
-            "inverter_cost_per_kw_gbp": self.inverter_cost_per_kw_gbp,
-            "own_use_rate_pence_per_kwh": self.own_use_rate_pence_per_kwh,
-            "retained_cash_floor_per_home_per_year_gbp": self.retained_cash_floor_per_home_per_year_gbp,
-            "grid_services_income_per_kw_per_year_gbp": self.grid_services_income_per_kw_per_year_gbp,
-        }
-        for field_name, value in _non_negative_fields.items():
-            if not 0.0 <= value < math.inf:
-                raise ConfigurationError(
-                    f"{field_name} must be >= 0 and finite, got {value}"
-                )
+        """Read every number through number_fields, then refuse an unknown grid-services model or an asset life shorter than the loan term, raising ConfigurationError."""
+        read_field(self, "standing_charge_pence_per_day", as_finite_float, POSITIVE)
+        read_field(self, "vat_rate", as_finite_float, UNIT_INTERVAL)
+        read_field(self, "retail_baseline_rate_pence_per_kwh", as_finite_float, POSITIVE)
+        read_field(self, "self_consumption_override", as_finite_float, FRACTION, optional=True)
+        read_field(self, "pv_cost_per_kwp_gbp", as_finite_float, POSITIVE)
+        read_field(self, "roof_fit_cost_gbp", as_finite_float, POSITIVE)
+        read_field(self, "battery_cost_per_kwh_gbp", as_finite_float, POSITIVE)
+        read_field(self, "inverter_cost_per_kw_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "grant_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "equity_fraction", as_finite_float, UNIT_INTERVAL)
+        read_field(self, "loan_term_years", as_whole_number, POSITIVE)
+        read_field(self, "loan_rate", as_finite_float, NON_NEGATIVE)
+        read_field(self, "opex_per_home_per_year_gbp", as_finite_float, POSITIVE)
+        read_field(self, "asset_life_years", as_whole_number)
+        read_field(self, "own_use_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "retained_cash_floor_per_home_per_year_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "grid_services_income_per_kw_per_year_gbp", as_finite_float, NON_NEGATIVE)
         _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
         if self.grid_services_model not in _VALID_GS_MODELS:
             raise ConfigurationError(
                 f"grid_services_model must be one of {sorted(_VALID_GS_MODELS)}, "
                 f"got '{self.grid_services_model}'"
+            )
+        if self.asset_life_years < self.loan_term_years:
+            raise ConfigurationError(
+                f"asset_life_years ({self.asset_life_years}) must be >= "
+                f"loan_term_years ({self.loan_term_years})"
             )
 
 

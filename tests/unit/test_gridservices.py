@@ -2,7 +2,6 @@
 """Tests for solar_challenge.gridservices — EventWindow, rate bands, events config."""
 
 import dataclasses
-import math
 import pickle
 import warnings
 from collections.abc import Callable
@@ -31,6 +30,11 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+_NOT_FINITE_NUMBERS = [*UNUSABLE_NUMBERS, pytest.param("x", id="word")]
+_RATE_BAND_FIELDS = ("availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh", "flat_gbp_per_kw_per_year")
+_VALID_EVENT_WINDOW = EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -144,46 +148,71 @@ class TestEventWindowValidation:
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(), events_per_year=1, event_hours=1.0)
 
-    def test_month_out_of_range_raises(self) -> None:
-        """Month value outside 1..12 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(0,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(13,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
+    def test_lists_and_whole_numbers_are_held_as_the_tuples_and_numbers_read(self) -> None:
+        window = EventWindow(
+            months=[1, 2], weekdays=[0, 4], hours=[16.0, 17], events_per_year=12.0, event_hours=3
+        )
+        assert (window.months, window.weekdays, window.hours) == ((1, 2), (0, 4), (16, 17))
+        for values in (window.months, window.weekdays, window.hours):
+            assert type(values) is tuple
+            assert [type(value) for value in values] == [int, int]
+        assert window.events_per_year == 12
+        assert type(window.events_per_year) is int
+        assert window.event_hours == 3.0
+        assert type(window.event_hours) is float
 
-    def test_weekday_out_of_range_raises(self) -> None:
-        """Weekday value outside 0..6 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(-1,), hours=(16,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(7,), hours=(16,), events_per_year=1, event_hours=1.0)
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            pytest.param("months", (0,), "months[0] must be between 1 and 12, got 0", id="month-0"),
+            pytest.param("months", (13,), "months[0] must be between 1 and 12, got 13", id="month-13"),
+            pytest.param(
+                "months", (11, 0), "months[1] must be between 1 and 12, got 0", id="second-month-0"
+            ),
+            pytest.param("weekdays", (-1,), "weekdays[0] must be between 0 and 6, got -1", id="weekday--1"),
+            pytest.param("weekdays", (7,), "weekdays[0] must be between 0 and 6, got 7", id="weekday-7"),
+            pytest.param("hours", (-1,), "hours[0] must be between 0 and 23, got -1", id="hour--1"),
+            pytest.param("hours", (24,), "hours[0] must be between 0 and 23, got 24", id="hour-24"),
+            pytest.param("months", (1.5,), "months[0] must be a whole number, got 1.5", id="month-1.5"),
+            pytest.param("months", "x", "months must be a list of whole numbers, got 'x'", id="months-word"),
+            pytest.param("months", 12, "months must be a list of whole numbers, got 12", id="months-bare-12"),
+            pytest.param(
+                "events_per_year", 0, "events_per_year must be greater than 0, got 0", id="events-0"
+            ),
+            pytest.param(
+                "events_per_year", -1, "events_per_year must be greater than 0, got -1", id="events--1"
+            ),
+            pytest.param(
+                "events_per_year", 2.5, "events_per_year must be a whole number, got 2.5", id="events-2.5"
+            ),
+            pytest.param("event_hours", 0.0, "event_hours must be greater than 0, got 0.0", id="hours-0"),
+            pytest.param("event_hours", -1.0, "event_hours must be greater than 0, got -1.0", id="hours--1"),
+        ],
+    )
+    def test_a_value_its_field_cannot_hold_is_refused_naming_it(
+        self, field: str, value: object, message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: value})
+        assert str(exc_info.value) == message
 
-    def test_hour_out_of_range_raises(self) -> None:
-        """Hour value outside 0..23 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(-1,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(24,), events_per_year=1, event_hours=1.0)
+    @pytest.mark.parametrize("field", ["months", "weekdays", "hours"])
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_an_element_that_is_not_a_finite_number_is_refused_naming_its_position(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: (value,)})
+        assert str(exc_info.value) == f"{field}[0] must be a finite number, got {value!r}"
 
-    def test_events_per_year_zero_raises(self) -> None:
-        """events_per_year == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=0, event_hours=1.0)
-
-    def test_events_per_year_negative_raises(self) -> None:
-        """events_per_year < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=-1, event_hours=1.0)
-
-    def test_event_hours_zero_raises(self) -> None:
-        """event_hours == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=0.0)
-
-    def test_event_hours_negative_raises(self) -> None:
-        """event_hours < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=-1.0)
+    @pytest.mark.parametrize("field", ["events_per_year", "event_hours"])
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_a_number_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     def test_valid_event_window_is_frozen(self) -> None:
         """Valid EventWindow is frozen — attribute assignment raises FrozenInstanceError."""
@@ -306,15 +335,26 @@ class TestGridServicesRateBands:
         with pytest.raises(ValueError):
             resolve_grid_services_rate_band("extreme")
 
-    def test_rate_band_rejects_negative_availability(self) -> None:
-        """GridServicesRateBand raises ConfigurationError for negative availability, naming the field."""
-        with pytest.raises(ConfigurationError, match="availability_gbp_per_kw_per_event"):
-            GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=5.0)
+    @pytest.mark.parametrize("field", _RATE_BAND_FIELDS)
+    def test_rate_band_refuses_a_negative_rate_naming_its_bound(self, field: str) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(GRID_SERVICES_RATE_BANDS.central, **{field: -1.0})
+        assert str(exc_info.value) == f"{field} must be at least 0, got -1.0"
 
-    def test_rate_band_rejects_negative_utilisation(self) -> None:
-        """GridServicesRateBand raises ConfigurationError for negative utilisation, naming the field."""
-        with pytest.raises(ConfigurationError, match="utilisation_gbp_per_mwh"):
-            GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=-5.0)
+    @pytest.mark.parametrize("field", _RATE_BAND_FIELDS)
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_rate_band_refuses_a_rate_that_is_not_a_finite_number_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(GRID_SERVICES_RATE_BANDS.central, **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_rate_band_holds_whole_rates_as_the_floats_it_reads(self) -> None:
+        band = GridServicesRateBand(1, 60)
+        assert (band.availability_gbp_per_kw_per_event, band.utilisation_gbp_per_mwh) == (1.0, 60.0)
+        assert type(band.availability_gbp_per_kw_per_event) is float
+        assert type(band.utilisation_gbp_per_mwh) is float
 
     def test_rate_band_is_frozen(self) -> None:
         """GridServicesRateBand is frozen — attribute assignment raises FrozenInstanceError."""
@@ -349,15 +389,6 @@ class TestGridServicesRateBands:
         band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
 
         assert band.flat_gbp_per_kw_per_year == 0.0
-
-    @pytest.mark.parametrize("rate", [-1.0, float("nan"), float("inf")])
-    def test_rate_band_refuses_a_flat_rate_that_is_negative_or_not_finite(self, rate: float) -> None:
-        with pytest.raises(ConfigurationError, match="flat_gbp_per_kw_per_year"):
-            GridServicesRateBand(
-                availability_gbp_per_kw_per_event=1.0,
-                utilisation_gbp_per_mwh=5.0,
-                flat_gbp_per_kw_per_year=rate,
-            )
 
     def test_rate_band_accepts_a_zero_flat_rate(self) -> None:
         band = GridServicesRateBand(
@@ -438,40 +469,48 @@ class TestGridServicesEventsConfigDefaults:
 class TestGridServicesEventsConfigValidation:
     """GridServicesEventsConfig.__post_init__ rejects invalid fields."""
 
-    def test_negative_availability_override_raises(self) -> None:
-        """Negative availability_gbp_per_kw_per_event raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(availability_gbp_per_kw_per_event=-0.01)
+    @pytest.mark.parametrize(
+        ("field", "value", "bound"),
+        [
+            pytest.param("aggregator_share", -0.01, "at least 0 and less than 1", id="share-negative"),
+            pytest.param("aggregator_share", 1.0, "at least 0 and less than 1", id="share-one"),
+            pytest.param("aggregator_share", 1.1, "at least 0 and less than 1", id="share-above-one"),
+            pytest.param("utilisation_factor", -0.01, "between 0 and 1", id="factor-negative"),
+            pytest.param("utilisation_factor", 1.01, "between 0 and 1", id="factor-above-one"),
+            pytest.param(
+                "availability_gbp_per_kw_per_event", -0.01, "at least 0", id="availability-negative"
+            ),
+            pytest.param("utilisation_gbp_per_mwh", -1.0, "at least 0", id="utilisation-negative"),
+        ],
+    )
+    def test_a_number_outside_its_range_is_refused_naming_the_range(
+        self, field: str, value: float, bound: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            GridServicesEventsConfig(**{field: value})
+        assert str(exc_info.value) == f"{field} must be {bound}, got {value!r}"
 
-    def test_negative_utilisation_override_raises(self) -> None:
-        """Negative utilisation_gbp_per_mwh raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(utilisation_gbp_per_mwh=-1.0)
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "aggregator_share",
+            "utilisation_factor",
+            "availability_gbp_per_kw_per_event",
+            "utilisation_gbp_per_mwh",
+        ],
+    )
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_a_number_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            GridServicesEventsConfig(**{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    def test_aggregator_share_negative_raises(self) -> None:
-        """aggregator_share < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(aggregator_share=-0.01)
-
-    def test_aggregator_share_exactly_one_raises(self) -> None:
-        """aggregator_share == 1.0 raises ConfigurationError ([0, 1) bound)."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(aggregator_share=1.0)
-
-    def test_aggregator_share_greater_than_one_raises(self) -> None:
-        """aggregator_share > 1 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(aggregator_share=1.1)
-
-    def test_utilisation_factor_negative_raises(self) -> None:
-        """utilisation_factor < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(utilisation_factor=-0.01)
-
-    def test_utilisation_factor_greater_than_one_raises(self) -> None:
-        """utilisation_factor > 1 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            GridServicesEventsConfig(utilisation_factor=1.01)
+    def test_a_whole_aggregator_share_is_held_as_the_float_it_reads(self) -> None:
+        share = GridServicesEventsConfig(aggregator_share=0).aggregator_share
+        assert share == 0.0
+        assert type(share) is float
 
     def test_empty_event_windows_raises(self) -> None:
         """Empty event_windows tuple raises ConfigurationError."""
@@ -1367,10 +1406,22 @@ class TestPricingValuesPriceAFleet:
         assert priced > 0.0
         assert cfg.annual_income_gbp(fleet) == priced
 
-    @pytest.mark.parametrize("rate", [0.0, -1.0, math.inf, math.nan])
-    def test_flat_refuses_a_rate_that_is_not_positive_and_finite(self, rate: float) -> None:
-        with pytest.raises(ConfigurationError, match="income_per_kw_per_year_gbp"):
+    @pytest.mark.parametrize("rate", [0.0, -1.0])
+    def test_flat_refuses_a_rate_that_is_not_positive_naming_its_bound(self, rate: float) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
             FlatGridServices(rate)
+        assert str(exc_info.value) == f"income_per_kw_per_year_gbp must be greater than 0, got {rate!r}"
+
+    @pytest.mark.parametrize("rate", _NOT_FINITE_NUMBERS)
+    def test_flat_refuses_a_rate_that_is_not_a_finite_number_naming_it(self, rate: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            FlatGridServices(rate)
+        assert str(exc_info.value) == f"income_per_kw_per_year_gbp must be a finite number, got {rate!r}"
+
+    def test_flat_holds_a_whole_rate_as_the_float_it_reads(self) -> None:
+        rate = FlatGridServices(12).income_per_kw_per_year_gbp
+        assert rate == 12.0
+        assert type(rate) is float
 
     def test_pricing_values_are_frozen(self) -> None:
         with pytest.raises(dataclasses.FrozenInstanceError):

@@ -29,6 +29,7 @@ from types import MappingProxyType
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 
 
 @dataclass(frozen=True)
@@ -73,29 +74,15 @@ class FlexibilityValueBand:
     provenance: str
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Read the four amounts through number_fields as finite numbers of at least 0, holding the floats read, then refuse an empty name or provenance, raising ConfigurationError."""
+        read_field(self, "time_shift_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "grid_services_per_home_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "grid_services_per_kw_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "total_gbp", as_finite_float, NON_NEGATIVE)
         if not self.name:
             raise ConfigurationError("name must be a non-empty string")
         if not self.provenance:
             raise ConfigurationError("provenance must be a non-empty string")
-        if self.time_shift_gbp < 0:
-            raise ConfigurationError(
-                f"time_shift_gbp must be non-negative, got {self.time_shift_gbp}"
-            )
-        if self.grid_services_per_home_gbp < 0:
-            raise ConfigurationError(
-                f"grid_services_per_home_gbp must be non-negative, "
-                f"got {self.grid_services_per_home_gbp}"
-            )
-        if self.grid_services_per_kw_gbp < 0:
-            raise ConfigurationError(
-                f"grid_services_per_kw_gbp must be non-negative, "
-                f"got {self.grid_services_per_kw_gbp}"
-            )
-        if self.total_gbp < 0:
-            raise ConfigurationError(
-                f"total_gbp must be non-negative, got {self.total_gbp}"
-            )
 
 
 # Representative battery discharge power in kW — matches the default of

@@ -24,6 +24,7 @@ from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _YEAR_FIELDS = ("loan_term_years", "asset_life_years")
 _FLOAT_FIELDS = tuple(
@@ -67,6 +68,13 @@ class TestFinanceConfig:
         """FinanceConfig can be constructed with only standing_charge_pence_per_day."""
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.standing_charge_pence_per_day == 60.0
+
+    def test_whole_number_amounts_are_held_as_the_floats_they_read(self) -> None:
+        fc = FinanceConfig(standing_charge_pence_per_day=60, grant_gbp=250000)
+        assert fc.standing_charge_pence_per_day == 60.0
+        assert type(fc.standing_charge_pence_per_day) is float
+        assert fc.grant_gbp == 250000.0
+        assert type(fc.grant_gbp) is float
 
     @pytest.mark.parametrize(
         ("field_name", "declared_default"),
@@ -257,16 +265,21 @@ class TestFinanceConfigValidation:
     # ---- year counts (whole numbers) ----
 
     @pytest.mark.parametrize("field", _YEAR_FIELDS)
-    @pytest.mark.parametrize("value", [20.5, True, pytest.param(np.True_, id="numpy-bool")])
+    @pytest.mark.parametrize(
+        ("value", "requirement"),
+        [
+            pytest.param(20.5, "a whole number", id="fraction"),
+            pytest.param(True, "a finite number", id="bool"),
+            pytest.param(np.True_, "a finite number", id="numpy-bool"),
+        ],
+    )
     def test_a_year_count_that_is_not_a_whole_number_is_refused(
-        self, field: str, value: object
+        self, field: str, value: object, requirement: str
     ) -> None:
         """A fractional or boolean year count is refused, naming the field and the value."""
-        with pytest.raises(
-            ConfigurationError,
-            match=re.escape(f"{field} must be a finite whole number, got {value}"),
-        ):
+        with pytest.raises(ConfigurationError) as exc_info:
             FinanceConfig(**self._BASE, **{field: value})
+        assert str(exc_info.value) == f"{field} must be {requirement}, got {value!r}"
 
     @pytest.mark.parametrize("field", _YEAR_FIELDS)
     @pytest.mark.parametrize(
@@ -393,6 +406,51 @@ class TestFinanceConfigValidation:
             match=rf"^{re.escape(field)} must be .+, got {re.escape(str(value))}$",
         ):
             FinanceConfig(**{**self._BASE, field: value})
+
+    @pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_number_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        """A NaN, an infinity, an int too large for a float, a bool or a word is refused by name, before any range is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            FinanceConfig(**{**self._BASE, field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            pytest.param(
+                "standing_charge_pence_per_day",
+                0.0,
+                "standing_charge_pence_per_day must be greater than 0, got 0.0",
+                id="standing-charge-zero",
+            ),
+            pytest.param("vat_rate", 2.0, "vat_rate must be between 0 and 1, got 2.0", id="vat-above-1"),
+            pytest.param(
+                "self_consumption_override",
+                0.0,
+                "self_consumption_override must be greater than 0 and at most 1, got 0.0",
+                id="override-zero",
+            ),
+            pytest.param(
+                "equity_fraction",
+                1.5,
+                "equity_fraction must be between 0 and 1, got 1.5",
+                id="equity-above-1",
+            ),
+            pytest.param(
+                "loan_term_years", 0, "loan_term_years must be greater than 0, got 0", id="loan-term-zero"
+            ),
+            pytest.param("grant_gbp", -1.0, "grant_gbp must be at least 0, got -1.0", id="grant-negative"),
+        ],
+    )
+    def test_a_number_outside_its_range_is_refused_naming_the_range(
+        self, field: str, value: float, message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            FinanceConfig(**{**self._BASE, field: value})
+        assert str(exc_info.value) == message
 
 
 class TestFinanceConfigParsing:
@@ -589,7 +647,7 @@ class TestFinanceConfigParsing:
     def test_a_fractional_year_count_is_refused_not_truncated(self, field: str) -> None:
         """A fractional year count reaches FinanceConfig, which refuses it, rather than being truncated to a whole year."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{field} must be a finite whole number, got 20.7")
+            ConfigurationError, match=re.escape(f"{field} must be a whole number, got 20.7")
         ):
             parse_finance_config({"standing_charge_pence_per_day": 60.0, field: 20.7})
 
@@ -728,7 +786,7 @@ class TestScenarioFinance:
 
         with pytest.raises(
             ConfigurationError,
-            match=re.escape("pv_cost_per_kwp_gbp must be > 0 and finite, got nan"),
+            match=re.escape("pv_cost_per_kwp_gbp must be a finite number, got nan"),
         ):
             load_scenarios(path)
 

@@ -16,6 +16,7 @@ from solar_challenge.flex import (
     resolve_flex_band,
 )
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestFlexibilityValueBand:
@@ -74,25 +75,33 @@ class TestFlexibilityValueBand:
 
     # --- validation: negative monetary fields ---
 
-    def test_negative_time_shift_raises(self):
-        """Negative time_shift_gbp raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="time_shift_gbp"):
-            self._make_band(time_shift_gbp=-1.0)
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("time_shift_gbp", -1.0),
+            ("grid_services_per_home_gbp", -0.01),
+            ("grid_services_per_kw_gbp", -5.0),
+            ("total_gbp", -1.0),
+        ],
+    )
+    def test_a_negative_amount_is_refused_naming_its_bound(self, field, value):
+        with pytest.raises(ConfigurationError) as exc_info:
+            self._make_band(**{field: value})
+        assert str(exc_info.value) == f"{field} must be at least 0, got {value!r}"
 
-    def test_negative_grid_services_per_home_raises(self):
-        """Negative grid_services_per_home_gbp raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="grid_services_per_home_gbp"):
-            self._make_band(grid_services_per_home_gbp=-0.01)
+    @pytest.mark.parametrize(
+        "field", ["time_shift_gbp", "grid_services_per_home_gbp", "grid_services_per_kw_gbp", "total_gbp"]
+    )
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_an_amount_that_is_not_a_finite_number_is_refused_naming_it(self, field, value):
+        with pytest.raises(ConfigurationError) as exc_info:
+            self._make_band(**{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    def test_negative_grid_services_per_kw_raises(self):
-        """Negative grid_services_per_kw_gbp raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="grid_services_per_kw_gbp"):
-            self._make_band(grid_services_per_kw_gbp=-5.0)
-
-    def test_negative_total_gbp_raises(self):
-        """Negative total_gbp raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="total_gbp"):
-            self._make_band(total_gbp=-1.0)
+    def test_a_whole_amount_is_held_as_the_float_it_reads(self):
+        time_shift = self._make_band(time_shift_gbp=100).time_shift_gbp
+        assert time_shift == 100.0
+        assert type(time_shift) is float
 
     def test_zero_monetary_fields_are_valid(self):
         """Zero values for monetary fields are valid (non-negative)."""

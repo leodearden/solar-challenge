@@ -2,18 +2,20 @@
 
 import dataclasses
 import itertools
-import math
+from collections.abc import Callable
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, require_valid_capacity_setting
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
 from solar_challenge.pv import PVConfig
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +49,15 @@ def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
     )
 
 
+def _outcome_of(read: Callable[[], object]) -> tuple[type, object]:
+    """The type and value *read* returns, or the type and message of the ConfigurationError it raises."""
+    try:
+        value = read()
+    except ConfigurationError as refusal:
+        return type(refusal), str(refusal)
+    return type(value), value
+
+
 class TestConfigPoint:
     """Tests for the ConfigPoint frozen value-object."""
 
@@ -68,47 +79,62 @@ class TestConfigPoint:
         cp = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.68)
         assert cp.battery_kwh == 0.0
 
-    def test_pv_kwp_zero_raises(self) -> None:
-        """pv_kwp==0 raises ValueError."""
-        with pytest.raises(ValueError, match="pv_kwp"):
-            ConfigPoint(pv_kwp=0.0, battery_kwh=5.0, inverter_kw=3.68)
-
-    def test_pv_kwp_negative_raises(self) -> None:
-        """pv_kwp<0 raises ValueError."""
-        with pytest.raises(ValueError, match="pv_kwp"):
-            ConfigPoint(pv_kwp=-1.0, battery_kwh=5.0, inverter_kw=3.68)
-
-    def test_battery_kwh_negative_raises(self) -> None:
-        """battery_kwh<0 raises ValueError."""
-        with pytest.raises(ValueError, match="battery_kwh"):
-            ConfigPoint(pv_kwp=4.0, battery_kwh=-0.1, inverter_kw=3.68)
-
-    def test_inverter_kw_zero_raises(self) -> None:
-        """inverter_kw==0 raises ValueError."""
-        with pytest.raises(ValueError, match="inverter_kw"):
-            ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=0.0)
-
-    def test_inverter_kw_negative_raises(self) -> None:
-        """inverter_kw<0 raises ValueError."""
-        with pytest.raises(ValueError, match="inverter_kw"):
-            ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=-3.68)
-
-    @pytest.mark.parametrize("value", [math.nan, math.inf])
-    @pytest.mark.parametrize("field", ["pv_kwp", "inverter_kw"])
-    def test_a_pv_or_inverter_capacity_that_is_not_finite_is_refused_naming_it(
-        self, field: str, value: float
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            pytest.param("pv_kwp", 0.0, "pv_kwp must be greater than 0, got 0.0", id="pv-zero"),
+            pytest.param("pv_kwp", -1.0, "pv_kwp must be greater than 0, got -1.0", id="pv-negative"),
+            pytest.param(
+                "battery_kwh", -0.1, "battery_kwh must be at least 0, got -0.1", id="battery-negative"
+            ),
+            pytest.param(
+                "inverter_kw", 0.0, "inverter_kw must be greater than 0, got 0.0", id="inverter-zero"
+            ),
+            pytest.param(
+                "inverter_kw", -3.68, "inverter_kw must be greater than 0, got -3.68", id="inverter-negative"
+            ),
+        ],
+    )
+    def test_a_capacity_outside_its_range_is_refused_naming_the_range(
+        self, field: str, value: float, message: str
     ) -> None:
-        """A NaN or infinite pv_kwp or inverter_kw is refused naming the field."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             ConfigPoint(**{"pv_kwp": 4.0, "battery_kwh": 5.0, "inverter_kw": 3.68, field: value})
-        assert str(exc_info.value) == f"{field} must be > 0 and finite, got {value}"
+        assert str(exc_info.value) == message
 
-    @pytest.mark.parametrize("value", [math.nan, math.inf])
-    def test_a_battery_kwh_that_is_not_a_capacity_is_refused_naming_it(self, value: float) -> None:
-        """A NaN or infinite battery_kwh is refused naming it, never read as a battery or as none."""
-        with pytest.raises(ValueError) as exc_info:
-            ConfigPoint(pv_kwp=4.0, battery_kwh=value, inverter_kw=3.68)
-        assert str(exc_info.value) == f"battery_kwh must be a finite number, got {value!r}"
+    @pytest.mark.parametrize("field", ["pv_kwp", "battery_kwh", "inverter_kw"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_capacity_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        """A NaN, an infinity, an int too large for a float, a bool or a word is refused naming the field, never read as a battery or as none."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            ConfigPoint(**{"pv_kwp": 4.0, "battery_kwh": 5.0, "inverter_kw": 3.68, field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_whole_capacities_are_held_as_the_floats_they_read(self) -> None:
+        cp = ConfigPoint(pv_kwp=4, battery_kwh=5, inverter_kw=3)
+        assert (cp.pv_kwp, cp.battery_kwh, cp.inverter_kw) == (4.0, 5.0, 3.0)
+        assert [type(value) for value in (cp.pv_kwp, cp.battery_kwh, cp.inverter_kw)] == [float, float, float]
+
+    @pytest.mark.parametrize(
+        "battery_kwh",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="word"),
+            pytest.param(-0.1, id="negative"),
+            pytest.param(0, id="no-battery"),
+            pytest.param(1e-9, id="tiny"),
+            pytest.param(5, id="whole"),
+            pytest.param("5", id="quoted"),
+            pytest.param(1e9, id="huge"),
+        ],
+    )
+    def test_battery_kwh_is_read_as_battery_reads_a_capacity_setting(self, battery_kwh: object) -> None:
+        """ConfigPoint holds the float battery.require_valid_capacity_setting returns for battery_kwh, or refuses it with the same message."""
+        assert _outcome_of(
+            lambda: ConfigPoint(pv_kwp=4.0, battery_kwh=battery_kwh, inverter_kw=3.68).battery_kwh
+        ) == _outcome_of(lambda: require_valid_capacity_setting(battery_kwh, "battery_kwh"))
 
 
 class TestEnumerateContract:

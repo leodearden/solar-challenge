@@ -828,6 +828,45 @@ the first 01:30 on 2024-10-27; it raises `ValueError` for a minute outside 0 to
 `LocalDay`'s constructor and methods. The 0.5.0 tag has none of these.
 Consumers need no change when they re-pin.
 
+**Unreleased on main** (task 862): `SEGTariff`, `TariffPeriod`, `FinanceConfig`,
+`GridServicesRateBand`, `EventWindow` and `GridServicesEventsConfig`,
+`solar_challenge.flex.FlexibilityValueBand`,
+`solar_challenge.community.CommunityBillingConfig` and
+`solar_challenge.optimize.ConfigPoint` refuse input the 0.5.0 tag accepts, and
+raise `ConfigurationError`, a `ValueError`, naming the field and the value;
+`FlatGridServices`, which the tag lacks, refuses the same way. Each number must
+be a finite number, never a bool (Python's or numpy's), inside its field's
+range, and one that is not a finite number is refused as such before its range
+is checked. The tag accepts e.g. `SEGTariff("x", float("nan"))`,
+`TariffPeriod("00:00", "00:00", True)`,
+`CommunityBillingConfig(seg_rate_pence_per_kwh=-1.0)` and an `EventWindow` with
+`event_hours=float("inf")` or `events_per_year=2.5`; `TariffConfig.flat_rate`
+refuses `True` and `"x"` as its period does, where the tag names a `True`
+rate's tariff "Flat rate 1.00 £/kWh". `EventWindow`'s `months`, `weekdays` and
+`hours` must each be a list of whole numbers in range, an element named by its
+position, e.g. `months[0]`. Each type holds what it read:
+`SEGTariff("x", 4).rate_pence_per_kwh` is `4.0` and
+`EventWindow(months=[1, 2], ...).months` is `(1, 2)`, a tuple of ints, its
+`weekdays` and `hours` likewise; a numeric string such as `"4"` is read as its
+number, a numpy scalar becomes the Python number it equals, and
+`FinanceConfig`'s year counts are still held as ints. Messages name the field
+and the value, e.g. `rate_pence_per_kwh must be at least 0, got -0.5` in place
+of the tag's `SEG rate must be non-negative, got -0.5 p/kWh`, and `months[0]
+must be between 1 and 12, got 13` in place of `EventWindow.months values must be
+in 1..12, got (13,)`. This supersedes the task 374 line's "must be > 0 and
+finite", "must be >= 0 and finite" and "must be a finite whole number", the task
+838 line's `TariffPeriod` rate messages, the task 803 line's flat rate refusal,
+which now reads e.g. `flat_gbp_per_kw_per_year must be at least 0, got -1.0`,
+and the task 774 line's "with the same messages" for `GridServicesRateBand` and
+`FlexibilityValueBand`. `CommunityConfig`'s refusals raise `ConfigurationError`
+where the tag raises a plain `ValueError`, with the same messages. `finance run`
+and `optimize configs` refuse such a finance block before they simulate, e.g.
+`Configuration error: event_hours must be a finite number, got inf`, where the
+tag accepts it; `solar-challenge validate config` reports it as an ERROR row
+for a `scenario:` file, and still does not read a fleet file's `finance:` block.
+Consumers that catch `ValueError` need no change for the type; those that match
+message text, or pass such values, change them when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
