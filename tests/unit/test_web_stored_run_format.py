@@ -26,6 +26,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 from tests._damaged_time_series import rewrite_time_series
@@ -108,6 +109,13 @@ def _refusal(storage: RunStorage, run_id: str, document: str, field: str | None)
     if field is not None:
         assert field in message
     return refusal
+
+
+def _window_refusal(path: Path) -> ValueError:
+    """The ValueError with which SimulationWindow.of_index refuses the index of the time series at *path*."""
+    with pytest.raises(ValueError) as refused:
+        SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow").index)
+    return refused.value
 
 
 def test_a_stored_run_unreadable_is_not_a_value_error() -> None:
@@ -324,11 +332,12 @@ def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_re
     no freq, as parquet keeps none; no rows; and rows spaced at a negative cadence.
     """
     _store_home_run_of_every_shape(storage)
-    rewrite_time_series(stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet", damage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, damage)
 
     refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
 
-    assert isinstance(refusal.__cause__, ValueError)
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
 
 
 def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
@@ -361,11 +370,12 @@ def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_doc
 
 def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_file(storage: RunStorage) -> None:
     _store_fleet_run_of_two_homes(storage)
-    rewrite_time_series(
-        stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet", lambda frame: frame.reset_index(drop=True)
-    )
+    path = stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet"
+    rewrite_time_series(path, lambda frame: frame.reset_index(drop=True))
 
-    _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
+    refusal = _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
+
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
 
 
 def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
