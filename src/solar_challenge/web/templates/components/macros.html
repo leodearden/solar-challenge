@@ -10,6 +10,8 @@
 
 {# The classes every card is drawn in, which only card writes #}
 {% set _card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm' %}
+{# The classes every panel is drawn in, which only panel writes: the card's surface in a larger radius #}
+{% set _panel_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm' %}
 {# The frame of the header band at a card's top, which card's title band and chart_panel's band share #}
 {% set _header_band_classes = 'px-6 border-b border-slate-200 dark:border-slate-700' %}
 
@@ -39,6 +41,14 @@
     {{ caller() }}
     {% endif %}
 {% if href %}</a>{% else %}</div>{% endif %}
+{% endmacro %}
+
+
+{# A panel around its caller's content: a div in the panel classes and classes #}
+{% macro panel(classes='') %}
+<div class="{{ _panel_classes }} {{ classes }}">
+    {{ caller() }}
+</div>
 {% endmacro %}
 
 
