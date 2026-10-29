@@ -349,7 +349,7 @@ class TestErrorHandling:
         [
             pytest.param(
                 {"loan_term_years": float("inf")},
-                "loan_term_years must be a finite whole number, got inf",
+                "loan_term_years must be a finite number, got inf",
                 id="infinite-loan-term",
             ),
             pytest.param(

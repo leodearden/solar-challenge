@@ -563,9 +563,6 @@ def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
 # class no longer makes raises ValueError, so drop the entry then.
 # ---------------------------------------------------------------------------
 REVIEWED_COMPUTED_NAME_WRITES: dict[str, dict[str, str]] = {
-    "FinanceConfig": {
-        "object.__setattr__(self, field_name, whole_years)": "__post_init__ draws field_name from the literal tuple ('loan_term_years', 'asset_life_years'), two of its declared fields",
-    },
     "home.SimulationResults": {
         "object.__setattr__(self, name, series.rename(column))": "__post_init__ draws name from _series_columns(), which reads dataclasses.fields, so each name is a declared field by construction",
     },
