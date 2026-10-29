@@ -1216,6 +1216,7 @@ def test_a_class_whose_constructor_wraps_a_descriptor_whose_type_defines_get_but
     [
         pytest.param(None, id="none"),
         pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
     ],
 )
 def test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_is_spelled_by_the_init_inspect_reads_in_its_place(
