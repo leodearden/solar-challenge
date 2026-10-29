@@ -18,6 +18,7 @@ import pandas as pd
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig, calculate_bill
 from solar_challenge.timebase import SimulationWindow
@@ -43,11 +44,16 @@ class CommunityBillingConfig:
     tariff:
         Community import tariff configuration.
     seg_rate_pence_per_kwh:
-        Smart Export Guarantee rate in pence per kWh.
+        Smart Export Guarantee rate in pence per kWh, a finite number of at
+        least 0, or ``None``.
     """
 
     tariff: Optional[TariffConfig] = None
     seg_rate_pence_per_kwh: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Read a set seg_rate_pence_per_kwh as a finite number of at least 0, holding the float read; None stays None."""
+        read_field(self, "seg_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
 
 
 # ---------------------------------------------------------------------------
