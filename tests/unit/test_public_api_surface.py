@@ -476,6 +476,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "step_minutes": "property (self) -> float",
         "row_energy_kwh": "(self, power_kw: Series) -> Series",
         "energy_kwh": "(self, power_kw: Series) -> float",
+        "rows": "(self) -> DatetimeIndex",
     },
 }
 

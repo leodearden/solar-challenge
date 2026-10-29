@@ -10,11 +10,10 @@ from solar_challenge.timebase import (
     HOURS_PER_MINUTE,
     MINUTES_PER_DAY,
     MINUTES_PER_HOUR,
+    ONE_MINUTE,
     SimulationWindow,
     covered_days,
 )
-
-_MINUTE = timedelta(minutes=1)
 
 
 @pytest.mark.parametrize(
@@ -60,7 +59,7 @@ def test_a_window_annualises_by_its_covered_year(
     scale: float,
     extrapolated: bool,
 ) -> None:
-    window = SimulationWindow(first, last, _MINUTE)
+    window = SimulationWindow(first, last, ONE_MINUTE)
 
     assert window.days == days
     assert window.year_days == year_days
@@ -70,7 +69,7 @@ def test_a_window_annualises_by_its_covered_year(
 
 def test_a_window_refuses_a_last_day_before_its_first_naming_both() -> None:
     with pytest.raises(ValueError) as refusal:
-        SimulationWindow(date(2024, 6, 2), date(2024, 6, 1), _MINUTE)
+        SimulationWindow(date(2024, 6, 2), date(2024, 6, 1), ONE_MINUTE)
 
     assert "2024-06-01" in str(refusal.value)
     assert "2024-06-02" in str(refusal.value)
@@ -104,20 +103,26 @@ def test_step_hours_and_step_minutes_are_the_cadence_in_hours_and_minutes(
 
 
 def test_a_one_minute_cadence_lasts_exactly_hours_per_minute() -> None:
-    window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), _MINUTE)
+    window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), ONE_MINUTE)
 
     assert window.step_hours == HOURS_PER_MINUTE
 
 
+def test_one_minute_is_a_standard_library_minute() -> None:
+    """The standard library's timedelta, the kind a window's cadence holds; pandas' Timedelta subclasses it, so the check is on the exact type."""
+    assert ONE_MINUTE == timedelta(minutes=1)
+    assert type(ONE_MINUTE) is timedelta
+
+
 def test_minutes_per_day_is_the_whole_minutes_in_24_hours() -> None:
     """An int, since its readers use it as an array length, a range and slice bound, and a modulus whose remainder is formatted :02d."""
-    assert MINUTES_PER_DAY == timedelta(hours=24) // _MINUTE
+    assert MINUTES_PER_DAY == timedelta(hours=24) // ONE_MINUTE
     assert isinstance(MINUTES_PER_DAY, int)
 
 
 def test_minutes_per_hour_is_the_whole_minutes_in_an_hour() -> None:
     """An int, since its readers build whole minute counts from it: range and slice bounds, an index into a minute table, and a divmod whose quotient and remainder are formatted :02d."""
-    assert MINUTES_PER_HOUR == timedelta(hours=1) // _MINUTE
+    assert MINUTES_PER_HOUR == timedelta(hours=1) // ONE_MINUTE
     assert isinstance(MINUTES_PER_HOUR, int)
 
 
@@ -253,3 +258,111 @@ def test_of_index_refuses_an_index_that_is_not_a_datetimeindex_naming_its_type_a
         SimulationWindow.of_index(index)
 
     assert f"{type(index).__name__} of dtype {index.dtype}" in str(refusal.value)
+
+
+def test_rows_run_over_the_window_s_local_days_at_its_cadence_on_its_clock() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), ONE_MINUTE, "Europe/London")
+
+    rows = window.rows()
+
+    pd.testing.assert_index_equal(rows, _whole_london_days("2024-03-30", "2024-04-01"))
+    assert len(rows) == 4_260
+    assert rows[0] == pd.Timestamp("2024-03-30 00:00+00:00")
+    assert rows[-1] == pd.Timestamp("2024-04-01 23:59+01:00")
+    assert rows.freq == ONE_MINUTE
+    assert SimulationWindow.of_index(rows) == window
+
+
+@pytest.mark.parametrize(
+    ("zone", "day", "row_count", "first_row", "last_row"),
+    [
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 31),
+            1_380,
+            "2024-03-31 00:00+00:00",
+            "2024-03-31 23:59+01:00",
+            id="london-clocks-go-forward",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 10, 27),
+            1_500,
+            "2024-10-27 00:00+01:00",
+            "2024-10-27 23:59+00:00",
+            id="london-clocks-go-back",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 3, 10),
+            1_380,
+            "2024-03-10 01:00-04:00",
+            "2024-03-10 23:59-04:00",
+            id="havana-clocks-skip-midnight",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 11, 3),
+            1_500,
+            "2024-11-03 00:00-04:00",
+            "2024-11-03 23:59-05:00",
+            id="havana-clocks-repeat-midnight",
+        ),
+    ],
+)
+def test_a_day_across_a_clock_change_runs_from_its_first_instant_to_the_next_date_s(
+    zone: str, day: date, row_count: int, first_row: str, last_row: str
+) -> None:
+    window = SimulationWindow(day, day, ONE_MINUTE, zone)
+
+    rows = window.rows()
+
+    assert len(rows) == row_count
+    assert rows[0] == pd.Timestamp(first_row)
+    assert rows[-1] == pd.Timestamp(last_row)
+    assert rows.freq == ONE_MINUTE
+    assert SimulationWindow.of_index(rows) == window
+
+
+def test_a_window_with_no_zone_has_24_hour_days() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), ONE_MINUTE)
+
+    rows = window.rows()
+
+    pd.testing.assert_index_equal(rows, pd.date_range("2024-03-30", "2024-04-01 23:59", freq="1min"))
+    assert SimulationWindow.of_index(rows) == window
+
+
+@pytest.mark.parametrize(
+    ("cadence", "in_minutes"),
+    [
+        (timedelta(minutes=7), "7 minutes"),
+        (timedelta(minutes=32), "32 minutes"),
+        (timedelta(hours=2), "120 minutes"),
+    ],
+)
+def test_rows_refuses_a_cadence_that_does_not_divide_one_hour_naming_it(
+    cadence: timedelta, in_minutes: str
+) -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), cadence, "Europe/London")
+
+    with pytest.raises(ValueError) as refusal:
+        window.rows()
+
+    assert repr(cadence) in str(refusal.value)
+    assert in_minutes in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("cadence", "row_count"),
+    [
+        (timedelta(seconds=45), 1_920),
+        (timedelta(minutes=15), 96),
+        (timedelta(hours=1), 24),
+    ],
+)
+def test_rows_accepts_a_cadence_that_divides_one_hour(cadence: timedelta, row_count: int) -> None:
+    rows = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), cadence, "Europe/London").rows()
+
+    assert len(rows) == row_count
+    assert rows.freq == cadence
