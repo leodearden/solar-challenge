@@ -717,6 +717,8 @@ def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_mod
     [
         pytest.param("Recreated", id="new"),
         pytest.param("Reinitialised", id="init"),
+        pytest.param("ReboundInitialised", id="init-wrapping-a-method-wrapper"),
+        pytest.param("RekeyedInitialised", id="init-wrapping-a-classmethod-descriptor"),
     ],
 )
 def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_class_holding_it_is_spelled(
@@ -736,6 +738,14 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
         "\n"
         "class Initialised:\n"
         "    @wraps(object.__init__)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n"
+        "\n"
+        "class BoundInitialised:\n"
+        "    @wraps(object().__init__)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n"
+        "\n"
+        "class KeyedInitialised:\n"
+        "    @wraps(dict.__dict__['fromkeys'])\n"
         "    def __init__(self, *args, **kwargs) -> None: ...\n",
     )
     signing = imported_module(
@@ -745,7 +755,7 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
         "import inspect\n"
         "from decimal import Decimal as Share\n"
         "\n"
-        "from wrapping import Created, Initialised\n"
+        "from wrapping import BoundInitialised, Created, Initialised, KeyedInitialised\n"
         "\n"
         "signature = inspect.Signature(\n"
         "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
@@ -755,6 +765,12 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
         "    __signature__ = signature\n"
         "\n"
         "class Reinitialised(Initialised):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class ReboundInitialised(BoundInitialised):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class RekeyedInitialised(KeyedInitialised):\n"
         "    __signature__ = signature\n",
     )
 
