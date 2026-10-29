@@ -9,7 +9,9 @@ field as data. None answers 500.
 Each test saves a current home run as a finished job saves it, then damages one document
 alike in both its copies: the file in the run's directory, which the results page and the
 CSV export read, and the runs row's column, which the run's detail, its job's results and
-the YAML export read. So a refusal's document names the copy the endpoint read.
+the YAML export read. So a refusal's document names the copy the endpoint read. A run's time
+series has no copy in its runs row, so it is damaged in its file alone, which only the results
+page and the CSV export read.
 """
 
 import json
@@ -18,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import NonCallableMagicMock
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -93,12 +96,33 @@ def _store_a_damaged_run(storage: RunStorage, damage: _Damage) -> None:
         conn.execute(f"UPDATE runs SET {damage.column} = ? WHERE id = ?", (json.dumps(column_document), _RUN_ID))
 
 
-def _assert_refused(response: TestResponse, document: str, field: str) -> None:
-    """Check that *response* answers 409 refusing run _RUN_ID's *document* at *field*, its error naming all three."""
+def _store_a_run_whose_time_series_has_a_range_index(storage: RunStorage) -> None:
+    """Save a day's home run under _RUN_ID, then rewrite its data.parquet with a RangeIndex in the place of its timestamps."""
+    store_home_run(storage, _RUN_ID, make_home_config(), make_sim_results(days=1))
+    path = stored_run_dir(storage, _RUN_ID) / "data.parquet"
+    pd.read_parquet(path, engine="pyarrow").reset_index(drop=True).to_parquet(path, engine="pyarrow")
+
+
+def _named(document: str, field: str | None) -> tuple[str, ...]:
+    """The texts a refusal of run _RUN_ID's *document* at *field* names: the run id and the document, and the field unless it is None, the document as a whole."""
+    return (_RUN_ID, document) if field is None else (_RUN_ID, document, field)
+
+
+def _assert_refused(response: TestResponse, document: str, field: str | None) -> None:
+    """Check that *response* answers 409 refusing run _RUN_ID's *document* at *field*, None for the document as a whole, its error naming each text _named gives."""
     assert response.status_code == 409, response.get_data(as_text=True)
     body = response.get_json()
     assert body == {"error": body["error"], "run_id": _RUN_ID, "document": document, "field": field}
-    assert [text for text in (_RUN_ID, document, field) if text not in body["error"]] == [], body["error"]
+    assert [text for text in _named(document, field) if text not in body["error"]] == [], body["error"]
+
+
+def _assert_redirected_flashing_refusal(response: TestResponse, document: str, field: str | None) -> None:
+    """Check that *response*, its redirects followed, took one to the dashboard, which flashes one text naming each text _named gives for run _RUN_ID's *document* at *field*."""
+    assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+    assert response.status_code == 200
+    page_texts = texts(response.get_data(as_text=True))
+    flashed = [text for text in page_texts if all(named in text for named in _named(document, field))]
+    assert len(flashed) == 1, page_texts
 
 
 @pytest.mark.parametrize("damage", _DAMAGES)
@@ -110,14 +134,17 @@ def test_the_results_page_of_an_unreadable_run_redirects_to_the_dashboard_flashi
 
     response = client.get(f"/results/{_RUN_ID}", follow_redirects=True)
 
-    assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
-    assert response.status_code == 200
-    flashed = [
-        text
-        for text in texts(response.get_data(as_text=True))
-        if _RUN_ID in text and damage.file in text and damage.field in text
-    ]
-    assert len(flashed) == 1, texts(response.get_data(as_text=True))
+    _assert_redirected_flashing_refusal(response, damage.file, damage.field)
+
+
+def test_the_results_page_of_a_run_whose_time_series_has_no_timestamps_redirects_to_the_dashboard_flashing_its_refusal(
+    storage: RunStorage, client: FlaskClient
+) -> None:
+    _store_a_run_whose_time_series_has_a_range_index(storage)
+
+    response = client.get(f"/results/{_RUN_ID}", follow_redirects=True)
+
+    _assert_redirected_flashing_refusal(response, "data.parquet", None)
 
 
 @pytest.mark.parametrize("damage", _DAMAGES)
@@ -129,6 +156,16 @@ def test_the_csv_export_of_an_unreadable_run_answers_409_naming_the_damaged_file
     response = client.get(f"/api/history/runs/{_RUN_ID}/export/csv")
 
     _assert_refused(response, damage.file, damage.field)
+
+
+def test_the_csv_export_of_a_run_whose_time_series_has_no_timestamps_answers_409_naming_its_file(
+    storage: RunStorage, client: FlaskClient
+) -> None:
+    _store_a_run_whose_time_series_has_a_range_index(storage)
+
+    response = client.get(f"/api/history/runs/{_RUN_ID}/export/csv")
+
+    _assert_refused(response, "data.parquet", None)
 
 
 @pytest.mark.parametrize("damage", _DAMAGES)

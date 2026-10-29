@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("pyarrow")
@@ -67,6 +68,11 @@ def _edit_document(path: Path, edit: Edit) -> None:
     document = json.loads(path.read_text())
     edit(document)
     path.write_text(json.dumps(document, indent=2))
+
+
+def _rewrite_time_series(path: Path, damage: Callable[[pd.DataFrame], pd.DataFrame]) -> None:
+    """Rewrite the time series at *path* as *damage* of the frame it holds."""
+    damage(pd.read_parquet(path, engine="pyarrow")).to_parquet(path, engine="pyarrow")
 
 
 def _set(*keys: str | int, value: Any) -> Edit:
@@ -289,6 +295,33 @@ def test_a_time_series_whose_pages_are_damaged_is_refused_naming_its_file(storag
     _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda frame: frame.reset_index(drop=True), id="a-range-index"),
+        pytest.param(lambda frame: frame.set_axis(frame.index.astype(str)), id="a-string-index"),
+        pytest.param(lambda frame: frame.drop(frame.index[5]), id="a-gap-between-two-rows"),
+        pytest.param(lambda frame: frame.iloc[:1], id="one-row"),
+        pytest.param(lambda frame: frame.iloc[:0], id="no-rows"),
+        pytest.param(lambda frame: frame.iloc[::-1], id="its-rows-in-reverse"),
+    ],
+)
+def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_refused_naming_its_file(
+    storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
+) -> None:
+    """SimulationWindow.of_index, or SimulationWindow itself for a negative cadence, refuses each damaged index, and its refusal is the cause.
+
+    The damages are an index of no timestamps, two ways; rows not evenly spaced; one row with
+    no freq, as parquet keeps none; no rows; and rows spaced at a negative cadence.
+    """
+    _store_home_run_of_every_shape(storage)
+    _rewrite_time_series(stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet", damage)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+    assert isinstance(refusal.__cause__, ValueError)
+
+
 def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
     """A directory in the place of its summary.json stands in for a file its permissions keep from being read, which they do not for a root user."""
     _store_home_run_of_every_shape(storage)
@@ -315,6 +348,15 @@ def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_doc
     _edit_document(stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_0_summary.json", _delete("total_demand_kwh"))
 
     _refusal(storage, _FLEET_RUN_ID, "homes/home_0_summary.json", "total_demand_kwh")
+
+
+def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_file(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    _rewrite_time_series(
+        stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet", lambda frame: frame.reset_index(drop=True)
+    )
+
+    _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
 
 
 def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
