@@ -30,7 +30,9 @@ CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, 4.2's reading
 class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's reading
 of a class member that is a `functools.partial`, 4.1's reading of a constructor
 `inspect` binds as a `classmethod` or through a descriptor, and 4.7's readings on those
-releases on 2026-10-28. A new refusal gets its rule test first, then its entry here.
+releases on 2026-10-28. 4.5's reading of a constructor that wraps a callable defined in C
+through a descriptor was measured on those releases on 2026-10-29. A new refusal gets its
+rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -240,9 +242,27 @@ and 4.7 says how a `classmethod` held as any constructor `inspect` binds, read o
 refused before any is bound. The other readings are:
 
 - A constructor that wraps a callable defined in C, as `functools.wraps(object.__new__)`
-  records one: 3.11 and 3.12 read the wrapper through that callable, as
-  `(*args, **kwargs)`, and from 3.13 `inspect` skips it as defined in C and reads the
-  constructor after it. `warnings.deprecated`, new in 3.13, writes such a `__new__`.
+  records one. From 3.13 `inspect` follows the constructor's `__wrapped__` as it looks the
+  constructor up, before binding it, and where that ends at a callable defined in C, it
+  skips the constructor as defined in C and reads the constructor after it. 3.11 and 3.12
+  bind it and read what that gives, so a `functools.wraps` wrapper reads through that
+  callable, as `(*args, **kwargs)`. `warnings.deprecated`, new in 3.13, writes such a
+  `__new__`. The walk stops at a link that carries a `__signature__`, and at a descriptor
+  whose type defines `__get__` but neither `__set__` nor `__delete__`, as a `staticmethod`
+  and a `classmethod` are. 3.13 counts no `functools.partial` as one, so it follows a
+  partial that records `__wrapped__`; 3.14 counts one. Every minor binds a constructor at
+  which the walk stops and reads what that gives, whatever it records as `__wrapped__`.
+  With `def build(receiver: float, rate: int) -> None`, a descriptor of that kind,
+  callable or not, whose `__get__` gives `build` and that records `object.__init__` as
+  `__wrapped__` reads as `(receiver: float, rate: int) -> None` held as `__init__` or as a
+  metaclass `__call__`, and `staticmethod(functools.wraps(object.__init__)(build))` reads
+  as `(self, /, *args, **kwargs)` there, on every minor; `surface_form` spells both. Where
+  what such a descriptor gives carries a string or callable `__signature__`, 4.1 refuses
+  it. A descriptor whose type also defines `__set__` or `__delete__`, callable or not, is
+  followed: held as `__init__`, one that gives `build` reads as
+  `(receiver: float, rate: int) -> None` on 3.11 and 3.12 and raises `ValueError` from
+  3.13, and held as a metaclass `__call__`, it reads as `()` from 3.13. `surface_form`
+  refuses it.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`: every minor reads it as a method descriptor, finds no text signature and
   raises `ValueError`.
@@ -269,6 +289,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_init_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_constructor_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_call_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_decorated_with_warnings_deprecated_raises_the_type_error_naming_the_new_it_writes`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_get_but_neither_set_nor_delete_is_spelled_by_what_inspect_binds_it_to_whatever_the_descriptor_records_as_wrapped`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_delete_a_partial_or_an_object_defining_no_get_that_records_a_callable_defined_in_c_as_wrapped_raises_a_type_error_naming_it_that_constructor_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
@@ -399,10 +421,13 @@ refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, th
 listed in 4.5, 4.5's reading of a constructor read through an object its class makes
 callable where it meets those two readings of 4.4, the reading 4.6 refuses where
 `inspect` reads a partial, and the binding 4.7 refuses differ only between 3.11 and 3.12
-on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. The
-warning 3.3 ignores rests on 3.13 alone. 4.6's refusal where a partial is bound rests on
-no minor: it names a binding no rule reads. Whether to lift one is for the task that
-changes `requires-python`.
+on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. But 3.13
+and 3.14 also read differently a `functools.partial` that records `__wrapped__`, where
+4.5's first reading meets one, since 3.14 counts it a method descriptor and 3.13 does not:
+held as `__new__` with `object.__new__` as `__wrapped__`, it reads as `(*args, **kwargs)`
+on 3.11, 3.12 and 3.14, and as `()` on 3.13. The warning 3.3 ignores rests on 3.13 alone.
+4.6's refusal where a partial is bound rests on no minor: it names a binding no rule
+reads. Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 
