@@ -24,7 +24,6 @@ its catalogue (tests/e2e/_job_requests.py).
 """
 
 import itertools
-import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -41,6 +40,7 @@ from tests.e2e._job_requests import (
     is_job_request,
     job_state_frame,
     timeout_frame,
+    unreadable_final_state_frame,
     untracked_frame,
 )
 
@@ -466,11 +466,8 @@ def test_a_run_whose_final_state_the_page_cannot_read_is_shown_lost_not_left_run
     running_jobs: HeldJobRequests,
     page_errors: list[str],
 ) -> None:
-    """Run, then end job-1's progress stream with a completed state whose progress is NaN, which the server's encoder writes and JSON.parse refuses: the tracker shows 'Simulation Failed' with 'Lost connection to server' and no results link, and the page reports the frame it could not read as an uncaught error."""
-    running_jobs.answer(
-        "job-1",
-        job_state_frame(a_job_state("job-1", "run-1", "completed", progress_pct=math.nan), version=5),
-    )
+    """Run, then end job-1's progress stream with a final state the page cannot read: the tracker shows 'Simulation Failed' with 'Lost connection to server' and no results link, and the page reports the frame it could not read as an uncaught error."""
+    running_jobs.answer("job-1", unreadable_final_state_frame("job-1", "run-1"))
     page.goto(live_server + simulate_page.path)
     page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
 
