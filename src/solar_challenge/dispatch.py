@@ -931,10 +931,7 @@ class ScheduledChargeStrategy(DispatchStrategy):
             ConfigurationError: If tz is not a ZoneInfo, naming it.
         """
         if not isinstance(tz, ZoneInfo):
-            raise ConfigurationError(
-                "ScheduledChargeStrategy's tz is the ZoneInfo on whose wall clock its windows open: "
-                f"got tz={tz!r}"
-            )
+            raise ConfigurationError(f"tz must be the ZoneInfo on whose wall clock its windows open, got {tz!r}")
         self._base = base
         self._windows = tuple(windows)
         self._tz = tz
