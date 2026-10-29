@@ -13,8 +13,9 @@ finish. A run is read only after its format.json names RUN_FORMAT_VERSION.
 
 A document is read strictly, as StoredDocument.read reads it, by web/field_tree.py's
 read_field_tree, and a value it refuses becomes a StoredRunUnreadable naming the run, the
-document, the field's dotted path and the reason. Non-JSON text, a document that is missing or
-cannot be read, and a time series that cannot be read are refused the same way.
+document, the field's dotted path and the reason. Non-JSON text, JSON nested too deeply to
+decode, a document that is missing or cannot be read, a time series that cannot be read, and one
+whose index SimulationResults.window refuses are refused the same way.
 StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the boundary
 answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
@@ -113,12 +114,17 @@ class StoredDocument:
         """The document *name* of run *run_id* whose JSON text is *text*.
 
         Raises:
-            StoredRunUnreadable: *text* is not JSON; its field is None.
+            StoredRunUnreadable: *text* is not JSON, or is nested too deeply for json.loads to
+                decode; its field is None.
         """
         try:
             return cls(run_id, name, json.loads(text))
         except ValueError as refusal:
             raise StoredRunUnreadable(run_id, name, None, f"is not JSON: {refusal}") from refusal
+        except RecursionError as refusal:
+            raise StoredRunUnreadable(
+                run_id, name, None, f"is nested too deeply to decode as JSON: {refusal}"
+            ) from refusal
 
     def read(self, cls: type[T]) -> T:
         """The *cls*, a dataclass, whose field tree the document holds, read strictly by read_field_tree.
@@ -458,23 +464,36 @@ def _json_document(run_dir: Path, run_id: str, name: str) -> StoredDocument:
     return StoredDocument.decoded(run_id, name, text)
 
 
+def _check_window(results: SimulationResults) -> None:
+    """Check that SimulationResults.window reads a window from the index of *results*.
+
+    Raises:
+        ValueError: As SimulationResults.window does, for an index no window describes.
+    """
+    _ = results.window
+
+
 def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
     """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
 
     Raises:
         StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions or a
-            damaged page, or is not a parquet of a SimulationResults' columns, the error being the
-            cause; the field is None.
+            damaged page, is not a parquet of a SimulationResults' columns, or has an index
+            SimulationResults.window refuses: not a DatetimeIndex, empty, one row with no
+            fixed-duration freq, or rows not evenly spaced at a positive cadence. The error is
+            the cause, and the field is None.
     """
     path = run_dir / name
     if not path.is_file():
         raise StoredRunUnreadable(run_id, name, None, "is missing")
     try:
-        return SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+        results = SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+        _check_window(results)
     except ValueError as refusal:
         raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
     except OSError as unreadable:
         raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
+    return results
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:

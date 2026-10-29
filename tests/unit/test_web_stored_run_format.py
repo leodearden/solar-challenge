@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("pyarrow")
@@ -25,8 +26,11 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
+from tests._damaged_time_series import rewrite_time_series
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._every_field_shape import home_of_every_field_shape
 from tests._run_storage_layout import stored_run_dir
@@ -105,6 +109,13 @@ def _refusal(storage: RunStorage, run_id: str, document: str, field: str | None)
     if field is not None:
         assert field in message
     return refusal
+
+
+def _window_refusal(path: Path) -> ValueError:
+    """The ValueError with which SimulationWindow.of_index refuses the index of the time series at *path*."""
+    with pytest.raises(ValueError) as refused:
+        SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow").index)
+    return refused.value
 
 
 def test_a_stored_run_unreadable_is_not_a_value_error() -> None:
@@ -272,6 +283,18 @@ def test_a_summary_that_is_not_json_is_refused_as_a_whole(storage: RunStorage) -
     _refusal(storage, _HOME_RUN_ID, "summary.json", None)
 
 
+@pytest.mark.parametrize("document", ["config.json", "summary.json"])
+def test_a_document_nested_too_deeply_to_decode_is_refused_as_a_whole_caused_by_the_recursion(
+    storage: RunStorage, document: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / document).write_text(JSON_NESTED_TOO_DEEPLY_TO_DECODE)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, document, None)
+
+    assert isinstance(refusal.__cause__, RecursionError)
+
+
 def test_a_time_series_that_is_not_parquet_is_refused_naming_its_file(storage: RunStorage) -> None:
     _store_home_run_of_every_shape(storage)
     (stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet").write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
@@ -287,6 +310,34 @@ def test_a_time_series_whose_pages_are_damaged_is_refused_naming_its_file(storag
     path.write_bytes(stored[:4] + b"\xab" * 60 + stored[64:])
 
     _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda frame: frame.reset_index(drop=True), id="a-range-index"),
+        pytest.param(lambda frame: frame.set_axis(frame.index.astype(str)), id="a-string-index"),
+        pytest.param(lambda frame: frame.drop(frame.index[5]), id="a-gap-between-two-rows"),
+        pytest.param(lambda frame: frame.iloc[:1], id="one-row"),
+        pytest.param(lambda frame: frame.iloc[:0], id="no-rows"),
+        pytest.param(lambda frame: frame.iloc[::-1], id="its-rows-in-reverse"),
+    ],
+)
+def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_refused_naming_its_file(
+    storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
+) -> None:
+    """SimulationWindow.of_index, or SimulationWindow itself for a negative cadence, refuses each damaged index, and its refusal is the cause.
+
+    The damages are an index of no timestamps, two ways; rows not evenly spaced; one row with
+    no freq, as parquet keeps none; no rows; and rows spaced at a negative cadence.
+    """
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, damage)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
 
 
 def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
@@ -315,6 +366,16 @@ def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_doc
     _edit_document(stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_0_summary.json", _delete("total_demand_kwh"))
 
     _refusal(storage, _FLEET_RUN_ID, "homes/home_0_summary.json", "total_demand_kwh")
+
+
+def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_file(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    path = stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet"
+    rewrite_time_series(path, lambda frame: frame.reset_index(drop=True))
+
+    refusal = _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
+
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
 
 
 def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
