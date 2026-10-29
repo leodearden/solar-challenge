@@ -1331,6 +1331,44 @@ def test_a_class_whose_init_inspect_binds_to_none_raises_the_type_error_naming_t
         surface_form(functools.partial(Reinitialised))
 
 
+@pytest.mark.parametrize(
+    ("base", "naming_base"),
+    [
+        pytest.param(int, r"\bbuiltins\.int\b", id="int"),
+        pytest.param(frozenset, r"\bbuiltins\.frozenset\b", id="frozenset"),
+        pytest.param(property, r"\bbuiltins\.property\b", id="property"),
+    ],
+)
+@pytest.mark.parametrize(
+    "name",
+    [pytest.param("__new__", id="new"), pytest.param("__init__", id="init")],
+)
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
+    ],
+)
+def test_a_class_whose_only_constructor_inspect_binds_to_none_over_a_class_defined_in_c_raises_the_type_error_naming_that_class(
+    held: object, name: str, base: type, naming_base: str
+) -> None:
+    skipping = type("Skipping", (base,), {name: held})
+
+    class Inheriting(skipping):
+        pass
+
+    for subject in (skipping, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*{naming_base}.*\bdefined in C\b.*\btext signature\b"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
 def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:
     def build(rate: int) -> str: ...
 
