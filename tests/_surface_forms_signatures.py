@@ -440,18 +440,18 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """Raise TypeError naming *cls* if inspect reads its constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
-    callable defined in C here if _wrapped_c_callable gives one for it, and is neither
-    callable nor None once bound, is read as an Enum, carries a __signature__ inspect
-    reads by minor, or is read as a builtin or through an object its class makes
-    callable, if _refuse_constructor_reading finds it so:
+    callable defined in C here if _wrapped_c_callable gives one for it, and is not
+    callable once bound, is read as an Enum, carries a __signature__ inspect reads by
+    minor, or is read as a builtin or through an object its class makes callable, if
+    _refuse_constructor_reading finds it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
       refuses, checked before it is bound, or if it wraps a callable defined in C, is a
-      functools.partial, is neither callable nor None once bound, is read as an Enum,
-      carries such a __signature__, or is read as a builtin or through such an object.
-      inspect reads any other __call__ _metaclass_call gives in their place, so none of
-      the constructors below is then checked;
+      functools.partial, is not callable once bound, is read as an Enum, carries such a
+      __signature__, or is read as a builtin or through such an object. inspect reads
+      any other __call__ _metaclass_call gives in their place, so none of the
+      constructors below is then checked;
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
@@ -459,9 +459,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
       defined in C, as the __new__ warnings.deprecated writes for a class wraps
       object.__new__;
     - that first-read constructor, if it is an __init__ that is a functools.partial;
-    - that first-read constructor, if it is neither callable nor None once bound, is
-      read as an Enum, carries such a __signature__, or is read as a builtin or through
-      such an object;
+    - that first-read constructor, if it is not callable once bound, is read as an Enum,
+      carries such a __signature__, or is read as a builtin or through such an object;
     - the constructor of the class holding that first-read constructor, if that class
       is not object and _constructed_in_c counts it as defined in C.
     """
@@ -652,7 +651,7 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 
 def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object) -> None:
-    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is neither callable nor None, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
     _refuse_constructor_bound_to_uncallable(cls, owner, name, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(cls, owner, name, end)
@@ -664,13 +663,12 @@ def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object)
 def _refuse_constructor_bound_to_uncallable(
     cls: type, owner: type, name: str, read: object
 ) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name*, and *read* with its type, if *read* is neither callable nor None; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
+    """Raise TypeError naming *cls*, *owner*'s *name*, and *read* with its type, if *read* is not callable; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
 
     On every admitted minor, inspect checks that *read* is callable before it reads
-    anything of it, its __signature__ included. A *read* of None is not refused: inspect
-    skips a constructor whose binding gives None.
+    anything of it, its __signature__ included.
     """
-    if read is not None and not callable(read):
+    if not callable(read):
         raise _constructor_read_as_error(cls, owner, name, read, _NOT_CALLABLE_ON_ANY_MINOR)
 
 
