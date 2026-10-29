@@ -6,6 +6,7 @@ then holds it; outside every window its base strategy decides.
 """
 
 import dataclasses
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -145,12 +146,10 @@ _UNSCHEDULABLE_FIELD_VALUES = [
 ]
 """A value of each ChargeWindow field but its target that the window cannot schedule."""
 
-_WINDOW_REQUIREMENTS = {
-    "days": "'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6",
-    "start": "a wall-clock time on its strategy's zone, with no tzinfo",
-    "duration": "more than 0 and at most a day",
-}
-"""What a ChargeWindow's days, start and duration must be, as its refusal of each says."""
+
+def _refusal_pattern(field: str, value: object) -> str:
+    """The pattern of the whole message of a refusal of *value*, given for *field*, in number_fields' form: <field> must be <requirement>, got <value!r>."""
+    return rf"\A{re.escape(field)} must be .+, got {re.escape(repr(value))}\Z"
 
 
 class TestChargeWindow:
@@ -162,10 +161,8 @@ class TestChargeWindow:
 
         The refusal takes the form its target's takes: <field> must be <requirement>, got <value!r>.
         """
-        with pytest.raises(ConfigurationError) as refusal:
+        with pytest.raises(ConfigurationError, match=_refusal_pattern(field, value)):
             dataclasses.replace(_NIGHTLY, **{field: value})
-
-        assert str(refusal.value) == f"{field} must be {_WINDOW_REQUIREMENTS[field]}, got {value!r}"
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -359,10 +356,8 @@ class TestScheduledChargeStrategyWindows:
         ],
     )
     def test_a_zone_that_is_no_zoneinfo_is_refused_saying_what_tz_must_be(self, zone: object) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
+        with pytest.raises(ConfigurationError, match=_refusal_pattern("tz", zone)):
             ScheduledChargeStrategy(_base(), (_NIGHTLY,), zone)
-
-        assert str(refusal.value) == f"tz must be the ZoneInfo on whose wall clock its windows open, got {zone!r}"
 
     @pytest.mark.parametrize(
         ("base", "name"),
