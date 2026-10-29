@@ -291,9 +291,9 @@ refused before any is bound. The other readings are:
   `None`, and raises as it reads what that method holds. `surface_form` raises
   `TypeError` naming the class, that constructor, and the object with its type.
 - A constructor whose lookup or binding gives `None`, as `None`, `Giver(None)` and
-  `staticmethod(None)` give held as any constructor. Every minor skips it, as if no
-  class in the MRO held one, and reads the constructor after it: in place of a metaclass
-  `__call__`, the class's `__new__` or `__init__`; in place of a `__new__`, the
+  `staticmethod(None)` give held as any constructor. Every minor skips it, reading that
+  name of no class in the MRO, and reads the constructor after it: in place of a
+  metaclass `__call__`, the class's `__new__` or `__init__`; in place of a `__new__`, the
   `__init__` the class resolves; in place of an `__init__`, the `__new__` it resolves,
   which a base may hold. `__new__ = None` beside `def __init__(self, rate: int) -> None`
   reads as `(rate: int) -> None`, as does that `__init__` beside a metaclass `__call__`
@@ -301,7 +301,19 @@ refused before any is bound. The other readings are:
   `inspect` reads in its place by the readings this section lists: beside
   `__new__ = None`, `__init__ = functools.partial(init)`, with
   `def init(self, rate: int) -> None`, reads as `(self, rate: int) -> None` on 3.11 to
-  3.13 and as `(rate: int) -> None` on 3.14, and is refused as 4.4's partial.
+  3.13 and as `(rate: int) -> None` on 3.14, and is refused as 4.4's partial. Where a
+  skipped `__new__` or `__init__` leaves no constructor defined in Python to read, every
+  minor reads the first text signature a class in the MRO other than `object` gives, as
+  for a class constructed by a class defined in C, below, and raises `ValueError` if none
+  gives one, since the skipped constructor is not `object`'s: `__init__ = None` alone
+  raises it, where a class that holds no constructor reads as `()`. Over `property`,
+  `__new__ = None` or `__init__ = None` reads as `property`'s text signature,
+  `(fget=None, fset=None, fdel=None, doc=None)`; over `int`, which gives none, either
+  raises `ValueError`, as `int` does; and over `frozenset`, which gives one from 3.13,
+  either raises `ValueError` on 3.11 and 3.12 and reads as `(iterable=(), /)` on 3.13
+  and 3.14. `surface_form` refuses such a class as one constructed by a class defined in
+  C wherever its MRO holds one other than `object`, and otherwise leaves it to
+  `inspect`, so `__init__ = None` alone raises that `ValueError`.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
 - A constructor read through an object its class makes callable. `inspect` reads a
@@ -334,6 +346,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_is_spelled_by_the_init_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_raises_the_type_error_naming_the_init_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_inspect_binds_to_none_raises_the_type_error_naming_the_new_inspect_reads_in_its_place`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_only_constructor_inspect_binds_to_none_over_a_class_defined_in_c_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
