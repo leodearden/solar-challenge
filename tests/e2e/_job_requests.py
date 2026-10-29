@@ -9,6 +9,7 @@ Also disconnects a single request, as a route handler, and fast-forwards a page 
 """
 
 import functools
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -75,6 +76,13 @@ def a_job_state(job_id: str, run_id: str, status: JobStatus, **changes: object) 
 def job_state_frame(state: JobState, *, version: int) -> str:
     """The frame the server sends state in as the job's state at version: its status's event, with version as its id."""
     return sse_frame(JOB_STATE_EVENTS[state.status], state, event_id=version, retry_ms=_SERVED_POLICY.retry_ms)
+
+
+def unreadable_final_state_frame(job_id: str, run_id: str) -> str:
+    """The frame that ends the progress stream of job job_id, of run run_id, with a completed state whose progress is NaN: sse_frame's json.dumps writes the bare token NaN, which the page's JSON.parse refuses."""
+    return job_state_frame(
+        a_job_state(job_id, run_id, "completed", progress_pct=math.nan), version=5
+    )
 
 
 def timeout_frame() -> str:
