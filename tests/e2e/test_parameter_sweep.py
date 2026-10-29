@@ -16,14 +16,16 @@ opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
 and that the page says why when it loses track of a sweep. A point whose job
 is cancelled, or which the server no longer tracks, shows that in its row, and
-the page goes on to follow the next point. A point whose progress stream
-disconnects keeps its status, and the page follows it alone while the browser
-reopens the stream; its job's completion on the reopened stream fills its row,
-and a reopened stream the server refuses fails it, as does a stream that stays
-broken past the page's reconnect limit. A point whose progress stream times
-out while its job runs keeps showing running while the browser reopens the
-stream, and the page follows it alone until its job ends; once the sweep's
-other point fails and it completes, the page draws the charts of its run.
+the page goes on to follow the next point. A point whose final state the page
+cannot read shows failed, and the page goes on to follow the next point. A
+point whose progress stream disconnects keeps its status, and the page follows
+it alone while the browser reopens the stream; its job's completion on the
+reopened stream fills its row, and a reopened stream the server refuses fails
+it, as does a stream that stays broken past the page's reconnect limit. A
+point whose progress stream times out while its job runs keeps showing running
+while the browser reopens the stream, and the page follows it alone until its
+job ends; once the sweep's other point fails and it completes, the page draws
+the charts of its run.
 
 Once every point of a sweep has ended, the page posts the finished points to
 POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
