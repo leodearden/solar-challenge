@@ -142,20 +142,23 @@ class TestCommunityConfig:
         assert cfg.community_battery is batt
 
     def test_p2p_with_battery_raises(self) -> None:
-        """p2p + community_battery set → ValueError."""
+        """p2p + community_battery set → ConfigurationError."""
         batt = BatteryConfig(capacity_kwh=5.0)
-        with pytest.raises(ValueError, match="p2p"):
+        with pytest.raises(ConfigurationError, match="p2p"):
             CommunityConfig(sharing_mode="p2p", community_battery=batt)
 
     def test_community_battery_mode_without_battery_raises(self) -> None:
-        """community_battery mode without a battery → ValueError."""
-        with pytest.raises(ValueError, match="community_battery"):
+        """community_battery mode without a battery → ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="community_battery"):
             CommunityConfig(sharing_mode="community_battery")
 
     def test_unknown_sharing_mode_raises(self) -> None:
-        """Unknown sharing_mode → ValueError."""
-        with pytest.raises(ValueError):
+        """Unknown sharing_mode → ConfigurationError naming the modes and the value."""
+        with pytest.raises(ConfigurationError) as exc_info:
             CommunityConfig(sharing_mode="virtual_net_metering")  # type: ignore[arg-type]
+        assert str(exc_info.value) == (
+            "sharing_mode must be 'p2p' or 'community_battery', got 'virtual_net_metering'"
+        )
 
     def test_frozen(self) -> None:
         """CommunityConfig is frozen (immutable)."""
