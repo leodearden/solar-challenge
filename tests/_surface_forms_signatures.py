@@ -531,8 +531,10 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
                 "inspect skips, as it skips a constructor whose lookup or binding gives None "
                 "or that is defined in C, and through no other constructor inspect reads, so "
                 "inspect reads a text signature a class in its MRO gives, which a class "
-                "docstring can give on some minors and not others, and raises ValueError "
-                f"where none gives one: make the name private, or define {name} with def"
+                "docstring can give on some minors and not others, and where none gives one "
+                "raises ValueError, or the TypeError binding a classmethod_descriptor "
+                f"__init__ to the class raises: make the name private, or define {name} "
+                "with def"
             )
 
 

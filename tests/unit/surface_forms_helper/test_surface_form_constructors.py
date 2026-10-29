@@ -1692,7 +1692,8 @@ def test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_namin
 
     for subject in (skipping, Inheriting):
         naming_it = (
-            rf"\.{subject.__name__}\b.*\.{re.escape(skipped)}\b.*\binspect skips\b.*\bValueError\b"
+            rf"\.{subject.__name__}\b.*\.{re.escape(skipped)}\b.*\binspect skips\b"
+            r".*\bValueError\b.*\bTypeError\b.*\bclassmethod_descriptor __init__"
         )
         with pytest.raises(TypeError, match=naming_it):
             surface_form(subject)
