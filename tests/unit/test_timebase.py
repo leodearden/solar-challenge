@@ -11,6 +11,7 @@ from solar_challenge.timebase import (
     MINUTES_PER_DAY,
     MINUTES_PER_HOUR,
     ONE_MINUTE,
+    LocalDay,
     SimulationWindow,
     covered_days,
 )
@@ -366,3 +367,90 @@ def test_rows_accepts_a_cadence_that_divides_one_hour(cadence: timedelta, row_co
 
     assert len(rows) == row_count
     assert rows.freq == cadence
+
+
+@pytest.mark.parametrize(
+    ("zone", "first_day", "last_day", "cadence", "rows_per_day"),
+    [
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            ONE_MINUTE,
+            [1_440, 1_380, 1_440],
+            id="london-clocks-go-forward",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 10, 26),
+            date(2024, 10, 28),
+            ONE_MINUTE,
+            [1_440, 1_500, 1_440],
+            id="london-clocks-go-back",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            timedelta(minutes=30),
+            [48, 46, 48],
+            id="london-half-hourly-clocks-go-forward",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 3, 9),
+            date(2024, 3, 11),
+            ONE_MINUTE,
+            [1_440, 1_380, 1_440],
+            id="havana-clocks-skip-midnight",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 11, 2),
+            date(2024, 11, 4),
+            ONE_MINUTE,
+            [1_440, 1_500, 1_440],
+            id="havana-clocks-repeat-midnight",
+        ),
+        pytest.param(
+            None,
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            ONE_MINUTE,
+            [1_440, 1_440, 1_440],
+            id="no-zone",
+        ),
+    ],
+)
+def test_local_days_split_the_rows_by_date_each_from_its_first_instant_at_the_window_s_cadence(
+    zone: str | None,
+    first_day: date,
+    last_day: date,
+    cadence: timedelta,
+    rows_per_day: list[int],
+) -> None:
+    window = SimulationWindow(first_day, last_day, cadence, zone)
+
+    days = list(window.local_days())
+
+    assert all(isinstance(day, LocalDay) for day in days)
+    assert [day.date for day in days] == [
+        first_day + timedelta(days=offset) for offset in range((last_day - first_day).days + 1)
+    ]
+    assert [len(day.rows) for day in days] == rows_per_day
+    for day in days:
+        pd.testing.assert_index_equal(
+            day.rows, SimulationWindow(day.date, day.date, cadence, zone).rows()
+        )
+        assert day.rows.freq == cadence
+    pd.testing.assert_index_equal(days[0].rows.append([day.rows for day in days[1:]]), window.rows())
+
+
+def test_local_days_refuses_a_cadence_that_does_not_divide_one_hour_when_called() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), timedelta(minutes=7), "Europe/London")
+
+    with pytest.raises(ValueError) as refusal:
+        window.local_days()
+
+    assert repr(timedelta(minutes=7)) in str(refusal.value)
+    assert "7 minutes" in str(refusal.value)
