@@ -25,9 +25,10 @@ import dataclasses
 import json
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -317,14 +318,16 @@ def _store_runs_each_sort_column_orders_differently(storage: RunStorage) -> None
     storage.create_run("run-e", run_type="home", name="Bravo", n_homes=1, created_at="2026-10-02T09:00:00+00:00")
 
 
-_RUN_IDS_ASCENDING_BY: dict[RunSort, list[str]] = {
-    "created_at": ["run-c", "run-e", "run-b", "run-d", "run-a"],
-    "name": ["run-b", "run-e", "run-d", "run-c", "run-a"],
-    "type": ["run-b", "run-c", "run-a", "run-d", "run-e"],
-    "status": ["run-a", "run-b", "run-d", "run-c", "run-e"],
-    "duration_seconds": ["run-a", "run-b", "run-c", "run-d", "run-e"],
-    "n_homes": ["run-a", "run-d", "run-e", "run-b", "run-c"],
-}
+_RUN_IDS_ASCENDING_BY: Mapping[RunSort, tuple[str, ...]] = MappingProxyType(
+    {
+        "created_at": ("run-c", "run-e", "run-b", "run-d", "run-a"),
+        "name": ("run-b", "run-e", "run-d", "run-c", "run-a"),
+        "type": ("run-b", "run-c", "run-a", "run-d", "run-e"),
+        "status": ("run-a", "run-b", "run-d", "run-c", "run-e"),
+        "duration_seconds": ("run-a", "run-b", "run-c", "run-d", "run-e"),
+        "n_homes": ("run-a", "run-d", "run-e", "run-b", "run-c"),
+    }
+)
 
 
 class TestRunQuery:
@@ -487,7 +490,7 @@ class TestPageRuns:
         pages = [storage.page_runs(RunQuery(sort=sort, descending=descending, page=page, per_page=2)) for page in (1, 2, 3)]
 
         ascending = _RUN_IDS_ASCENDING_BY[sort]
-        assert [run_id for page in pages for run_id in _ids(page)] == (ascending[::-1] if descending else ascending)
+        assert tuple(run_id for page in pages for run_id in _ids(page)) == (ascending[::-1] if descending else ascending)
         assert [page.total for page in pages] == [5, 5, 5]
 
 
