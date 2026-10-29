@@ -89,6 +89,15 @@ def test_must_be_refuses_a_value_saying_what_its_field_must_be_and_what_it_got(
     assert str(refusal) == message
 
 
+def test_must_be_on_a_subclass_returns_that_subclass() -> None:
+    class NarrowerRefusal(ConfigurationError):
+        pass
+
+    refusal = NarrowerRefusal.must_be("tz", "a ZoneInfo", got="Europe/London")
+
+    assert type(refusal) is NarrowerRefusal
+
+
 def test_importing_the_errors_module_loads_no_other_package_module() -> None:
     loaded, refusal = _probe("import solar_challenge.errors")
 
