@@ -62,7 +62,7 @@ _PANEL_LOOK = _Look(
 )
 _PANEL_TITLE_BAND_LOOK = _Look("panel", frozenset("px-5 py-4 border-b border-slate-200 dark:border-slate-700".split()))
 """The header band a titled panel draws above its content."""
-_SHADOWS =frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
+_SHADOWS = frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
 """The Tailwind box-shadow utilities that draw a shadow."""
 _FLAT_CARD_LOOK = _Look(
     "flat_card",
