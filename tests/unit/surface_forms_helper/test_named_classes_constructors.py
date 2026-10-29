@@ -4,13 +4,18 @@
 import decimal
 import fractions
 import functools
+import inspect
 import pathlib
 import warnings
+from collections.abc import Callable
 
 import pytest
 
-from tests._surface_forms import named_classes
-from tests.unit.surface_forms_helper._fixtures import imported_module
+from tests._surface_forms import named_classes, surface_form
+from tests.unit.surface_forms_helper._fixtures import (
+    CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR,
+    imported_module,
+)
 
 
 def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
@@ -754,6 +759,35 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
     )
 
     assert named_classes(getattr(signing, name)) == {decimal.Decimal}
+
+
+@pytest.mark.parametrize("wrap", CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR)
+def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names(
+    wrap: Callable[[Callable[..., object]], object],
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    signature = inspect.Signature(
+        [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+    )
+
+    class Initialised:
+        __signature__ = signature
+        __init__ = classmethod(wrap(build))
+
+    class Created:
+        __signature__ = signature
+        __new__ = classmethod(wrap(build))
+
+    class Calling(type):
+        __call__ = classmethod(wrap(build))
+
+    class Called(metaclass=Calling):
+        __signature__ = signature
+
+    for cls in (Initialised, Created, Called):
+        assert surface_form(cls) == "(rate: int)"
+        assert named_classes(cls) == {int}
 
 
 @pytest.mark.parametrize(

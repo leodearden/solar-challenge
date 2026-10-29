@@ -13,6 +13,15 @@ and CallableGetterDeleter a callable one, for the rules about how inspect reads 
 descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
 other than functools.partial, and SettableGetterPartial one whose type also defines
 __set__, for the rules about how inspect reads and binds such a partial.
+PartialFirstGetterPartial is one whose type takes __get__ from GetMixin, a base after
+functools.partial, whose own __get__ comes first from Python 3.13, for the rules about a
+classmethod that wraps such a partial.
+ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
+inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
+what it wraps. CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR makes, from a function, a method
+descriptor, a classmethod or a property, each of which a classmethod that wraps it binds
+through its __get__ on 3.11 and 3.12 and as a method from 3.13, for the rules about where
+named_classes binds such a classmethod itself.
 class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
 whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
 rules about each constructor site.
@@ -94,6 +103,33 @@ class SettableGetterPartial(GetterPartial):
     """A GetterPartial whose type also defines __set__, so that no minor reads it as a method descriptor."""
 
     def __set__(self, instance: object, value: object) -> None: ...
+
+
+class GetMixin:
+    """A class that defines __get__, for a functools.partial subclass to take it from."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self
+
+
+class PartialFirstGetterPartial(functools.partial, GetMixin):
+    """A functools.partial whose type takes __get__ from a base after functools.partial in its MRO."""
+
+
+def _share(receiver: object, rate: int) -> None: ...
+
+
+class ChainedCall:
+    """A class whose __call__ is a classmethod of a staticmethod, which Python 3.11 and 3.12 bind through the staticmethod's __get__ and later minors as a method of the staticmethod."""
+
+    __call__ = classmethod(staticmethod(_share))
+
+
+CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR = (
+    pytest.param(lambda build: str.join, id="method-descriptor"),
+    pytest.param(classmethod, id="classmethod"),
+    pytest.param(property, id="property"),
+)
 
 
 def class_whose_init_is(constructor: object) -> type:

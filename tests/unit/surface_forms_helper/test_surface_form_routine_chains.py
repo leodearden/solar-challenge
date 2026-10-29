@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form for the signature inspect reads for a routine, at the end of the chain it follows from one, and the TypeError raised where inspect reads that chain differently by minor or cannot read it, one per test.
 
-The classes above the first test are defined at module level, where a parametrize
-decorator can reach them.
+The classes and the function above the first test are defined at module level, where a
+parametrize decorator can reach them.
 """
 
 import contextlib
@@ -25,7 +25,9 @@ from tests.unit.surface_forms_helper._fixtures import (
     UNREADABLE_ROUTINES,
     CallableGetter,
     CallableGetterDeleter,
+    ChainedCall,
     GetterDeleter,
+    PartialFirstGetterPartial,
 )
 
 
@@ -68,6 +70,15 @@ class UnsignedTextedCall(TextedCall):
     """A TextedCall whose instances also carry a __signature__ of None."""
 
     __signature__ = None
+
+
+def _share(receiver: object, rate: int) -> None: ...
+
+
+class PartialFirstCall:
+    """A class whose __call__ is a classmethod of a PartialFirstGetterPartial, which Python 3.11 and 3.12 bind through GetMixin's __get__ and later minors as a method of the partial."""
+
+    __call__ = classmethod(PartialFirstGetterPartial(_share))
 
 
 def test_a_partial_is_spelled_by_the_signature_it_leaves_of_the_callable_it_wraps() -> None:
@@ -444,6 +455,34 @@ def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_
             surface_form(functools.partial(SignedPartialCall()))
         with pytest.raises(TypeError, match=rf"{re.escape(repr(nested))} is read through .*\.PartialCall\.__call__\b.*\bfunctools\.partial\b"):
             surface_form(nested)
+
+
+@pytest.mark.parametrize(
+    ("call_class", "kind"),
+    [
+        pytest.param(ChainedCall, r"\bbuiltins\.staticmethod\b", id="staticmethod"),
+        pytest.param(
+            PartialFirstCall,
+            r"\.PartialFirstGetterPartial\b",
+            id="partial-taking-get-from-a-later-base",
+        ),
+    ],
+)
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_classmethod_that_wraps_an_object_whose_type_defines_get_raises_a_type_error_naming_it_that_call_and_that_type(
+    call_class: type, kind: str
+) -> None:
+    called = functools.partial(call_class())
+
+    refusing_that_call = (
+        rf" is read through .*\.{call_class.__name__}\.__call__, a classmethod\b"
+        rf".*{kind}.*\b3\.11\b.*\b3\.13\b"
+    )
+    with pytest.raises(TypeError, match=re.escape(repr(called)) + refusing_that_call):
+        surface_form(called)
+    with pytest.raises(TypeError, match=re.escape(repr(called)) + refusing_that_call):
+        named_classes(called)
+    with pytest.raises(TypeError, match=r"\.<lambda>" + refusing_that_call):
+        surface_form(functools.wraps(call_class())(lambda rate: None))
 
 
 def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries() -> None:

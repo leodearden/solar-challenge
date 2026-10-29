@@ -151,7 +151,7 @@ def _call_as_read(obj: object) -> object:
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, is read differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial."""
+    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, is read differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial or a classmethod _refuse_classmethod_bound_by_minor refuses."""
     holders = list(namespace_holders(type(obj).__mro__, "__call__"))
     c_holder = next(
         (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
@@ -176,9 +176,10 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
             "on that object or on what is read through it"
         )
-    _refuse_partial_bound_as_method(
-        subject, "is read through", holders[0], "__call__", vars(holders[0])["__call__"]
-    )
+    holder = holders[0]
+    held = vars(holder)["__call__"]
+    _refuse_partial_bound_as_method(subject, "is read through", holder, "__call__", held)
+    _refuse_classmethod_bound_by_minor(subject, "is read through", holder, "__call__", held)
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
@@ -439,10 +440,15 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
-      __new__ or __init__, if it wraps a callable defined in C, is a functools.partial,
-      is read as an Enum, carries such a __signature__, or is read as a builtin or
-      through such an object. inspect reads any other __call__ _metaclass_call gives in
-      their place, so none of the constructors below is then checked;
+      __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
+      refuses, checked before it is bound, or if it wraps a callable defined in C, is a
+      functools.partial, is read as an Enum, carries such a __signature__, or is read
+      as a builtin or through such an object. inspect reads any other __call__
+      _metaclass_call gives in their place, so none of the constructors below is then
+      checked;
+    - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
+      chooses which to read, if either is a classmethod
+      _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
     - the constructor inspect reads first of those the holder's own namespace holds, if
       it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
       class wraps object.__new__;
@@ -455,10 +461,18 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """
     call = _metaclass_call(cls)
     if call is not None:
+        _refuse_classmethod_bound_by_minor(
+            cls, "is constructed through", type(cls), "__call__", call
+        )
         _refuse_wrapper_of_c_callable(cls, type(cls), "__call__", call)
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_reading(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
         return
+    for name in ("__new__", "__init__"):
+        owner = next(namespace_holders(cls.__mro__, name))
+        _refuse_classmethod_bound_by_minor(
+            cls, "is constructed through", owner, name, vars(owner)[name]
+        )
     holder = _constructor_holder(cls)
     name, constructor = _first_read_constructor(holder)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
@@ -486,10 +500,15 @@ def _constructed_in_c(holder: type) -> bool:
 
 
 def _first_read_constructor(holder: type) -> tuple[str, object]:
-    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), unless that is defined in C beside an __init__; else its __init__."""
+    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), or as _classmethod_as_read gives it if it is a classmethod, unless that is defined in C beside an __init__; else its __init__."""
     namespace = vars(holder)
     if "__new__" in namespace:
-        new = getattr(holder, "__new__")
+        held = namespace["__new__"]
+        new = (
+            _classmethod_as_read(held.__func__, holder)
+            if isinstance(held, classmethod)
+            else getattr(holder, "__new__")
+        )
         if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and "__init__" in namespace):
             return "__new__", new
     return "__init__", namespace["__init__"]
@@ -532,6 +551,8 @@ def _wrapped_c_callable(
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
 
 
+_BindingVerb: typing.TypeAlias = typing.Literal["is constructed through", "is read through"]
+
 _PARTIAL_BOUND_BY_MINOR = (
     "a functools.partial, which Python 3.14 binds to the instance as a method and earlier "
     "minors call without it"
@@ -540,7 +561,7 @@ _PARTIAL_BOUND_BY_MINOR = (
 
 def _refuse_partial_bound_as_method(
     subject: object,
-    verb: typing.Literal["is constructed through", "is read through"],
+    verb: _BindingVerb,
     owner: type,
     name: str,
     method: object,
@@ -560,6 +581,39 @@ def _partial_binding_clause(partial: functools.partial[object]) -> str:
     return (
         f"a {label_of(type(partial))}, a functools.partial whose type takes __get__ from a "
         "class other than functools.partial, a binding no rule of this helper reads"
+    )
+
+
+_CLASSMETHOD_BOUND_BY_MINOR = (
+    "Python 3.11 and 3.12 bind a classmethod through the __get__ of what it wraps, a "
+    "binding no rule of this helper reads, and 3.13 and 3.14 bind it as a method of what "
+    "it wraps"
+)
+
+
+def _refuse_classmethod_bound_by_minor(
+    subject: object, verb: _BindingVerb, owner: type, name: str, held: object
+) -> None:
+    """Raise TypeError saying *subject* *verb* *owner*'s *name*, naming the type of what it wraps and stating _CLASSMETHOD_BOUND_BY_MINOR, if *held*, the one *owner* holds as *name* that inspect binds for *subject*, is a classmethod whose __func__ _is_bound_through_a_get_no_rule_reads finds."""
+    if isinstance(held, classmethod) and _is_bound_through_a_get_no_rule_reads(held.__func__):
+        raise TypeError(
+            f"{label_of(subject)} {verb} {label_of(owner)}.{name}, a classmethod that wraps a "
+            f"{label_of(type(held.__func__))}, whose type defines __get__: "
+            f"{_CLASSMETHOD_BOUND_BY_MINOR}: make the name private, or define {name} with def"
+        )
+
+
+def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
+    """Whether Python 3.11 and 3.12 bind *wrapped*, held in a classmethod, through a __get__ no rule of this helper reads: one its type takes from a class other than types.FunctionType, functools.partial and types.MethodType.
+
+    A function's __get__ binds it as a method, as 3.13 and 3.14 bind what any
+    classmethod holds; functools.partial and types.MethodType define __get__ only from
+    3.13, where a classmethod no longer binds what it holds through its __get__, so on
+    3.11 and 3.12 neither hides the __get__ of a class after it in the MRO.
+    """
+    return any(
+        holder not in (types.FunctionType, functools.partial, types.MethodType)
+        for holder in namespace_holders(type(wrapped).__mro__, "__get__")
     )
 
 
@@ -794,7 +848,7 @@ def _refuse_constructor_generated_for_another_class(
 
 
 def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as getattr gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
+    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as _first_read_constructor gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
     kind, constructor = _first_read_constructor(holder)
     if kind == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return constructor
@@ -816,12 +870,29 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    if isinstance(descriptor, classmethod):
+        return _classmethod_as_read(descriptor.__func__, type(owner))
     get = getattr(type(descriptor), "__get__", None)
     if get is None or isinstance(descriptor, functools.partial):
         return descriptor
     bound: object = get(descriptor, owner, type(owner))
     return bound
+
+
+def _classmethod_as_read(function: object, owner: type) -> object:
+    """What inspect reads for a classmethod that holds *function*, bound to *owner* as Python 3.13 and 3.14 bind one, whatever it holds: a method of *function*, or *function* itself if it is not callable.
+
+    types.MethodType will not make a method of what is not callable, though
+    classmethod.__get__ makes one, and inspect reads such a method through to
+    *function*, as _links_inspect_reads does.
+
+    3.11 and 3.12 bind it alike unless _refuse_classmethod_bound_by_minor refuses the
+    classmethod, as it does wherever inspect itself binds one.
+    """
+    if not callable(function):
+        return function
+    return types.MethodType(function, owner)
 
 
 def _generated_constructor_modules(
