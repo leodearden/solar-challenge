@@ -20,7 +20,8 @@ pytest.importorskip("flask")
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import live_managers
 from solar_challenge.web.schema import SCHEMA_VERSION, SchemaVersionMismatch, StoreUnreadable
-from solar_challenge.web.shared import get_database, get_storage
+from solar_challenge.web.shared import get_database, get_job_stream_policy, get_storage
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
 from tests._dashboard_databases import write_pre_548_database
 from tests._web_app import build_test_app, database_path_in, release_store_lock, run_storage_of
@@ -193,6 +194,22 @@ def test_the_apps_run_store_keeps_its_runs_in_the_apps_database(tmp_path: Path) 
 
     with app.app_context():
         assert get_storage().database == get_database()
+
+
+def test_the_app_serves_its_job_progress_streams_under_the_default_policy(tmp_path: Path) -> None:
+    """Two default policies compare equal: each one's clock and sleep are the same builtins, time.monotonic and time.sleep."""
+    app = build_test_app(tmp_path)
+
+    with app.app_context():
+        assert get_job_stream_policy() == JobStreamPolicy()
+
+
+def test_a_job_stream_policy_extension_that_is_not_a_policy_is_refused_naming_its_type(tmp_path: Path) -> None:
+    app = build_test_app(tmp_path)
+    app.extensions["job_stream_policy"] = object()
+
+    with app.app_context(), pytest.raises(TypeError, match=r"\bobject\b"):
+        get_job_stream_policy()
 
 
 def test_dropping_the_app_frees_its_job_manager(tmp_path: Path) -> None:

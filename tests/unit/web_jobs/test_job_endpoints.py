@@ -25,11 +25,17 @@ from solar_challenge.web.jobs import HomeSimulator, JobManager, JobState
 from solar_challenge.web.sse import HEARTBEAT, JobStreamPolicy, job_progress_frames
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
+from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
-from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
+from tests.unit.web_jobs._app_client import (
+    A_HOME_JOB_DAYS,
+    A_HOME_JOB_REQUEST,
+    client_using,
+    serve_job_streams_under,
+)
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
@@ -677,6 +683,38 @@ class TestJobProgressEndpoint:
 
         assert reopened == opened
         assert [frame.event for frame in parse_sse_events(reopened)] == ["completed"]
+
+    def test_a_running_jobs_stream_open_past_its_policys_limit_ends_with_the_timeout_naming_the_limit_and_the_job_runs_on(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        """Task 564's ten-minute test, with no real waiting: the stream's first sleep moves its clock past the limit.
+
+        Only the chunks the test asserts are read, one by one, since a stream that heartbeats
+        until its job ends never ends while the job is held.
+        """
+        manager, client = _a_held_job(app, blocking_simulation)
+        running = client.get("/api/jobs/id-1").get_json()
+        clock = ManualClock()
+        serve_job_streams_under(
+            app,
+            JobStreamPolicy(
+                limit_seconds=30.0, retry_ms=1500, clock=clock, sleep=lambda _seconds: clock.advance(31.0)
+            ),
+        )
+
+        with _progress_stream(client, "id-1") as chunks:
+            assert parse_sse_events(next(chunks)) == [
+                SseFrame("progress", running, id=_version_of(manager, "id-1"), retry=1500)
+            ]
+            assert next(chunks) == HEARTBEAT
+            assert parse_sse_events(next(chunks)) == [
+                SseFrame("timeout", {"limit_seconds": 30.0}, id=None, retry=1500)
+            ]
+            assert next(chunks, None) is None
+
+        after = client.get("/api/jobs/id-1").get_json()
+        assert after["status"] == "running"
+        assert after == running
 
     def test_a_stream_on_a_job_queued_behind_a_running_one_sends_its_queued_state_at_once(
         self, app: Flask, blocking_simulation: BlockingSimulation
