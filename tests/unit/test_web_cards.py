@@ -55,6 +55,15 @@ _PANEL_LOOK = _Look(
     "panel",
     frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm".split()),
 )
+_SHADOWS = frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
+"""The Tailwind box-shadow utilities that draw a shadow."""
+_FLAT_CARD_LOOK = _Look(
+    "flat_card",
+    frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg".split()),
+    lacks=_SHADOWS,
+)
+"""Its classes are a subset of the card's, which carries shadow-sm, and of scenarios/builder.html's
+preset dropdown's, which carries shadow-lg: having no shadow is what tells a flat card from both."""
 
 _Drawn = tuple[str, frozenset[str]]
 
@@ -154,6 +163,17 @@ def _page(client: FlaskClient, path: str) -> str:
         ),
         pytest.param("/scenarios/sweep", _PANEL_LOOK, [_div(), _div(), _div()], id="sweep-panels"),
         pytest.param("/assistant/", _PANEL_LOOK, [_div("flex", "flex-col", "h-[600px]")], id="assistant-panel"),
+        pytest.param(
+            "/history/runs",
+            _FLAT_CARD_LOOK,
+            [
+                _div("overflow-x-auto"),
+                _div("mt-4", "px-4", "py-12", "text-center", "text-sm", "text-slate-500", "dark:text-slate-400"),
+                _div("mt-4", "px-4", "py-12", "text-center"),
+                _div("p-4"),
+            ],
+            id="runs-flat-cards",
+        ),
     ],
 )
 def test_each_element_a_page_that_needs_no_stored_run_draws_in_a_card_look_carries_the_looks_classes_and_its_own(
@@ -184,6 +204,7 @@ def _compare_page(client: FlaskClient, storage: RunStorage) -> str:
 _STAT_CARD = _div("p-5")
 _CHART_PANEL = _div("overflow-hidden")
 _ACTIONS_CARD = _div("p-6")
+_RUN_HEADER_BOX = _div("p-4", "text-center")
 
 
 @pytest.mark.parametrize(
@@ -196,6 +217,7 @@ _ACTIONS_CARD = _div("p-6")
             _fleet_results_page, _CARD_LOOK, {_STAT_CARD, _CHART_PANEL, _ACTIONS_CARD}, id="fleet-results-cards"
         ),
         pytest.param(_compare_page, _CARD_LOOK, {_CHART_PANEL}, id="compare-two-home-runs-cards"),
+        pytest.param(_compare_page, _FLAT_CARD_LOOK, {_RUN_HEADER_BOX}, id="compare-two-home-runs-flat-cards"),
     ],
 )
 def test_each_element_a_page_of_stored_runs_draws_in_a_card_look_carries_the_looks_classes_and_its_own(
@@ -262,6 +284,13 @@ def test_a_panel_is_one_div_in_the_panel_classes_and_its_own_that_holds_its_cont
     drawn = str(macros.panel(classes="sticky top-24", caller=lambda: "Body"))
 
     assert _div_classes(drawn) == [_PANEL_LOOK.classes | {"sticky", "top-24"}]
+    assert texts(drawn) == ["Body"]
+
+
+def test_a_flat_card_is_one_div_in_the_flat_card_classes_and_its_own_that_holds_its_content(macros: Any) -> None:
+    drawn = str(macros.flat_card(classes="p-4 text-center", caller=lambda: "Body"))
+
+    assert _div_classes(drawn) == [_FLAT_CARD_LOOK.classes | {"p-4", "text-center"}]
     assert texts(drawn) == ["Body"]
 
 
@@ -332,6 +361,7 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
     [
         pytest.param(_CARD_LOOK, id="card"),
         pytest.param(_PANEL_LOOK, id="panel"),
+        pytest.param(_FLAT_CARD_LOOK, id="flat-card"),
     ],
 )
 def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html(
