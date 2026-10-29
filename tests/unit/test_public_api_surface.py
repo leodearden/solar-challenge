@@ -467,6 +467,10 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "to_dataframe": "(self) -> DataFrame",
         "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str) -> SimulationResults",
     },
+    "timebase.LocalDay": {
+        "minute_of_day": "(self) -> ndarray",
+        "instant": "(self, minute_of_day: int) -> Timestamp",
+    },
     "timebase.SimulationWindow": {
         "of_index": "classmethod (cls, index: Index) -> SimulationWindow",
         "days": "property (self) -> int",

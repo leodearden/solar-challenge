@@ -817,9 +817,15 @@ Europe/London's spring-forward day, 1,500 on its fall-back day and 1,440 on any
 other. `rows()` raises `ValueError` naming the cadence when the cadence does not
 divide one hour, and `local_days()` raises the same `ValueError` when it is
 called, before it yields a day. `LocalDay`, in `solar_challenge.timebase`, is a
-frozen dataclass compared by identity; the frozen contract now also covers its
-constructor. The 0.5.0 tag has neither method. Consumers need no change when
-they re-pin.
+frozen dataclass compared by identity, whose two methods read the local wall
+clock. `minute_of_day()` gives each row's minute of the day, 0 to 1439: it
+repeats the minutes of the hour the clocks go back over and lacks those of the
+hour they skip. `instant(minute_of_day)` gives the first row of the date whose
+clock reads that minute or later, e.g. 02:00 BST for 01:30 on 2024-03-31, and
+the first 01:30 on 2024-10-27; it raises `ValueError` for a minute outside 0 to
+1439, or one no row of the date reaches. The frozen contract now also covers
+`LocalDay`'s constructor and methods. The 0.5.0 tag has none of these.
+Consumers need no change when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
