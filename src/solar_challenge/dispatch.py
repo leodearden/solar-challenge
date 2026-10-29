@@ -856,18 +856,15 @@ class ChargeWindow:
         read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
         if not _are_opening_days(self.days):
             raise ConfigurationError(
-                "ChargeWindow's days are 'daily' or a non-empty frozenset of date.weekday() numbers, "
-                f"0 to 6: got days={self.days!r}"
+                "days must be 'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6, "
+                f"got {self.days!r}"
             )
         if self.start.tzinfo is not None:
             raise ConfigurationError(
-                "ChargeWindow's start is a wall-clock time on its strategy's zone, so it has no tzinfo: "
-                f"got start={self.start!r}"
+                f"start must be a wall-clock time on its strategy's zone, with no tzinfo, got {self.start!r}"
             )
         if not timedelta(0) < self.duration <= _ONE_DAY:
-            raise ConfigurationError(
-                f"ChargeWindow's duration is more than 0 and at most a day: got duration={self.duration!r}"
-            )
+            raise ConfigurationError(f"duration must be more than 0 and at most a day, got {self.duration!r}")
 
     def covers(self, moment: datetime) -> bool:
         """Whether the window is open at moment, a naive wall-clock time on its strategy's zone.
