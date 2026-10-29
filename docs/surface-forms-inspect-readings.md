@@ -30,9 +30,9 @@ CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-26, 4.2's reading
 class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's reading
 of a class member that is a `functools.partial`, 4.1's reading of a constructor
 `inspect` binds as a `classmethod` or through a descriptor, and 4.7's readings on those
-releases on 2026-10-28. 4.5's reading of a constructor that wraps a callable defined in C
-through a descriptor was measured on those releases on 2026-10-29. A new refusal gets its
-rule test first, then its entry here.
+releases on 2026-10-28. 4.5's reading of where `inspect`'s lookup of a constructor stops
+following `__wrapped__` was measured on those releases on 2026-10-29. A new refusal gets
+its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -263,8 +263,15 @@ refused before any is bound. The other readings are:
   it. A descriptor whose type also defines `__set__` or `__delete__`, callable or not, is
   followed: held as `__init__`, one that gives `build` reads as
   `(receiver: float, rate: int) -> None` on 3.11 and 3.12 and raises `ValueError` from
-  3.13, and held as a metaclass `__call__`, it reads as `()` from 3.13. `surface_form`
-  refuses it.
+  3.13, and held as a metaclass `__call__`, it reads as `()` from 3.13. An object whose
+  type defines no `__get__` is followed too: held at either and recording
+  `object.__init__`, it reads as `(self, /, *args, **kwargs)` on 3.11 and 3.12 if it is
+  callable, and raises `TypeError` there if it is not, and reads as `()` from 3.13.
+  `surface_form` refuses each. Held as `__new__`, which `inspect` looks up with
+  `getattr`, a descriptor is bound before the walk, which starts from what its `__get__`
+  gives: one that gives `build` reads as `(rate: int) -> None` on every minor, whatever
+  its type defines besides `__get__` and whatever it records as `__wrapped__`, and
+  `surface_form` spells it.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`: every minor reads it as a method descriptor, finds no text signature and
   raises `ValueError`.
@@ -292,6 +299,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_type_error_naming_it_that_call_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_decorated_with_warnings_deprecated_raises_the_type_error_naming_the_new_it_writes`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_get_but_neither_set_nor_delete_is_spelled_by_what_inspect_binds_it_to_whatever_the_descriptor_records_as_wrapped`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_is_a_descriptor_that_records_a_callable_defined_in_c_as_wrapped_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter_whatever_its_type_defines_besides_get`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_delete_a_partial_or_an_object_defining_no_get_that_records_a_callable_defined_in_c_as_wrapped_raises_a_type_error_naming_it_that_constructor_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`

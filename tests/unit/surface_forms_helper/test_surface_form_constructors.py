@@ -444,6 +444,35 @@ def test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_g
 
 
 @pytest.mark.parametrize(
+    "giver",
+    [
+        pytest.param(CallableGiver, id="get-only-descriptor"),
+        pytest.param(Giver, id="non-callable-get-only-descriptor"),
+        pytest.param(DeletingCallableGiver, id="get-delete-descriptor"),
+        pytest.param(DeletingGiver, id="non-callable-get-delete-descriptor"),
+        pytest.param(SettingCallableGiver, id="get-set-descriptor"),
+        pytest.param(SettingGiver, id="non-callable-get-set-descriptor"),
+    ],
+)
+def test_a_class_whose_new_is_a_descriptor_that_records_a_callable_defined_in_c_as_wrapped_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter_whatever_its_type_defines_besides_get(
+    giver: type[Giver],
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    held = giver(build)
+    held.__wrapped__ = object.__new__
+    cls = class_whose_new_is(held)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == "(rate: int) -> None"
+        assert named_classes(subject) == {int}
+        assert surface_form(functools.partial(subject)) == "(rate: int) -> None"
+
+
+@pytest.mark.parametrize(
     "hold",
     [
         pytest.param(
@@ -466,6 +495,10 @@ def test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_g
         pytest.param(
             lambda build: _recording_object_init(SettingGiver(build)),
             id="non-callable-get-set-descriptor",
+        ),
+        pytest.param(
+            lambda build: _recording_object_init(types.SimpleNamespace()),
+            id="non-callable-object-defining-no-get",
         ),
     ],
 )
