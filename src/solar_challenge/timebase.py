@@ -2,6 +2,8 @@
 """What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's; and the rows a window gives, over its local calendar days."""
 
 import calendar
+import itertools
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -34,11 +36,22 @@ def covered_days(first_day: date, last_day: date) -> int:
     return last_day.toordinal() - first_day.toordinal() + 1
 
 
+@dataclass(frozen=True, eq=False)
+class LocalDay:
+    """One calendar date of a window on the window's clock: the window's rows that start on that date, from the date's first instant, at the window's cadence.
+
+    Compared by identity, since a generated == would compare its rows element by element.
+    """
+
+    date: date
+    rows: pd.DatetimeIndex
+
+
 @dataclass(frozen=True)
 class SimulationWindow:
     """The calendar days a simulated series covers, its first and last local dates both counted; how long each of its rows lasts; and its clock's zone name, None for a naive index.
 
-    A yearly figure is a window total times annualisation_scale, and rows() is the series' index.
+    A yearly figure is a window total times annualisation_scale; rows() is the series' index, and local_days() splits its rows by date.
     """
 
     first_day: date
@@ -126,9 +139,26 @@ class SimulationWindow:
         Raises:
             ValueError: If the cadence does not divide one hour, naming it.
         """
+        return self._rows_over(self._day_starts())
+
+    def local_days(self) -> Iterator[LocalDay]:
+        """One LocalDay per date from first_day to last_day, in order, splitting rows() at each date's first instant.
+
+        Raises:
+            ValueError: If the cadence does not divide one hour, naming it, when called rather than on the first next().
+        """
         starts = self._day_starts()
+        rows = self._rows_over(starts)
+        bounds = itertools.pairwise(rows.searchsorted(starts))
+        return (
+            LocalDay(self.first_day + timedelta(days=offset), rows[begin:end])
+            for offset, (begin, end) in enumerate(bounds)
+        )
+
+    def _rows_over(self, day_starts: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        """The rows from the first of day_starts up to, not including, the last, at the window's cadence, at microsecond resolution."""
         return pd.date_range(
-            starts[0], starts[-1], freq=pd.Timedelta(self.cadence), inclusive="left", unit="us"
+            day_starts[0], day_starts[-1], freq=pd.Timedelta(self.cadence), inclusive="left", unit="us"
         )
 
     def _day_starts(self) -> pd.DatetimeIndex:
