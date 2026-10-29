@@ -428,13 +428,13 @@ def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
-_C_CALLABLE_KINDS = (
-    types.BuiltinFunctionType,
-    types.WrapperDescriptorType,
-    types.MethodWrapperType,
-    types.ClassMethodDescriptorType,
+_CCallableInspectSkips: typing.TypeAlias = (
+    types.BuiltinFunctionType
+    | types.WrapperDescriptorType
+    | types.MethodWrapperType
+    | types.ClassMethodDescriptorType
 )
-_C_ROUTINE_KINDS = (*_C_CALLABLE_KINDS, types.MethodDescriptorType)
+_C_ROUTINE_KINDS = (_CCallableInspectSkips, types.MethodDescriptorType)
 
 
 def _refuse_constructor_without_a_portable_form(cls: type) -> None:
@@ -463,8 +463,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - that first-read constructor, if it is not callable once bound, is read as an Enum,
       carries such a __signature__, or is read as a builtin or through such an object;
     - the constructor of the class _refuse_class_constructed_in_c finds, if that
-      first-read constructor is of a kind in _C_CALLABLE_KINDS, which inspect skips as
-      defined in C.
+      first-read constructor is a _CCallableInspectSkips.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -485,7 +484,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, name, constructor))
-    if isinstance(constructor, _C_CALLABLE_KINDS):
+    if isinstance(constructor, _CCallableInspectSkips):
         _refuse_class_constructed_in_c(cls)
 
 
@@ -495,7 +494,7 @@ def _refuse_class_constructed_in_c(cls: type) -> None:
     That class is the one holding the constructor _first_read_constructor gives, unless
     _skipped_as_none skips the name such a class holds, as a __new__ that gives None
     over int skips int's, or that constructor is a method-wrapper or a
-    classmethod_descriptor, of a kind in _C_CALLABLE_KINDS but not in
+    classmethod_descriptor, a _CCallableInspectSkips of a kind not in
     _C_CONSTRUCTOR_KINDS, which only a class defined in Python holds, as an __init__
     that is object().__init__ over int is.
     """
@@ -534,9 +533,8 @@ def _first_read_constructor(cls: type) -> tuple[type, str, object]:
     the one *cls* resolves skipped. The class is the first in the MRO that holds a name
     it reads, else object, whose constructors are defined in C. The constructor is that
     class's __new__, as getattr gives it (a staticmethod unwrapped), or as
-    _classmethod_as_read gives it if it is a classmethod, unless it is of a kind in
-    _C_CALLABLE_KINDS, which inspect skips as defined in C, beside an __init__ inspect
-    reads; else its __init__.
+    _classmethod_as_read gives it if it is a classmethod, unless it is a
+    _CCallableInspectSkips beside an __init__ inspect reads; else its __init__.
     """
     names = [
         name
@@ -553,14 +551,14 @@ def _first_read_constructor(cls: type) -> tuple[type, str, object]:
             else getattr(holder, "__new__")
         )
         init_beside = "__init__" in names and "__init__" in namespace
-        if not (isinstance(new, _C_CALLABLE_KINDS) and init_beside):
+        if not (isinstance(new, _CCallableInspectSkips) and init_beside):
             return holder, "__new__", new
     return holder, "__init__", namespace["__init__"]
 
 
 def _skipped_as_none(owner: type, name: str, held: object) -> bool:
-    """Whether inspect skips *held*, the constructor *owner* resolves as *name*, as inspect.getattr_static finds it, on every admitted minor, reading that name of no class in the MRO: it gives None as inspect looks it up, a __new__ through getattr and any other bound to *owner* as _bound_to binds it. Neither a classmethod, which inspect binds to a method even of None, nor a constructor of a kind in _C_CALLABLE_KINDS, which inspect skips as defined in C and never binds, gives None."""
-    if isinstance(held, (classmethod, *_C_CALLABLE_KINDS)):
+    """Whether inspect skips *held*, the constructor *owner* resolves as *name*, as inspect.getattr_static finds it, on every admitted minor, reading that name of no class in the MRO: it gives None as inspect looks it up, a __new__ through getattr and any other bound to *owner* as _bound_to binds it. Neither a classmethod, which inspect binds to a method even of None, nor a _CCallableInspectSkips, which inspect never binds, gives None."""
+    if isinstance(held, (classmethod, _CCallableInspectSkips)):
         return False
     read = getattr(owner, name) if name == "__new__" else _bound_to(held, owner)
     return read is None
@@ -586,24 +584,16 @@ def _refuse_wrapper_of_c_callable(
         )
 
 
-def _wrapped_c_callable(
-    constructor: object,
-) -> (
-    types.BuiltinFunctionType
-    | types.WrapperDescriptorType
-    | types.MethodWrapperType
-    | types.ClassMethodDescriptorType
-    | None
-):
-    """The callable of a kind in _C_CALLABLE_KINDS, the kinds inspect skips as defined in C, that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself of such a kind.
+def _wrapped_c_callable(constructor: object) -> _CCallableInspectSkips | None:
+    """The _CCallableInspectSkips that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself one.
 
     docs/surface-forms-inspect-readings.md §4.5 says which minors take that walk from a
     constructor, and how each reads one at which it stops.
     """
-    if isinstance(constructor, _C_CALLABLE_KINDS):
+    if isinstance(constructor, _CCallableInspectSkips):
         return None
     wrapped = _unwrapped(constructor, _stops_constructor_lookup)
-    return wrapped if isinstance(wrapped, _C_CALLABLE_KINDS) else None
+    return wrapped if isinstance(wrapped, _CCallableInspectSkips) else None
 
 
 def _stops_constructor_lookup(link: object) -> bool:
@@ -902,7 +892,7 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     end = _chain_end(constructor)
-    if signature_holder is not None and isinstance(end, _C_CALLABLE_KINDS):
+    if signature_holder is not None and isinstance(end, _CCallableInspectSkips):
         return dict.fromkeys(names, defining_module(signature_holder))
     author = _annotations_author(end)
     if _is_generated(author):
@@ -936,15 +926,15 @@ def _refuse_constructor_generated_for_another_class(
 
 def _constructor_as_read(cls: type, name: str, constructor: object) -> object:
     """*constructor*, the one _first_read_constructor gives for *cls* as *name*, as inspect reads it: a __new__ as given, and any other __init__ bound to *cls*, as _bound_to binds it."""
-    if name == "__new__" or isinstance(constructor, _C_CALLABLE_KINDS):
+    if name == "__new__" or isinstance(constructor, _CCallableInspectSkips):
         return constructor
     return _bound_to(constructor, cls)
 
 
 def _metaclass_call(cls: type) -> object | None:
-    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if inspect skips it on every minor: it is of a kind in _C_CALLABLE_KINDS, which inspect skips as defined in C, as type.__call__ is, or _skipped_as_none finds it skipped."""
+    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if inspect skips it on every minor: it is a _CCallableInspectSkips, as type.__call__ is, or _skipped_as_none finds it skipped."""
     call: object = inspect.getattr_static(type(cls), "__call__")
-    if isinstance(call, _C_CALLABLE_KINDS) or _skipped_as_none(type(cls), "__call__", call):
+    if isinstance(call, _CCallableInspectSkips) or _skipped_as_none(type(cls), "__call__", call):
         return None
     return call
 
