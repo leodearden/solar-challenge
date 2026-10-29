@@ -15,6 +15,7 @@ earlier tests imported cannot hide what the case loads.
 import json
 import subprocess
 import sys
+from datetime import timedelta
 
 import pytest
 
@@ -63,6 +64,29 @@ def _probe(statement: str) -> tuple[set[str], list[str] | None]:
 
 def test_a_configuration_error_is_a_value_error() -> None:
     assert issubclass(ConfigurationError, ValueError)
+
+
+@pytest.mark.parametrize(
+    ("field", "requirement", "value", "message"),
+    [
+        pytest.param("tz", "a ZoneInfo", "Europe/London", "tz must be a ZoneInfo, got 'Europe/London'", id="text-is-quoted"),
+        pytest.param(
+            "duration",
+            "more than 0 and at most a day",
+            timedelta(0),
+            "duration must be more than 0 and at most a day, got datetime.timedelta(0)",
+            id="an-object-is-shown-by-repr",
+        ),
+    ],
+)
+def test_must_be_refuses_a_value_saying_what_its_field_must_be_and_what_it_got(
+    field: str, requirement: str, value: object, message: str
+) -> None:
+    """Every refusal of one field's value takes this frame; the value is shown by repr, so text is quoted."""
+    refusal = ConfigurationError.must_be(field, requirement, got=value)
+
+    assert type(refusal) is ConfigurationError
+    assert str(refusal) == message
 
 
 def test_importing_the_errors_module_loads_no_other_package_module() -> None:
