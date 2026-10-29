@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every connection the dashboard opens to its database comes from a Database, which applies one policy.
 
-Rows are read by column name, the foreign keys of any table on the database are enforced, and nothing is read
-from the file before the first statement. A store open_database created journals in WAL mode,
+Rows are read by column name, the foreign keys of any table on the database are enforced, temporary
+storage (the B-trees of a sort, a temporary table) is kept in memory, and nothing is read from the file
+before the first statement. A store open_database created journals in WAL mode,
 so every connection to it reports wal. A transaction commits a block that succeeds, rolls
 back a block that raises, and closes its connection either way.
 """
@@ -86,6 +87,18 @@ def test_deleting_a_run_on_a_dashboard_connection_deletes_the_rows_that_referenc
         conn.execute("DELETE FROM runs WHERE id = 'run-1'")
 
         assert conn.execute("SELECT id FROM run_notes").fetchall() == []
+
+
+_TEMP_STORE_MEMORY = 2
+"""What PRAGMA temp_store reports for MEMORY (0 is DEFAULT, 1 FILE)."""
+
+
+@pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
+def test_a_dashboard_connection_keeps_its_temporary_storage_in_memory(
+    open_connection: ConnectionOpener, dashboard_database: Database
+) -> None:
+    with open_connection(dashboard_database) as conn:
+        assert conn.execute("PRAGMA temp_store").fetchone()[0] == _TEMP_STORE_MEMORY
 
 
 @pytest.mark.parametrize("open_connection", CONNECTION_OPENERS)
