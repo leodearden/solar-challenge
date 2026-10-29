@@ -509,10 +509,11 @@ def _refuse_class_constructed_in_c(cls: type) -> None:
 
 
 def _constructed_in_c(holder: type) -> bool:
-    """Whether the constructors *holder*'s own namespace holds are defined in C, as object's are and as a builtin or extension type's are: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS."""
+    """Whether *holder*, a class other than object, is defined in C, as a builtin or extension type is, by the constructors its own namespace holds: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS and is not object's own, which a class defined in Python holds where it assigns one."""
     namespace = vars(holder)
     return all(
         isinstance(namespace[name], _C_CONSTRUCTOR_KINDS)
+        and namespace[name] is not vars(object)[name]
         for name in ("__new__", "__init__")
         if name in namespace
     )

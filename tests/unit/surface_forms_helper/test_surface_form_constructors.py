@@ -36,6 +36,12 @@ class Ledger(dict):
     """A class that inherits its constructor from dict, which CPython defines in C."""
 
 
+class ReinitialisedLedger(dict):
+    """A class over dict that holds object's own __init__, as a class defined in Python can."""
+
+    __init__ = object.__init__
+
+
 class DeletableCallableGetter(CallableGetter):
     """A CallableGetter whose type also defines __delete__, so that inspect counts it a method descriptor before Python 3.13 alone."""
 
@@ -266,6 +272,11 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_ty
             r"\btests\.unit\.surface_forms_helper\.test_surface_form_constructors\.Ledger\b.*\bbuiltins\.dict\b",
             id="Ledger",
         ),
+        pytest.param(
+            ReinitialisedLedger,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_constructors\.ReinitialisedLedger\b.*\bbuiltins\.dict\b",
+            id="ReinitialisedLedger",
+        ),
     ],
 )
 def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
@@ -281,12 +292,20 @@ def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
     class Plain:
         pass
 
-    class Renewed:
+    class RenewedByAStaticmethod:
         __new__ = staticmethod(object.__new__)
+
+    class RenewedByABuiltin:
+        __new__ = object.__new__
+
+    class ReinitialisedByASlotWrapper:
+        __init__ = object.__init__
 
     assert surface_form(object) == "()"
     assert surface_form(Plain) == "()"
-    assert surface_form(Renewed) == "()"
+    assert surface_form(RenewedByAStaticmethod) == "()"
+    assert surface_form(RenewedByABuiltin) == "()"
+    assert surface_form(ReinitialisedByASlotWrapper) == "()"
 
 
 def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:

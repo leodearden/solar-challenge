@@ -314,8 +314,8 @@ refused before any is bound. The other readings are:
   `(receiver, rate: int) -> None` on 3.11 to 3.13 and as `(rate: int) -> None` on 3.14,
   and is refused as 4.4's partial. Where `inspect` reads none, `surface_form` refuses
   the class as constructed by the class defined in C its MRO holds, naming that class,
-  or, with no such class in the MRO, as a class of which `inspect` reads no
-  constructor, below.
+  or, with no such class in the MRO, reads it as the entry below on a class of which
+  `inspect` reads no constructor says.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`, at the end of the chain from a constructor whose binding gives a
   callable: the binding gives such a descriptor that is callable, or a wrapper that
@@ -359,7 +359,8 @@ refused before any is bound. The other readings are:
   `__init__` the class resolves, by the readings above. Every minor reads the first text
   signature a class in its MRO other than `object` gives. Failing that, it reads `()` if
   the `__new__` and `__init__` the class resolves are `object`'s, as for
-  `__new__ = staticmethod(object.__new__)` alone, and otherwise raises `ValueError`, or
+  `__new__ = object.__new__`, `__new__ = staticmethod(object.__new__)` or
+  `__init__ = object.__init__` alone, and otherwise raises `ValueError`, or
   the `TypeError` binding a `classmethod_descriptor` `__init__` to the class raises, as
   for `__init__ = dict.__dict__['fromkeys']`. A class docstring written as a text
   signature, `Name(rate)`, `--` and a blank line, and indented as a class body indents
@@ -372,6 +373,10 @@ refused before any is bound. The other readings are:
   by that class instead, as the next entry says.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
+  `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
+  own namespace holds is a builtin or a slot wrapper and none is `object`'s own, which a
+  class defined in Python holds where it assigns one: over `dict`,
+  `__init__ = object.__init__` is refused as constructed by `dict`.
 - A constructor read through an object its class makes callable. `inspect` reads a
   metaclass `__call__`, a `__new__` or an `__init__`, bound as it binds it, as it reads a
   routine (§2), so where that constructor is such an object, or a chain from it ends at
@@ -411,6 +416,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_that_object_constructs_is_spelled_with_no_parameters`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
