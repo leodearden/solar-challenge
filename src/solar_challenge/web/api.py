@@ -42,9 +42,9 @@ from solar_challenge.web.presets import (
     saved_fleet_presets,
 )
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
-from solar_challenge.web.shared import get_database, get_job_manager, get_storage
+from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
-from solar_challenge.web.sse import JobStreamPolicy, event_stream, job_progress_frames, parse_last_event_id
+from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import one_of
@@ -173,9 +173,10 @@ def get_job_progress(job_id: str) -> Response:
     """Stream the job's snapshots as Server-Sent Events, as web/sse.py's job_progress_frames sends them.
 
     A stream sends the job's current state at once and each newer state as the job
-    reports it. It ends with the job's final state, with a timeout once it has been open
-    past its policy's limit, or with untracked when the server tracks no such job. A
-    reopened stream resumes after the version its Last-Event-ID header names.
+    reports it, under the app's job stream policy. It ends with the job's final state, with
+    a timeout once it has been open past the policy's limit, or with untracked when the
+    server tracks no such job. A reopened stream resumes after the version its
+    Last-Event-ID header names.
 
     Args:
         job_id: Unique job identifier.
@@ -189,7 +190,7 @@ def get_job_progress(job_id: str) -> Response:
             job_manager.job_snapshot,
             job_id,
             last_event_id=parse_last_event_id(request.headers.get("Last-Event-ID")),
-            policy=JobStreamPolicy(),
+            policy=get_job_stream_policy(),
         )
     )
 

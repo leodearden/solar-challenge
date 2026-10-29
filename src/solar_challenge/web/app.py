@@ -20,6 +20,7 @@ from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
 from solar_challenge.web.schema import open_database
 from solar_challenge.web.scenarios import bp as scenarios_bp
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
 
@@ -161,6 +162,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @app.errorhandler(500)
     def internal_server_error(e: Exception) -> tuple[str, int]:
         return render_template("errors/500.html"), 500
+
+    app.extensions["job_stream_policy"] = JobStreamPolicy()
 
     store_lock = acquire_store_lock(Path(app.config["DATA_DIR"]))
     try:
