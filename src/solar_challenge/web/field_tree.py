@@ -212,7 +212,7 @@ def _member_for(value: Any, union: Any, path: str | None) -> Any:
     tags = [_tags(member)[tag_field] for member in members]
     stored = value.get(tag_field)
     if stored not in tags:
-        stored_text = "missing" if tag_field not in value else repr(stored)
+        stored_text = "missing" if tag_field not in value else _json_value(stored)
         raise FieldTreeRefused(_child(path, tag_field), f"is {stored_text}, not one of {tags}")
     return members[tags.index(stored)]
 
