@@ -428,12 +428,13 @@ def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
 
 
 _C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
-_C_ROUTINE_KINDS = (
-    *_C_CONSTRUCTOR_KINDS,
-    types.MethodDescriptorType,
-    types.ClassMethodDescriptorType,
+_C_CALLABLE_KINDS = (
+    types.BuiltinFunctionType,
+    types.WrapperDescriptorType,
     types.MethodWrapperType,
+    types.ClassMethodDescriptorType,
 )
+_C_ROUTINE_KINDS = (*_C_CALLABLE_KINDS, types.MethodDescriptorType)
 
 
 def _refuse_constructor_without_a_portable_form(cls: type) -> None:
@@ -582,16 +583,22 @@ def _refuse_wrapper_of_c_callable(
 
 def _wrapped_c_callable(
     constructor: object,
-) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C.
+) -> (
+    types.BuiltinFunctionType
+    | types.WrapperDescriptorType
+    | types.MethodWrapperType
+    | types.ClassMethodDescriptorType
+    | None
+):
+    """The callable of a kind in _C_CALLABLE_KINDS, the kinds inspect skips as defined in C, that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself of such a kind.
 
     docs/surface-forms-inspect-readings.md §4.5 says which minors take that walk from a
     constructor, and how each reads one at which it stops.
     """
-    if isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+    if isinstance(constructor, _C_CALLABLE_KINDS):
         return None
     wrapped = _unwrapped(constructor, _stops_constructor_lookup)
-    return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
+    return wrapped if isinstance(wrapped, _C_CALLABLE_KINDS) else None
 
 
 def _stops_constructor_lookup(link: object) -> bool:
