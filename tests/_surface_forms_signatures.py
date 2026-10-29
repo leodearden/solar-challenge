@@ -213,10 +213,11 @@ def _links_inspect_reads(obj: object, stop: Callable[[object], bool]) -> Iterato
 _ABSENT = object()
 
 
-def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> object:
-    """The callable reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
+def _unwrapped(obj: object, stop: Callable[[object], bool]) -> object:
+    """The object reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
     return inspect.unwrap(
-        obj, stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link)
+        obj,  # type: ignore[arg-type]  # typeshed types unwrap's func as a callable; it follows __wrapped__ from any object
+        stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link),
     )
 
 
@@ -519,39 +520,40 @@ def _refuse_wrapper_of_c_callable(
 ) -> None:
     """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C that *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps, if _wrapped_c_callable gives one.
 
-    inspect reads such a wrapper through that callable on some Python releases, and skips
-    it as defined in C on others, reading the next constructor instead.
+    On some Python releases inspect follows __wrapped__ to that callable and skips the
+    constructor as defined in C, reading the next constructor instead, and on others it
+    reads the constructor as it binds it.
     """
     wrapped = _wrapped_c_callable(constructor)
     if wrapped is not None:
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which wraps "
-            f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
-            "that callable on some Python releases and skips it as defined in C on "
-            f"others: make the name private, or define {name} with def, wrapping no "
-            "callable defined in C"
+            f"{wrapped.__qualname__}, defined in C: on some Python releases inspect follows "
+            "__wrapped__ to that callable and skips the constructor as defined in C, and on "
+            "others it reads the constructor as it binds it: make the name private, or "
+            f"define {name} with def, wrapping no callable defined in C"
         )
 
 
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C.
 
     That walk is the one Python 3.13 and 3.14 take from a constructor as they look it
-    up, before binding it: where it ends at such a callable, they skip the constructor
-    as defined in C. 3.11 and 3.12 take no such walk. It stops at a __signature__,
-    leaving it to _refuse_constructor_signature, and at a method descriptor, which every
-    minor binds before following any __wrapped__ and reads as what that gives, as
-    _refuse_constructor_reading reads it. So it never follows __wrapped__ from what a
-    binding gives. Only a constructor this walk follows to a callable defined in C meets
-    both checks, such as a descriptor whose type defines __delete__ and whose __get__
-    gives a callable carrying a __signature__, and
+    up, callable or not, before binding it: where it ends at such a callable, they skip
+    the constructor as defined in C. 3.11 and 3.12 take no such walk. It stops at a
+    __signature__, leaving it to _refuse_constructor_signature, and at a method
+    descriptor, which every minor binds before following any __wrapped__ and reads as
+    what that gives, as _refuse_constructor_reading reads it. So it never follows
+    __wrapped__ from what a binding gives. Only a constructor this walk follows to a
+    callable defined in C meets both checks, such as a descriptor whose type defines
+    __delete__ and whose __get__ gives a callable carrying a __signature__, and
     _refuse_constructor_without_a_portable_form checks the wrapper first. A get-only
     descriptor whose binding gives such a callable meets _refuse_constructor_signature
     alone.
     """
-    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return None
     wrapped = _unwrapped(constructor, _stops_constructor_lookup)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
