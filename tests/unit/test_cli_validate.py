@@ -395,7 +395,7 @@ home:
         """scenarios/bristol-phase1-flex.yaml's finance block, its first event window's event_hours infinite, in a scenario: document.
 
         `validate config` reads a finance block only through a scenario's loader; a fleet
-        file's finance: block is not read (esc-862-1).
+        file's finance: block is not read.
         """
         flex = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
         finance = yaml.safe_load(flex.read_text())["finance"]

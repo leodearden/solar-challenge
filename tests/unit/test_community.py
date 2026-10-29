@@ -31,9 +31,9 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics
-from tests._unusable_numbers import UNUSABLE_NUMBERS
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 # ---------------------------------------------------------------------------
