@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for web/sse.py: the encoder, the event catalogue and the job progress stream of the dashboard's event streams.
+"""Tests for web/sse.py: the encoder, the event catalogue, and the job progress stream of the dashboard's event streams with the policy that paces it.
 
 The job progress stream's tests run job_progress_frames on a _ScriptedJob, which stands in
 for a JobManager's job_snapshot, under a JobStreamPolicy that never sleeps: each sleep is
@@ -24,16 +24,21 @@ from solar_challenge.web.sse import (
     CHAT_FAILED,
     CHAT_TOOL,
     HEARTBEAT,
-    JOB_COMPLETE,
-    JOB_ERROR,
+    JOB_CANCELLED,
+    JOB_COMPLETED,
+    JOB_FAILED,
     JOB_PROGRESS,
     JOB_STATE_EVENTS,
+    JOB_STREAM_TIMED_OUT,
+    JOB_UNTRACKED,
     ChatDelta,
     ChatDone,
     ChatFailed,
     ChatToolCall,
     JobStreamPolicy,
+    JobUntracked,
     SseEvent,
+    StreamTimedOut,
     event_stream,
     job_progress_frames,
     parse_last_event_id,
@@ -94,7 +99,7 @@ _CATALOGUE_SAMPLES = [
         id="job-progress",
     ),
     pytest.param(
-        JOB_COMPLETE,
+        JOB_COMPLETED,
         dataclasses.replace(
             _A_RUNNING_JOB,
             status="completed",
@@ -103,7 +108,7 @@ _CATALOGUE_SAMPLES = [
             message="Simulation completed successfully",
         ),
         SseFrame(
-            "complete",
+            "completed",
             {
                 "job_id": "job-1",
                 "run_id": "run-2",
@@ -114,13 +119,13 @@ _CATALOGUE_SAMPLES = [
                 "created_at": "2026-10-26T09:00:00+00:00",
             },
         ),
-        id="job-complete",
+        id="job-completed",
     ),
     pytest.param(
-        JOB_ERROR,
+        JOB_FAILED,
         dataclasses.replace(_A_RUNNING_JOB, status="failed", message=_AWKWARD_TEXT),
         SseFrame(
-            "error",
+            "failed",
             {
                 "job_id": "job-1",
                 "run_id": "run-2",
@@ -131,7 +136,36 @@ _CATALOGUE_SAMPLES = [
                 "created_at": "2026-10-26T09:00:00+00:00",
             },
         ),
-        id="job-error",
+        id="job-failed",
+    ),
+    pytest.param(
+        JOB_CANCELLED,
+        dataclasses.replace(_A_RUNNING_JOB, status="cancelled", message="Cancelled: its run was deleted"),
+        SseFrame(
+            "cancelled",
+            {
+                "job_id": "job-1",
+                "run_id": "run-2",
+                "status": "cancelled",
+                "progress_pct": 20.0,
+                "current_step": "Simulating",
+                "message": "Cancelled: its run was deleted",
+                "created_at": "2026-10-26T09:00:00+00:00",
+            },
+        ),
+        id="job-cancelled",
+    ),
+    pytest.param(
+        JOB_STREAM_TIMED_OUT,
+        StreamTimedOut(600.0),
+        SseFrame("timeout", {"limit_seconds": 600.0}),
+        id="job-stream-timed-out",
+    ),
+    pytest.param(
+        JOB_UNTRACKED,
+        JobUntracked("job-1"),
+        SseFrame("untracked", {"job_id": "job-1"}),
+        id="job-untracked",
     ),
 ]
 """Each catalogue event, a sample payload, and the frame the reader must return for it.
@@ -169,13 +203,13 @@ def test_the_round_trip_covers_every_event_sse_declares() -> None:
 _EVENT_NAME_OF_EACH_JOB_STATUS: dict[JobStatus, str] = {
     "queued": "progress",
     "running": "progress",
-    "completed": "complete",
-    "failed": "error",
-    "cancelled": "error",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "cancelled",
 }
-"""The event a frame of each job status names, as the pages read it until docs/prds/job-events-and-sse-framing.md's δ renames them.
+"""The event a frame of each job status names, as web/static/js/job-progress-stream.js reads it.
 
-A cancelled job's frame is the error event, as a failed one's is.
+Each terminal status names its own event (docs/prds/job-events-and-sse-framing.md D-S20-1).
 """
 
 
@@ -227,16 +261,17 @@ def test_the_heartbeat_is_an_sse_comment() -> None:
 
 
 class _ScriptedJob:
-    """Stands in for one job's JobManager.job_snapshot: snapshot() answers the job's current JobSnapshot, or None once forget() is called.
+    """Stands in for JobManager.job_snapshot on one job: snapshot(job_id) answers the job's current JobSnapshot for the job's own id, and None for any other id or once forget() is called.
 
     move(**changes) replaces the job's state with the state so changed, at the next version.
     """
 
     def __init__(self, snapshot: JobSnapshot) -> None:
+        self._job_id = snapshot.state.job_id
         self._current: JobSnapshot | None = snapshot
 
-    def snapshot(self) -> JobSnapshot | None:
-        return self._current
+    def snapshot(self, job_id: str) -> JobSnapshot | None:
+        return self._current if job_id == self._job_id else None
 
     def move(self, **changes: Any) -> JobSnapshot:
         current = self._current
@@ -262,8 +297,11 @@ def clock() -> ManualClock:
 
 @pytest.fixture
 def policy(sleeps: list[float], clock: ManualClock) -> JobStreamPolicy:
-    """The policy of the stream under test: each sleep is recorded in sleeps, not slept, and its limit is timed on clock."""
-    return JobStreamPolicy(sleep=sleeps.append, clock=clock)
+    """The policy of the stream under test: each sleep is recorded in sleeps, not slept, and its limit is timed on clock.
+
+    Its retry is not the default one, so a frame that carries it took it from the policy.
+    """
+    return JobStreamPolicy(sleep=sleeps.append, clock=clock, retry_ms=1500)
 
 
 def _next_poll(stream: Iterator[str]) -> list[str]:
@@ -288,13 +326,14 @@ def _read(chunks: Iterable[str]) -> list[SseFrame | str]:
     return read
 
 
-def _frame_of(snapshot: JobSnapshot) -> SseFrame:
-    """The frame a reader must take for *snapshot*: its status's event, its state's fields as data, and its version as id."""
-    return SseFrame(JOB_STATE_EVENTS[snapshot.state.status].name, dataclasses.asdict(snapshot.state), id=snapshot.version)
-
-
-_JOB_NOT_FOUND_FRAME = 'event: error\ndata: {"error": "Job not found"}\n\n'
-_TIMED_OUT_FRAME = 'event: error\ndata: {"error": "SSE stream timed out after 10 minutes"}\n\n'
+def _frame_of(snapshot: JobSnapshot, policy: JobStreamPolicy) -> SseFrame:
+    """The frame a reader must take for *snapshot* on a stream under *policy*: its status's event, its state's fields as data, its version as id and the policy's retry."""
+    return SseFrame(
+        JOB_STATE_EVENTS[snapshot.state.status].name,
+        dataclasses.asdict(snapshot.state),
+        id=snapshot.version,
+        retry=policy.retry_ms,
+    )
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
@@ -302,12 +341,14 @@ def test_a_stream_sends_an_unfinished_jobs_state_on_open_then_only_heartbeats_wh
     status: JobStatus, sleeps: list[float], policy: JobStreamPolicy
 ) -> None:
     state = dataclasses.replace(_A_RUNNING_JOB, status=status)
-    stream = job_progress_frames(_ScriptedJob(JobSnapshot(3, state)).snapshot, last_event_id=None, policy=policy)
+    stream = job_progress_frames(
+        _ScriptedJob(JobSnapshot(3, state)).snapshot, "job-1", last_event_id=None, policy=policy
+    )
 
     first_poll = _read(_next_poll(stream))
 
     assert first_poll == [
-        SseFrame(JOB_STATE_EVENTS[status].name, dataclasses.asdict(state), id=3, retry=None),
+        SseFrame(JOB_STATE_EVENTS[status].name, dataclasses.asdict(state), id=3, retry=policy.retry_ms),
         HEARTBEAT,
     ]
     assert list(first_poll[0].data) == [field.name for field in dataclasses.fields(JobState)]
@@ -323,91 +364,140 @@ def test_a_finished_jobs_stream_sends_its_final_state_once_and_ends(
 ) -> None:
     final = JobSnapshot(5, dataclasses.replace(_A_RUNNING_JOB, status=status))
 
-    stream = job_progress_frames(_ScriptedJob(final).snapshot, last_event_id=last_event_id, policy=policy)
+    stream = job_progress_frames(_ScriptedJob(final).snapshot, "job-1", last_event_id=last_event_id, policy=policy)
 
-    assert _read(stream) == [_frame_of(final)]
+    assert _read(stream) == [_frame_of(final, policy)]
     assert sleeps == []
 
 
 def test_a_stream_reopened_at_the_jobs_version_sends_no_state_until_the_job_moves_on(policy: JobStreamPolicy) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, last_event_id=3, policy=policy)
+    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=3, policy=policy)
 
     assert _next_poll(stream) == [HEARTBEAT]
 
     saving = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
 
-    assert _read(_next_poll(stream)) == [_frame_of(saving), HEARTBEAT]
+    assert _read(_next_poll(stream)) == [_frame_of(saving, policy), HEARTBEAT]
 
 
 def test_a_stream_reopened_at_an_earlier_version_sends_the_jobs_current_state_on_open(policy: JobStreamPolicy) -> None:
     current = JobSnapshot(3, _A_RUNNING_JOB)
 
-    stream = job_progress_frames(_ScriptedJob(current).snapshot, last_event_id=2, policy=policy)
+    stream = job_progress_frames(_ScriptedJob(current).snapshot, "job-1", last_event_id=2, policy=policy)
 
-    assert _read(_next_poll(stream)) == [_frame_of(current), HEARTBEAT]
+    assert _read(_next_poll(stream)) == [_frame_of(current, policy), HEARTBEAT]
 
 
 def test_the_states_a_job_moves_through_between_two_polls_collapse_into_the_newest(policy: JobStreamPolicy) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, last_event_id=None, policy=policy)
+    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.move(progress_pct=50.0, message="Halfway through the simulation...")
     newest = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
 
-    assert _read(_next_poll(stream)) == [_frame_of(newest), HEARTBEAT]
+    assert _read(_next_poll(stream)) == [_frame_of(newest, policy), HEARTBEAT]
     assert newest.version == 5
 
 
-def test_a_stream_on_a_job_its_source_does_not_track_sends_only_the_not_found_frame(policy: JobStreamPolicy) -> None:
-    assert list(job_progress_frames(lambda: None, last_event_id=None, policy=policy)) == [_JOB_NOT_FOUND_FRAME]
+def test_a_stream_on_a_job_its_source_does_not_track_sends_only_the_untracked_frame_naming_the_job(
+    policy: JobStreamPolicy,
+) -> None:
+    stream = job_progress_frames(lambda _job_id: None, "job-9", last_event_id=None, policy=policy)
+
+    assert _read(stream) == [SseFrame("untracked", {"job_id": "job-9"}, id=None, retry=policy.retry_ms)]
 
 
-def test_a_stream_whose_job_stops_being_tracked_ends_with_the_not_found_frame(policy: JobStreamPolicy) -> None:
+def test_a_stream_whose_job_stops_being_tracked_ends_with_the_untracked_frame_naming_the_job(
+    policy: JobStreamPolicy,
+) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, last_event_id=None, policy=policy)
+    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.forget()
 
-    assert list(stream) == [_JOB_NOT_FOUND_FRAME]
+    assert _read(stream) == [SseFrame("untracked", {"job_id": "job-1"}, id=None, retry=policy.retry_ms)]
 
 
 _TEN_MINUTES = 600.0
-_JUST_OVER_TEN_MINUTES = math.nextafter(_TEN_MINUTES, math.inf)
-"""The first time after ten minutes that a clock reading float seconds can show."""
+"""D21's limit on a job progress stream, the default policy's."""
+
+_POLICIES_AND_THEIR_LIMITS = [
+    pytest.param(JobStreamPolicy(), _TEN_MINUTES, id="the-default-policy"),
+    pytest.param(JobStreamPolicy(limit_seconds=30.0), 30.0, id="a-policy-of-thirty-seconds"),
+]
+"""A policy and the limit in seconds a stream under it must keep: D21's ten minutes by default, or the policy's own."""
 
 
-def _a_policy_whose_every_sleep_lasts(seconds: float, clock: ManualClock) -> JobStreamPolicy:
-    """A policy whose every sleep moves *clock* on by *seconds* at once, whatever heartbeat it sleeps for."""
-    return JobStreamPolicy(sleep=lambda _heartbeat_seconds: clock.advance(seconds), clock=clock)
+def _with_every_sleep_lasting(seconds: float, clock: ManualClock, policy: JobStreamPolicy) -> JobStreamPolicy:
+    """*policy*, but timing its limit on *clock*, and with every sleep moving *clock* on by *seconds* at once, whatever heartbeat it sleeps for."""
+    return dataclasses.replace(policy, sleep=lambda _heartbeat_seconds: clock.advance(seconds), clock=clock)
 
 
-def test_a_stream_open_for_exactly_ten_minutes_still_sends_the_jobs_next_state(clock: ManualClock) -> None:
+@pytest.mark.parametrize(("policy_of_its_limit", "limit_seconds"), _POLICIES_AND_THEIR_LIMITS)
+def test_a_stream_open_for_exactly_its_limit_still_sends_the_jobs_next_state(
+    policy_of_its_limit: JobStreamPolicy, limit_seconds: float, clock: ManualClock
+) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(
-        job.snapshot, last_event_id=None, policy=_a_policy_whose_every_sleep_lasts(_TEN_MINUTES, clock)
-    )
+    policy = _with_every_sleep_lasting(limit_seconds, clock, policy_of_its_limit)
+    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     saving = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
 
-    assert _read(_next_poll(stream)) == [_frame_of(saving), HEARTBEAT]
+    assert _read(_next_poll(stream)) == [_frame_of(saving, policy), HEARTBEAT]
 
 
-def test_a_stream_open_for_more_than_ten_minutes_sends_the_timed_out_frame_and_ends_without_the_jobs_state(
-    clock: ManualClock,
+@pytest.mark.parametrize(("policy_of_its_limit", "limit_seconds"), _POLICIES_AND_THEIR_LIMITS)
+def test_a_stream_open_past_its_limit_sends_only_the_timeout_frame_naming_the_limit_and_ends_without_the_jobs_state(
+    policy_of_its_limit: JobStreamPolicy, limit_seconds: float, clock: ManualClock
 ) -> None:
+    """Each sleep lasts the least time past the limit that a clock reading float seconds can show."""
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(
-        job.snapshot, last_event_id=None, policy=_a_policy_whose_every_sleep_lasts(_JUST_OVER_TEN_MINUTES, clock)
-    )
+    policy = _with_every_sleep_lasting(math.nextafter(limit_seconds, math.inf), clock, policy_of_its_limit)
+    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
 
-    assert list(stream) == [_TIMED_OUT_FRAME]
+    assert _read(stream) == [
+        SseFrame("timeout", {"limit_seconds": limit_seconds}, id=None, retry=policy.retry_ms)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("limit_seconds", 0.0),
+        ("limit_seconds", -1.0),
+        ("limit_seconds", math.nan),
+        ("heartbeat_seconds", -1.0),
+        ("heartbeat_seconds", math.nan),
+        ("retry_ms", -1),
+    ],
+    ids=[
+        "no-limit",
+        "a-negative-limit",
+        "a-limit-that-is-not-a-number",
+        "a-negative-heartbeat",
+        "a-heartbeat-that-is-not-a-number",
+        "a-negative-retry",
+    ],
+)
+def test_a_policy_whose_field_would_break_every_stream_is_refused_naming_the_field_and_its_value(
+    field: str, value: float
+) -> None:
+    """Each would break every stream: a limit of zero or less ends a stream at its first poll, a limit that is not a number never ends one, time.sleep raises on a negative or NaN heartbeat, and EventSource ignores a negative retry."""
+    with pytest.raises(ValueError, match=rf"\b{field}\b.*{re.escape(repr(value))}"):
+        JobStreamPolicy(**{field: value})
+
+
+def test_a_policy_may_poll_without_pausing_and_ask_the_browser_to_reopen_at_once() -> None:
+    policy = JobStreamPolicy(heartbeat_seconds=0.0, retry_ms=0)
+
+    assert (policy.heartbeat_seconds, policy.retry_ms) == (0.0, 0)
 
 
 @pytest.mark.parametrize(("header", "version"), [("0", 0), ("17", 17), ("9" * 18, 10**18 - 1)])
