@@ -14,6 +14,9 @@
 {% set _panel_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm' %}
 {# The classes every flat card is drawn in, which only flat_card writes: the card's surface with no shadow #}
 {% set _flat_card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg' %}
+{# The classes of a split card's top and bottom parts, which only split_card writes: the bottom has no top border, so the top's bottom border divides them #}
+{% set _split_card_top_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg' %}
+{% set _split_card_bottom_classes = 'bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg' %}
 {# The frame of the header band at a card's top, which card's title band and chart_panel's band share #}
 {% set _header_band_classes = 'px-6 border-b border-slate-200 dark:border-slate-700' %}
 
@@ -58,6 +61,17 @@
 {% macro flat_card(classes='') %}
 <div class="{{ _flat_card_classes }} {{ classes }}">
     {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# A card in two parts, top above bottom: each a div in its part's classes, the bottom's in bottom_classes too #}
+{% macro split_card(top, bottom, bottom_classes='') %}
+<div class="{{ _split_card_top_classes }}">
+    {{ top }}
+</div>
+<div class="{{ _split_card_bottom_classes }} {{ bottom_classes }}">
+    {{ bottom }}
 </div>
 {% endmacro %}
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import tab_bar %}
+{% from "components/macros.html" import split_card, tab_bar %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 
@@ -215,8 +215,8 @@ document.addEventListener('alpine:init', () => {
 ) }}
 
 <div x-data="homeSimulator()">
-    <!-- Tab navigation -->
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
+    {% set configuration %}
+        <!-- Tab navigation -->
         {{ tab_bar(configuration_tabs, label='Configuration tabs', tab_classes='px-6') }}
 
         <!-- Tab content panels -->
@@ -363,10 +363,10 @@ document.addEventListener('alpine:init', () => {
                 </div>
             </div>
         </div>
-    </div>
+    {% endset %}
 
-    <!-- Bottom section: name, preset, submit -->
-    <div class="bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg p-6">
+    {% set submission %}
+        <!-- Bottom section: name, preset, submit -->
         <form @submit.prevent="submitSimulation()" class="flex flex-col sm:flex-row items-end gap-4">
             <!-- Name field -->
             <div class="flex-1 w-full sm:w-auto space-y-1.5">
@@ -411,7 +411,8 @@ document.addEventListener('alpine:init', () => {
                 <span x-text="submitting ? 'Submitting...' : 'Run Simulation'"></span>
             </button>
         </form>
-    </div>
+    {% endset %}
+    {{ split_card(configuration, submission, bottom_classes='p-6') }}
 
     <!-- Validation errors -->
     <template x-if="Object.keys(validationErrors).length > 0">
