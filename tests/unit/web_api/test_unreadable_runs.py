@@ -29,6 +29,7 @@ from werkzeug.test import TestResponse
 
 from solar_challenge.web.jobs import JobState
 from solar_challenge.web.storage import RunStorage
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._html_page import texts
 from tests._run_storage_layout import stored_run_dir
@@ -39,15 +40,31 @@ _RUN_ID = "damaged-run"
 
 @dataclass(frozen=True)
 class _Damage:
-    """One document of a run, damaged alike in its file and its runs column, and the field its refusal names.
+    """One document of a run, damaged alike in its file and its runs column, and the field its refusal names, None for the document as a whole.
 
-    edit changes a decoded copy of the document in place.
+    damaged makes the document's damaged JSON text from its JSON text.
     """
 
     file: str
     column: str
-    edit: Callable[[dict[str, Any]], None]
-    field: str
+    damaged: Callable[[str], str]
+    field: str | None
+
+
+def _edited(edit: Callable[[dict[str, Any]], None]) -> Callable[[str], str]:
+    """The damage that decodes a document's JSON text, applies *edit* to it in place, and encodes it again."""
+
+    def damaged(text: str) -> str:
+        document = json.loads(text)
+        edit(document)
+        return json.dumps(document, indent=2)
+
+    return damaged
+
+
+def _nested_too_deeply(_text: str) -> str:
+    """The damage that replaces a document's JSON text, whatever it was, with JSON_NESTED_TOO_DEEPLY_TO_DECODE."""
+    return JSON_NESTED_TOO_DEEPLY_TO_DECODE
 
 
 def _without_total_generation_kwh(document: dict[str, Any]) -> None:
@@ -66,34 +83,40 @@ def _with_a_big_battery(document: dict[str, Any]) -> None:
     document["battery_config"] = "big"
 
 
-_SUMMARY_LACKS_A_REQUIRED_FIELD = _Damage("summary.json", "summary_json", _without_total_generation_kwh, "total_generation_kwh")
-_SUMMARY_HOLDS_AN_UNKNOWN_KEY = _Damage("summary.json", "summary_json", _with_a_retired_figure, "retired_figure")
-_SUMMARY_HOLDS_A_NUMBER_NO_FLOAT_CAN_HOLD = _Damage(
-    "summary.json", "summary_json", _with_a_generation_no_float_can_hold, "total_generation_kwh"
+_SUMMARY_LACKS_A_REQUIRED_FIELD = _Damage(
+    "summary.json", "summary_json", _edited(_without_total_generation_kwh), "total_generation_kwh"
 )
-_CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE = _Damage("config.json", "config_json", _with_a_big_battery, "battery_config")
+_SUMMARY_HOLDS_AN_UNKNOWN_KEY = _Damage("summary.json", "summary_json", _edited(_with_a_retired_figure), "retired_figure")
+_SUMMARY_HOLDS_A_NUMBER_NO_FLOAT_CAN_HOLD = _Damage(
+    "summary.json", "summary_json", _edited(_with_a_generation_no_float_can_hold), "total_generation_kwh"
+)
+_SUMMARY_NESTED_TOO_DEEPLY = _Damage("summary.json", "summary_json", _nested_too_deeply, None)
+_CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE = _Damage(
+    "config.json", "config_json", _edited(_with_a_big_battery), "battery_config"
+)
+_CONFIG_NESTED_TOO_DEEPLY = _Damage("config.json", "config_json", _nested_too_deeply, None)
 
 _SUMMARY_DAMAGES = [
     pytest.param(_SUMMARY_LACKS_A_REQUIRED_FIELD, id="summary-lacks-a-required-field"),
     pytest.param(_SUMMARY_HOLDS_AN_UNKNOWN_KEY, id="summary-holds-an-unknown-key"),
     pytest.param(_SUMMARY_HOLDS_A_NUMBER_NO_FLOAT_CAN_HOLD, id="summary-holds-a-number-no-float-can-hold"),
+    pytest.param(_SUMMARY_NESTED_TOO_DEEPLY, id="summary-nested-too-deeply"),
 ]
-_CONFIG_DAMAGES = [pytest.param(_CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE, id="config-holds-a-string-for-a-battery")]
+_CONFIG_DAMAGES = [
+    pytest.param(_CONFIG_HOLDS_A_VALUE_OF_A_WRONG_TYPE, id="config-holds-a-string-for-a-battery"),
+    pytest.param(_CONFIG_NESTED_TOO_DEEPLY, id="config-nested-too-deeply"),
+]
 _DAMAGES = [*_SUMMARY_DAMAGES, *_CONFIG_DAMAGES]
 
 
 def _store_a_damaged_run(storage: RunStorage, damage: _Damage) -> None:
-    """Save a day's home run under _RUN_ID, then apply *damage* to its file and to its runs column."""
+    """Save a day's home run under _RUN_ID, then replace the JSON text of its file and of its runs column with *damage* of it."""
     store_home_run(storage, _RUN_ID, make_home_config(), make_sim_results(days=1))
     path = stored_run_dir(storage, _RUN_ID) / damage.file
-    file_document = json.loads(path.read_text())
-    damage.edit(file_document)
-    path.write_text(json.dumps(file_document, indent=2))
+    path.write_text(damage.damaged(path.read_text()))
     with storage.database.transaction() as conn:
         (text,) = conn.execute(f"SELECT {damage.column} FROM runs WHERE id = ?", (_RUN_ID,)).fetchone()
-        column_document = json.loads(text)
-        damage.edit(column_document)
-        conn.execute(f"UPDATE runs SET {damage.column} = ? WHERE id = ?", (json.dumps(column_document), _RUN_ID))
+        conn.execute(f"UPDATE runs SET {damage.column} = ? WHERE id = ?", (damage.damaged(text), _RUN_ID))
 
 
 def _store_a_run_whose_time_series_has_a_range_index(storage: RunStorage) -> None:

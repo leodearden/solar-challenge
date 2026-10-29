@@ -28,6 +28,7 @@ from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._every_field_shape import home_of_every_field_shape
 from tests._run_storage_layout import stored_run_dir
@@ -276,6 +277,18 @@ def test_a_summary_that_is_not_json_is_refused_as_a_whole(storage: RunStorage) -
     (stored_run_dir(storage, _HOME_RUN_ID) / "summary.json").write_text("{not json")
 
     _refusal(storage, _HOME_RUN_ID, "summary.json", None)
+
+
+@pytest.mark.parametrize("document", ["config.json", "summary.json"])
+def test_a_document_nested_too_deeply_to_decode_is_refused_as_a_whole_caused_by_the_recursion(
+    storage: RunStorage, document: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / document).write_text(JSON_NESTED_TOO_DEEPLY_TO_DECODE)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, document, None)
+
+    assert isinstance(refusal.__cause__, RecursionError)
 
 
 def test_a_time_series_that_is_not_parquet_is_refused_naming_its_file(storage: RunStorage) -> None:

@@ -48,6 +48,7 @@ from solar_challenge.web.storage import (
     run_headline,
 )
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_stores import empty_run_storage
 from tests._run_summaries import fleet_summary, home_summary, summary_json
@@ -492,6 +493,7 @@ class TestHeadlineFigures:
         ("damaged_summary_json", "field"),
         [
             pytest.param("{not json", None, id="summary-not-json"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, id="summary-nested-too-deeply"),
             pytest.param(
                 summary_json(home_summary(total_generation_kwh=None)), "total_generation_kwh", id="generation-null"
             ),
