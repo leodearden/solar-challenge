@@ -461,8 +461,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - that first-read constructor, if it is an __init__ that is a functools.partial;
     - that first-read constructor, if it is not callable once bound, is read as an Enum,
       carries such a __signature__, or is read as a builtin or through such an object;
-    - the constructor of the class holding that first-read constructor, if that class
-      is not object and _constructed_in_c counts it as defined in C.
+    - the constructor of the class _refuse_class_constructed_in_c finds, if that
+      first-read constructor is of a kind in _C_CONSTRUCTOR_KINDS.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -483,10 +483,29 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
     _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, name, constructor))
-    if holder is not object and _constructed_in_c(holder):
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+        _refuse_class_constructed_in_c(cls)
+
+
+def _refuse_class_constructed_in_c(cls: type) -> None:
+    """Raise TypeError naming *cls* and the first class in its MRO, object aside, that holds a __new__ or __init__ and that _constructed_in_c counts as defined in C, if one does; inspect reads no constructor of *cls*, so it reads the first text signature a class in that MRO gives.
+
+    That class is the one holding the constructor _first_read_constructor gives, unless
+    _skipped_as_none skips the name such a class holds, as a __new__ that gives None
+    over int skips int's.
+    """
+    constructing = next(
+        (
+            base
+            for base in namespace_holders(cls.__mro__[:-1], "__new__", "__init__")
+            if _constructed_in_c(base)
+        ),
+        None,
+    )
+    if constructing is not None:
         raise TypeError(
-            f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
-            "builtin or extension type), so inspect reads its signature from a text "
+            f"{label_of(cls)} is constructed by {label_of(constructing)}, which is defined in C "
+            "(a builtin or extension type), so inspect reads its signature from a text "
             "signature, which a release of its package can add or rewrite, as CPython's "
             "minors do: make the name private, or give the class an __init__ or __new__ "
             "defined with def"
