@@ -272,7 +272,7 @@ def _as_hour_window(value: object, field: str, within: Interval) -> tuple[int, i
     """
     hours = as_whole_numbers(value, field, within)
     if len(hours) != 2 or not hours[0] < hours[1]:
-        raise ConfigurationError(f"{field} must be a (start, end) window that starts before it ends, got {value!r}")
+        raise ConfigurationError.must_be(field, "a (start, end) window that starts before it ends", got=value)
     return (hours[0], hours[1])
 
 
@@ -284,7 +284,7 @@ def _as_hour_windows(value: object, field: str, within: Interval) -> tuple[tuple
             or if _as_hour_window refuses a window.
     """
     if not isinstance(value, (list, tuple)):
-        raise ConfigurationError(f"{field} must be a list of (start, end) windows, got {value!r}")
+        raise ConfigurationError.must_be(field, "a list of (start, end) windows", got=value)
     if not value:
         raise ConfigurationError(f"{field} must hold at least one (start, end) window; it is empty")
     return tuple(_as_hour_window(window, f"{field}[{index}]", within) for index, window in enumerate(value))
@@ -855,16 +855,15 @@ class ChargeWindow:
         """Read target_soc_fraction as GridChargeConfig does, then refuse a field the window cannot schedule, naming the field and its value."""
         read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
         if not _are_opening_days(self.days):
-            raise ConfigurationError(
-                "days must be 'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6, "
-                f"got {self.days!r}"
+            raise ConfigurationError.must_be(
+                "days", "'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6", got=self.days
             )
         if self.start.tzinfo is not None:
-            raise ConfigurationError(
-                f"start must be a wall-clock time on its strategy's zone, with no tzinfo, got {self.start!r}"
+            raise ConfigurationError.must_be(
+                "start", "a wall-clock time on its strategy's zone, with no tzinfo", got=self.start
             )
         if not timedelta(0) < self.duration <= _ONE_DAY:
-            raise ConfigurationError(f"duration must be more than 0 and at most a day, got {self.duration!r}")
+            raise ConfigurationError.must_be("duration", "more than 0 and at most a day", got=self.duration)
 
     def covers(self, moment: datetime) -> bool:
         """Whether the window is open at moment, a naive wall-clock time on its strategy's zone.
@@ -931,7 +930,7 @@ class ScheduledChargeStrategy(DispatchStrategy):
             ConfigurationError: If tz is not a ZoneInfo, naming it.
         """
         if not isinstance(tz, ZoneInfo):
-            raise ConfigurationError(f"tz must be the ZoneInfo on whose wall clock its windows open, got {tz!r}")
+            raise ConfigurationError.must_be("tz", "the ZoneInfo on whose wall clock its windows open", got=tz)
         self._base = base
         self._windows = tuple(windows)
         self._tz = tz

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The package's exception types: this module imports no other solar_challenge module, so any module can import it at top level."""
 
+from typing import Self
+
 
 class ConfigurationError(ValueError):
     """Raised for a value that an input type or the scenario grammar refuses; the message names the value and why.
@@ -18,3 +20,8 @@ class ConfigurationError(ValueError):
     Where an input type still raises plain ValueError, docs/prds/errors-leaf.md (contract C4
     and §11) names the work that converts it.
     """
+
+    @classmethod
+    def must_be(cls, field: str, requirement: str, *, got: object) -> Self:
+        """Return the refusal of *got*, the value given for *field*, which must be *requirement*: "<field> must be <requirement>, got <got!r>"; the caller raises it."""
+        return cls(f"{field} must be {requirement}, got {got!r}")

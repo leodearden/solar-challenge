@@ -13,7 +13,7 @@ import math
 import numbers
 from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, TypeVar
+from typing import Any, Final, TypeVar
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.whole_numbers import is_boolean, whole_number
@@ -80,9 +80,9 @@ def as_finite_float(value: Any, field: str, within: Interval = Interval()) -> fl
     try:
         number = float(value)
     except (ValueError, TypeError, OverflowError) as exc:
-        _refuse(field, "a finite number", value, cause=exc)
+        raise ConfigurationError.must_be(field, "a finite number", got=value) from exc
     if is_boolean(value) or not math.isfinite(number):
-        _refuse(field, "a finite number", value)
+        raise ConfigurationError.must_be(field, "a finite number", got=value)
     return _admitted(number, within, field, value)
 
 
@@ -100,7 +100,7 @@ def as_whole_number(value: Any, field: str, within: Interval = Interval()) -> in
     number = as_finite_float(value, field)
     whole = int(value) if isinstance(value, numbers.Integral) else whole_number(number)
     if whole is None:
-        _refuse(field, "a whole number", value)
+        raise ConfigurationError.must_be(field, "a whole number", got=value)
     return _admitted(whole, within, field, value)
 
 
@@ -148,17 +148,12 @@ def _read_each(
 ) -> tuple[_Number, ...]:
     """Return each element i of *values* read by *read* as {field}[{i}], refusing *values* unless it is a list of *kind*: iterable, and neither text, a mapping nor a set, whose order is arbitrary."""
     if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
-        _refuse(field, f"a list of {kind}", values)
+        raise ConfigurationError.must_be(field, f"a list of {kind}", got=values)
     return tuple(read(value, f"{field}[{index}]", within) for index, value in enumerate(values))
 
 
 def _admitted(number: _Number, within: Interval, field: str, value: Any) -> _Number:
     """Return *number*, read from *value*, the value given for *field*, refusing it if *within* does not admit it."""
     if not within.admits(number):
-        _refuse(field, within, value)
+        raise ConfigurationError.must_be(field, str(within), got=value)
     return number
-
-
-def _refuse(field: str, requirement: str | Interval, value: Any, *, cause: Exception | None = None) -> NoReturn:
-    """Raise the refusal of *value*, given for *field*, which must be *requirement*, from *cause*."""
-    raise ConfigurationError(f"{field} must be {requirement}, got {value!r}") from cause
