@@ -476,11 +476,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_reading(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
         return
-    for name in ("__new__", "__init__"):
-        owner = next(namespace_holders(cls.__mro__, name))
-        _refuse_classmethod_bound_by_minor(
-            cls, "is constructed through", owner, name, vars(owner)[name]
-        )
+    for name, owner, held in _resolved_constructors(cls):
+        _refuse_classmethod_bound_by_minor(cls, "is constructed through", owner, name, held)
     holder, name, constructor = _first_read_constructor(cls)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
@@ -526,9 +523,7 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
 
     docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
     """
-    for name in ("__new__", "__init__"):
-        holder = next(namespace_holders(cls.__mro__, name))
-        held = vars(holder)[name]
+    for name, holder, held in _resolved_constructors(cls):
         read = held if isinstance(held, _CCallableInspectSkips) else getattr(cls, name)
         if read is not vars(object)[name]:
             raise TypeError(
@@ -539,6 +534,13 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
                 "docstring can give on some minors and not others, and raises ValueError "
                 f"where none gives one: make the name private, or define {name} with def"
             )
+
+
+def _resolved_constructors(cls: type) -> Iterator[tuple[str, type, object]]:
+    """The __new__ and then the __init__ *cls* resolves: each name, the first class in *cls*'s MRO whose namespace holds that name, and what it holds there."""
+    for name in ("__new__", "__init__"):
+        holder = next(namespace_holders(cls.__mro__, name))
+        yield name, holder, vars(holder)[name]
 
 
 def _first_read_constructor(cls: type) -> tuple[type, str, object]:
