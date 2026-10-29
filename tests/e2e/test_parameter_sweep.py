@@ -59,10 +59,10 @@ from tests.e2e._job_requests import (
     is_job_request,
     job_state_frame,
     timeout_frame,
+    unreadable_final_state_frame,
     untracked_frame,
 )
 from tests.e2e._run_badges import classes_of_each
-from tests.e2e._unreadable_final_state import unreadable_final_state_frame
 
 
 # -- Page loading ----------------------------------------------------------
