@@ -15,7 +15,8 @@ other than functools.partial, and SettableGetterPartial one whose type also defi
 __set__, for the rules about how inspect reads and binds such a partial.
 PartialFirstGetterPartial is one whose type takes __get__ from GetMixin, a base after
 functools.partial, whose own __get__ comes first from Python 3.13, for the rules about a
-classmethod that wraps such a partial.
+classmethod that wraps such a partial and about how inspect reads and binds such a
+partial.
 ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
 inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
 what it wraps. CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR makes, from a function, a method

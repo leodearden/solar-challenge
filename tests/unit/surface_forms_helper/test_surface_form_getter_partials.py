@@ -15,7 +15,9 @@ import pytest
 
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
+    GetMixin,
     GetterPartial,
+    PartialFirstGetterPartial,
     SettableGetterPartial,
     class_whose_init_is,
     class_whose_metaclass_call_is,
@@ -34,19 +36,8 @@ class DeletableGetterPartial(GetterPartial):
     def __delete__(self, instance: object) -> None: ...
 
 
-class GetMixin:
-    """A class that defines __get__, for a functools.partial subclass to take it from."""
-
-    def __get__(self, instance: object, owner: type | None = None) -> object:
-        return self
-
-
 class MixedInGetterPartial(GetMixin, functools.partial):
     """A functools.partial whose type takes __get__ from a base before functools.partial in its MRO."""
-
-
-class PartialFirstGetterPartial(functools.partial, GetMixin):
-    """A functools.partial whose type takes __get__ from a base after functools.partial in its MRO."""
 
 
 class GivingGetterPartial:
