@@ -172,8 +172,7 @@ _CATALOGUE_SAMPLES = [
 
 The expected names and keys are literals, not read back from the catalogue: they are
 the wire contract the pages read, web/static/js/assistant.js the chat's, and
-web/static/js/job-progress-stream.js, progress-tracker.js and parameter-sweep.js the
-job stream's.
+web/static/js/job-progress-stream.js the job stream's.
 """
 
 
