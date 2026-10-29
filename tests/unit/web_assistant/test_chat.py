@@ -433,9 +433,9 @@ class TestChatPageWiring:
     def test_the_one_assistant_chat_div_carries_the_chat_and_history_urls_assistant_js_reads(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """static/js/assistant.js finds the chat by the id assistant-chat, then reads the URL it
-        posts each message to from its data-chat-url and the URL it loads the history from from
-        its data-history-url."""
+        """static/js/assistant.js finds the chat by its id, assistant-chat, and reads two URLs from
+        it: data-chat-url, where it posts each message, and data-history-url, where it loads the
+        chat history."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
         page = client.get("/assistant").get_data(as_text=True)
 

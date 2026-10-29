@@ -92,7 +92,7 @@ def _drawn(page: str, look: _Look) -> list[_Drawn]:
 
 
 def _div(*classes: str) -> _Drawn:
-    """A div drawn in a look that carries *classes* beyond the look's classes."""
+    """A div drawn in a look, carrying *classes* beyond the look's classes."""
     return ("div", frozenset(classes))
 
 
