@@ -406,6 +406,11 @@ _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR = (
     "defines no __get__, and as a functools.partial, through its func, from 3.13"
 )
 
+_NOT_CALLABLE_ON_ANY_MINOR = (
+    "which is not callable: inspect reads no signature for what is not callable, on any "
+    "admitted minor"
+)
+
 
 def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
     """Raise TypeError naming *obj*, *end* and *end*'s type if *end*, the end of the chain inspect follows from *obj*, is a descriptor _is_read_as_builtin_before_3_13 finds.
@@ -435,18 +440,18 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """Raise TypeError naming *cls* if inspect reads its constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
-    callable defined in C here if _wrapped_c_callable gives one for it, and is read as
-    an Enum, carries a __signature__ inspect reads by minor, or is read as a builtin or
-    through an object its class makes callable, if _refuse_constructor_reading finds
-    it so:
+    callable defined in C here if _wrapped_c_callable gives one for it, and is neither
+    callable nor None once bound, is read as an Enum, carries a __signature__ inspect
+    reads by minor, or is read as a builtin or through an object its class makes
+    callable, if _refuse_constructor_reading finds it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
       refuses, checked before it is bound, or if it wraps a callable defined in C, is a
-      functools.partial, is read as an Enum, carries such a __signature__, or is read
-      as a builtin or through such an object. inspect reads any other __call__
-      _metaclass_call gives in their place, so none of the constructors below is then
-      checked;
+      functools.partial, is neither callable nor None once bound, is read as an Enum,
+      carries such a __signature__, or is read as a builtin or through such an object.
+      inspect reads any other __call__ _metaclass_call gives in their place, so none of
+      the constructors below is then checked;
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
@@ -455,8 +460,9 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
       class wraps object.__new__;
     - a functools.partial the holder's own namespace holds as __init__, unless that
       namespace also holds a __new__ not defined in C, which inspect reads first;
-    - that first-read constructor, if it is read as an Enum, carries such a
-      __signature__, or is read as a builtin or through such an object;
+    - that first-read constructor, if it is neither callable nor None once bound, is
+      read as an Enum, carries such a __signature__, or is read as a builtin or through
+      such an object;
     - the constructor of a holder other than object that _constructed_in_c counts as
       defined in C.
     """
@@ -628,12 +634,37 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 
 def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object) -> None:
-    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is neither callable nor None, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    _refuse_constructor_bound_to_uncallable(cls, owner, name, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(cls, owner, name, end)
     _refuse_constructor_signature(cls, owner, name, end)
     _refuse_constructor_read_as_builtin(cls, owner, name, read)
     _refuse_call_without_a_portable_form(cls, end)
+
+
+def _refuse_constructor_bound_to_uncallable(
+    cls: type, owner: type, name: str, read: object
+) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name*, and *read* with its type, if *read* is neither callable nor None; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
+
+    On every admitted minor, inspect checks that *read* is callable before it reads
+    anything of it, its __signature__ included. A *read* of None is not refused: inspect
+    skips a constructor whose binding gives None.
+    """
+    if read is not None and not callable(read):
+        raise _constructor_read_as_error(cls, owner, name, read, _NOT_CALLABLE_ON_ANY_MINOR)
+
+
+def _constructor_read_as_error(
+    cls: type, owner: type, name: str, link: object, reading: str
+) -> TypeError:
+    """The error naming *cls*, *owner*'s *name*, and *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    return TypeError(
+        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
+        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
+        f"define {name} with def"
+    )
 
 
 def _refuse_constructor_read_as_enum(cls: type, owner: type, name: str, end: object) -> None:
@@ -654,11 +685,7 @@ def _refuse_constructor_read_as_builtin(
     if found is None:
         return
     link, reading = found
-    raise TypeError(
-        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
-        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
-        f"define {name} with def"
-    )
+    raise _constructor_read_as_error(cls, owner, name, link, reading)
 
 
 def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None:
