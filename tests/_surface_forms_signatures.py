@@ -902,7 +902,7 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     end = _chain_end(constructor)
-    if signature_holder is not None and isinstance(end, _C_CONSTRUCTOR_KINDS):
+    if signature_holder is not None and isinstance(end, _C_CALLABLE_KINDS):
         return dict.fromkeys(names, defining_module(signature_holder))
     author = _annotations_author(end)
     if _is_generated(author):
