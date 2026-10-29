@@ -12,6 +12,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -31,10 +32,10 @@ from tests._web_runs import store_fleet_run, store_home_run
 _CARD_TRIPLE = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
 _CARD_CLASSES = frozenset(_CARD_TRIPLE.split())
 _CARD_MACROS_KEY = "templates/components/macros.html"
-_HEADER_BAND_PARAMETERS = {
+_HEADER_BAND_PARAMETERS: Mapping[str, frozenset[str]] = MappingProxyType({
     "card": frozenset({"subtitle", "header_classes", "dot_classes", "header_aside"}),
     "panel": frozenset({"subtitle_expression"}),
-}
+})
 """The arguments each macro, by name, draws only in the header band its title opens."""
 
 _JINJA = Environment()
@@ -312,7 +313,6 @@ _POINT_COUNT = "previewValues.length + ' values will be tested'"
 
 
 def test_a_titled_panel_draws_a_header_band_of_its_title_over_its_subtitle_above_its_content(macros: Any) -> None:
-    """html.parser decodes the &#39; that autoescape writes for each quote, so the expression reads back unchanged."""
     drawn = str(macros.panel(title="Sweep Point Preview", subtitle_expression=_POINT_COUNT, caller=lambda: "Body"))
 
     assert _div_classes(drawn) == [_PANEL_LOOK.classes, _PANEL_TITLE_BAND_LOOK.classes]
