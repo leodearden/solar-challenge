@@ -535,6 +535,48 @@ def test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_del
             surface_form(functools.partial(subject))
 
 
+@pytest.mark.parametrize(
+    ("wrapped", "qualified_name"),
+    [
+        pytest.param(object().__init__, "object.__init__", id="method-wrapper"),
+        pytest.param(dict.__dict__["fromkeys"], "dict.fromkeys", id="classmethod-descriptor"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_wraps_a_method_wrapper_or_a_classmethod_descriptor_raises_a_type_error_naming_it_that_constructor_and_that_callable(
+    construct: Callable[[object], type],
+    constructor: str,
+    wrapped: object,
+    qualified_name: str,
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    cls = construct(functools.wraps(wrapped)(build))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*"
+            rf"\b{re.escape(qualified_name)}, defined in C\b"
+            r".*\bskips the constructor as defined in C\b.*\breads the constructor as it binds it\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
 def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
     def settle(cls: type, rate: int, scale: float = 1.0) -> None: ...
 
