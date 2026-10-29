@@ -58,6 +58,8 @@ from solar_challenge.number_fields import (
     UNIT_INTERVAL,
     Interval,
     as_finite_float,
+    as_whole_number,
+    as_whole_numbers,
     read_field,
 )
 
@@ -228,14 +230,19 @@ class EventWindow:
     eligible calendar months, week-days (ISO Monday=0), and clock hours, plus
     aggregate statistics used by the capacity-at-events income formula.
 
+    months, weekdays and hours are each read as a tuple of whole numbers, so a
+    list is held as the tuple of its elements.
+
     Attributes:
         months: Tuple of eligible months (1=Jan … 12=Dec).
         weekdays: Tuple of eligible weekdays (0=Mon … 6=Sun).
         hours: Tuple of eligible hours (0 … 23); uses 24-hour clock, so
             ``hours=(16, 17, 18)`` selects 16:xx, 17:xx, and 18:xx only
             (19:00 is excluded).
-        events_per_year: Expected number of activation events per year.
-        event_hours: Duration of each activation event in hours.
+        events_per_year: Expected number of activation events per year, a
+            whole number greater than 0.
+        event_hours: Duration of each activation event in hours, a finite
+            number greater than 0.
     """
 
     months: tuple[int, ...]
@@ -245,33 +252,18 @@ class EventWindow:
     event_hours: float
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Read every field through number_fields, holding what it read, then refuse an empty months, weekdays or hours, raising ConfigurationError."""
+        read_field(self, "months", as_whole_numbers, Interval(1, 12))
+        read_field(self, "weekdays", as_whole_numbers, Interval(0, 6))
+        read_field(self, "hours", as_whole_numbers, Interval(0, 23))
+        read_field(self, "events_per_year", as_whole_number, POSITIVE)
+        read_field(self, "event_hours", as_finite_float, POSITIVE)
         if not self.months:
             raise ConfigurationError("EventWindow.months must be a non-empty tuple")
         if not self.weekdays:
             raise ConfigurationError("EventWindow.weekdays must be a non-empty tuple")
         if not self.hours:
             raise ConfigurationError("EventWindow.hours must be a non-empty tuple")
-        if any(m < 1 or m > 12 for m in self.months):
-            raise ConfigurationError(
-                f"EventWindow.months values must be in 1..12, got {self.months}"
-            )
-        if any(d < 0 or d > 6 for d in self.weekdays):
-            raise ConfigurationError(
-                f"EventWindow.weekdays values must be in 0..6, got {self.weekdays}"
-            )
-        if any(h < 0 or h > 23 for h in self.hours):
-            raise ConfigurationError(
-                f"EventWindow.hours values must be in 0..23, got {self.hours}"
-            )
-        if self.events_per_year <= 0:
-            raise ConfigurationError(
-                f"EventWindow.events_per_year must be > 0, got {self.events_per_year}"
-            )
-        if self.event_hours <= 0.0:
-            raise ConfigurationError(
-                f"EventWindow.event_hours must be > 0, got {self.event_hours}"
-            )
 
     def mask(self, index: pd.DatetimeIndex) -> pd.Series:
         """Return a boolean Series selecting in-window timesteps.
