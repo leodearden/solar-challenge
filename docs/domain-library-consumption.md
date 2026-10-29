@@ -801,8 +801,9 @@ and `peak_hours[0] must be a (start, end) window that starts before it ends, got
 valid. Consumers that catch `ValueError` need no change for the type; those that
 match message text, or pass such values, change them when they re-pin.
 
-**Unreleased on main** (task 893): `SimulationWindow`, in
-`solar_challenge.timebase`, the type of the task 777 line's
+**Unreleased on main** (task 893): `solar_challenge.timebase` gains
+`ONE_MINUTE`, `timedelta(minutes=1)`, the cadence of a simulated run's window.
+Its `SimulationWindow`, the type of the task 777 line's
 `SimulationResults.window`, gains two methods. `rows()` is the window's index,
 from its first day's first instant on its clock up to, not including, the first
 instant after its last day, at its cadence, with `freq` the cadence, at
