@@ -213,10 +213,11 @@ def _links_inspect_reads(obj: object, stop: Callable[[object], bool]) -> Iterato
 _ABSENT = object()
 
 
-def _unwrapped(obj: Callable[..., object], stop: Callable[[object], bool]) -> object:
-    """The callable reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
+def _unwrapped(obj: object, stop: Callable[[object], bool]) -> object:
+    """The object reached from *obj* through the callables each wrapper records as __wrapped__, stopping at the first link *stop* holds of or whose __signature__ is None: inspect stops following __wrapped__ at such a wrapper and reads it as the callable it is."""
     return inspect.unwrap(
-        obj, stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link)
+        obj,  # type: ignore[arg-type]  # typeshed types unwrap's func as a callable; it follows __wrapped__ from any object
+        stop=lambda link: getattr(link, "__signature__", _ABSENT) is None or stop(link),
     )
 
 
@@ -519,36 +520,45 @@ def _refuse_wrapper_of_c_callable(
 ) -> None:
     """Raise TypeError naming *cls*, *owner*'s *name* and the callable defined in C that *constructor*, the one *owner* holds as *name* that inspect reads first for *cls*, wraps, if _wrapped_c_callable gives one.
 
-    inspect reads such a wrapper through that callable on some Python releases, and skips
-    it as defined in C on others, reading the next constructor instead.
+    On some Python releases inspect follows __wrapped__ to that callable and skips the
+    constructor as defined in C, reading the next constructor instead, and on others it
+    reads the constructor as it binds it.
     """
     wrapped = _wrapped_c_callable(constructor)
     if wrapped is not None:
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which wraps "
-            f"{wrapped.__qualname__}, defined in C: inspect reads such a wrapper through "
-            "that callable on some Python releases and skips it as defined in C on "
-            f"others: make the name private, or define {name} with def, wrapping no "
-            "callable defined in C"
+            f"{wrapped.__qualname__}, defined in C: on some Python releases inspect follows "
+            "__wrapped__ to that callable and skips the constructor as defined in C, and on "
+            "others it reads the constructor as it binds it: make the name private, or "
+            f"define {name} with def, wrapping no callable defined in C"
         )
 
 
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link whose __signature__ is not None, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C.
 
-    It stops at any __signature__, as inspect's own lookup of a constructor does from
-    Python 3.13, and leaves a constructor whose chain carries one to
-    _refuse_constructor_signature, which reads the chain from that constructor as
-    inspect binds it. Since it reads *constructor* as held, a constructor that wraps a
-    callable defined in C and whose binding gives a callable carrying a __signature__
-    meets both; _refuse_constructor_without_a_portable_form checks the wrapper first.
+    docs/surface-forms-inspect-readings.md §4.5 says which minors take that walk from a
+    constructor, and how each reads one at which it stops.
     """
-    if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return None
-    wrapped = _unwrapped(constructor, _has_non_none_signature)
+    wrapped = _unwrapped(constructor, _stops_constructor_lookup)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
+
+
+def _stops_constructor_lookup(link: object) -> bool:
+    """Whether Python 3.13, looking a class's constructor up before binding it, stops following __wrapped__ at *link*: *link* carries a __signature__, a None one being _unwrapped's own stop, or is a method descriptor as 3.13's inspect.ismethoddescriptor counts one, no class, method, function or functools.partial, whose type defines __get__ but neither __set__ nor __delete__.
+
+    docs/surface-forms-inspect-readings.md §4.5 says where each minor's lookup stops.
+    """
+    return _has_non_none_signature(link) or (
+        inspect.ismethoddescriptor(link)
+        and not is_get_delete_descriptor(link)
+        and not isinstance(link, functools.partial)
+    )
 
 
 _BindingVerb: typing.TypeAlias = typing.Literal["is constructed through", "is read through"]
