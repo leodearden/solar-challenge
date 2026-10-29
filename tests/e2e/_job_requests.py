@@ -49,7 +49,7 @@ _PROGRESS_STEP_AND_MESSAGE_OF_EACH_STATUS: Mapping[JobStatus, tuple[float, str, 
         "cancelled": (20.0, "Simulating", "Cancelled: its run was deleted"),
     }
 )
-"""The progress, step and message a JobManager reports a home job in each status with: a failed or cancelled job keeps the progress and step it was simulating at."""
+"""A plausible progress, step and message for a faked home job in each status, which web/jobs.py's own may differ from: a failed or cancelled job keeps the progress and step it was simulating at."""
 
 
 def disconnect_request(route: Route) -> None:
@@ -58,7 +58,7 @@ def disconnect_request(route: Route) -> None:
 
 
 def a_job_state(job_id: str, run_id: str, status: JobStatus, **changes: object) -> JobState:
-    """The state of job job_id, of run run_id, in status: the progress, step and message a JobManager reports a home job in that status with, and a fixed created_at; changes replaces any of its fields."""
+    """The state of job job_id, of run run_id, in status, with a plausible progress, step and message for a home job in that status and a fixed created_at; changes replaces any of its fields."""
     progress_pct, current_step, message = _PROGRESS_STEP_AND_MESSAGE_OF_EACH_STATUS[status]
     state = JobState(
         job_id=job_id,

@@ -212,17 +212,15 @@ def test_a_run_whose_progress_stream_times_out_follows_its_job_on_the_reopened_s
     page_errors: list[str],
 ) -> None:
     """Run, then end job-1's progress stream with its running state and a timeout, as the server ends a stream open past its limit while the job goes on: while the stream the browser reopens is held, the tracker still shows the job's progress, and neither 'Reconnecting to server...' nor 'Simulation Failed', and job-1's completion on the reopened stream shows run-1's results link."""
+    running = a_job_state("job-1", "run-1", "running")
     page.goto(live_server + simulate_page.path)
     with page.expect_request("**/api/jobs/job-1/progress"):
         page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
     # The browser reopens the stream that timed out
     with page.expect_request("**/api/jobs/job-1/progress"):
-        running_jobs.answer_once(
-            "job-1",
-            job_state_frame(a_job_state("job-1", "run-1", "running"), version=3) + timeout_frame(),
-        )
+        running_jobs.answer_once("job-1", job_state_frame(running, version=3) + timeout_frame())
 
-    expect(page.get_by_text("Running home simulation...", exact=True)).to_be_visible()
+    expect(page.get_by_text(running.message, exact=True)).to_be_visible()
     expect(page.get_by_text("Reconnecting to server...", exact=True)).to_be_hidden()
     expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
 
@@ -401,9 +399,10 @@ def test_a_run_whose_job_fails_shows_the_jobs_message(
     page_errors: list[str],
 ) -> None:
     """Run, then answer job-1's progress stream with its running state and then its failed state: the tracker shows 'Simulation Failed' and the job's message, once, beside the job's last progress message, and no results link."""
+    running = a_job_state("job-1", "run-1", "running")
     running_jobs.answer(
         "job-1",
-        job_state_frame(a_job_state("job-1", "run-1", "running"), version=3)
+        job_state_frame(running, version=3)
         + job_state_frame(a_job_state("job-1", "run-1", "failed", message="Run 1 failed"), version=4),
     )
     page.goto(live_server + simulate_page.path)
@@ -411,7 +410,7 @@ def test_a_run_whose_job_fails_shows_the_jobs_message(
 
     expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
     expect(page.get_by_text("Run 1 failed", exact=True)).to_be_visible()
-    expect(page.get_by_text("Running home simulation...", exact=True)).to_be_visible()
+    expect(page.get_by_text(running.message, exact=True)).to_be_visible()
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
     assert page_errors == [], f"Errors on {simulate_page.path}: {page_errors}"
 
@@ -423,16 +422,15 @@ def test_a_run_whose_job_is_cancelled_shows_its_cancellation_not_a_failure(
     running_jobs: HeldJobRequests,
     page_errors: list[str],
 ) -> None:
-    """Run, then answer job-1's progress stream with the cancelled state of a job whose run was deleted: the tracker shows its 'Cancelled' heading and the server's message, not 'Simulation Failed', and no results link."""
+    """Run, then answer job-1's progress stream with the cancelled state of a job whose run was deleted: the tracker shows its 'Cancelled' heading and the job's message, not 'Simulation Failed', and no results link."""
+    cancelled = a_job_state("job-1", "run-1", "cancelled")
     page.goto(live_server + simulate_page.path)
     with page.expect_request("**/api/jobs/job-1/progress"):
         page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
 
-    running_jobs.answer(
-        "job-1", job_state_frame(a_job_state("job-1", "run-1", "cancelled"), version=4)
-    )
+    running_jobs.answer("job-1", job_state_frame(cancelled, version=4))
 
-    expect(page.get_by_text("Cancelled: its run was deleted", exact=True)).to_be_visible()
+    expect(page.get_by_text(cancelled.message, exact=True)).to_be_visible()
     expect(page.get_by_text("Cancelled", exact=True)).to_be_visible()
     expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
