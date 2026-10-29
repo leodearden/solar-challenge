@@ -462,8 +462,10 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - that first-read constructor, if it is an __init__ that is a functools.partial;
     - that first-read constructor, if it is not callable once bound, is read as an Enum,
       carries such a __signature__, or is read as a builtin or through such an object;
-    - the constructor of the class _refuse_class_constructed_in_c finds, if inspect reads
-      no constructor of *cls*, as _first_read_constructor then gives object's __init__.
+    - if inspect reads no constructor of *cls*, as _first_read_constructor then gives
+      object's __init__: the constructor of the class _refuse_class_constructed_in_c
+      finds, else the __new__ or __init__, one inspect skips, that
+      _refuse_class_with_no_constructor_inspect_reads names.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -486,6 +488,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, name, constructor))
     if isinstance(constructor, _CCallableInspectSkips):
         _refuse_class_constructed_in_c(cls)
+        _refuse_class_with_no_constructor_inspect_reads(cls)
 
 
 def _refuse_class_constructed_in_c(cls: type) -> None:
@@ -516,6 +519,26 @@ def _constructed_in_c(holder: type) -> bool:
         for name in ("__new__", "__init__")
         if name in namespace
     )
+
+
+def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
+    """Raise TypeError naming *cls*, of which inspect reads no constructor, and the first of the __new__ and __init__ it resolves that is not object's, by the class holding it: each as inspect's last check reads it, through getattr, but a _CCallableInspectSkips as held, since binding a classmethod_descriptor to *cls* raises.
+
+    docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
+    """
+    for name in ("__new__", "__init__"):
+        holder = next(namespace_holders(cls.__mro__, name))
+        held = vars(holder)[name]
+        read = held if isinstance(held, _CCallableInspectSkips) else getattr(cls, name)
+        if read is not vars(object)[name]:
+            raise TypeError(
+                f"{label_of(cls)} is constructed through {label_of(holder)}.{name}, which "
+                "inspect skips, as it skips a constructor whose lookup or binding gives None "
+                "or that is defined in C, and through no other constructor inspect reads, so "
+                "inspect reads a text signature a class in its MRO gives, which a class "
+                "docstring can give on some minors and not others, and raises ValueError "
+                f"where none gives one: make the name private, or define {name} with def"
+            )
 
 
 def _first_read_constructor(cls: type) -> tuple[type, str, object]:
