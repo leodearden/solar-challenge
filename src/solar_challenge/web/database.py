@@ -41,15 +41,18 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         """Open a connection to this database under the policy every dashboard connection applies; the caller closes it.
 
-        Rows are read by column name and the schema's foreign keys are enforced. Opening reads
-        nothing from the file, so an unreadable database raises at the first statement, inside
-        the caller's error handling. journal_mode=WAL is a property of the file, which
+        Rows are read by column name, the schema's foreign keys are enforced, and temporary
+        storage (a sort's B-trees, a temporary table) is kept in memory, so no statement needs a
+        writable temporary directory (D-S19-13 in docs/prds/run-store-one-owner.md). Opening
+        reads nothing from the file, so an unreadable database raises at the first statement,
+        inside the caller's error handling. journal_mode=WAL is a property of the file, which
         web/schema.py's open_database sets when it creates a store, so a connection to a store
         it created reports wal. tests/unit/test_web_database_connections.py pins this policy.
         """
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
         return conn
 
     @contextmanager
