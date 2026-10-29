@@ -10,12 +10,11 @@ rank.  The design is specified in docs/prds/discrete-install-config-sweep.md.
 from __future__ import annotations
 
 import itertools
-import math
 from dataclasses import dataclass, fields as dc_fields, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
-from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
+from solar_challenge.battery import BatteryConfig, has_battery
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     FinanceConfig,
@@ -28,6 +27,7 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetConfig, simulate_fleet
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.number_fields import NON_NEGATIVE, POSITIVE, as_finite_float, read_field
 from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
@@ -45,9 +45,11 @@ class ConfigPoint:
     """A single discrete install specification for the install-config sweep.
 
     Attributes:
-        pv_kwp: PV DC rated capacity in kWp (must be > 0 and finite).
-        battery_kwh: Battery nameplate (total) energy capacity in kWh (must be
-            >= 0 and finite), set as ``BatteryConfig.capacity_kwh`` on every home.  The
+        pv_kwp: PV DC rated capacity in kWp, a finite number greater than 0,
+            held as a float.
+        battery_kwh: Battery nameplate (total) energy capacity in kWh, a finite
+            number of at least 0, held as a float, and set as
+            ``BatteryConfig.capacity_kwh`` on every home.  The
             energy a home can actually cycle is the usable window inside that
             capacity, bounded by its battery's ``min_soc_fraction`` and
             ``max_soc_fraction``.
@@ -58,7 +60,8 @@ class ConfigPoint:
             triggers battery fabrication or replacement; there is no epsilon
             tolerance.  Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
             "no battery".
-        inverter_kw: AC inverter rated capacity in kW (must be > 0 and finite).
+        inverter_kw: AC inverter rated capacity in kW, a finite number greater
+            than 0, held as a float.
     """
 
     pv_kwp: float
@@ -66,16 +69,10 @@ class ConfigPoint:
     inverter_kw: float
 
     def __post_init__(self) -> None:
-        """Validate install dimensions."""
-        if not 0 < self.pv_kwp < math.inf:
-            raise ValueError(
-                f"pv_kwp must be > 0 and finite, got {self.pv_kwp}"
-            )
-        require_valid_capacity_setting(self.battery_kwh, "battery_kwh")
-        if not 0 < self.inverter_kw < math.inf:
-            raise ValueError(
-                f"inverter_kw must be > 0 and finite, got {self.inverter_kw}"
-            )
+        """Read the three install dimensions through number_fields, holding the floats read."""
+        read_field(self, "pv_kwp", as_finite_float, POSITIVE)
+        read_field(self, "battery_kwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "inverter_kw", as_finite_float, POSITIVE)
 
 
 # ---------------------------------------------------------------------------
