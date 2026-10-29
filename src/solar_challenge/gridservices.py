@@ -43,7 +43,6 @@ Key public symbols:
   :class:`GridServicesAtEvents` breakdown.
 """
 
-import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
@@ -53,6 +52,14 @@ import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    Interval,
+    as_finite_float,
+    read_field,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -115,22 +122,10 @@ class GridServicesRateBand:
     flat_gbp_per_kw_per_year: float = 0.0
 
     def __post_init__(self) -> None:
-        """Refuse a negative rate, or a flat rate that is not finite, raising ConfigurationError."""
-        if self.availability_gbp_per_kw_per_event < 0:
-            raise ConfigurationError(
-                "availability_gbp_per_kw_per_event must be non-negative, "
-                f"got {self.availability_gbp_per_kw_per_event}"
-            )
-        if self.utilisation_gbp_per_mwh < 0:
-            raise ConfigurationError(
-                f"utilisation_gbp_per_mwh must be non-negative, "
-                f"got {self.utilisation_gbp_per_mwh}"
-            )
-        if not 0.0 <= self.flat_gbp_per_kw_per_year < math.inf:
-            raise ConfigurationError(
-                "flat_gbp_per_kw_per_year must be >= 0 and finite, "
-                f"got {self.flat_gbp_per_kw_per_year}"
-            )
+        """Read the three rates through number_fields as finite numbers of at least 0, holding the floats read."""
+        read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE)
+        read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "flat_gbp_per_kw_per_year", as_finite_float, NON_NEGATIVE)
 
 
 @dataclass(frozen=True)
@@ -343,31 +338,15 @@ class GridServicesEventsConfig:
     utilisation_gbp_per_mwh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Read the numbers through number_fields, holding the floats read, then refuse an unknown band or no event windows, raising ConfigurationError."""
+        read_field(self, "aggregator_share", as_finite_float, Interval(0, 1, high_open=True))
+        read_field(self, "utilisation_factor", as_finite_float, UNIT_INTERVAL)
+        read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE, optional=True)
+        read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE, optional=True)
         GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band")
         if not self.event_windows:
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"
-            )
-        if not (0.0 <= self.aggregator_share < 1.0):
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.aggregator_share must be in [0, 1), "
-                f"got {self.aggregator_share}"
-            )
-        if not (0.0 <= self.utilisation_factor <= 1.0):
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.utilisation_factor must be in [0, 1], "
-                f"got {self.utilisation_factor}"
-            )
-        if self.availability_gbp_per_kw_per_event is not None and self.availability_gbp_per_kw_per_event < 0:
-            raise ConfigurationError(
-                "GridServicesEventsConfig.availability_gbp_per_kw_per_event override "
-                f"must be >= 0, got {self.availability_gbp_per_kw_per_event}"
-            )
-        if self.utilisation_gbp_per_mwh is not None and self.utilisation_gbp_per_mwh < 0:
-            raise ConfigurationError(
-                "GridServicesEventsConfig.utilisation_gbp_per_mwh override "
-                f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
             )
 
     def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
@@ -429,12 +408,8 @@ class FlatGridServices:
     income_per_kw_per_year_gbp: float
 
     def __post_init__(self) -> None:
-        """Refuse a rate that is not > 0 and finite, raising ConfigurationError."""
-        if not 0.0 < self.income_per_kw_per_year_gbp < math.inf:
-            raise ConfigurationError(
-                "FlatGridServices.income_per_kw_per_year_gbp must be > 0 and finite, "
-                f"got {self.income_per_kw_per_year_gbp}; zero income is NoGridServices()"
-            )
+        """Read the rate through number_fields as a finite number greater than 0, holding the float read."""
+        read_field(self, "income_per_kw_per_year_gbp", as_finite_float, POSITIVE)
 
     def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
         """Return the rate × the installed discharge power of the fleet's batteries, in £ per year.
