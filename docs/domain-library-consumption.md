@@ -801,6 +801,33 @@ and `peak_hours[0] must be a (start, end) window that starts before it ends, got
 valid. Consumers that catch `ValueError` need no change for the type; those that
 match message text, or pass such values, change them when they re-pin.
 
+**Unreleased on main** (task 893): `solar_challenge.timebase` gains
+`ONE_MINUTE`, `timedelta(minutes=1)`, the cadence of a simulated run's window.
+Its `SimulationWindow`, the type of the task 777 line's
+`SimulationResults.window`, gains two methods. `rows()` is the window's index,
+from its first day's first instant on its clock up to, not including, the first
+instant after its last day, at its cadence, with `freq` the cadence, at
+microsecond resolution, so `SimulationWindow.of_index(window.rows())` is the
+window. A date's first instant is its local midnight, or, where the clocks skip
+midnight, the instant they jump to, or, where they repeat it, the first 00:00.
+A window with no zone has 24-hour days. A Europe/London one-minute window from
+2024-03-30 to 2024-04-01 has 4,260 rows. `local_days()` yields one
+`LocalDay(date, rows)` per date from `first_day` to `last_day`, in order, each
+holding the rows of `rows()` that start on its date: 1,380 one-minute rows on
+Europe/London's spring-forward day, 1,500 on its fall-back day and 1,440 on any
+other. `rows()` raises `ValueError` naming the cadence when the cadence does not
+divide one hour, and `local_days()` raises the same `ValueError` when it is
+called, before it yields a day. `LocalDay`, in `solar_challenge.timebase`, is a
+frozen dataclass compared by identity, whose two methods read the local wall
+clock. `minute_of_day()` gives each row's minute of the day, 0 to 1439: it
+repeats the minutes of the hour the clocks go back over and lacks those of the
+hour they skip. `instant(minute_of_day)` gives the first row of the date whose
+clock reads that minute or later, e.g. 02:00 BST for 01:30 on 2024-03-31, and
+the first 01:30 on 2024-10-27; it raises `ValueError` for a minute outside 0 to
+1439, or one no row of the date reaches. The frozen contract now also covers
+`LocalDay`'s constructor and methods. The 0.5.0 tag has none of these.
+Consumers need no change when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
