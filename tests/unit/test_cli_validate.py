@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from rich.text import Text
 from typer.testing import CliRunner, Result
 
@@ -387,6 +388,35 @@ home:
 
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
+
+    def test_a_finance_number_its_type_refuses_is_an_error_row_naming_the_field_and_the_value(
+        self, tmp_path: Path
+    ) -> None:
+        """scenarios/bristol-phase1-flex.yaml's finance block, its first event window's event_hours infinite, in a scenario: document.
+
+        `validate config` reads a finance block only through a scenario's loader; a fleet
+        file's finance: block is not read (esc-862-1).
+        """
+        flex = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+        finance = yaml.safe_load(flex.read_text())["finance"]
+        finance["grid_services_events"]["event_windows"][0]["event_hours"] = float("inf")
+        document = {
+            "scenario": {
+                "name": "Bristol Phase 1 Flex",
+                "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
+                "home": {"pv": {"capacity_kw": 4.0}},
+                "finance": finance,
+            }
+        }
+
+        result = self._validate_config(tmp_path, yaml.safe_dump(document))
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert "event_hours" in error_row
+        assert names_as_a_word(error_row, "inf")
 
     def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
         self, tmp_path: Path

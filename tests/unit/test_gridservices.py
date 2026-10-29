@@ -34,6 +34,7 @@ from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _NOT_FINITE_NUMBERS = [*UNUSABLE_NUMBERS, pytest.param("x", id="word")]
 _RATE_BAND_FIELDS = ("availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh", "flat_gbp_per_kw_per_year")
+_VALID_EVENT_WINDOW = EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -147,46 +148,71 @@ class TestEventWindowValidation:
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(), events_per_year=1, event_hours=1.0)
 
-    def test_month_out_of_range_raises(self) -> None:
-        """Month value outside 1..12 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(0,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(13,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
+    def test_lists_and_whole_numbers_are_held_as_the_tuples_and_numbers_read(self) -> None:
+        window = EventWindow(
+            months=[1, 2], weekdays=[0, 4], hours=[16.0, 17], events_per_year=12.0, event_hours=3
+        )
+        assert (window.months, window.weekdays, window.hours) == ((1, 2), (0, 4), (16, 17))
+        for values in (window.months, window.weekdays, window.hours):
+            assert type(values) is tuple
+            assert [type(value) for value in values] == [int, int]
+        assert window.events_per_year == 12
+        assert type(window.events_per_year) is int
+        assert window.event_hours == 3.0
+        assert type(window.event_hours) is float
 
-    def test_weekday_out_of_range_raises(self) -> None:
-        """Weekday value outside 0..6 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(-1,), hours=(16,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(7,), hours=(16,), events_per_year=1, event_hours=1.0)
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            pytest.param("months", (0,), "months[0] must be between 1 and 12, got 0", id="month-0"),
+            pytest.param("months", (13,), "months[0] must be between 1 and 12, got 13", id="month-13"),
+            pytest.param(
+                "months", (11, 0), "months[1] must be between 1 and 12, got 0", id="second-month-0"
+            ),
+            pytest.param("weekdays", (-1,), "weekdays[0] must be between 0 and 6, got -1", id="weekday--1"),
+            pytest.param("weekdays", (7,), "weekdays[0] must be between 0 and 6, got 7", id="weekday-7"),
+            pytest.param("hours", (-1,), "hours[0] must be between 0 and 23, got -1", id="hour--1"),
+            pytest.param("hours", (24,), "hours[0] must be between 0 and 23, got 24", id="hour-24"),
+            pytest.param("months", (1.5,), "months[0] must be a whole number, got 1.5", id="month-1.5"),
+            pytest.param("months", "x", "months must be a list of whole numbers, got 'x'", id="months-word"),
+            pytest.param("months", 12, "months must be a list of whole numbers, got 12", id="months-bare-12"),
+            pytest.param(
+                "events_per_year", 0, "events_per_year must be greater than 0, got 0", id="events-0"
+            ),
+            pytest.param(
+                "events_per_year", -1, "events_per_year must be greater than 0, got -1", id="events--1"
+            ),
+            pytest.param(
+                "events_per_year", 2.5, "events_per_year must be a whole number, got 2.5", id="events-2.5"
+            ),
+            pytest.param("event_hours", 0.0, "event_hours must be greater than 0, got 0.0", id="hours-0"),
+            pytest.param("event_hours", -1.0, "event_hours must be greater than 0, got -1.0", id="hours--1"),
+        ],
+    )
+    def test_a_value_its_field_cannot_hold_is_refused_naming_it(
+        self, field: str, value: object, message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: value})
+        assert str(exc_info.value) == message
 
-    def test_hour_out_of_range_raises(self) -> None:
-        """Hour value outside 0..23 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(-1,), events_per_year=1, event_hours=1.0)
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(24,), events_per_year=1, event_hours=1.0)
+    @pytest.mark.parametrize("field", ["months", "weekdays", "hours"])
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_an_element_that_is_not_a_finite_number_is_refused_naming_its_position(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: (value,)})
+        assert str(exc_info.value) == f"{field}[0] must be a finite number, got {value!r}"
 
-    def test_events_per_year_zero_raises(self) -> None:
-        """events_per_year == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=0, event_hours=1.0)
-
-    def test_events_per_year_negative_raises(self) -> None:
-        """events_per_year < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=-1, event_hours=1.0)
-
-    def test_event_hours_zero_raises(self) -> None:
-        """event_hours == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=0.0)
-
-    def test_event_hours_negative_raises(self) -> None:
-        """event_hours < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=-1.0)
+    @pytest.mark.parametrize("field", ["events_per_year", "event_hours"])
+    @pytest.mark.parametrize("value", _NOT_FINITE_NUMBERS)
+    def test_a_number_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_VALID_EVENT_WINDOW, **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     def test_valid_event_window_is_frozen(self) -> None:
         """Valid EventWindow is frozen — attribute assignment raises FrozenInstanceError."""
