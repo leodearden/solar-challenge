@@ -49,9 +49,17 @@
 {% endmacro %}
 
 
-{# A panel around its caller's content: a div in the panel classes and classes #}
-{% macro panel(classes='') %}
+{# A panel around its caller's content: a div in the panel classes and classes. A title draws a header band above the content: the title, then the subtitle the Alpine expression subtitle_expression holds #}
+{% macro panel(title='', subtitle_expression='', classes='') %}
 <div class="{{ _panel_classes }} {{ classes }}">
+    {% if title %}
+    <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+        <h3 class="font-semibold text-slate-800 dark:text-white">{{ title }}</h3>
+        {% if subtitle_expression %}
+        <p class="text-xs text-slate-400 mt-1" x-text="{{ subtitle_expression }}"></p>
+        {% endif %}
+    </div>
+    {% endif %}
     {{ caller() }}
 </div>
 {% endmacro %}
