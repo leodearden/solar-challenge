@@ -110,6 +110,18 @@ class SettingCallableGiver(CallableGiver):
     def __set__(self, instance: object, value: object) -> None: ...
 
 
+class DeletingGiver(Giver):
+    """A Giver whose type also defines __delete__ but no __call__."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class SettingGiver(Giver):
+    """A Giver whose type also defines __set__ but no __call__."""
+
+    def __set__(self, instance: object, value: object) -> None: ...
+
+
 def _recording_object_init(wrapper: object) -> object:
     wrapper.__wrapped__ = object.__init__
     return wrapper
@@ -397,6 +409,12 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
             set(),
             id="wrapper-of-such-a-descriptor",
         ),
+        pytest.param(
+            lambda build: _recording_object_init(Giver(build)),
+            "(receiver: float, rate: int) -> None",
+            {float, int},
+            id="non-callable-descriptor",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -441,6 +459,14 @@ def test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_g
             lambda build: functools.update_wrapper(functools.partial(build), object.__init__),
             id="partial",
         ),
+        pytest.param(
+            lambda build: _recording_object_init(DeletingGiver(build)),
+            id="non-callable-get-delete-descriptor",
+        ),
+        pytest.param(
+            lambda build: _recording_object_init(SettingGiver(build)),
+            id="non-callable-get-set-descriptor",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -466,6 +492,7 @@ def test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_del
         naming_it = (
             rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*"
             r"\bobject\.__init__, defined in C\b"
+            r".*\bskips the constructor as defined in C\b.*\breads the constructor as it binds it\b"
         )
         with pytest.raises(TypeError, match=naming_it):
             surface_form(subject)
