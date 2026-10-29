@@ -358,11 +358,11 @@ class TestScheduledChargeStrategyWindows:
             pytest.param(timezone.utc, id="a-fixed-offset"),
         ],
     )
-    def test_a_zone_that_is_no_zoneinfo_is_refused_naming_it(self, zone: object) -> None:
+    def test_a_zone_that_is_no_zoneinfo_is_refused_saying_what_tz_must_be(self, zone: object) -> None:
         with pytest.raises(ConfigurationError) as refusal:
             ScheduledChargeStrategy(_base(), (_NIGHTLY,), zone)
 
-        assert repr(zone) in str(refusal.value)
+        assert str(refusal.value) == f"tz must be the ZoneInfo on whose wall clock its windows open, got {zone!r}"
 
     @pytest.mark.parametrize(
         ("base", "name"),
