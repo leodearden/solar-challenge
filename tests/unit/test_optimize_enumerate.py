@@ -2,10 +2,11 @@
 
 import dataclasses
 import itertools
+from collections.abc import Callable
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, require_valid_capacity_setting
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
@@ -46,6 +47,15 @@ def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
         seg_tariff_pence_per_kwh=7.5,
         finance=finance,
     )
+
+
+def _outcome_of(read: Callable[[], object]) -> tuple[type, object]:
+    """The type and value *read* returns, or the type and message of the ConfigurationError it raises."""
+    try:
+        value = read()
+    except ConfigurationError as refusal:
+        return type(refusal), str(refusal)
+    return type(value), value
 
 
 class TestConfigPoint:
@@ -106,6 +116,25 @@ class TestConfigPoint:
         cp = ConfigPoint(pv_kwp=4, battery_kwh=5, inverter_kw=3)
         assert (cp.pv_kwp, cp.battery_kwh, cp.inverter_kw) == (4.0, 5.0, 3.0)
         assert [type(value) for value in (cp.pv_kwp, cp.battery_kwh, cp.inverter_kw)] == [float, float, float]
+
+    @pytest.mark.parametrize(
+        "battery_kwh",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="word"),
+            pytest.param(-0.1, id="negative"),
+            pytest.param(0, id="no-battery"),
+            pytest.param(1e-9, id="tiny"),
+            pytest.param(5, id="whole"),
+            pytest.param("5", id="quoted"),
+            pytest.param(1e9, id="huge"),
+        ],
+    )
+    def test_battery_kwh_is_read_as_battery_reads_a_capacity_setting(self, battery_kwh: object) -> None:
+        """ConfigPoint holds the float battery.require_valid_capacity_setting returns for battery_kwh, or refuses it with the same message."""
+        assert _outcome_of(
+            lambda: ConfigPoint(pv_kwp=4.0, battery_kwh=battery_kwh, inverter_kw=3.68).battery_kwh
+        ) == _outcome_of(lambda: require_valid_capacity_setting(battery_kwh, "battery_kwh"))
 
 
 class TestEnumerateContract:
