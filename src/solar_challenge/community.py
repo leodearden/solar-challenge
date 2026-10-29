@@ -17,6 +17,7 @@ import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
@@ -83,19 +84,19 @@ class CommunityConfig:
     billing: Optional[CommunityBillingConfig] = None
 
     def __post_init__(self) -> None:
-        """Validate mode / battery consistency."""
+        """Refuse an unknown sharing mode, or a community battery the mode does not take, raising ConfigurationError."""
         if self.sharing_mode not in ("p2p", "community_battery"):
-            raise ValueError(
+            raise ConfigurationError(
                 f"sharing_mode must be 'p2p' or 'community_battery', "
                 f"got {self.sharing_mode!r}"
             )
         if self.sharing_mode == "p2p" and self.community_battery is not None:
-            raise ValueError(
+            raise ConfigurationError(
                 "sharing_mode='p2p' must not have a community_battery; "
                 "set sharing_mode='community_battery' to enable battery dispatch."
             )
         if self.sharing_mode == "community_battery" and self.community_battery is None:
-            raise ValueError(
+            raise ConfigurationError(
                 "sharing_mode='community_battery' requires a community_battery config; "
                 "provide a BatteryConfig or switch to sharing_mode='p2p'."
             )
